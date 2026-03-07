@@ -1,0 +1,30 @@
+# Build artifacts
+*.test
+*.out
+debug_envelope.go
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Claude Code internal
+.claude/
+.antigravity.yaml
+.antigravity_root
+
+# Embedded Pekko source repo (reference only — not part of this project)
+pekko/
+
+# sbt / Scala build artifacts (in gekka/ sbt sub-project)
+gekka/project/target/
+gekka/target/
+scala-server/target/
+scala-server/project/target/
+target/
+*.class
+*.jar
+
+# OS
+.DS_Store

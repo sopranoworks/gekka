@@ -1,0 +1,764 @@
+package gekka
+
+import (
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	reflect "reflect"
+	sync "sync"
+	unsafe "unsafe"
+)
+
+const (
+	// Verify that this generated code is sufficiently up-to-date.
+	_ = protoimpl.EnforceVersion(20 - protoimpl.MinVersion)
+	// Verify that runtime/protoimpl is sufficiently up-to-date.
+	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
+)
+
+type Quarantined struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	From          *UniqueAddress         `protobuf:"bytes,1,req,name=from" json:"from,omitempty"`
+	To            *UniqueAddress         `protobuf:"bytes,2,req,name=to" json:"to,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Quarantined) Reset() {
+	*x = Quarantined{}
+	mi := &file_ArteryControlFormats_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Quarantined) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Quarantined) ProtoMessage() {}
+
+func (x *Quarantined) ProtoReflect() protoreflect.Message {
+	mi := &file_ArteryControlFormats_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Quarantined.ProtoReflect.Descriptor instead.
+func (*Quarantined) Descriptor() ([]byte, []int) {
+	return file_ArteryControlFormats_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *Quarantined) GetFrom() *UniqueAddress {
+	if x != nil {
+		return x.From
+	}
+	return nil
+}
+
+func (x *Quarantined) GetTo() *UniqueAddress {
+	if x != nil {
+		return x.To
+	}
+	return nil
+}
+
+// Generic message declaration that is used for all types of message that (currently) have a single
+// address field. A message that needs to changed later can be cloned from this one and then adapted.
+// ActorSystemTerminating
+// ActorSystemTerminating.Ack
+// OutboundHandshake.HandshakeRsp
+type MessageWithAddress struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Address       *UniqueAddress         `protobuf:"bytes,1,req,name=address" json:"address,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MessageWithAddress) Reset() {
+	*x = MessageWithAddress{}
+	mi := &file_ArteryControlFormats_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MessageWithAddress) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MessageWithAddress) ProtoMessage() {}
+
+func (x *MessageWithAddress) ProtoReflect() protoreflect.Message {
+	mi := &file_ArteryControlFormats_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MessageWithAddress.ProtoReflect.Descriptor instead.
+func (*MessageWithAddress) Descriptor() ([]byte, []int) {
+	return file_ArteryControlFormats_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *MessageWithAddress) GetAddress() *UniqueAddress {
+	if x != nil {
+		return x.Address
+	}
+	return nil
+}
+
+type HandshakeReq struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	From          *UniqueAddress         `protobuf:"bytes,1,req,name=from" json:"from,omitempty"`
+	To            *Address               `protobuf:"bytes,2,req,name=to" json:"to,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HandshakeReq) Reset() {
+	*x = HandshakeReq{}
+	mi := &file_ArteryControlFormats_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HandshakeReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HandshakeReq) ProtoMessage() {}
+
+func (x *HandshakeReq) ProtoReflect() protoreflect.Message {
+	mi := &file_ArteryControlFormats_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HandshakeReq.ProtoReflect.Descriptor instead.
+func (*HandshakeReq) Descriptor() ([]byte, []int) {
+	return file_ArteryControlFormats_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *HandshakeReq) GetFrom() *UniqueAddress {
+	if x != nil {
+		return x.From
+	}
+	return nil
+}
+
+func (x *HandshakeReq) GetTo() *Address {
+	if x != nil {
+		return x.To
+	}
+	return nil
+}
+
+// CompressionProtocol.ActorRefCompressionAdvertisement
+// CompressionProtocol.ClassManifestCompressionAdvertisement
+type CompressionTableAdvertisement struct {
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	From         *UniqueAddress         `protobuf:"bytes,1,req,name=from" json:"from,omitempty"`
+	OriginUid    *uint64                `protobuf:"varint,2,req,name=originUid" json:"originUid,omitempty"`
+	TableVersion *uint32                `protobuf:"varint,3,req,name=tableVersion" json:"tableVersion,omitempty"`
+	// actual Map is represented by separate sequences of keys and values,
+	// relies on both sequences using the same order so that corresponding entries can be
+	// associated again when deserializing
+	Keys          []string `protobuf:"bytes,4,rep,name=keys" json:"keys,omitempty"`
+	Values        []uint32 `protobuf:"varint,5,rep,name=values" json:"values,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CompressionTableAdvertisement) Reset() {
+	*x = CompressionTableAdvertisement{}
+	mi := &file_ArteryControlFormats_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CompressionTableAdvertisement) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CompressionTableAdvertisement) ProtoMessage() {}
+
+func (x *CompressionTableAdvertisement) ProtoReflect() protoreflect.Message {
+	mi := &file_ArteryControlFormats_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CompressionTableAdvertisement.ProtoReflect.Descriptor instead.
+func (*CompressionTableAdvertisement) Descriptor() ([]byte, []int) {
+	return file_ArteryControlFormats_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *CompressionTableAdvertisement) GetFrom() *UniqueAddress {
+	if x != nil {
+		return x.From
+	}
+	return nil
+}
+
+func (x *CompressionTableAdvertisement) GetOriginUid() uint64 {
+	if x != nil && x.OriginUid != nil {
+		return *x.OriginUid
+	}
+	return 0
+}
+
+func (x *CompressionTableAdvertisement) GetTableVersion() uint32 {
+	if x != nil && x.TableVersion != nil {
+		return *x.TableVersion
+	}
+	return 0
+}
+
+func (x *CompressionTableAdvertisement) GetKeys() []string {
+	if x != nil {
+		return x.Keys
+	}
+	return nil
+}
+
+func (x *CompressionTableAdvertisement) GetValues() []uint32 {
+	if x != nil {
+		return x.Values
+	}
+	return nil
+}
+
+// CompressionProtocol.ActorRefCompressionAdvertisementAck
+// CompressionProtocol.ClassManifestCompressionAdvertisementAck
+type CompressionTableAdvertisementAck struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	From          *UniqueAddress         `protobuf:"bytes,1,req,name=from" json:"from,omitempty"`
+	Version       *uint32                `protobuf:"varint,2,req,name=version" json:"version,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CompressionTableAdvertisementAck) Reset() {
+	*x = CompressionTableAdvertisementAck{}
+	mi := &file_ArteryControlFormats_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CompressionTableAdvertisementAck) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CompressionTableAdvertisementAck) ProtoMessage() {}
+
+func (x *CompressionTableAdvertisementAck) ProtoReflect() protoreflect.Message {
+	mi := &file_ArteryControlFormats_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CompressionTableAdvertisementAck.ProtoReflect.Descriptor instead.
+func (*CompressionTableAdvertisementAck) Descriptor() ([]byte, []int) {
+	return file_ArteryControlFormats_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *CompressionTableAdvertisementAck) GetFrom() *UniqueAddress {
+	if x != nil {
+		return x.From
+	}
+	return nil
+}
+
+func (x *CompressionTableAdvertisementAck) GetVersion() uint32 {
+	if x != nil && x.Version != nil {
+		return *x.Version
+	}
+	return 0
+}
+
+// SystemMessageDelivery.SystemMessageEnvelope
+type SystemMessageEnvelope struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Message         []byte                 `protobuf:"bytes,1,req,name=message" json:"message,omitempty"`
+	SerializerId    *int32                 `protobuf:"varint,2,req,name=serializerId" json:"serializerId,omitempty"`
+	MessageManifest []byte                 `protobuf:"bytes,3,opt,name=messageManifest" json:"messageManifest,omitempty"`
+	SeqNo           *uint64                `protobuf:"varint,4,req,name=seqNo" json:"seqNo,omitempty"`
+	AckReplyTo      *UniqueAddress         `protobuf:"bytes,5,req,name=ackReplyTo" json:"ackReplyTo,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *SystemMessageEnvelope) Reset() {
+	*x = SystemMessageEnvelope{}
+	mi := &file_ArteryControlFormats_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SystemMessageEnvelope) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SystemMessageEnvelope) ProtoMessage() {}
+
+func (x *SystemMessageEnvelope) ProtoReflect() protoreflect.Message {
+	mi := &file_ArteryControlFormats_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SystemMessageEnvelope.ProtoReflect.Descriptor instead.
+func (*SystemMessageEnvelope) Descriptor() ([]byte, []int) {
+	return file_ArteryControlFormats_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *SystemMessageEnvelope) GetMessage() []byte {
+	if x != nil {
+		return x.Message
+	}
+	return nil
+}
+
+func (x *SystemMessageEnvelope) GetSerializerId() int32 {
+	if x != nil && x.SerializerId != nil {
+		return *x.SerializerId
+	}
+	return 0
+}
+
+func (x *SystemMessageEnvelope) GetMessageManifest() []byte {
+	if x != nil {
+		return x.MessageManifest
+	}
+	return nil
+}
+
+func (x *SystemMessageEnvelope) GetSeqNo() uint64 {
+	if x != nil && x.SeqNo != nil {
+		return *x.SeqNo
+	}
+	return 0
+}
+
+func (x *SystemMessageEnvelope) GetAckReplyTo() *UniqueAddress {
+	if x != nil {
+		return x.AckReplyTo
+	}
+	return nil
+}
+
+// SystemMessageDelivery.Ack
+// SystemMessageDelivery.Nack
+type SystemMessageDeliveryAck struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SeqNo         *uint64                `protobuf:"varint,1,req,name=seqNo" json:"seqNo,omitempty"`
+	From          *UniqueAddress         `protobuf:"bytes,2,req,name=from" json:"from,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SystemMessageDeliveryAck) Reset() {
+	*x = SystemMessageDeliveryAck{}
+	mi := &file_ArteryControlFormats_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SystemMessageDeliveryAck) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SystemMessageDeliveryAck) ProtoMessage() {}
+
+func (x *SystemMessageDeliveryAck) ProtoReflect() protoreflect.Message {
+	mi := &file_ArteryControlFormats_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SystemMessageDeliveryAck.ProtoReflect.Descriptor instead.
+func (*SystemMessageDeliveryAck) Descriptor() ([]byte, []int) {
+	return file_ArteryControlFormats_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *SystemMessageDeliveryAck) GetSeqNo() uint64 {
+	if x != nil && x.SeqNo != nil {
+		return *x.SeqNo
+	}
+	return 0
+}
+
+func (x *SystemMessageDeliveryAck) GetFrom() *UniqueAddress {
+	if x != nil {
+		return x.From
+	}
+	return nil
+}
+
+// *
+// Defines a remote address.
+type Address struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Protocol      *string                `protobuf:"bytes,1,req,name=protocol" json:"protocol,omitempty"`
+	System        *string                `protobuf:"bytes,2,req,name=system" json:"system,omitempty"`
+	Hostname      *string                `protobuf:"bytes,3,req,name=hostname" json:"hostname,omitempty"`
+	Port          *uint32                `protobuf:"varint,4,req,name=port" json:"port,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Address) Reset() {
+	*x = Address{}
+	mi := &file_ArteryControlFormats_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Address) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Address) ProtoMessage() {}
+
+func (x *Address) ProtoReflect() protoreflect.Message {
+	mi := &file_ArteryControlFormats_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Address.ProtoReflect.Descriptor instead.
+func (*Address) Descriptor() ([]byte, []int) {
+	return file_ArteryControlFormats_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *Address) GetProtocol() string {
+	if x != nil && x.Protocol != nil {
+		return *x.Protocol
+	}
+	return ""
+}
+
+func (x *Address) GetSystem() string {
+	if x != nil && x.System != nil {
+		return *x.System
+	}
+	return ""
+}
+
+func (x *Address) GetHostname() string {
+	if x != nil && x.Hostname != nil {
+		return *x.Hostname
+	}
+	return ""
+}
+
+func (x *Address) GetPort() uint32 {
+	if x != nil && x.Port != nil {
+		return *x.Port
+	}
+	return 0
+}
+
+// *
+// Defines a remote address with uid.
+type UniqueAddress struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Address       *Address               `protobuf:"bytes,1,req,name=address" json:"address,omitempty"`
+	Uid           *uint64                `protobuf:"varint,2,req,name=uid" json:"uid,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UniqueAddress) Reset() {
+	*x = UniqueAddress{}
+	mi := &file_ArteryControlFormats_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UniqueAddress) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UniqueAddress) ProtoMessage() {}
+
+func (x *UniqueAddress) ProtoReflect() protoreflect.Message {
+	mi := &file_ArteryControlFormats_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UniqueAddress.ProtoReflect.Descriptor instead.
+func (*UniqueAddress) Descriptor() ([]byte, []int) {
+	return file_ArteryControlFormats_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *UniqueAddress) GetAddress() *Address {
+	if x != nil {
+		return x.Address
+	}
+	return nil
+}
+
+func (x *UniqueAddress) GetUid() uint64 {
+	if x != nil && x.Uid != nil {
+		return *x.Uid
+	}
+	return 0
+}
+
+// RemoteWatcher.ArteryHeartbeat is empty array
+// RemoteWatcher.ArteryHeartbeatRsp
+type ArteryHeartbeatRsp struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Uid           *uint64                `protobuf:"varint,1,req,name=uid" json:"uid,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ArteryHeartbeatRsp) Reset() {
+	*x = ArteryHeartbeatRsp{}
+	mi := &file_ArteryControlFormats_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ArteryHeartbeatRsp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ArteryHeartbeatRsp) ProtoMessage() {}
+
+func (x *ArteryHeartbeatRsp) ProtoReflect() protoreflect.Message {
+	mi := &file_ArteryControlFormats_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ArteryHeartbeatRsp.ProtoReflect.Descriptor instead.
+func (*ArteryHeartbeatRsp) Descriptor() ([]byte, []int) {
+	return file_ArteryControlFormats_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *ArteryHeartbeatRsp) GetUid() uint64 {
+	if x != nil && x.Uid != nil {
+		return *x.Uid
+	}
+	return 0
+}
+
+type FlushAck struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ExpectedAcks  *int32                 `protobuf:"varint,1,opt,name=expectedAcks" json:"expectedAcks,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FlushAck) Reset() {
+	*x = FlushAck{}
+	mi := &file_ArteryControlFormats_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FlushAck) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FlushAck) ProtoMessage() {}
+
+func (x *FlushAck) ProtoReflect() protoreflect.Message {
+	mi := &file_ArteryControlFormats_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FlushAck.ProtoReflect.Descriptor instead.
+func (*FlushAck) Descriptor() ([]byte, []int) {
+	return file_ArteryControlFormats_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *FlushAck) GetExpectedAcks() int32 {
+	if x != nil && x.ExpectedAcks != nil {
+		return *x.ExpectedAcks
+	}
+	return 0
+}
+
+var File_ArteryControlFormats_proto protoreflect.FileDescriptor
+
+const file_ArteryControlFormats_proto_rawDesc = "" +
+	"\n" +
+	"\x1aArteryControlFormats.proto\"Q\n" +
+	"\vQuarantined\x12\"\n" +
+	"\x04from\x18\x01 \x02(\v2\x0e.UniqueAddressR\x04from\x12\x1e\n" +
+	"\x02to\x18\x02 \x02(\v2\x0e.UniqueAddressR\x02to\">\n" +
+	"\x12MessageWithAddress\x12(\n" +
+	"\aaddress\x18\x01 \x02(\v2\x0e.UniqueAddressR\aaddress\"L\n" +
+	"\fHandshakeReq\x12\"\n" +
+	"\x04from\x18\x01 \x02(\v2\x0e.UniqueAddressR\x04from\x12\x18\n" +
+	"\x02to\x18\x02 \x02(\v2\b.AddressR\x02to\"\xb1\x01\n" +
+	"\x1dCompressionTableAdvertisement\x12\"\n" +
+	"\x04from\x18\x01 \x02(\v2\x0e.UniqueAddressR\x04from\x12\x1c\n" +
+	"\toriginUid\x18\x02 \x02(\x04R\toriginUid\x12\"\n" +
+	"\ftableVersion\x18\x03 \x02(\rR\ftableVersion\x12\x12\n" +
+	"\x04keys\x18\x04 \x03(\tR\x04keys\x12\x16\n" +
+	"\x06values\x18\x05 \x03(\rR\x06values\"`\n" +
+	" CompressionTableAdvertisementAck\x12\"\n" +
+	"\x04from\x18\x01 \x02(\v2\x0e.UniqueAddressR\x04from\x12\x18\n" +
+	"\aversion\x18\x02 \x02(\rR\aversion\"\xc5\x01\n" +
+	"\x15SystemMessageEnvelope\x12\x18\n" +
+	"\amessage\x18\x01 \x02(\fR\amessage\x12\"\n" +
+	"\fserializerId\x18\x02 \x02(\x05R\fserializerId\x12(\n" +
+	"\x0fmessageManifest\x18\x03 \x01(\fR\x0fmessageManifest\x12\x14\n" +
+	"\x05seqNo\x18\x04 \x02(\x04R\x05seqNo\x12.\n" +
+	"\n" +
+	"ackReplyTo\x18\x05 \x02(\v2\x0e.UniqueAddressR\n" +
+	"ackReplyTo\"T\n" +
+	"\x18SystemMessageDeliveryAck\x12\x14\n" +
+	"\x05seqNo\x18\x01 \x02(\x04R\x05seqNo\x12\"\n" +
+	"\x04from\x18\x02 \x02(\v2\x0e.UniqueAddressR\x04from\"m\n" +
+	"\aAddress\x12\x1a\n" +
+	"\bprotocol\x18\x01 \x02(\tR\bprotocol\x12\x16\n" +
+	"\x06system\x18\x02 \x02(\tR\x06system\x12\x1a\n" +
+	"\bhostname\x18\x03 \x02(\tR\bhostname\x12\x12\n" +
+	"\x04port\x18\x04 \x02(\rR\x04port\"E\n" +
+	"\rUniqueAddress\x12\"\n" +
+	"\aaddress\x18\x01 \x02(\v2\b.AddressR\aaddress\x12\x10\n" +
+	"\x03uid\x18\x02 \x02(\x04R\x03uid\"&\n" +
+	"\x12ArteryHeartbeatRsp\x12\x10\n" +
+	"\x03uid\x18\x01 \x02(\x04R\x03uid\".\n" +
+	"\bFlushAck\x12\"\n" +
+	"\fexpectedAcks\x18\x01 \x01(\x05R\fexpectedAcksB\x1b\n" +
+	"\x17org.apache.pekko.remoteH\x01"
+
+var (
+	file_ArteryControlFormats_proto_rawDescOnce sync.Once
+	file_ArteryControlFormats_proto_rawDescData []byte
+)
+
+func file_ArteryControlFormats_proto_rawDescGZIP() []byte {
+	file_ArteryControlFormats_proto_rawDescOnce.Do(func() {
+		file_ArteryControlFormats_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_ArteryControlFormats_proto_rawDesc), len(file_ArteryControlFormats_proto_rawDesc)))
+	})
+	return file_ArteryControlFormats_proto_rawDescData
+}
+
+var file_ArteryControlFormats_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_ArteryControlFormats_proto_goTypes = []any{
+	(*Quarantined)(nil),                      // 0: Quarantined
+	(*MessageWithAddress)(nil),               // 1: MessageWithAddress
+	(*HandshakeReq)(nil),                     // 2: HandshakeReq
+	(*CompressionTableAdvertisement)(nil),    // 3: CompressionTableAdvertisement
+	(*CompressionTableAdvertisementAck)(nil), // 4: CompressionTableAdvertisementAck
+	(*SystemMessageEnvelope)(nil),            // 5: SystemMessageEnvelope
+	(*SystemMessageDeliveryAck)(nil),         // 6: SystemMessageDeliveryAck
+	(*Address)(nil),                          // 7: Address
+	(*UniqueAddress)(nil),                    // 8: UniqueAddress
+	(*ArteryHeartbeatRsp)(nil),               // 9: ArteryHeartbeatRsp
+	(*FlushAck)(nil),                         // 10: FlushAck
+}
+var file_ArteryControlFormats_proto_depIdxs = []int32{
+	8,  // 0: Quarantined.from:type_name -> UniqueAddress
+	8,  // 1: Quarantined.to:type_name -> UniqueAddress
+	8,  // 2: MessageWithAddress.address:type_name -> UniqueAddress
+	8,  // 3: HandshakeReq.from:type_name -> UniqueAddress
+	7,  // 4: HandshakeReq.to:type_name -> Address
+	8,  // 5: CompressionTableAdvertisement.from:type_name -> UniqueAddress
+	8,  // 6: CompressionTableAdvertisementAck.from:type_name -> UniqueAddress
+	8,  // 7: SystemMessageEnvelope.ackReplyTo:type_name -> UniqueAddress
+	8,  // 8: SystemMessageDeliveryAck.from:type_name -> UniqueAddress
+	7,  // 9: UniqueAddress.address:type_name -> Address
+	10, // [10:10] is the sub-list for method output_type
+	10, // [10:10] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
+}
+
+func init() { file_ArteryControlFormats_proto_init() }
+func file_ArteryControlFormats_proto_init() {
+	if File_ArteryControlFormats_proto != nil {
+		return
+	}
+	type x struct{}
+	out := protoimpl.TypeBuilder{
+		File: protoimpl.DescBuilder{
+			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ArteryControlFormats_proto_rawDesc), len(file_ArteryControlFormats_proto_rawDesc)),
+			NumEnums:      0,
+			NumMessages:   11,
+			NumExtensions: 0,
+			NumServices:   0,
+		},
+		GoTypes:           file_ArteryControlFormats_proto_goTypes,
+		DependencyIndexes: file_ArteryControlFormats_proto_depIdxs,
+		MessageInfos:      file_ArteryControlFormats_proto_msgTypes,
+	}.Build()
+	File_ArteryControlFormats_proto = out.File
+	file_ArteryControlFormats_proto_goTypes = nil
+	file_ArteryControlFormats_proto_depIdxs = nil
+}

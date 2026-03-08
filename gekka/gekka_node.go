@@ -13,6 +13,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"net"
 	"reflect"
 	"sync"
@@ -98,6 +99,18 @@ type NodeConfig struct {
 	//   /metrics  — JSON snapshot of internal counters
 	//   /metrics?fmt=prom — Prometheus text exposition format
 	MonitoringPort int
+
+	// LogHandler is a custom slog.Handler used for all actor-aware loggers
+	// created on this node. When nil the default slog handler is used.
+	//
+	// Example — JSON logging at DEBUG level:
+	//
+	//	h := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})
+	//	node, _ := gekka.Spawn(gekka.NodeConfig{
+	//	    SystemName: "MySystem", Host: "127.0.0.1", Port: 2552,
+	//	    LogHandler: h,
+	//	})
+	LogHandler slog.Handler
 }
 
 // resolve returns the effective (scheme, system, host, port) for this config.
@@ -127,6 +140,13 @@ type IncomingMessage struct {
 	SerializerId int32
 	// Manifest is the type tag embedded in the Artery envelope.
 	Manifest string
+	// Sender is the actor that sent this message. It is a remote ActorRef
+	// constructed from the Artery envelope's sender field. It is the zero-value
+	// NoSender when the remote side did not include a sender path.
+	//
+	// Prefer using BaseActor.Sender() inside Receive; this field is exposed
+	// for callbacks that receive IncomingMessage directly (e.g. OnMessage).
+	Sender ActorRef
 }
 
 // GekkaNode is the single entry point for the gekka library. It wires together
@@ -151,6 +171,10 @@ type GekkaNode struct {
 	actorsMu sync.RWMutex
 	actors   map[string]actor.Actor // actor path suffix → Actor
 
+	remoteWatchersMu sync.Mutex
+	// node addr "host:port" → target full path → slice of watcher references
+	remoteWatchers map[string]map[string][]ActorRef
+
 	// System is the ActorSystem for this node. Use it to create and register
 	// actors by name:
 	//
@@ -158,6 +182,9 @@ type GekkaNode struct {
 	//	    return &MyActor{BaseActor: actor.NewBaseActor()}
 	//	}}, "my-actor")
 	System ActorSystem
+
+	clusterWatcherRef ActorRef
+	logHandler        slog.Handler // nil = use slog.Default().Handler()
 }
 
 // Spawn creates, wires, and starts a GekkaNode. The TCP listener is bound
@@ -224,19 +251,35 @@ func Spawn(cfg NodeConfig) (*GekkaNode, error) {
 	cm.metrics = metrics
 
 	node := &GekkaNode{
-		nm:        nm,
-		cm:        cm,
-		router:    router,
-		repl:      repl,
-		server:    server,
-		ctx:       ctx,
-		cancel:    cancel,
-		localAddr: localAddr,
-		seeds:     cfg.SeedNodes,
-		metrics:   metrics,
-		actors:    make(map[string]actor.Actor),
+		nm:             nm,
+		cm:             cm,
+		router:         router,
+		repl:           repl,
+		server:         server,
+		ctx:            ctx,
+		cancel:         cancel,
+		localAddr:      localAddr,
+		seeds:          cfg.SeedNodes,
+		metrics:        metrics,
+		actors:         make(map[string]actor.Actor),
+		remoteWatchers: make(map[string]map[string][]ActorRef),
+		logHandler:     cfg.LogHandler,
 	}
 	node.System = &nodeActorSystem{node: node}
+
+	// Internal watcher to track remote node failures and synthesize Terminated messages
+	remoteDeathWatcherProps := Props{
+		New: func() actor.Actor {
+			return &remoteDeathWatcherActor{
+				BaseActor: actor.NewBaseActor(),
+				node:      node,
+			}
+		},
+	}
+	rdwRef, err := node.System.ActorOf(remoteDeathWatcherProps, "remoteDeathWatcher")
+	if err == nil {
+		node.Subscribe(rdwRef, EventUnreachableMember, EventMemberRemoved)
+	}
 
 	// Start the optional monitoring HTTP server.
 	monPort := cfg.MonitoringPort
@@ -251,7 +294,32 @@ func Spawn(cfg NodeConfig) (*GekkaNode, error) {
 		node.monitoring = ms
 	}
 
+	// Internal watcher to clean up dead cluster event subscribers
+	watcherProps := Props{
+		New: func() actor.Actor {
+			return &clusterWatcherActor{
+				BaseActor: actor.NewBaseActor(),
+				node:      node,
+			}
+		},
+	}
+	watcherRef, err := node.System.ActorOf(watcherProps, "internalClusterWatcher")
+	if err == nil {
+		node.clusterWatcherRef = watcherRef
+	}
+
 	return node, nil
+}
+
+type clusterWatcherActor struct {
+	actor.BaseActor
+	node *GekkaNode
+}
+
+func (a *clusterWatcherActor) Receive(msg any) {
+	if term, ok := msg.(Terminated); ok {
+		a.node.Unsubscribe(term.Actor)
+	}
 }
 
 // Addr returns the bound TCP address after Spawn. Use this to discover the
@@ -295,18 +363,30 @@ func (n *GekkaNode) OnMessage(fn func(ctx context.Context, msg *IncomingMessage)
 			recipientPath = meta.Recipient.GetPath()
 		}
 
-		// Try registered actors first.
+		// Build a sender ActorRef from the Artery envelope's sender field.
+		// This allows the receiving actor to reply via a.Sender().Tell(…, a.Self()).
+		var senderRef ActorRef
+		if meta.Sender != nil && meta.Sender.GetPath() != "" {
+			senderRef = ActorRef{fullPath: meta.Sender.GetPath(), node: n}
+		}
+
+		incoming := &IncomingMessage{
+			RecipientPath: recipientPath,
+			Payload:       meta.Payload,
+			SerializerId:  meta.SerializerId,
+			Manifest:      string(meta.MessageManifest),
+			Sender:        senderRef,
+		}
+
+		// Try registered actors first; deliver via actor.Envelope so that
+		// BaseActor.currentSender is set before Receive is called.
 		n.actorsMu.RLock()
 		a, found := n.actors[recipientPath]
 		n.actorsMu.RUnlock()
 		if found {
+			env := actor.Envelope{Payload: incoming, Sender: senderRef}
 			select {
-			case a.Mailbox() <- &IncomingMessage{
-				RecipientPath: recipientPath,
-				Payload:       meta.Payload,
-				SerializerId:  meta.SerializerId,
-				Manifest:      string(meta.MessageManifest),
-			}:
+			case a.Mailbox() <- env:
 			default:
 				// Mailbox full — drop, just like a dead-letter in Pekko.
 			}
@@ -316,12 +396,7 @@ func (n *GekkaNode) OnMessage(fn func(ctx context.Context, msg *IncomingMessage)
 		if fn == nil {
 			return nil
 		}
-		return fn(ctx, &IncomingMessage{
-			RecipientPath: recipientPath,
-			Payload:       meta.Payload,
-			SerializerId:  meta.SerializerId,
-			Manifest:      string(meta.MessageManifest),
-		})
+		return fn(ctx, incoming)
 	}
 }
 
@@ -559,31 +634,28 @@ func (n *GekkaNode) SingletonProxy(managerPath, role string) *ClusterSingletonPr
 	return NewClusterSingletonProxy(n.cm, n.router, managerPath, role)
 }
 
-// Subscribe registers ch to receive cluster domain events.
+// Subscribe registers an ActorRef to receive cluster domain events.
 //
 // Pass Event* variables to filter specific types; omit to receive all events:
 //
-//	ch := make(chan gekka.ClusterDomainEvent, 16)
-//	node.Subscribe(ch, gekka.EventMemberUp, gekka.EventMemberRemoved)
-//	go func() {
-//	    for evt := range ch {
-//	        switch e := evt.(type) {
-//	        case gekka.MemberUp:
-//	            log.Printf("member up: %s", e.Member)
-//	        }
-//	    }
-//	}()
+//	node.Subscribe(myActorRef, gekka.EventMemberUp, gekka.EventMemberRemoved)
 //
-// ch must be buffered. Events are dropped (not queued) if the channel is full,
-// so size the buffer for your slowest consumer.
-func (n *GekkaNode) Subscribe(ch chan<- ClusterDomainEvent, types ...reflect.Type) {
-	n.cm.Subscribe(ch, types...)
+// When the subscriber actor is stopped, it is automatically unsubscribed to
+// prevent memory leaks.
+func (n *GekkaNode) Subscribe(ref ActorRef, types ...reflect.Type) {
+	n.cm.Subscribe(ref, types...)
+	if n.clusterWatcherRef.fullPath != "" {
+		n.System.Watch(n.clusterWatcherRef, ref)
+	}
 }
 
-// Unsubscribe removes ch from the cluster event subscriber list.
-// Safe to call even if ch was never subscribed or has already been removed.
-func (n *GekkaNode) Unsubscribe(ch chan<- ClusterDomainEvent) {
-	n.cm.Unsubscribe(ch)
+// Unsubscribe removes the actor from the cluster event subscriber list.
+// Safe to call even if the actor was never subscribed or has already been removed.
+func (n *GekkaNode) Unsubscribe(ref ActorRef) {
+	n.cm.Unsubscribe(ref)
+	if n.clusterWatcherRef.fullPath != "" {
+		n.System.Unwatch(n.clusterWatcherRef, ref)
+	}
 }
 
 // Metrics returns a point-in-time snapshot of all internal counters.
@@ -610,9 +682,36 @@ func (n *GekkaNode) Serialization() *SerializationRegistry {
 	return n.nm.SerializerRegistry
 }
 
+// RegisterSerializer registers a custom Serializer with this node's
+// SerializationRegistry, keyed by s.Identifier(). Overwrites any existing
+// entry for the same ID.
+//
+//	node.RegisterSerializer(&MyJSONSerializer{})
+func (n *GekkaNode) RegisterSerializer(s Serializer) {
+	n.nm.SerializerRegistry.RegisterSerializer(s.Identifier(), s)
+}
+
+// RegisterType binds a manifest string to a Go reflect.Type so that
+// ProtobufSerializer and JSONSerializer can instantiate the correct struct
+// when deserializing an incoming message.
+//
+// manifest is typically the fully-qualified Scala/Java class name used by the
+// remote Pekko side, or any agreed-upon string for Go-to-Go communication.
+//
+//	node.RegisterType("com.example.OrderPlaced", reflect.TypeOf(OrderPlaced{}))
+//	node.RegisterType("com.example.UserCreated", reflect.TypeOf((*UserCreated)(nil)))
+func (n *GekkaNode) RegisterType(manifest string, typ reflect.Type) {
+	n.nm.SerializerRegistry.RegisterManifest(manifest, typ)
+}
+
 // Shutdown stops the TCP server and cancels all background goroutines.
 // It is safe to call multiple times.
 func (n *GekkaNode) Shutdown() error {
-	n.cancel()
-	return n.server.Shutdown()
+	if n.cancel != nil {
+		n.cancel()
+	}
+	if n.server != nil {
+		return n.server.Shutdown()
+	}
+	return nil
 }

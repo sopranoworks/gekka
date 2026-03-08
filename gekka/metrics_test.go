@@ -526,4 +526,3 @@ func TestMonitoring_CountAssociations(t *testing.T) {
 		t.Logf("CountAssociations = %d", n)
 	}
 }
-

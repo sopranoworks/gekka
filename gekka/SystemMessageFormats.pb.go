@@ -198,8 +198,8 @@ func (x *SystemMessage) GetDwNotificationData() *DeathWatchNotificationData {
 
 type WatchData struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Watchee       *ProtoActorRef              `protobuf:"bytes,1,req,name=watchee" json:"watchee,omitempty"`
-	Watcher       *ProtoActorRef              `protobuf:"bytes,2,req,name=watcher" json:"watcher,omitempty"`
+	Watchee       *ProtoActorRef         `protobuf:"bytes,1,req,name=watchee" json:"watchee,omitempty"`
+	Watcher       *ProtoActorRef         `protobuf:"bytes,2,req,name=watcher" json:"watcher,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -250,7 +250,7 @@ func (x *WatchData) GetWatcher() *ProtoActorRef {
 
 type SuperviseData struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Child         *ProtoActorRef              `protobuf:"bytes,1,req,name=child" json:"child,omitempty"`
+	Child         *ProtoActorRef         `protobuf:"bytes,1,req,name=child" json:"child,omitempty"`
 	Async         *bool                  `protobuf:"varint,2,req,name=async" json:"async,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -302,7 +302,7 @@ func (x *SuperviseData) GetAsync() bool {
 
 type FailedData struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Child         *ProtoActorRef              `protobuf:"bytes,1,req,name=child" json:"child,omitempty"`
+	Child         *ProtoActorRef         `protobuf:"bytes,1,req,name=child" json:"child,omitempty"`
 	Uid           *uint64                `protobuf:"varint,2,req,name=uid" json:"uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -354,7 +354,7 @@ func (x *FailedData) GetUid() uint64 {
 
 type DeathWatchNotificationData struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
-	Actor              *ProtoActorRef              `protobuf:"bytes,1,req,name=actor" json:"actor,omitempty"`
+	Actor              *ProtoActorRef         `protobuf:"bytes,1,req,name=actor" json:"actor,omitempty"`
 	ExistenceConfirmed *bool                  `protobuf:"varint,2,req,name=existenceConfirmed" json:"existenceConfirmed,omitempty"`
 	AddressTerminated  *bool                  `protobuf:"varint,3,req,name=addressTerminated" json:"addressTerminated,omitempty"`
 	unknownFields      protoimpl.UnknownFields
@@ -479,7 +479,7 @@ var file_SystemMessageFormats_proto_goTypes = []any{
 	(*FailedData)(nil),                 // 4: FailedData
 	(*DeathWatchNotificationData)(nil), // 5: DeathWatchNotificationData
 	(*Payload)(nil),                    // 6: Payload
-	(*ProtoActorRef)(nil),                   // 7: ProtoActorRef
+	(*ProtoActorRef)(nil),              // 7: ProtoActorRef
 }
 var file_SystemMessageFormats_proto_depIdxs = []int32{
 	0,  // 0: SystemMessage.type:type_name -> SystemMessage.Type

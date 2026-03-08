@@ -24,6 +24,13 @@ distributed-worker
 monitoring
 ask-pattern
 
+# Example Binaries (recursive)
+examples/**/basic
+examples/**/crdt-dashboard
+examples/**/distributed-worker
+examples/**/monitoring
+examples/**/ask-pattern
+
 # sbt / Scala build artifacts (in gekka/ sbt sub-project)
 gekka/project/target/
 gekka/target/

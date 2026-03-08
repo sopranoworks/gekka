@@ -266,7 +266,7 @@ func (x *Identify) GetMessageId() *Payload {
 type ActorIdentity struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	CorrelationId *Payload               `protobuf:"bytes,1,req,name=correlationId" json:"correlationId,omitempty"`
-	Ref           *ProtoActorRef              `protobuf:"bytes,2,opt,name=ref" json:"ref,omitempty"`
+	Ref           *ProtoActorRef         `protobuf:"bytes,2,opt,name=ref" json:"ref,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -637,7 +637,7 @@ func (x *ThrowableNotSerializable) GetOriginalClassName() string {
 
 type ActorInitializationException struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Actor         *ProtoActorRef              `protobuf:"bytes,1,opt,name=actor" json:"actor,omitempty"`
+	Actor         *ProtoActorRef         `protobuf:"bytes,1,opt,name=actor" json:"actor,omitempty"`
 	Message       *string                `protobuf:"bytes,2,req,name=message" json:"message,omitempty"`
 	Cause         *Payload               `protobuf:"bytes,3,req,name=cause" json:"cause,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -892,7 +892,7 @@ var file_ContainerFormats_proto_goTypes = []any{
 	(*Selection)(nil),                    // 2: Selection
 	(*Identify)(nil),                     // 3: Identify
 	(*ActorIdentity)(nil),                // 4: ActorIdentity
-	(*ProtoActorRef)(nil),                     // 5: ProtoActorRef
+	(*ProtoActorRef)(nil),                // 5: ProtoActorRef
 	(*Option)(nil),                       // 6: Option
 	(*Payload)(nil),                      // 7: Payload
 	(*WatcherHeartbeatResponse)(nil),     // 8: WatcherHeartbeatResponse

@@ -14,7 +14,6 @@ package gekka
 
 import (
 	"fmt"
-	"log"
 	"reflect"
 
 	"gekka/gekka/cluster"
@@ -102,19 +101,17 @@ var (
 
 // ── Subscriber management (methods on ClusterManager) ────────────────────────
 
-// eventSubscriber is an internal record for one registered subscriber channel.
+// eventSubscriber is an internal record for one registered subscriber.
 type eventSubscriber struct {
-	ch    chan<- ClusterDomainEvent
+	ref   ActorRef
 	types map[reflect.Type]struct{} // nil = subscribe to all event types
 }
 
-// Subscribe registers ch to receive cluster domain events.
+// Subscribe registers an ActorRef to receive cluster domain events.
 //
 // Pass Event* values to receive only specific types; omit types to subscribe
-// to every ClusterDomainEvent.  ch must be a buffered channel — publishEvent
-// drops events rather than blocking when the channel is full, so size the
-// buffer to accommodate your slowest consumer (16–64 is typical).
-func (cm *ClusterManager) Subscribe(ch chan<- ClusterDomainEvent, types ...reflect.Type) {
+// to every ClusterDomainEvent.
+func (cm *ClusterManager) Subscribe(ref ActorRef, types ...reflect.Type) {
 	var typeSet map[reflect.Type]struct{}
 	if len(types) > 0 {
 		typeSet = make(map[reflect.Type]struct{}, len(types))
@@ -123,18 +120,18 @@ func (cm *ClusterManager) Subscribe(ch chan<- ClusterDomainEvent, types ...refle
 		}
 	}
 	cm.subMu.Lock()
-	cm.subs = append(cm.subs, eventSubscriber{ch: ch, types: typeSet})
+	cm.subs = append(cm.subs, eventSubscriber{ref: ref, types: typeSet})
 	cm.subMu.Unlock()
 }
 
-// Unsubscribe removes ch from the subscriber list.  Safe to call even when ch
-// was never subscribed or has already been unsubscribed.
-func (cm *ClusterManager) Unsubscribe(ch chan<- ClusterDomainEvent) {
+// Unsubscribe removes the actor from the subscriber list. Safe to call even when
+// the actor was never subscribed or has already been unsubscribed.
+func (cm *ClusterManager) Unsubscribe(ref ActorRef) {
 	cm.subMu.Lock()
 	defer cm.subMu.Unlock()
 	kept := cm.subs[:0]
 	for _, s := range cm.subs {
-		if s.ch != ch {
+		if s.ref.Path() != ref.Path() {
 			kept = append(kept, s)
 		}
 	}
@@ -143,9 +140,7 @@ func (cm *ClusterManager) Unsubscribe(ch chan<- ClusterDomainEvent) {
 
 // publishEvent delivers evt to all matching subscribers.
 //
-// Non-blocking: if a subscriber's channel is full the event is silently
-// dropped and a warning is logged.  Safe to call while holding cm.mu because
-// it only acquires cm.subMu (a separate lock).
+// Safe to call while holding cm.mu because it only acquires cm.subMu (a separate lock).
 func (cm *ClusterManager) publishEvent(evt ClusterDomainEvent) {
 	cm.subMu.RLock()
 	subs := append([]eventSubscriber(nil), cm.subs...)
@@ -158,11 +153,7 @@ func (cm *ClusterManager) publishEvent(evt ClusterDomainEvent) {
 				continue
 			}
 		}
-		select {
-		case s.ch <- evt:
-		default:
-			log.Printf("ClusterEvents: subscriber channel full, dropping %T", evt)
-		}
+		s.ref.Tell(evt)
 	}
 }
 

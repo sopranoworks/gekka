@@ -20,9 +20,13 @@ import (
 // supports fire-and-forget delivery (Tell) and request-reply (Ask) regardless
 // of whether the target actor is on this node or on a remote node.
 //
+// ActorRef implements actor.Ref, so it can be passed wherever that interface
+// is expected (e.g. BaseActor.Sender(), BaseActor.Self()).
+//
 // Obtain an ActorRef from:
 //   - node.ActorSelection("...").Resolve(ctx) — discovery by path
 //   - node.SpawnActor("/user/myActor", a)     — register a new local actor
+//   - node.System.ActorOf(props, "name")      — create + register in one step
 //
 // An ActorRef is a lightweight value — it is safe to copy and share across
 // goroutines.
@@ -30,6 +34,21 @@ type ActorRef struct {
 	fullPath string // full actor-path URI, e.g. "pekko://System@host:port/user/foo"
 	node     *GekkaNode
 	local    actor.Actor // non-nil when the target is registered locally on this node
+}
+
+// NoSender is the zero-value ActorRef used when no specific sender is attached
+// to a message. Pass it (or omit the sender argument) to Tell when the recipient
+// should not reply to a particular actor.
+//
+//	ref.Tell([]byte("fire and forget"), gekka.NoSender)
+//	ref.Tell([]byte("fire and forget")) // equivalent
+var NoSender ActorRef
+
+// Terminated is sent to watching actors when the target actor stops.
+// For remote actors, this is triggered when the hosting node leaves the cluster
+// or becomes unreachably severed.
+type Terminated struct {
+	Actor ActorRef
 }
 
 // Path returns the full actor-path URI for this reference.
@@ -46,17 +65,45 @@ func (r ActorRef) String() string { return r.fullPath }
 // Tell is fire-and-forget: it returns as soon as the message is accepted by
 // the mailbox or the Artery outbox. It does not wait for the actor to process
 // the message or for any network acknowledgment.
-func (r ActorRef) Tell(msg any) {
+//
+// sender is the actor reference to embed as the message origin so that the
+// recipient can reply via its Sender() method. Omit sender (or pass
+// gekka.NoSender / nil) for anonymous fire-and-forget messages.
+//
+//	// Simple fire-and-forget
+//	ref.Tell([]byte("ping"))
+//
+//	// With explicit sender so the recipient can reply
+//	ref.Tell([]byte("ping"), self)
+//
+// Tell satisfies the actor.Ref interface.
+func (r ActorRef) Tell(msg any, sender ...actor.Ref) {
+	// Resolve sender: nil means NoSender.
+	var s actor.Ref
+	if len(sender) > 0 && sender[0] != nil && sender[0].Path() != "" {
+		s = sender[0]
+	}
+
 	if r.local != nil {
+		env := actor.Envelope{Payload: msg, Sender: s}
 		select {
-		case r.local.Mailbox() <- msg:
+		case r.local.Mailbox() <- env:
 		default:
 			// Mailbox full — drop silently (analogous to Pekko dead letters).
 		}
 		return
 	}
-	// Remote: use a background context — Tell is fire-and-forget.
-	_ = r.node.Send(context.Background(), r.fullPath, msg)
+
+	if r.node == nil {
+		return
+	}
+
+	// Remote: serialise and send via Artery TCP.
+	if s != nil {
+		_ = r.node.router.SendWithSender(context.Background(), r.fullPath, s.Path(), msg)
+	} else {
+		_ = r.node.Send(context.Background(), r.fullPath, msg)
+	}
 }
 
 // Ask sends msg and blocks until the actor replies or ctx is cancelled.
@@ -162,8 +209,9 @@ func (s ActorSelection) Resolve(ctx context.Context) (ActorRef, error) {
 }
 
 // Tell resolves the selection and delivers msg. For unresolved local actors an
-// error is logged and the message is dropped.
-func (s ActorSelection) Tell(msg any) {
+// error is logged and the message is dropped. sender is forwarded to the
+// resolved ActorRef.Tell — see ActorRef.Tell for semantics.
+func (s ActorSelection) Tell(msg any, sender ...actor.Ref) {
 	ref, err := s.Resolve(context.Background())
 	if err != nil {
 		if !strings.HasPrefix(s.rawPath, "/") {
@@ -172,7 +220,7 @@ func (s ActorSelection) Tell(msg any) {
 		}
 		return
 	}
-	ref.Tell(msg)
+	ref.Tell(msg, sender...)
 }
 
 // Ask resolves the selection and blocks until the actor replies or ctx is
@@ -229,7 +277,35 @@ func (n *GekkaNode) ActorSelection(path string) ActorSelection {
 // "/user/myActor". Do NOT call actor.Start yourself before SpawnActor — that
 // would launch two receive goroutines.
 func (n *GekkaNode) SpawnActor(path string, a actor.Actor) ActorRef {
+	ref := ActorRef{fullPath: n.selfPathURI(path), node: n, local: a}
+
+	// Inject the actor's own reference so it can use Self() inside Receive.
+	type selfSetter interface{ SetSelf(actor.Ref) }
+	if ss, ok := a.(selfSetter); ok {
+		ss.SetSelf(ref)
+	}
+
+	// Inject the ActorContext so actors can spawn peers and access the
+	// node lifecycle context via a.System(). Uses actor.InjectSystem so that
+	// the package-local type assertion reaches the unexported setSystem method.
+	if nas, ok := n.System.(*nodeActorSystem); ok {
+		actor.InjectSystem(a, nas.asActorContext())
+	}
+
+	// Initialise the actor-aware logger. Uses actor.InjectLog for the same
+	// package-locality reason.
+	actor.InjectLog(a, n.logHandler, ref)
+
+	a.SetOnStop(func() {
+		n.UnregisterActor(path)
+		terminatedMsg := Terminated{Actor: ref}
+		for _, w := range a.Watchers() {
+			if watcherRef, ok := w.(ActorRef); ok {
+				watcherRef.Tell(terminatedMsg)
+			}
+		}
+	})
 	actor.Start(a)
 	n.RegisterActor(path, a)
-	return ActorRef{fullPath: n.selfPathURI(path), node: n, local: a}
+	return ref
 }

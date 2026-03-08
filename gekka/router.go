@@ -101,7 +101,9 @@ func (r *Router) Send(ctx context.Context, path string, msg interface{}) error {
 			finalSerializerId = 4
 			finalManifest = ""
 		} else {
-			finalSerializerId = 4
+			// Arbitrary Go struct: use the built-in JSONSerializer so that
+			// ToBinary succeeds (ByteArraySerializer only accepts []byte).
+			finalSerializerId = JSONSerializerID
 			finalManifest = msgType.String()
 		}
 	}
@@ -200,7 +202,9 @@ func (r *Router) SendWithSender(ctx context.Context, path string, senderPath str
 			finalSerializerId = 4
 			finalManifest = ""
 		} else {
-			finalSerializerId = 4
+			// Arbitrary Go struct: use the built-in JSONSerializer so that
+			// ToBinary succeeds (ByteArraySerializer only accepts []byte).
+			finalSerializerId = JSONSerializerID
 			finalManifest = msgType.String()
 		}
 	}

@@ -58,11 +58,17 @@ func TestRouter_Send_AutoDial(t *testing.T) {
 		Hostname: proto.String("127.0.0.1"),
 		Port:     proto.Uint32(2553),
 	}
-	remoteNM := NewNodeManager(remoteLocalAddr)
+	remoteNM := NewNodeManager(remoteLocalAddr, 0)
+
+	serverCtx, serverCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer serverCancel()
 
 	go func() {
-		conn, _ := ln.Accept()
-		remoteNM.ProcessConnection(context.Background(), conn, INBOUND, nil)
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		remoteNM.ProcessConnection(serverCtx, conn, INBOUND, nil, 0)
 	}()
 
 	// 2. Setup Local Router
@@ -72,23 +78,31 @@ func TestRouter_Send_AutoDial(t *testing.T) {
 		Hostname: proto.String("127.0.0.1"),
 		Port:     proto.Uint32(2552),
 	}
-	localNM := NewNodeManager(localAddr)
+	localNM := NewNodeManager(localAddr, 0)
 	router := NewRouter(localNM)
 
-	// 3. Send message (triggers dial)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	// 3. Send message (triggers dial + handshake)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
 	msg := &ArteryHeartbeatRsp{Uid: proto.Uint64(123)}
-	err = router.Send(ctx, "pekko://remoteSystem@127.0.0.1:2553/user/receiver", msg)
-	if err != nil {
+	if err := router.Send(ctx, "pekko://remoteSystem@127.0.0.1:2553/user/receiver", msg); err != nil {
 		t.Fatalf("Router.Send failed: %v", err)
 	}
 
-	// 4. Verify association exists
+	// 4. Verify association exists (dialRemote returns it as soon as it appears).
 	assoc, ok := router.getAssociationByHost("127.0.0.1", 2553)
 	if !ok {
 		t.Fatal("association should have been created")
+	}
+
+	// 5. Wait up to 2 s for the handshake to complete (initiateHandshake sleeps 500 ms).
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if assoc.GetState() == ASSOCIATED {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 	if assoc.GetState() != ASSOCIATED {
 		t.Errorf("expected state ASSOCIATED, got %v", assoc.GetState())
@@ -100,7 +114,15 @@ func TestRouter_Buffering(t *testing.T) {
 	defer client.Close()
 	defer server.Close()
 
-	nm := NewNodeManager(&Address{Hostname: proto.String("127.0.0.1")})
+	remoteAddr := &Address{
+		Protocol: proto.String("pekko"),
+		System:   proto.String("remoteSystem"),
+		Hostname: proto.String("10.0.0.1"),
+		Port:     proto.Uint32(2552),
+	}
+	nm := NewNodeManager(&Address{Hostname: proto.String("127.0.0.1")}, 0)
+
+	// Build a fully-initialised outbound association that is registered in nm.
 	assoc := &GekkaAssociation{
 		state:     WAITING_FOR_HANDSHAKE,
 		role:      OUTBOUND,
@@ -108,36 +130,74 @@ func TestRouter_Buffering(t *testing.T) {
 		nodeMgr:   nm,
 		pending:   make([][]byte, 0),
 		handshake: make(chan struct{}),
+		outbox:    make(chan []byte, 100),
+		remote: &UniqueAddress{
+			Address: remoteAddr,
+			Uid:     proto.Uint64(0),
+		},
 	}
+	nm.mu.Lock()
+	nm.associations["10.0.0.1:2552-0"] = assoc
+	nm.mu.Unlock()
 
-	// Send while waiting (unframed payload, Send adds frame)
+	// Start the outbox writer goroutine (normally started by ProcessConnection).
+	outboxCtx, outboxCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer outboxCancel()
+	go func() {
+		for {
+			select {
+			case <-outboxCtx.Done():
+				return
+			case msg, ok := <-assoc.outbox:
+				if !ok {
+					return
+				}
+				_ = WriteFrame(assoc.conn, msg)
+			}
+		}
+	}()
+
+	// Send while waiting — message should be buffered, not written yet.
 	payload := []byte("delayed-message")
-	if err := assoc.Send("/user/test", payload, 1, "test"); err != nil {
+	if err := assoc.Send("/user/test", payload, 4, ""); err != nil {
 		t.Fatalf("Send failed: %v", err)
 	}
-
 	if len(assoc.pending) != 1 {
-		t.Fatal("message should be buffered")
+		t.Fatal("message should be buffered in pending")
 	}
 
-	// Complete handshake
+	// Complete handshake: mwa.Address matches assoc.remote (host/port).
 	mwa := &MessageWithAddress{
 		Address: &UniqueAddress{
-			Address: &Address{Hostname: proto.String("remote")},
+			Address: remoteAddr,
 			Uid:     proto.Uint64(1),
 		},
 	}
 	go func() {
-		assoc.handleHandshakeRsp(mwa)
+		_ = assoc.handleHandshakeRsp(mwa)
 	}()
 
-	// Read from client
+	// The pending message should now be flushed through the outbox to `server`,
+	// making it readable from `client` as a 4-byte length-prefixed Artery frame.
 	header := make([]byte, 4)
 	if _, err := io.ReadFull(client, header); err != nil {
-		t.Fatalf("failed to read header: %v", err)
+		t.Fatalf("failed to read frame header after handshake: %v", err)
 	}
-	length := binary.LittleEndian.Uint32(header)
-	if length != uint32(len(payload)) {
-		t.Errorf("expected length %d, got %d", len(payload), length)
+	frameLen := binary.LittleEndian.Uint32(header)
+	if frameLen == 0 {
+		t.Fatal("expected non-zero frame length")
+	}
+	// The frame is a proper Artery binary frame (28-byte header + literals + payload).
+	// Just verify the payload bytes contain our original message.
+	frameBytes := make([]byte, frameLen)
+	if _, err := io.ReadFull(client, frameBytes); err != nil {
+		t.Fatalf("failed to read frame body: %v", err)
+	}
+	meta, err := ParseArteryFrame(frameBytes, nil, 0)
+	if err != nil {
+		t.Fatalf("ParseArteryFrame: %v", err)
+	}
+	if string(meta.Payload) != string(payload) {
+		t.Errorf("expected payload %q, got %q", payload, meta.Payload)
 	}
 }

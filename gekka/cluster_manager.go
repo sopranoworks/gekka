@@ -18,6 +18,7 @@ import (
 	"math/rand"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"gekka/gekka/cluster"
@@ -62,6 +63,18 @@ type ClusterManager struct {
 	fd              *PhiAccrualFailureDetector
 	cancelHeartbeat context.CancelFunc
 	protocol        string // "pekko" or "akka"; set by GekkaNode.Spawn
+
+	// welcomeReceived is set to true once a Welcome message has been
+	// processed — i.e. this node has successfully joined a cluster.
+	welcomeReceived atomic.Bool
+
+	// metrics is the shared NodeMetrics instance (set by GekkaNode.Spawn).
+	// Nil-safe: all callers check before touching.
+	metrics *NodeMetrics
+
+	// Cluster event subscribers — managed by cluster_events.go methods.
+	subMu sync.RWMutex
+	subs  []eventSubscriber
 }
 
 // proto returns the configured actor-path scheme, defaulting to "pekko".
@@ -84,9 +97,10 @@ func (cm *ClusterManager) heartbeatPath(system, host string, port uint32) string
 
 func NewClusterManager(local *UniqueAddress, router *Router) *ClusterManager {
 	clLocal := toClusterUniqueAddress(local)
+	localHash := int32(local.GetUid()) // simplified hash as UID
 	return &ClusterManager{
 		localAddress: local,
-		localHash:    int32(local.GetUid()), // simplified hash as UID
+		localHash:    localHash,
 		router:       router,
 		fd:           NewPhiAccrualFailureDetector(8.0, 1000),
 		state: &cluster.Gossip{
@@ -98,8 +112,16 @@ func NewClusterManager(local *UniqueAddress, router *Router) *ClusterManager {
 				},
 			},
 			AllAddresses: []*cluster.UniqueAddress{clLocal},
+			AllHashes:    []string{fmt.Sprintf("%d", localHash)},
 			Overview:     &cluster.GossipOverview{},
-			Version:      &cluster.VectorClock{},
+			Version: &cluster.VectorClock{
+				Versions: []*cluster.VectorClock_Version{
+					{
+						HashIndex: proto.Int32(0),
+						Timestamp: proto.Int64(1),
+					},
+				},
+			},
 		},
 	}
 }
@@ -137,7 +159,7 @@ func (cm *ClusterManager) JoinCluster(ctx context.Context, seedHost string, seed
 	// In Pekko Cluster, we usually start with InitJoin.
 	// Send a minimal config so Pekko's JoinConfigCompatCheckCluster.check
 	// can call getString("pekko.cluster.downing-provider-class") without throwing.
-	minConfig := proto.String(`pekko.cluster.downing-provider-class = ""`)
+	minConfig := proto.String(`pekko.cluster.downing-provider-class = "org.apache.pekko.cluster.sbr.SplitBrainResolverProvider"`)
 	initJoin := &cluster.InitJoin{CurrentConfig: minConfig}
 	return cm.router.Send(ctx, path, initJoin)
 }
@@ -176,11 +198,27 @@ func (cm *ClusterManager) LeaveCluster() error {
 
 // HandleIncomingClusterMessage dispatches cluster-level messages.
 // Pekko's ClusterMessageSerializer uses short manifests: "IJ", "IJA", "J", "W", "GE", "GS", "HB", "HBR", "L".
-func (cm *ClusterManager) HandleIncomingClusterMessage(ctx context.Context, meta *ArteryMetadata) error {
+// remoteAddr is the UniqueAddress of the node that sent this message (from the association handshake).
+func (cm *ClusterManager) HandleIncomingClusterMessage(ctx context.Context, meta *ArteryMetadata, remoteAddr *UniqueAddress) error {
 	manifest := string(meta.MessageManifest)
+	log.Printf("Cluster: HandleIncomingClusterMessage manifest=%q", manifest)
 	switch manifest {
-	case "IJ": // InitJoin — handle if we are the seed
-		return nil
+	case "IJ": // InitJoin — we are the seed; reply with InitJoinAck
+		if _, err := proto.Marshal(&cluster.InitJoin{}); err == nil { // parse is optional; CurrentConfig is advisory
+		}
+		if remoteAddr == nil {
+			log.Printf("Cluster: InitJoin: no remote address (handshake pending), ignoring")
+			return nil
+		}
+		log.Printf("Cluster: received InitJoin from %v — sending InitJoinAck", remoteAddr.GetAddress())
+		ack := &cluster.InitJoinAck{
+			Address:     toClusterAddress(cm.localAddress.Address),
+			ConfigCheck: &cluster.ConfigCheck{Type: cluster.ConfigCheck_CompatibleConfig.Enum()},
+		}
+		raddr := remoteAddr.GetAddress()
+		system := cm.localAddress.GetAddress().GetSystem()
+		path := cm.clusterCorePath(system, raddr.GetHostname(), raddr.GetPort())
+		return cm.router.Send(ctx, path, ack)
 	case "IJA": // InitJoinAck — received Ack, now send Join
 		ack := &cluster.InitJoinAck{}
 		if err := proto.Unmarshal(meta.Payload, ack); err != nil {
@@ -201,8 +239,15 @@ func (cm *ClusterManager) HandleIncomingClusterMessage(ctx context.Context, meta
 		return cm.handleHeartbeat(meta)
 	case "HBR": // HeartbeatRsp
 		return cm.handleHeartbeatRsp(meta)
-	case "L": // Leave
-		log.Printf("Cluster: received Leave")
+	case "L": // Leave — a member is requesting graceful departure
+		leave := &cluster.Address{}
+		if err := proto.Unmarshal(meta.Payload, leave); err != nil {
+			return err
+		}
+		log.Printf("Cluster: received Leave from %s:%d", leave.GetHostname(), leave.GetPort())
+		cm.mu.Lock()
+		cm.markMemberLeavingLocked(leave)
+		cm.mu.Unlock()
 		return nil
 	default:
 		log.Printf("Cluster: unknown manifest %q", manifest)
@@ -246,21 +291,87 @@ func (cm *ClusterManager) handleJoin(meta *ArteryMetadata) error {
 	if err := proto.Unmarshal(meta.Payload, join); err != nil {
 		return err
 	}
-	log.Printf("Cluster: received Join from %v", join.GetNode())
+	joiningNode := join.GetNode()
+	log.Printf("Cluster: received Join from %v", joiningNode)
 
-	// Send Welcome back to the joining node
+	// Add the joining node to our gossip state as Joining, then send Welcome with
+	// the updated state.  The gossip loop's performLeaderActions will transition
+	// Joining → Up on the next tick.
+	cm.mu.Lock()
+	cm.addMemberToGossipLocked(joiningNode)
+	welcomeGossip := proto.Clone(cm.state).(*cluster.Gossip)
+	cm.connectToNewMembers(cm.state)
+	cm.mu.Unlock()
+
 	welcome := &cluster.Welcome{
 		From:   toClusterUniqueAddress(cm.localAddress),
-		Gossip: cm.state,
+		Gossip: welcomeGossip,
 	}
 
-	// We need a path to the joining node.
-	addr := join.GetNode().GetAddress()
+	addr := joiningNode.GetAddress()
 	system := cm.localAddress.GetAddress().GetSystem()
 	path := cm.clusterCorePath(system, addr.GetHostname(), addr.GetPort())
 
 	log.Printf("Cluster: sending Welcome to %s", path)
 	return cm.router.Send(context.Background(), path, welcome)
+}
+
+// addMemberToGossipLocked adds a joining node to the gossip Members list (as Joining).
+// Must be called with cm.mu held.
+func (cm *ClusterManager) addMemberToGossipLocked(joiningAddr *cluster.UniqueAddress) {
+	// Look for an existing AllAddresses entry by host:port.
+	for i, addr := range cm.state.AllAddresses {
+		if addr.GetAddress().GetHostname() == joiningAddr.GetAddress().GetHostname() &&
+			addr.GetAddress().GetPort() == joiningAddr.GetAddress().GetPort() {
+			// Already known — add Member if not present.
+			for _, m := range cm.state.Members {
+				if m.GetAddressIndex() == int32(i) {
+					return // already a member
+				}
+			}
+			cm.state.Members = append(cm.state.Members, &cluster.Member{
+				AddressIndex: proto.Int32(int32(i)),
+				Status:       cluster.MemberStatus_Joining.Enum(),
+				UpNumber:     proto.Int32(int32(len(cm.state.Members) + 1)),
+			})
+			cm.incrementVersionWithLockHeld()
+			return
+		}
+	}
+
+	// New address — append to AllAddresses and create a Member.
+	addrIdx := int32(len(cm.state.AllAddresses))
+	cm.state.AllAddresses = append(cm.state.AllAddresses, joiningAddr)
+	cm.state.Members = append(cm.state.Members, &cluster.Member{
+		AddressIndex: proto.Int32(addrIdx),
+		Status:       cluster.MemberStatus_Joining.Enum(),
+		UpNumber:     proto.Int32(int32(len(cm.state.Members) + 1)),
+	})
+	cm.incrementVersionWithLockHeld()
+}
+
+// markMemberLeavingLocked transitions an Up/WeaklyUp member to Leaving status.
+// Must be called with cm.mu held.
+func (cm *ClusterManager) markMemberLeavingLocked(leaveAddr *cluster.Address) {
+	for _, m := range cm.state.Members {
+		addr := cm.state.AllAddresses[m.GetAddressIndex()]
+		if addr.GetAddress().GetHostname() == leaveAddr.GetHostname() &&
+			addr.GetAddress().GetPort() == leaveAddr.GetPort() {
+			if m.GetStatus() == cluster.MemberStatus_Up || m.GetStatus() == cluster.MemberStatus_WeaklyUp {
+				m.Status = cluster.MemberStatus_Leaving.Enum()
+				cm.incrementVersionWithLockHeld()
+				log.Printf("Cluster: marked %s:%d as Leaving", leaveAddr.GetHostname(), leaveAddr.GetPort())
+				// publishEvent is safe while holding cm.mu — it only acquires cm.subMu.
+				cm.publishEvent(MemberLeft{Member: MemberAddress{
+					Protocol: addr.GetAddress().GetProtocol(),
+					System:   addr.GetAddress().GetSystem(),
+					Host:     leaveAddr.GetHostname(),
+					Port:     leaveAddr.GetPort(),
+				}})
+			}
+			return
+		}
+	}
 }
 
 func (cm *ClusterManager) handleWelcome(meta *ArteryMetadata) error {
@@ -276,15 +387,22 @@ func (cm *ClusterManager) handleWelcome(meta *ArteryMetadata) error {
 	log.Printf("Cluster: welcomed by %v", welcome.GetFrom())
 	cm.mu.Lock()
 	cm.state = welcome.Gossip
+	cm.connectToNewMembers(welcome.Gossip)
 	cm.mu.Unlock()
+	// Signal that this node has successfully joined a cluster.
+	cm.welcomeReceived.Store(true)
 	return nil
 }
 
 func (cm *ClusterManager) handleGossipEnvelope(meta *ArteryMetadata) error {
+	if cm.metrics != nil {
+		cm.metrics.GossipsReceived.Add(1)
+	}
 	envelope := &cluster.GossipEnvelope{}
 	if err := proto.Unmarshal(meta.Payload, envelope); err != nil {
 		return err
 	}
+	log.Printf("Cluster: received GossipEnvelope from %v", envelope.GetFrom())
 
 	// Pekko GZIP-compresses GossipEnvelope.serializedGossip
 	decompressed, err := gzipDecompress(envelope.SerializedGossip)
@@ -355,34 +473,210 @@ func CompareVectorClock(v1, v2 *cluster.VectorClock) ClockOrdering {
 	return ClockSame
 }
 
+func (cm *ClusterManager) vectorClockToMap(vc *cluster.VectorClock, hashes []string) map[string]int64 {
+	m := make(map[string]int64)
+	if vc == nil {
+		return m
+	}
+	for _, v := range vc.Versions {
+		idx := v.GetHashIndex()
+		if int(idx) >= 0 && int(idx) < len(hashes) {
+			m[hashes[idx]] = v.GetTimestamp()
+		}
+	}
+	return m
+}
+
+func (cm *ClusterManager) compareResolvedClocks(m1, m2 map[string]int64) ClockOrdering {
+	allKeys := make(map[string]bool)
+	for k := range m1 {
+		allKeys[k] = true
+	}
+	for k := range m2 {
+		allKeys[k] = true
+	}
+
+	hasBefore := false
+	hasAfter := false
+
+	for k := range allKeys {
+		val1 := m1[k]
+		val2 := m2[k]
+		if val1 < val2 {
+			hasBefore = true
+		} else if val1 > val2 {
+			hasAfter = true
+		}
+	}
+
+	if hasBefore && hasAfter {
+		return ClockConcurrent
+	}
+	if hasBefore {
+		return ClockBefore
+	}
+	if hasAfter {
+		return ClockAfter
+	}
+	return ClockSame
+}
+
+// mergeGossipStates merges two concurrent gossip states into one.
+// It takes the union of AllAddresses and Members (keeping higher member status
+// for duplicates), and the pairwise-max of the VectorClocks.
+// Must be called with cm.mu held (read or write).
+func (cm *ClusterManager) mergeGossipStates(local, incoming *cluster.Gossip) *cluster.Gossip {
+	type addrKey struct {
+		host string
+		port uint32
+	}
+
+	// ── AllAddresses (union, dedup by host:port) ─────────────────────────────
+	mergedAddresses := make([]*cluster.UniqueAddress, 0, len(local.AllAddresses)+len(incoming.AllAddresses))
+	addrIndexMap := make(map[addrKey]int32)
+
+	for _, addr := range local.AllAddresses {
+		k := addrKey{addr.GetAddress().GetHostname(), addr.GetAddress().GetPort()}
+		if _, ok := addrIndexMap[k]; !ok {
+			addrIndexMap[k] = int32(len(mergedAddresses))
+			mergedAddresses = append(mergedAddresses, addr)
+		}
+	}
+	incomingIdxRemap := make(map[int32]int32, len(incoming.AllAddresses))
+	for i, addr := range incoming.AllAddresses {
+		k := addrKey{addr.GetAddress().GetHostname(), addr.GetAddress().GetPort()}
+		if existIdx, ok := addrIndexMap[k]; ok {
+			incomingIdxRemap[int32(i)] = existIdx
+		} else {
+			newIdx := int32(len(mergedAddresses))
+			incomingIdxRemap[int32(i)] = newIdx
+			addrIndexMap[k] = newIdx
+			mergedAddresses = append(mergedAddresses, addr)
+		}
+	}
+
+	// ── Members (union, higher status wins for duplicates) ───────────────────
+	// Status lifecycle order: Joining < WeaklyUp < Up < Leaving < Exiting < Removed / Down
+	statusOrd := map[cluster.MemberStatus]int{
+		cluster.MemberStatus_Joining:  0,
+		cluster.MemberStatus_WeaklyUp: 1,
+		cluster.MemberStatus_Up:       2,
+		cluster.MemberStatus_Leaving:  3,
+		cluster.MemberStatus_Exiting:  4,
+		cluster.MemberStatus_Removed:  5,
+		cluster.MemberStatus_Down:     6,
+	}
+
+	mergedMembers := make([]*cluster.Member, 0, len(local.Members)+len(incoming.Members))
+	memberByMergedIdx := make(map[int32]*cluster.Member)
+
+	for _, m := range local.Members {
+		addr := local.AllAddresses[m.GetAddressIndex()]
+		k := addrKey{addr.GetAddress().GetHostname(), addr.GetAddress().GetPort()}
+		mergedIdx := addrIndexMap[k]
+		newM := proto.Clone(m).(*cluster.Member)
+		newM.AddressIndex = proto.Int32(mergedIdx)
+		memberByMergedIdx[mergedIdx] = newM
+		mergedMembers = append(mergedMembers, newM)
+	}
+	for _, m := range incoming.Members {
+		mergedIdx := incomingIdxRemap[m.GetAddressIndex()]
+		if existing, ok := memberByMergedIdx[mergedIdx]; ok {
+			if statusOrd[m.GetStatus()] > statusOrd[existing.GetStatus()] {
+				existing.Status = m.Status
+			}
+		} else {
+			newM := proto.Clone(m).(*cluster.Member)
+			newM.AddressIndex = proto.Int32(mergedIdx)
+			memberByMergedIdx[mergedIdx] = newM
+			mergedMembers = append(mergedMembers, newM)
+		}
+	}
+
+	// ── AllHashes (union) + VectorClock (pairwise max) ───────────────────────
+	mergedHashes := make([]string, 0, len(local.AllHashes)+len(incoming.AllHashes))
+	hashIdxMap := make(map[string]int32)
+	for _, h := range local.AllHashes {
+		if _, ok := hashIdxMap[h]; !ok {
+			hashIdxMap[h] = int32(len(mergedHashes))
+			mergedHashes = append(mergedHashes, h)
+		}
+	}
+	for _, h := range incoming.AllHashes {
+		if _, ok := hashIdxMap[h]; !ok {
+			hashIdxMap[h] = int32(len(mergedHashes))
+			mergedHashes = append(mergedHashes, h)
+		}
+	}
+
+	localVCMap := cm.vectorClockToMap(local.Version, local.AllHashes)
+	incomingVCMap := cm.vectorClockToMap(incoming.Version, incoming.AllHashes)
+
+	mergedVC := &cluster.VectorClock{}
+	for h, idx := range hashIdxMap {
+		t1, t2 := localVCMap[h], incomingVCMap[h]
+		maxT := t1
+		if t2 > maxT {
+			maxT = t2
+		}
+		if maxT > 0 {
+			mergedVC.Versions = append(mergedVC.Versions, &cluster.VectorClock_Version{
+				HashIndex: proto.Int32(idx),
+				Timestamp: proto.Int64(maxT),
+			})
+		}
+	}
+
+	return &cluster.Gossip{
+		AllAddresses: mergedAddresses,
+		Members:      mergedMembers,
+		AllHashes:    mergedHashes,
+		Version:      mergedVC,
+		Overview:     &cluster.GossipOverview{},
+	}
+}
+
 func (cm *ClusterManager) processIncomingGossip(gossip *cluster.Gossip) error {
 	cm.mu.Lock()
-	defer cm.mu.Unlock()
 
-	ordering := CompareVectorClock(cm.state.Version, gossip.Version)
+	m1 := cm.vectorClockToMap(cm.state.Version, cm.state.AllHashes)
+	m2 := cm.vectorClockToMap(gossip.Version, gossip.AllHashes)
+	log.Printf("Cluster: Comparison - localHashes=%v incomingHashes=%v localMap=%v incomingMap=%v", cm.state.AllHashes, gossip.AllHashes, m1, m2)
+	ordering := cm.compareResolvedClocks(m1, m2)
 
+	var events []ClusterDomainEvent
 	if ordering == ClockBefore {
-		// Incoming is newer, replace local state
+		// Incoming is newer — diff before replacing so we can emit events.
 		log.Printf("Cluster: received newer Gossip, replacing local state")
+		events = diffGossipMembers(cm.state, gossip)
 		cm.state = gossip
 		cm.connectToNewMembers(gossip)
 	} else if ordering == ClockConcurrent {
-		// Merge concurrent states
-		log.Printf("Cluster: received concurrent Gossip, merging (simplified replacement for now)")
-		// In a real implementation we would merge member status, seen tables, and vector clocks.
-		cm.state = gossip
-		cm.incrementVersion()
-		cm.connectToNewMembers(gossip)
-	} else {
-		// Log.Printf("Cluster: received older or same Gossip, ignoring")
+		// Merge concurrent states: union of members, pairwise-max vector clock.
+		log.Printf("Cluster: received concurrent Gossip, merging")
+		merged := cm.mergeGossipStates(cm.state, gossip)
+		events = diffGossipMembers(cm.state, merged)
+		cm.state = merged
+		cm.incrementVersionWithLockHeld()
+		cm.connectToNewMembers(merged)
 	}
 
-	// Update Failure Detector for all members
 	for _, addr := range gossip.GetAllAddresses() {
 		key := fmt.Sprintf("%s:%d-%d", addr.GetAddress().GetHostname(), addr.GetAddress().GetPort(), addr.GetUid())
 		cm.fd.Heartbeat(key)
 	}
 
+	cm.mu.Unlock()
+
+	// Record convergence timestamp when all Up members have seen this state.
+	if cm.metrics != nil && cm.CheckConvergence() {
+		cm.metrics.RecordConvergence()
+	}
+
+	// Publish events outside the lock so slow subscribers can't stall gossip.
+	for _, evt := range events {
+		cm.publishEvent(evt)
+	}
 	return nil
 }
 
@@ -408,8 +702,9 @@ func (cm *ClusterManager) connectToNewMembers(gossip *cluster.Gossip) {
 
 		// Sending a GossipStatus to standard cluster path triggers a connection if one doesn't exist
 		status := &cluster.GossipStatus{
-			From:    toClusterUniqueAddress(cm.localAddress),
-			Version: localState.Version,
+			From:      toClusterUniqueAddress(cm.localAddress),
+			AllHashes: localState.AllHashes,
+			Version:   localState.Version,
 		}
 
 		_ = cm.router.Send(context.Background(), path, status)
@@ -417,13 +712,33 @@ func (cm *ClusterManager) connectToNewMembers(gossip *cluster.Gossip) {
 }
 
 func (cm *ClusterManager) incrementVersion() {
-	// Vector clock logic: Increment timestamp for local node (simplified by hash)
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	cm.incrementVersionWithLockHeld()
+}
+
+func (cm *ClusterManager) incrementVersionWithLockHeld() {
 	if cm.state.Version == nil {
 		cm.state.Version = &cluster.VectorClock{}
 	}
+
+	myHashStr := fmt.Sprintf("%d", cm.localHash)
+	myIndex := -1
+	for i, h := range cm.state.AllHashes {
+		if h == myHashStr {
+			myIndex = i
+			break
+		}
+	}
+
+	if myIndex == -1 {
+		myIndex = len(cm.state.AllHashes)
+		cm.state.AllHashes = append(cm.state.AllHashes, myHashStr)
+	}
+
 	found := false
 	for _, v := range cm.state.Version.Versions {
-		if v.GetHashIndex() == cm.localHash {
+		if v.GetHashIndex() == int32(myIndex) {
 			v.Timestamp = proto.Int64(v.GetTimestamp() + 1)
 			found = true
 			break
@@ -431,7 +746,7 @@ func (cm *ClusterManager) incrementVersion() {
 	}
 	if !found {
 		cm.state.Version.Versions = append(cm.state.Version.Versions, &cluster.VectorClock_Version{
-			HashIndex: proto.Int32(cm.localHash),
+			HashIndex: proto.Int32(int32(myIndex)),
 			Timestamp: proto.Int64(1),
 		})
 	}
@@ -541,19 +856,48 @@ func (cm *ClusterManager) performLeaderActions() {
 		leader.GetUid() == uint32(cm.localAddress.GetUid()&0xFFFFFFFF) {
 
 		cm.mu.Lock()
+		var events []ClusterDomainEvent
 		changed := false
 		for _, m := range cm.state.Members {
-			if m.GetStatus() == cluster.MemberStatus_Joining {
+			ua := cm.state.AllAddresses[m.GetAddressIndex()]
+			ma := memberAddressFromUA(ua)
+			switch m.GetStatus() {
+			case cluster.MemberStatus_Joining:
 				m.Status = cluster.MemberStatus_Up.Enum()
 				m.UpNumber = proto.Int32(m.GetUpNumber() + 1)
+				events = append(events, MemberUp{Member: ma})
+				if cm.metrics != nil {
+					cm.metrics.MemberUpEvents.Add(1)
+				}
 				changed = true
-				log.Printf("Leader: transitioned member %d to UP", m.GetAddressIndex())
+				log.Printf("Leader: transitioned member %d Joining → Up", m.GetAddressIndex())
+			case cluster.MemberStatus_Leaving:
+				m.Status = cluster.MemberStatus_Exiting.Enum()
+				events = append(events, MemberExited{Member: ma})
+				changed = true
+				log.Printf("Leader: transitioned member %d Leaving → Exiting", m.GetAddressIndex())
+			case cluster.MemberStatus_Exiting:
+				m.Status = cluster.MemberStatus_Removed.Enum()
+				events = append(events, MemberRemoved{Member: ma})
+				if cm.metrics != nil {
+					cm.metrics.MemberRemovedEvents.Add(1)
+				}
+				changed = true
+				log.Printf("Leader: transitioned member %d Exiting → Removed", m.GetAddressIndex())
 			}
 		}
 		if changed {
-			cm.incrementVersion()
+			// Use the lock-held variant — we already hold cm.mu (write).
+			// The former cm.incrementVersion() call was a deadlock bug.
+			cm.incrementVersionWithLockHeld()
 		}
 		cm.mu.Unlock()
+
+		// Publish events outside the lock so a slow subscriber can't stall
+		// the gossip loop.
+		for _, evt := range events {
+			cm.publishEvent(evt)
+		}
 	}
 }
 
@@ -588,15 +932,29 @@ func (cm *ClusterManager) updateReachability(addrIdx int32, status cluster.Reach
 		cm.state.Overview = &cluster.GossipOverview{}
 	}
 
+	// Build the MemberAddress for event publishing (safe: addrIdx is always valid here).
+	var ma MemberAddress
+	if int(addrIdx) < len(cm.state.AllAddresses) {
+		ma = memberAddressFromUA(cm.state.AllAddresses[addrIdx])
+	}
+
 	found := false
 	for _, r := range cm.state.Overview.ObserverReachability {
 		if r.GetAddressIndex() == 0 { // 0 is us (local address index)
 			for _, s := range r.SubjectReachability {
 				if s.GetAddressIndex() == addrIdx {
 					if s.GetStatus() != status {
+						oldStatus := s.GetStatus()
 						s.Status = status.Enum()
 						s.Version = proto.Int64(s.GetVersion() + 1)
-						cm.incrementVersion()
+						// Fix: use lock-held variant — caller holds cm.mu (write).
+						cm.incrementVersionWithLockHeld()
+						// publishEvent is safe here: only acquires cm.subMu, not cm.mu.
+						if status == cluster.ReachabilityStatus_Unreachable {
+							cm.publishEvent(UnreachableMember{Member: ma})
+						} else if oldStatus == cluster.ReachabilityStatus_Unreachable {
+							cm.publishEvent(ReachableMember{Member: ma})
+						}
 					}
 					found = true
 					break
@@ -608,7 +966,10 @@ func (cm *ClusterManager) updateReachability(addrIdx int32, status cluster.Reach
 					Status:       status.Enum(),
 					Version:      proto.Int64(1),
 				})
-				cm.incrementVersion()
+				cm.incrementVersionWithLockHeld()
+				if status == cluster.ReachabilityStatus_Unreachable {
+					cm.publishEvent(UnreachableMember{Member: ma})
+				}
 			}
 			found = true
 			break
@@ -627,7 +988,10 @@ func (cm *ClusterManager) updateReachability(addrIdx int32, status cluster.Reach
 				},
 			},
 		})
-		cm.incrementVersion()
+		cm.incrementVersionWithLockHeld()
+		if status == cluster.ReachabilityStatus_Unreachable {
+			cm.publishEvent(UnreachableMember{Member: ma})
+		}
 	}
 }
 
@@ -643,13 +1007,19 @@ func (cm *ClusterManager) handleGossipStatus(meta *ArteryMetadata) error {
 	path := cm.clusterCorePath(system, addr.GetHostname(), addr.GetPort())
 
 	cm.mu.RLock()
-	ordering := CompareVectorClock(cm.state.Version, status.Version)
+	m1 := cm.vectorClockToMap(cm.state.Version, cm.state.AllHashes)
+	m2 := cm.vectorClockToMap(status.Version, status.AllHashes)
+	ordering := cm.compareResolvedClocks(m1, m2)
+	log.Printf("Cluster: handleGossipStatus from %v, ordering=%v localHashes=%v statusHashes=%v", status.GetFrom(), ordering, cm.state.AllHashes, status.AllHashes)
+
 	var statePayload []byte
 	var localVersion *cluster.VectorClock
+	var localHashes []string
 	if ordering == ClockAfter || ordering == ClockConcurrent {
 		statePayload, _ = proto.Marshal(cm.state)
 	} else if ordering == ClockBefore {
 		localVersion = cm.state.Version
+		localHashes = cm.state.AllHashes
 	}
 	cm.mu.RUnlock()
 
@@ -671,8 +1041,9 @@ func (cm *ClusterManager) handleGossipStatus(meta *ArteryMetadata) error {
 	} else if ordering == ClockBefore {
 		// Their state is newer, reply with our GossipStatus so they will send us their GossipEnvelope
 		myStatus := &cluster.GossipStatus{
-			From:    toClusterUniqueAddress(cm.localAddress),
-			Version: localVersion,
+			From:      toClusterUniqueAddress(cm.localAddress),
+			AllHashes: localHashes,
+			Version:   localVersion,
 		}
 		return cm.router.Send(context.Background(), path, myStatus)
 	}
@@ -706,8 +1077,9 @@ func (cm *ClusterManager) gossipTick() {
 	}
 
 	status := &cluster.GossipStatus{
-		From:    toClusterUniqueAddress(cm.localAddress),
-		Version: version,
+		From:      toClusterUniqueAddress(cm.localAddress),
+		AllHashes: cm.state.AllHashes,
+		Version:   version,
 	}
 
 	path := cm.clusterCorePath(

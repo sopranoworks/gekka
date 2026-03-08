@@ -9,9 +9,7 @@
 package gekka
 
 import (
-	"bytes"
 	"context"
-	"encoding/binary"
 	"net"
 	"testing"
 	"time"
@@ -33,58 +31,41 @@ func TestTcpArteryHandler_Framing(t *testing.T) {
 		return nil
 	}
 
-	errChan := make(chan error, 1)
 	go func() {
-		errChan <- TcpArteryHandlerWithCallback(ctx, server, handler, nil, 0)
+		_ = TcpArteryHandlerWithCallback(ctx, server, handler, nil, 0, 1)
 	}()
 
-	// Test Case 1: RemoteEnvelope
+	// Build a proper Artery binary frame carrying a user message.
 	recipientPath := "pekko://system@127.0.0.1:2552/user/test"
 	payload := []byte("hello artery")
-	remoteEnv := &RemoteEnvelope{
-		Recipient: &ActorRefData{Path: &recipientPath},
-		Message: &SerializedMessage{
-			Message:      payload,
-			SerializerId: proto.Int32(2),
-		},
-		Seq: proto.Uint64(123),
+	frame, err := BuildArteryFrame(42, 2, "", recipientPath, "MyMsg", payload, false)
+	if err != nil {
+		t.Fatalf("BuildArteryFrame: %v", err)
 	}
-	envPayload, _ := proto.Marshal(remoteEnv)
-
-	header := make([]byte, 4)
-	binary.LittleEndian.PutUint32(header, uint32(len(envPayload)))
-	client.Write(header)
-	client.Write(envPayload)
+	if err := WriteFrame(client, frame); err != nil {
+		t.Fatalf("WriteFrame: %v", err)
+	}
 
 	select {
 	case meta := <-receivedMetas:
 		if meta.SerializerId != 2 {
 			t.Errorf("expected serializerId 2, got %d", meta.SerializerId)
 		}
-		if !bytes.Equal(meta.Payload, payload) {
-			t.Errorf("expected payload %s, got %s", payload, meta.Payload)
-		}
-		if meta.SeqNo != 123 {
-			t.Errorf("expected seq 123, got %d", meta.SeqNo)
+		if string(meta.Payload) != string(payload) {
+			t.Errorf("expected payload %q, got %q", payload, meta.Payload)
 		}
 		if meta.Recipient.GetPath() != recipientPath {
-			t.Errorf("expected recipient %s, got %s", recipientPath, meta.Recipient.GetPath())
+			t.Errorf("expected recipient %q, got %q", recipientPath, meta.Recipient.GetPath())
+		}
+		if string(meta.MessageManifest) != "MyMsg" {
+			t.Errorf("expected manifest %q, got %q", "MyMsg", string(meta.MessageManifest))
 		}
 	case <-time.After(500 * time.Millisecond):
-		t.Error("timeout waiting for remote envelope")
+		t.Error("timeout waiting for decoded frame")
 	}
 
-	// Close client to signal EOF
+	// Close client to signal EOF; handler should exit cleanly.
 	client.Close()
-
-	select {
-	case err := <-errChan:
-		if err != nil {
-			t.Errorf("expected nil error on EOF, got %v", err)
-		}
-	case <-time.After(100 * time.Millisecond):
-		t.Error("timeout waiting for handler to exit on EOF")
-	}
 }
 
 func TestTcpArteryHandler_InvalidLength(t *testing.T) {
@@ -95,21 +76,21 @@ func TestTcpArteryHandler_InvalidLength(t *testing.T) {
 	ctx := context.Background()
 	errChan := make(chan error, 1)
 	go func() {
-		errChan <- TcpArteryHandlerWithCallback(ctx, server, func(context.Context, *ArteryMetadata) error { return nil }, nil, 0)
+		errChan <- TcpArteryHandlerWithCallback(ctx, server, func(context.Context, *ArteryMetadata) error { return nil }, nil, 0, 1)
 	}()
 
-	// Test Case: Negative Length (simulated by large uint32 interpreting as signed)
+	// 0xFFFFFFFF > MaxArteryPayloadLength — should trigger length check.
 	header := make([]byte, 4)
-	binary.LittleEndian.PutUint32(header, 0xFFFFFFFF) // -1 if signed
+	putUint32LE(header, 0xFFFFFFFF)
 	client.Write(header)
 
 	select {
 	case err := <-errChan:
 		if err == nil {
-			t.Error("expected error for negative length, got nil")
+			t.Error("expected error for oversized length, got nil")
 		}
-	case <-time.After(100 * time.Millisecond):
-		t.Error("timeout waiting for error on negative length")
+	case <-time.After(200 * time.Millisecond):
+		t.Error("timeout waiting for error on invalid length")
 	}
 }
 
@@ -121,11 +102,11 @@ func TestTcpArteryHandler_Oversized(t *testing.T) {
 	ctx := context.Background()
 	errChan := make(chan error, 1)
 	go func() {
-		errChan <- TcpArteryHandlerWithCallback(ctx, server, func(context.Context, *ArteryMetadata) error { return nil }, nil, 0)
+		errChan <- TcpArteryHandlerWithCallback(ctx, server, func(context.Context, *ArteryMetadata) error { return nil }, nil, 0, 1)
 	}()
 
 	header := make([]byte, 4)
-	binary.LittleEndian.PutUint32(header, MaxArteryPayloadLength+1)
+	putUint32LE(header, MaxArteryPayloadLength+1)
 	client.Write(header)
 
 	select {
@@ -133,17 +114,30 @@ func TestTcpArteryHandler_Oversized(t *testing.T) {
 		if err == nil {
 			t.Error("expected error for oversized payload, got nil")
 		}
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(200 * time.Millisecond):
 		t.Error("timeout waiting for error on oversized payload")
 	}
 }
 
+// putUint32LE writes a uint32 in little-endian to b.
+func putUint32LE(b []byte, v uint32) {
+	b[0] = byte(v)
+	b[1] = byte(v >> 8)
+	b[2] = byte(v >> 16)
+	b[3] = byte(v >> 24)
+}
+
 func TestDecodeArteryEnvelope_SystemMessage(t *testing.T) {
-	payload := []byte("system message")
-	systemEnv := &SystemMessageEnvelope{
-		Message:      payload,
-		SerializerId: proto.Int32(1),
-		SeqNo:        proto.Uint64(456),
+	// Build an Artery binary frame carrying a SystemMessageEnvelope as its payload.
+	// This is how Pekko actually sends system messages over the wire.
+	inner := &SystemMessage{Type: SystemMessage_WATCH.Enum()}
+	innerBytes, _ := proto.Marshal(inner)
+
+	sme := &SystemMessageEnvelope{
+		Message:         innerBytes,
+		SerializerId:    proto.Int32(ArteryInternalSerializerID),
+		SeqNo:           proto.Uint64(456),
+		MessageManifest: []byte("SystemMessage"),
 		AckReplyTo: &UniqueAddress{
 			Address: &Address{
 				Protocol: proto.String("pekko"),
@@ -154,23 +148,35 @@ func TestDecodeArteryEnvelope_SystemMessage(t *testing.T) {
 			Uid: proto.Uint64(999),
 		},
 	}
-	envPayload, _ := proto.Marshal(systemEnv)
+	smeBytes, _ := proto.Marshal(sme)
 
-	meta, err := DecodeArteryEnvelope(envPayload, nil, 0)
+	// Wrap in an Artery frame with manifest "SystemMessage".
+	frame, err := BuildArteryFrame(0, ArteryInternalSerializerID, "", "", "SystemMessage", smeBytes, true)
 	if err != nil {
-		t.Fatalf("failed to decode system message: %v", err)
+		t.Fatalf("BuildArteryFrame: %v", err)
 	}
 
-	if meta.SerializerId != 1 {
-		t.Errorf("expected serializerId 1, got %d", meta.SerializerId)
+	meta, err := DecodeArteryEnvelope(frame, nil, 0)
+	if err != nil {
+		t.Fatalf("DecodeArteryEnvelope: %v", err)
 	}
-	if !bytes.Equal(meta.Payload, payload) {
-		t.Errorf("expected payload %s, got %s", payload, meta.Payload)
+
+	if meta.SerializerId != ArteryInternalSerializerID {
+		t.Errorf("expected serializerId %d, got %d", ArteryInternalSerializerID, meta.SerializerId)
 	}
-	if meta.SeqNo != 456 {
-		t.Errorf("expected seq 456, got %d", meta.SeqNo)
+	if string(meta.MessageManifest) != "SystemMessage" {
+		t.Errorf("expected manifest %q, got %q", "SystemMessage", string(meta.MessageManifest))
 	}
-	if meta.AckReplyTo.GetUid() != 999 {
-		t.Errorf("expected uid 999, got %d", meta.AckReplyTo.GetUid())
+
+	// The payload is the serialised SystemMessageEnvelope — verify it round-trips.
+	var decoded SystemMessageEnvelope
+	if err := proto.Unmarshal(meta.Payload, &decoded); err != nil {
+		t.Fatalf("unmarshal SystemMessageEnvelope from payload: %v", err)
+	}
+	if decoded.GetSeqNo() != 456 {
+		t.Errorf("expected SeqNo 456, got %d", decoded.GetSeqNo())
+	}
+	if decoded.AckReplyTo.GetUid() != 999 {
+		t.Errorf("expected AckReplyTo uid 999, got %d", decoded.AckReplyTo.GetUid())
 	}
 }

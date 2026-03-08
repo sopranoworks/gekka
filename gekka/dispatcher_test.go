@@ -26,7 +26,7 @@ func TestNodeRegistry_UIDRestart(t *testing.T) {
 		Hostname: proto.String("127.0.0.1"),
 		Port:     proto.Uint32(2552),
 	}
-	nm := NewNodeManager(localAddr)
+	nm := NewNodeManager(localAddr, 0)
 
 	remoteUA1 := &UniqueAddress{
 		Address: &Address{
@@ -86,7 +86,7 @@ func TestDispatcher_AutoACK(t *testing.T) {
 		Hostname: proto.String("127.0.0.1"),
 		Port:     proto.Uint32(2552),
 	}
-	nm := NewNodeManager(localAddr)
+	nm := NewNodeManager(localAddr, 0)
 
 	remoteUA := &UniqueAddress{
 		Address: &Address{
@@ -112,11 +112,12 @@ func TestDispatcher_AutoACK(t *testing.T) {
 		_ = assoc.Process(ctx)
 	}()
 
-	// Send a SystemMessage that requires an ACK (SeqNo > 0)
+	// Build a SystemMessageEnvelope (SeqNo=42 requires an ACK) and wrap it in
+	// a proper Artery binary frame with manifest "SystemMessage".
 	sm := &SystemMessage{Type: SystemMessage_WATCH.Enum()}
-	payload, _ := proto.Marshal(sm)
+	smBytes, _ := proto.Marshal(sm)
 	env := &SystemMessageEnvelope{
-		Message:         payload,
+		Message:         smBytes,
 		SerializerId:    proto.Int32(ArteryInternalSerializerID),
 		SeqNo:           proto.Uint64(42),
 		AckReplyTo:      remoteUA,
@@ -124,30 +125,37 @@ func TestDispatcher_AutoACK(t *testing.T) {
 	}
 	envPayload, _ := proto.Marshal(env)
 
-	header := make([]byte, 4)
-	binary.LittleEndian.PutUint32(header, uint32(len(envPayload)))
-	client.Write(header)
-	client.Write(envPayload)
+	frame, err := BuildArteryFrame(0, ArteryInternalSerializerID, "", "", "SystemMessage", envPayload, true)
+	if err != nil {
+		t.Fatalf("BuildArteryFrame: %v", err)
+	}
+	if err := WriteFrame(client, frame); err != nil {
+		t.Fatalf("WriteFrame: %v", err)
+	}
 
-	// Read the automatic ACK back
+	// Read the automatic ACK back (also an Artery frame).
 	ackHeader := make([]byte, 4)
 	if _, err := io.ReadFull(client, ackHeader); err != nil {
 		t.Fatalf("failed to read ACK header: %v", err)
 	}
 	ackLen := binary.LittleEndian.Uint32(ackHeader)
-	ackPayload := make([]byte, ackLen)
-	if _, err := io.ReadFull(client, ackPayload); err != nil {
-		t.Fatalf("failed to read ACK payload: %v", err)
+	ackFrameBytes := make([]byte, ackLen)
+	if _, err := io.ReadFull(client, ackFrameBytes); err != nil {
+		t.Fatalf("failed to read ACK frame: %v", err)
 	}
 
-	ackEnv := &SystemMessageEnvelope{}
-	proto.Unmarshal(ackPayload, ackEnv)
-	if string(ackEnv.MessageManifest) != "SystemMessageDeliveryAck" {
-		t.Errorf("expected SystemMessageDeliveryAck manifest, got %s", string(ackEnv.MessageManifest))
+	ackMeta, err := ParseArteryFrame(ackFrameBytes, nil, 0)
+	if err != nil {
+		t.Fatalf("ParseArteryFrame on ACK: %v", err)
+	}
+	if string(ackMeta.MessageManifest) != "SystemMessageDeliveryAck" {
+		t.Errorf("expected SystemMessageDeliveryAck manifest, got %q", string(ackMeta.MessageManifest))
 	}
 
 	ackBody := &SystemMessageDeliveryAck{}
-	proto.Unmarshal(ackEnv.Message, ackBody)
+	if err := proto.Unmarshal(ackMeta.Payload, ackBody); err != nil {
+		t.Fatalf("unmarshal SystemMessageDeliveryAck: %v", err)
+	}
 	if ackBody.GetSeqNo() != 42 {
 		t.Errorf("expected ACK for seq 42, got %d", ackBody.GetSeqNo())
 	}
@@ -163,7 +171,7 @@ func TestDispatcher_Heuristic(t *testing.T) {
 		System:   proto.String("localSystem"),
 		Hostname: proto.String("127.0.0.1"),
 		Port:     proto.Uint32(2552),
-	})
+	}, 0)
 	assoc := &GekkaAssociation{
 		state:   ASSOCIATED,
 		conn:    server,

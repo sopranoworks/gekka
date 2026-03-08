@@ -17,6 +17,13 @@ debug_envelope.go
 # Embedded Pekko source repo (reference only — not part of this project)
 pekko/
 
+# Generated Binaries
+basic
+crdt-dashboard
+distributed-worker
+monitoring
+ask-pattern
+
 # sbt / Scala build artifacts (in gekka/ sbt sub-project)
 gekka/project/target/
 gekka/target/

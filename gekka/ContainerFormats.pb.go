@@ -266,7 +266,7 @@ func (x *Identify) GetMessageId() *Payload {
 type ActorIdentity struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	CorrelationId *Payload               `protobuf:"bytes,1,req,name=correlationId" json:"correlationId,omitempty"`
-	Ref           *ActorRef              `protobuf:"bytes,2,opt,name=ref" json:"ref,omitempty"`
+	Ref           *ProtoActorRef              `protobuf:"bytes,2,opt,name=ref" json:"ref,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -308,34 +308,34 @@ func (x *ActorIdentity) GetCorrelationId() *Payload {
 	return nil
 }
 
-func (x *ActorIdentity) GetRef() *ActorRef {
+func (x *ActorIdentity) GetRef() *ProtoActorRef {
 	if x != nil {
 		return x.Ref
 	}
 	return nil
 }
 
-type ActorRef struct {
+type ProtoActorRef struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Path          *string                `protobuf:"bytes,1,req,name=path" json:"path,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ActorRef) Reset() {
-	*x = ActorRef{}
+func (x *ProtoActorRef) Reset() {
+	*x = ProtoActorRef{}
 	mi := &file_ContainerFormats_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ActorRef) String() string {
+func (x *ProtoActorRef) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ActorRef) ProtoMessage() {}
+func (*ProtoActorRef) ProtoMessage() {}
 
-func (x *ActorRef) ProtoReflect() protoreflect.Message {
+func (x *ProtoActorRef) ProtoReflect() protoreflect.Message {
 	mi := &file_ContainerFormats_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -347,12 +347,12 @@ func (x *ActorRef) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ActorRef.ProtoReflect.Descriptor instead.
-func (*ActorRef) Descriptor() ([]byte, []int) {
+// Deprecated: Use ProtoActorRef.ProtoReflect.Descriptor instead.
+func (*ProtoActorRef) Descriptor() ([]byte, []int) {
 	return file_ContainerFormats_proto_rawDescGZIP(), []int{4}
 }
 
-func (x *ActorRef) GetPath() string {
+func (x *ProtoActorRef) GetPath() string {
 	if x != nil && x.Path != nil {
 		return *x.Path
 	}
@@ -637,7 +637,7 @@ func (x *ThrowableNotSerializable) GetOriginalClassName() string {
 
 type ActorInitializationException struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Actor         *ActorRef              `protobuf:"bytes,1,opt,name=actor" json:"actor,omitempty"`
+	Actor         *ProtoActorRef              `protobuf:"bytes,1,opt,name=actor" json:"actor,omitempty"`
 	Message       *string                `protobuf:"bytes,2,req,name=message" json:"message,omitempty"`
 	Cause         *Payload               `protobuf:"bytes,3,req,name=cause" json:"cause,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -674,7 +674,7 @@ func (*ActorInitializationException) Descriptor() ([]byte, []int) {
 	return file_ContainerFormats_proto_rawDescGZIP(), []int{10}
 }
 
-func (x *ActorInitializationException) GetActor() *ActorRef {
+func (x *ActorInitializationException) GetActor() *ProtoActorRef {
 	if x != nil {
 		return x.Actor
 	}
@@ -892,7 +892,7 @@ var file_ContainerFormats_proto_goTypes = []any{
 	(*Selection)(nil),                    // 2: Selection
 	(*Identify)(nil),                     // 3: Identify
 	(*ActorIdentity)(nil),                // 4: ActorIdentity
-	(*ActorRef)(nil),                     // 5: ActorRef
+	(*ProtoActorRef)(nil),                     // 5: ProtoActorRef
 	(*Option)(nil),                       // 6: Option
 	(*Payload)(nil),                      // 7: Payload
 	(*WatcherHeartbeatResponse)(nil),     // 8: WatcherHeartbeatResponse
@@ -907,11 +907,11 @@ var file_ContainerFormats_proto_depIdxs = []int32{
 	0,  // 1: Selection.type:type_name -> PatternType
 	7,  // 2: Identify.messageId:type_name -> Payload
 	7,  // 3: ActorIdentity.correlationId:type_name -> Payload
-	5,  // 4: ActorIdentity.ref:type_name -> ActorRef
+	5,  // 4: ActorIdentity.ref:type_name -> ProtoActorRef
 	7,  // 5: Option.value:type_name -> Payload
 	7,  // 6: Throwable.cause:type_name -> Payload
 	12, // 7: Throwable.stackTrace:type_name -> StackTraceElement
-	5,  // 8: ActorInitializationException.actor:type_name -> ActorRef
+	5,  // 8: ActorInitializationException.actor:type_name -> ProtoActorRef
 	7,  // 9: ActorInitializationException.cause:type_name -> Payload
 	10, // [10:10] is the sub-list for method output_type
 	10, // [10:10] is the sub-list for method input_type

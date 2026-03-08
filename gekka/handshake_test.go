@@ -19,6 +19,50 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// sendMagic writes the Artery TCP connection magic header (AKKA + streamId).
+// In Pekko Artery, the OUTBOUND (client) side writes this before any frames.
+func sendMagic(t *testing.T, conn net.Conn, streamId byte) {
+	t.Helper()
+	if _, err := conn.Write([]byte{'A', 'K', 'K', 'A', streamId}); err != nil {
+		t.Fatalf("sendMagic: %v", err)
+	}
+}
+
+// sendArteryFrame builds and writes a proper Artery binary frame.
+func sendArteryFrame(t *testing.T, conn net.Conn, manifest string, msg proto.Message) {
+	t.Helper()
+	payload, err := proto.Marshal(msg)
+	if err != nil {
+		t.Fatalf("proto.Marshal: %v", err)
+	}
+	frame, err := BuildArteryFrame(0, ArteryInternalSerializerID, "", "", manifest, payload, true)
+	if err != nil {
+		t.Fatalf("BuildArteryFrame: %v", err)
+	}
+	if err := WriteFrame(conn, frame); err != nil {
+		t.Fatalf("WriteFrame: %v", err)
+	}
+}
+
+// readArteryFrame reads one length-prefixed Artery frame and parses it.
+func readArteryFrame(t *testing.T, conn net.Conn) *ArteryMetadata {
+	t.Helper()
+	header := make([]byte, 4)
+	if _, err := io.ReadFull(conn, header); err != nil {
+		t.Fatalf("readArteryFrame header: %v", err)
+	}
+	length := binary.LittleEndian.Uint32(header)
+	frameBytes := make([]byte, length)
+	if _, err := io.ReadFull(conn, frameBytes); err != nil {
+		t.Fatalf("readArteryFrame payload: %v", err)
+	}
+	meta, err := ParseArteryFrame(frameBytes, nil, 0)
+	if err != nil {
+		t.Fatalf("ParseArteryFrame: %v", err)
+	}
+	return meta
+}
+
 func TestArteryHandshake_Success(t *testing.T) {
 	client, server := net.Pipe()
 	defer client.Close()
@@ -30,18 +74,16 @@ func TestArteryHandshake_Success(t *testing.T) {
 		Hostname: proto.String("127.0.0.1"),
 		Port:     proto.Uint32(2552),
 	}
-	nm := NewNodeManager(localAddr)
+	nm := NewNodeManager(localAddr, 0)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	handler := TcpArteryHandlerWithNodeManager(nm)
-	errChan := make(chan error, 1)
 	go func() {
-		errChan <- handler(ctx, server)
+		_ = handler(ctx, server)
 	}()
 
-	// Construct HandshakeReq
 	remoteAddr := &UniqueAddress{
 		Address: &Address{
 			Protocol: proto.String("pekko"),
@@ -51,67 +93,31 @@ func TestArteryHandshake_Success(t *testing.T) {
 		},
 		Uid: proto.Uint64(12345),
 	}
-	req := &HandshakeReq{
-		From: remoteAddr,
-		To:   localAddr,
-	}
-	payload, _ := proto.Marshal(req)
 
-	// Wrap in SystemMessageEnvelope
-	env := &SystemMessageEnvelope{
-		Message:         payload,
-		SerializerId:    proto.Int32(ArteryInternalSerializerID),
-		SeqNo:           proto.Uint64(0), // Set to 0 to avoid automatic ACK in this test
-		AckReplyTo:      remoteAddr,
-		MessageManifest: []byte("HandshakeReq"),
-	}
-	envPayload, _ := proto.Marshal(env)
+	// 1. Send Artery TCP magic header (OUTBOUND side sends this first).
+	sendMagic(t, client, 1)
 
-	// Send length-prefixed frame
-	header := make([]byte, 4)
-	binary.LittleEndian.PutUint32(header, uint32(len(envPayload)))
-	client.Write(header)
-	client.Write(envPayload)
+	// 2. Send HandshakeReq with correct 'To' address.
+	req := &HandshakeReq{From: remoteAddr, To: localAddr}
+	sendArteryFrame(t, client, "d", req)
 
-	// Read HandshakeRsp from server
-	rspHeader := make([]byte, 4)
-	_, err := io.ReadFull(client, rspHeader)
-	if err != nil {
-		t.Fatalf("failed to read response header: %v", err)
+	// 3. Read HandshakeRsp (manifest "e", payload = MessageWithAddress).
+	meta := readArteryFrame(t, client)
+	if string(meta.MessageManifest) != "e" {
+		t.Errorf("expected manifest %q, got %q", "e", string(meta.MessageManifest))
 	}
-	rspLen := binary.LittleEndian.Uint32(rspHeader)
-	rspPayload := make([]byte, rspLen)
-	_, err = io.ReadFull(client, rspPayload)
-	if err != nil {
-		t.Fatalf("failed to read response payload: %v", err)
-	}
-
-	// Decode response envelope
-	rspEnv := &SystemMessageEnvelope{}
-	err = proto.Unmarshal(rspPayload, rspEnv)
-	if err != nil {
-		t.Fatalf("failed to unmarshal response envelope: %v", err)
-	}
-
-	if rspEnv.GetSerializerId() != ArteryInternalSerializerID {
-		t.Errorf("expected internal serializer ID 13, got %d", rspEnv.GetSerializerId())
-	}
-
-	// Decode HandshakeRsp (MessageWithAddress)
 	mwa := &MessageWithAddress{}
-	err = proto.Unmarshal(rspEnv.Message, mwa)
-	if err != nil {
-		t.Fatalf("failed to unmarshal HandshakeRsp: %v", err)
+	if err := proto.Unmarshal(meta.Payload, mwa); err != nil {
+		t.Fatalf("unmarshal HandshakeRsp: %v", err)
 	}
-
 	if mwa.Address.Address.GetSystem() != "localSystem" {
 		t.Errorf("expected system localSystem, got %s", mwa.Address.Address.GetSystem())
 	}
 
-	// Verify Association state
+	// 4. Verify association state.
 	assoc, ok := nm.GetAssociation(remoteAddr)
 	if !ok {
-		t.Fatalf("association not found")
+		t.Fatal("association not found")
 	}
 	if assoc.GetState() != ASSOCIATED {
 		t.Errorf("expected state ASSOCIATED, got %v", assoc.GetState())
@@ -129,7 +135,7 @@ func TestArteryHandshake_AddressMismatch(t *testing.T) {
 		Hostname: proto.String("127.0.0.1"),
 		Port:     proto.Uint32(2552),
 	}
-	nm := NewNodeManager(localAddr)
+	nm := NewNodeManager(localAddr, 0)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
@@ -140,7 +146,10 @@ func TestArteryHandshake_AddressMismatch(t *testing.T) {
 		errChan <- handler(ctx, server)
 	}()
 
-	// Construct HandshakeReq with WRONG 'to' address
+	// Send magic.
+	sendMagic(t, client, 1)
+
+	// Send HandshakeReq with WRONG 'To' system name.
 	wrongTo := &Address{
 		Protocol: proto.String("pekko"),
 		System:   proto.String("wrongSystem"),
@@ -159,33 +168,9 @@ func TestArteryHandshake_AddressMismatch(t *testing.T) {
 		},
 		To: wrongTo,
 	}
-	payload, err := proto.Marshal(req)
-	if err != nil {
-		t.Fatalf("failed to marshal HandshakeReq: %v", err)
-	}
-	env := &SystemMessageEnvelope{
-		Message:      payload,
-		SerializerId: proto.Int32(ArteryInternalSerializerID),
-		SeqNo:        proto.Uint64(0), // Set to 0 to avoid automatic ACK in this test
-		AckReplyTo: &UniqueAddress{
-			Address: &Address{
-				Protocol: proto.String("pekko"),
-				System:   proto.String("remoteSystem"),
-				Hostname: proto.String("10.0.0.1"),
-				Port:     proto.Uint32(2552),
-			},
-			Uid: proto.Uint64(123),
-		},
-		MessageManifest: []byte("HandshakeReq"),
-	}
-	envPayload, _ := proto.Marshal(env)
+	sendArteryFrame(t, client, "d", req)
 
-	header := make([]byte, 4)
-	binary.LittleEndian.PutUint32(header, uint32(len(envPayload)))
-	client.Write(header)
-	client.Write(envPayload)
-
-	// Expect an error from the handler
+	// Handler should return an error due to address mismatch.
 	select {
 	case err := <-errChan:
 		if err == nil {
@@ -207,7 +192,7 @@ func TestArteryControl_HeartbeatAndQuarantine(t *testing.T) {
 		Hostname: proto.String("127.0.0.1"),
 		Port:     proto.Uint32(2552),
 	}
-	nm := NewNodeManager(localAddr)
+	nm := NewNodeManager(localAddr, 0)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -227,50 +212,17 @@ func TestArteryControl_HeartbeatAndQuarantine(t *testing.T) {
 		Uid: proto.Uint64(123),
 	}
 
-	// 0. Handshake
-	handReq := &HandshakeReq{
-		From: remoteUA,
-		To:   localAddr,
-	}
-	handPayload, _ := proto.Marshal(handReq)
-	handEnv := &SystemMessageEnvelope{
-		Message:         handPayload,
-		SerializerId:    proto.Int32(ArteryInternalSerializerID),
-		SeqNo:           proto.Uint64(0),
-		AckReplyTo:      remoteUA,
-		MessageManifest: []byte("HandshakeReq"),
-	}
-	handEnvPayload, _ := proto.Marshal(handEnv)
-	header := make([]byte, 4)
-	binary.LittleEndian.PutUint32(header, uint32(len(handEnvPayload)))
-	client.Write(header)
-	client.Write(handEnvPayload)
+	// 0. Handshake.
+	sendMagic(t, client, 1)
+	sendArteryFrame(t, client, "d", &HandshakeReq{From: remoteUA, To: localAddr})
 
-	// DRAIN HandshakeRsp from server to avoid blocking the server's write
-	rspHeader := make([]byte, 4)
-	io.ReadFull(client, rspHeader)
-	rspLen := binary.LittleEndian.Uint32(rspHeader)
-	rspPayload := make([]byte, rspLen)
-	io.ReadFull(client, rspPayload)
+	// Drain HandshakeRsp.
+	readArteryFrame(t, client)
 
-	// 1. Send HeartbeatRsp
-	hb := &ArteryHeartbeatRsp{
-		Uid: proto.Uint64(123),
-	}
-	hbPayload, _ := proto.Marshal(hb)
-	hbEnv := &SystemMessageEnvelope{
-		Message:         hbPayload,
-		SerializerId:    proto.Int32(ArteryInternalSerializerID),
-		SeqNo:           proto.Uint64(0),
-		AckReplyTo:      remoteUA,
-		MessageManifest: []byte("HeartbeatRsp"),
-	}
-	hbEnvPayload, _ := proto.Marshal(hbEnv)
-	binary.LittleEndian.PutUint32(header, uint32(len(hbEnvPayload)))
-	client.Write(header)
-	client.Write(hbEnvPayload)
+	// 1. Send ArteryHeartbeatRsp (manifest "n").
+	sendArteryFrame(t, client, "n", &ArteryHeartbeatRsp{Uid: proto.Uint64(123)})
 
-	// 2. Send Quarantined
+	// 2. Send Quarantined (manifest "Quarantined").
 	quar := &Quarantined{
 		From: remoteUA,
 		To: &UniqueAddress{
@@ -278,26 +230,14 @@ func TestArteryControl_HeartbeatAndQuarantine(t *testing.T) {
 			Uid:     proto.Uint64(1),
 		},
 	}
-	quarPayload, _ := proto.Marshal(quar)
-	quarEnv := &SystemMessageEnvelope{
-		Message:         quarPayload,
-		SerializerId:    proto.Int32(ArteryInternalSerializerID),
-		SeqNo:           proto.Uint64(0),
-		AckReplyTo:      remoteUA,
-		MessageManifest: []byte("Quarantined"),
-	}
-	quarEnvPayload, _ := proto.Marshal(quarEnv)
-	binary.LittleEndian.PutUint32(header, uint32(len(quarEnvPayload)))
-	client.Write(header)
-	client.Write(quarEnvPayload)
+	sendArteryFrame(t, client, "Quarantined", quar)
 
-	// 3. Verify state is QUARANTINED
-	// We need to wait a bit for the handler to process
+	// 3. Wait a moment for the handler to process the Quarantined message.
 	time.Sleep(100 * time.Millisecond)
 
 	foundAssoc, ok := nm.GetAssociation(remoteUA)
 	if !ok {
-		t.Fatalf("association not found")
+		t.Fatal("association not found")
 	}
 	if foundAssoc.GetState() != QUARANTINED {
 		t.Errorf("expected state QUARANTINED, got %v", foundAssoc.GetState())

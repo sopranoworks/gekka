@@ -1,16 +1,25 @@
-# gekka &nbsp;[![Version](https://img.shields.io/badge/version-0.1.0-blue)](https://github.com/gekka/gekka) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+# gekka &nbsp;[![Version](https://img.shields.io/badge/version-0.2.0-blue)](https://github.com/gekka/gekka) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**Version 0.1.0**
+**Version 0.2.0**
 
-A Go library for connecting to [Apache Pekko](https://pekko.apache.org/) clusters over the Artery TCP remoting protocol. Write Go services that participate in Pekko clusters alongside Scala/Java actors — joining, sending messages, routing to cluster singletons, and sharing distributed state via CRDTs.
+A Go library for connecting to [Apache Pekko](https://pekko.apache.org/) clusters over the Artery TCP remoting protocol. Write Go services that participate in Pekko clusters alongside Scala/Java actors — joining, sending messages, routing to cluster singletons, sharing distributed state via CRDTs, and handling messages through a channel-based actor model.
+
+> ⚠️ **Warning**: This project is under active development. The public API and interfaces are subject to change without notice until the 1.0.0 release.
 
 ## Features
 
-- **Artery TCP remoting** — binary-compatible framing, compression-table handshake, sequence/ACK
-- **Cluster membership** — InitJoin → Join → Welcome flow, gossip, vector-clock convergence, heartbeat/failure detection
+- **ActorSystem & ActorOf** — create actors the Pekko way: `ref, _ := node.System.ActorOf(gekka.Props{New: func() actor.Actor { return &MyActor{} }}, "name")`; `Props.New` is a closure that captures dependencies; the system registers the actor, starts its goroutine, and returns a location-transparent `ActorRef`
+- **Location-transparent ActorRef** — `ref.Tell(msg)` and `ref.Ask(ctx, msg)` work identically for local and remote actors; local delivery skips serialization; remote delivery uses Artery TCP
+- **ActorSelection** — discover actors by path: `node.ActorSelection("/user/foo").Resolve(nil)` for local actors; `node.ActorSelection("pekko://Sys@host:port/user/foo").Resolve(nil)` for remote
+- **Channel-based Actor Model** — embed `actor.BaseActor`, implement `Receive(any)`, and the mailbox goroutine is managed automatically; register actors directly with `node.RegisterActor` or use `node.System.ActorOf` for the full lifecycle in one call
+- **Reactive Cluster Events** — push-based subscription (`node.Subscribe(ch, types...)`) delivers `MemberUp`, `MemberLeft`, `UnreachableMember`, and other `ClusterDomainEvent` values to a buffered channel
+- **Artery TCP remoting** — binary-compatible framing, compression-table handshake, sequence/ACK; Artery heartbeats (Serializer ID 17) ensure stable transport-layer liveness
+- **Cluster membership** — InitJoin → Join → Welcome flow, gossip, vector-clock convergence, cluster heartbeat/failure detection
 - **Cluster Singleton Proxy** — route to the singleton on the current oldest node with automatic failover
 - **Distributed Data (CRDTs)** — G-Counter and OR-Set with JSON gossip propagation to Scala peers
-- **Serialization registry** — Protobuf (ID 2) and raw-bytes (ID 4) built in; register custom types
+- **Ask (request-response)** — `node.Ask(ctx, dst, msg)` blocks until the remote actor replies; uses a unique temporary sender path; respects `context.Context` deadline
+- **Extensible Serialization** — Protobuf (ID 2) and raw bytes (ID 4) built in; register custom types and `GekkaSerializer` implementations for any serializer ID and manifest
+- **Observability** — built-in HTTP server (`/healthz`, `/metrics`, `/metrics?fmt=prom`) exposing a live snapshot of internal counters with zero external dependencies
 - **Multi-provider support** — select `ProviderPekko` (default) or `ProviderAkka` at node creation; all actor paths and internal cluster paths adjust automatically
 - **Type-safe actor paths** — `actor.Address` and `actor.ActorPath` builder API (equivalent to Pekko's `Address` / `ActorPath`)
 
@@ -20,33 +29,106 @@ A Go library for connecting to [Apache Pekko](https://pekko.apache.org/) cluster
 
 ```go
 import (
+    "context"
+    "log"
+
     "gekka/gekka"
     "gekka/gekka/actor"
 )
 
-self := actor.Address{Protocol: "pekko", System: "ClusterSystem", Host: "127.0.0.1", Port: 2553}
+// ── 1. Define your actor ────────────────────────────────────────────────────
 
-node, err := gekka.Spawn(gekka.NodeConfig{Address: self})
+type EchoActor struct {
+    actor.BaseActor          // provides Mailbox() chan any
+    remoteRef gekka.ActorRef // location-transparent ref to remote peer
+}
+
+func (a *EchoActor) Receive(msg any) {
+    incoming, ok := msg.(*gekka.IncomingMessage)
+    if !ok {
+        return
+    }
+    switch string(incoming.Payload) {
+    case "Ping":
+        a.remoteRef.Tell([]byte("Pong")) // fire-and-forget; works local or remote
+    default:
+        log.Printf("received: %s", incoming.Payload)
+    }
+}
+
+// ── 2. Spawn the node ────────────────────────────────────────────────────────
+
+node, err := gekka.Spawn(gekka.NodeConfig{
+    SystemName: "ClusterSystem",
+    Host:       "127.0.0.1",
+    Port:       2553,
+})
 if err != nil {
     log.Fatal(err)
 }
 defer node.Shutdown()
 
-// Register a handler for incoming messages
-node.OnMessage(func(ctx context.Context, msg *gekka.IncomingMessage) error {
-    fmt.Printf("received: %s\n", msg.Payload)
-    return nil
-})
+// ── 3. Resolve the remote actor via ActorSelection ───────────────────────────
+//
+// Resolve(nil) falls back to node.Context() — the node's own root context,
+// cancelled when node.Shutdown() is called. Pass a context with a deadline
+// only when you need per-call cancellation during resolution.
 
-// Join a Pekko cluster seed node
+remoteRef, err := node.ActorSelection("pekko://ClusterSystem@127.0.0.1:2552/user/echo").
+    Resolve(nil) // nil → node's own context; safe for long-lived refs
+if err != nil {
+    log.Fatal(err)
+}
+
+// ── 4. Create a local actor with node.System.ActorOf ─────────────────────────
+//
+// Props.New is a factory closure — dependencies are captured by value.
+// ActorOf starts the goroutine, registers at /user/echo, and returns an ActorRef.
+
+ref, err := node.System.ActorOf(gekka.Props{
+    New: func() actor.Actor {
+        return &EchoActor{
+            BaseActor:  actor.NewBaseActor(),
+            remoteRef:  remoteRef,
+        }
+    },
+}, "echo")
+if err != nil {
+    log.Fatal(err)
+}
+log.Printf("local actor at %s", ref)
+
+// ── 5. Join a Pekko cluster seed node ────────────────────────────────────────
+
 if err := node.Join("127.0.0.1", 2552); err != nil {
     log.Fatal(err)
 }
 
-// Send a raw-bytes message to a remote actor using a typed path
-seed := actor.Address{Protocol: "pekko", System: "ClusterSystem", Host: "127.0.0.1", Port: 2552}
-echoPath := seed.WithRoot("user").Child("echo")
-err = node.Send(ctx, echoPath, []byte("hello"))
+// ── 6. Subscribe to cluster events ───────────────────────────────────────────
+
+events := make(chan gekka.ClusterDomainEvent, 16)
+node.Subscribe(events)
+go func() {
+    for evt := range events {
+        switch e := evt.(type) {
+        case gekka.MemberUp:
+            log.Printf("member up: %s", e.Member)
+        case gekka.UnreachableMember:
+            log.Printf("unreachable: %s", e.Member)
+        }
+    }
+}()
+
+// ── 7. Send messages — Tell (fire-and-forget) and Ask (request-reply) ────────
+
+remoteRef.Tell([]byte("Ping"))
+
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+reply, err := remoteRef.Ask(ctx, []byte("Ping"))
+if b, ok := reply.([]byte); ok {
+    log.Printf("Ask reply: %s", b) // → "Pong"
+}
 ```
 
 ---
@@ -228,7 +310,7 @@ pekko {
 }
 ```
 
-> **Note on unreachability:** Pekko's `ClusterHeartbeatSender` uses `actorSelection` (serializer ID 6 — `MessageContainerSerializer`). Go cannot decode these envelopes, so Pekko will mark the Go node as UNREACHABLE after ~18 s. The `keep-oldest` SBR strategy automatically downs and removes the Go node when it becomes truly unreachable. Configure `stable-after` and `acceptable-heartbeat-pause` to suit your scenario.
+> **Note on failure detection:** Pekko's `ClusterHeartbeatSender` (Serializer 5, manifest `"HB"`) runs on 1 s intervals. Configure `acceptable-heartbeat-pause` in your HOCON to give Go nodes sufficient headroom. gekka handles these automatically via `ClusterManager.StartHeartbeat`.
 
 ### 2. Spawn and join
 
@@ -337,7 +419,233 @@ msg := obj.(*mypb.MyMessage)
 
 ---
 
-## Cluster Singleton Proxy
+## Channel-based Actor Model
+
+gekka provides a lightweight, idiomatic Go actor model built on channels. Each actor lives in its own goroutine and processes messages sequentially — no mutexes required inside `Receive`.
+
+### Defining an actor
+
+Embed `actor.BaseActor` to get the mailbox channel for free, then implement `Receive`:
+
+```go
+type GreetActor struct {
+    actor.BaseActor
+    remoteRef gekka.ActorRef
+}
+
+func (a *GreetActor) Receive(msg any) {
+    incoming, ok := msg.(*gekka.IncomingMessage)
+    if !ok {
+        return
+    }
+    switch string(incoming.Payload) {
+    case "hello":
+        log.Println("<- hello received")
+        a.remoteRef.Tell([]byte("world"))
+    default:
+        log.Printf("<- unknown: %s", incoming.Payload)
+    }
+}
+```
+
+### Creating actors with node.System.ActorOf (recommended)
+
+`ActorSystem` is the single entry point for actor lifecycle management.
+`node.System.ActorOf` creates the actor, starts its goroutine, registers it at `/user/<name>`, and returns a location-transparent `ActorRef` — mirroring Pekko's `system.actorOf(Props(...), "name")`:
+
+```go
+ref, err := node.System.ActorOf(gekka.Props{
+    New: func() actor.Actor {
+        // Dependencies are captured by the closure.
+        return &GreetActor{
+            BaseActor:  actor.NewBaseActor(),
+            remoteRef:  remoteRef, // ActorRef to the remote peer
+        }
+    },
+}, "greeter") // registers at /user/greeter
+if err != nil {
+    log.Fatal(err)
+}
+
+// ref is an ActorRef pointing to the new local actor.
+ref.Tell("hello from the outside")
+```
+
+`Props.New` is called exactly once. Any configuration or external dependencies the actor needs should be injected through the closure:
+
+```go
+// Custom mailbox size — pass it in via the closure
+ref, _ := node.System.ActorOf(gekka.Props{
+    New: func() actor.Actor {
+        return &MyActor{BaseActor: actor.NewBaseActorWithSize(1024)}
+    },
+}, "high-throughput-actor")
+```
+
+### Low-level registration (when you need manual control)
+
+Use `RegisterActor` directly when you need to start the goroutine and register the actor separately:
+
+```go
+a := &GreetActor{BaseActor: actor.NewBaseActor()}
+
+// Start the receive goroutine explicitly
+actor.Start(a)
+
+// Map Artery recipient path → actor
+node.RegisterActor("/user/greeter", a)
+
+// Remove the mapping later if needed
+node.UnregisterActor("/user/greeter")
+```
+
+Incoming Artery frames whose recipient path matches `/user/greeter` are automatically pushed into the actor's mailbox as `*gekka.IncomingMessage`. Unmatched messages fall through to the `OnMessage` callback (if set).
+
+### Custom mailbox size
+
+```go
+// Actor with a larger buffer — useful under high throughput
+a := &MyActor{BaseActor: actor.NewBaseActorWithSize(1024)}
+```
+
+If the mailbox is full, the message is silently dropped (equivalent to Pekko's dead-letter behaviour).
+
+> **Zero-value safety** — If you construct the struct with a literal (`&MyActor{}` without calling `NewBaseActor()`), `actor.Start` calls `initMailbox()` automatically before launching the goroutine.
+
+---
+
+## Reactive Cluster Events
+
+gekka delivers cluster membership changes as a push-based stream of typed values on a buffered Go channel — no polling required.
+
+### Subscribing
+
+```go
+events := make(chan gekka.ClusterDomainEvent, 16)
+
+// Subscribe to all event types
+node.Subscribe(events)
+
+// Or filter to specific types
+node.Subscribe(events, gekka.EventMemberUp, gekka.EventUnreachableMember)
+
+go func() {
+    for evt := range events {
+        switch e := evt.(type) {
+        case gekka.MemberUp:
+            log.Printf("[up]          %s", e.Member)
+        case gekka.MemberLeft:
+            log.Printf("[left]        %s", e.Member)
+        case gekka.MemberExited:
+            log.Printf("[exited]      %s", e.Member)
+        case gekka.MemberRemoved:
+            log.Printf("[removed]     %s", e.Member)
+        case gekka.UnreachableMember:
+            log.Printf("[unreachable] %s", e.Member)
+        case gekka.ReachableMember:
+            log.Printf("[reachable]   %s", e.Member)
+        }
+    }
+}()
+
+defer node.Unsubscribe(events)
+```
+
+Events are dropped (not queued) when the channel buffer is full — size it for your slowest consumer.
+
+### Available event types
+
+| Go type | Pekko equivalent | When fired |
+|---------|-----------------|------------|
+| `MemberUp` | `MemberUp` | Node transitions to Up |
+| `MemberLeft` | `MemberLeft` | Node voluntarily leaves |
+| `MemberExited` | `MemberExited` | Node finished leaving |
+| `MemberRemoved` | `MemberRemoved` | Node fully removed |
+| `UnreachableMember` | `UnreachableMember` | Failure detector triggers |
+| `ReachableMember` | `ReachableMember` | Connectivity restored |
+
+---
+
+## Built-in Observability
+
+Enable the built-in HTTP server by setting `MonitoringPort` in `NodeConfig`:
+
+```go
+node, _ := gekka.Spawn(gekka.NodeConfig{
+    SystemName:    "ClusterSystem",
+    Host:          "127.0.0.1",
+    Port:          2553,
+    MonitoringPort: 8080,
+})
+```
+
+Or via `SpawnFromConfig` when `monitoring.port` is set in `application.conf`.
+
+### Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|--------------|
+| `/healthz` | GET | `200 OK` when joined (`Up`); `503 Service Unavailable` otherwise |
+| `/metrics` | GET | JSON snapshot of internal counters |
+| `/metrics?fmt=prom` | GET | Prometheus text exposition format |
+
+### Sample JSON metrics
+
+```json
+{
+  "messages_sent":     142,
+  "messages_received": 139,
+  "gossips_received":   27,
+  "heartbeats_sent":    60,
+  "associations":        2
+}
+```
+
+No external dependencies are required; the server binds only when `MonitoringPort > 0`.
+
+---
+
+## Sending and Receiving Messages
+
+### Sending
+
+`Send` accepts a typed `actor.ActorPath`, a raw string URI, or any `fmt.Stringer`:
+
+```go
+seed := actor.Address{Protocol: "pekko", System: "ClusterSystem", Host: "127.0.0.1", Port: 2552}
+
+// Raw bytes (Pekko ByteArraySerializer, ID 4)
+node.Send(ctx, seed.WithRoot("user").Child("myActor"), []byte("ping"))
+
+// Protobuf message (ID 2) — any proto.Message
+node.Send(ctx, seed.WithRoot("user").Child("myActor"), &mypb.MyMessage{...})
+
+// Plain string URI also works
+node.Send(ctx, "pekko://ClusterSystem@127.0.0.1:2552/user/myActor", []byte("ping"))
+```
+
+Actor paths follow the format: `pekko://<system>@<host>:<port>/<path>`.
+
+### Receiving via a registered Actor (recommended)
+
+See [Channel-based Actor Model](#channel-based-actor-model) above.
+
+### Receiving via OnMessage callback
+
+```go
+node.OnMessage(func(ctx context.Context, msg *gekka.IncomingMessage) error {
+    switch msg.SerializerId {
+    case 4: // raw bytes
+        fmt.Println("got bytes:", string(msg.Payload))
+    case 2: // Protobuf — use your registry to decode
+        obj, err := node.Serialization().DeserializePayload(msg.SerializerId, msg.Manifest, msg.Payload)
+        _ = obj.(*mypb.MyMessage)
+    }
+    return nil
+})
+```
+
+> **Priority:** registered actors take precedence. `OnMessage` only fires when no actor is registered for the recipient path.
 
 Route messages to a Pekko `ClusterSingletonManager`-managed actor. The proxy automatically targets the **oldest Up** cluster member (matching Pekko's `keep-oldest` strategy).
 
@@ -523,22 +831,81 @@ type NodeConfig struct {
 }
 ```
 
+### `ActorSystem` and `Props`
+
+`node.System` is of type `ActorSystem`. Use it to create and register actors:
+
+```go
+type Props struct {
+    New func() actor.Actor // factory; closure captures dependencies
+}
+
+type ActorSystem interface {
+    ActorOf(props Props, name string) (ActorRef, error)
+}
+```
+
+`ActorOf` registers the actor at `/user/<name>`, starts its goroutine, and returns an `ActorRef`.
+
+### `ActorRef`
+
+A location-transparent reference to an actor (local or remote):
+
+| Method | Description |
+|--------|-------------|
+| `ref.Tell(msg any)` | Fire-and-forget delivery; local skips serialization; remote uses Artery |
+| `ref.Ask(ctx, msg) (any, error)` | Request-reply; blocks until response or ctx cancelled |
+| `ref.Path() string` | Full actor-path URI |
+| `ref.String() string` | Same as `Path()` — implements `fmt.Stringer` |
+
+### `ActorSelection`
+
+Lazy handle for actor discovery:
+
+```go
+// Resolve by local path suffix — nil means use the node's own context
+ref, err := node.ActorSelection("/user/greeter").Resolve(nil)
+
+// Resolve by absolute remote URI (no network call; connection is lazy)
+// nil is idiomatic here too — the ref lives as long as the node
+ref, err := node.ActorSelection("pekko://Sys@10.0.0.1:2552/user/greeter").Resolve(nil)
+
+// When you do need per-call cancellation, pass a real context:
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+ref, err = node.ActorSelection("/user/greeter").Resolve(ctx)
+
+// Shortcut: Tell without resolving first
+node.ActorSelection("/user/greeter").Tell([]byte("ping"))
+```
+
 ### `GekkaNode` methods
 
 | Method | Description |
 |--------|-------------|
+| `System` | `ActorSystem` — create actors with `System.ActorOf(props, name)` |
 | `Addr() net.Addr` | Bound TCP address |
+| `Port() uint32` | Bound TCP port |
 | `SelfAddress() actor.Address` | Node's own address as a typed value |
 | `Join(host, port)` | Send InitJoin, start heartbeat + gossip loop |
 | `JoinSeeds() error` | Join the first non-self seed from `NodeConfig.SeedNodes` |
 | `Seeds() []actor.Address` | Seed nodes parsed from HOCON config |
 | `Leave() error` | Broadcast Leave to cluster members |
 | `Send(ctx, dst, msg)` | Deliver a message; dst can be `actor.ActorPath`, `string`, or `fmt.Stringer` |
-| `OnMessage(fn)` | Register user-message callback |
+| `Ask(ctx, dst, msg)` | Request-response; blocks until reply or ctx cancellation |
+| `ActorSelection(path) ActorSelection` | Lazy handle for local or remote actor discovery |
+| `SpawnActor(path, a) ActorRef` | Start + register actor at a full path suffix; returns ActorRef |
+| `RegisterActor(path, a)` | Bind an Actor to an Artery recipient path |
+| `UnregisterActor(path)` | Remove an actor binding |
+| `OnMessage(fn)` | Register a fallback user-message callback |
+| `Subscribe(ch, types...)` | Receive cluster domain events on a buffered channel |
+| `Unsubscribe(ch)` | Remove event subscription |
 | `WaitForHandshake(ctx, host, port)` | Block until Artery handshake completes |
 | `SingletonProxy(path, role)` | Return a ClusterSingletonProxy |
 | `Replicator() *Replicator` | Return the CRDT replicator |
 | `Serialization()` | Return the SerializationRegistry |
+| `Metrics() MetricsSnapshot` | Point-in-time snapshot of internal counters |
+| `MonitoringAddr() net.Addr` | Address of the built-in HTTP monitoring server (nil if disabled) |
 | `StopHeartbeat()` | Pause heartbeats to seed (simulate failure) |
 | `StartHeartbeat()` | Resume heartbeats to seed |
 | `Shutdown() error` | Stop server and cancel goroutines |
@@ -563,6 +930,38 @@ go test -v -run "^(TestGCounter|TestORSet|TestReplicator|TestCluster_JoinHandsha
 
 ---
 
+## Examples
+
+Three self-contained examples live in the `examples/` directory.
+Each has its own `application.conf` and `README.md` with step-by-step
+setup instructions.
+
+| Example | Directory | Key APIs demonstrated |
+|---------|-----------|----------------------|
+| **Basic Ping-Pong** | [`examples/basic/`](examples/basic/) | `SpawnFromConfig`, `node.System.ActorOf`, `ActorSelection`, `ActorRef.Tell`, `ActorRef.Ask`, `JoinSeeds`, `Subscribe`, `Leave` |
+| **Distributed Worker** | [`examples/distributed-worker/`](examples/distributed-worker/) | `node.System.ActorOf`, `SingletonProxy`, automatic failover, JSON job dispatch |
+| **CRDT Dashboard** | [`examples/crdt-dashboard/`](examples/crdt-dashboard/) | `Replicator`, `GCounter`, `ORSet`, live terminal dashboard |
+| **Ask Pattern** | [`examples/ask-pattern/`](examples/ask-pattern/) | `Ask` request-response, HTTP frontend, context timeout |
+| **Monitoring** | [`examples/monitoring/`](examples/monitoring/) | `MonitoringPort`, `/healthz`, `/metrics` endpoints |
+
+### Quick run (after starting a Pekko seed at :2552)
+
+```bash
+# Basic Ping-Pong — joins cluster, sends "Ping" every 3 s, receives "Echo: …"
+go run ./examples/basic
+
+# Distributed Worker — dispatches JSON jobs to a ClusterSingleton every 2 s
+go run ./examples/distributed-worker
+
+# CRDT Dashboard — live terminal showing GCounter + ORSet convergence
+go run ./examples/crdt-dashboard
+
+# Ask Pattern — HTTP server; curl http://localhost:8080/ask?msg=hello
+go run ./examples/ask-pattern
+```
+
+---
+
 ## Project Layout
 
 ```
@@ -571,25 +970,29 @@ gekka/
 ├── README.md
 ├── go.mod
 └── gekka/
-    ├── version.go                    ← const Version = "0.1.0"
-    ├── gekka_node.go                 ← top-level API (Spawn, SpawnFromConfig, Join, Send, …)
+    ├── version.go                    ← const Version = "0.2.0"
+    ├── gekka_node.go                 ← top-level API (Spawn, Join, RegisterActor, Subscribe, …)
+    ├── actor_system.go               ← ActorSystem interface, Props, nodeActorSystem
+    ├── actor_ref.go                  ← ActorRef, ActorSelection, SpawnActor
     ├── hocon_config.go               ← HOCON loader (LoadConfig, ParseHOCONString)
     ├── association.go                ← per-connection state machine
     ├── tcp_artery_handler.go         ← Artery framing / dispatch
     ├── router.go                     ← actor-path resolution + serializer selection
     ├── cluster_manager.go            ← gossip, heartbeat, membership
     ├── cluster_singleton_proxy.go    ← oldest-node routing
+    ├── monitoring_server.go          ← /healthz and /metrics HTTP server
     ├── replicator.go                 ← CRDT gossip engine
     ├── gcounter.go                   ← Grow-only Counter CRDT
     ├── orset.go                      ← Observed-Remove Set CRDT
-    ├── serialization_registry.go     ← Protobuf + JSON serializers
+    ├── serialization_registry.go     ← Protobuf + custom serializers
     ├── integration_test.go           ← end-to-end tests vs. Scala
     ├── testdata/
     │   ├── pekko.conf                ← sample Pekko application.conf
     │   ├── akka.conf                 ← sample Akka application.conf
     │   └── reference.conf            ← sample fallback defaults
     ├── actor/
-    │   └── actor.go                  ← actor.Address and actor.ActorPath types
+    │   ├── actor.go                  ← actor.Address and actor.ActorPath types
+    │   └── base_actor.go             ← Actor interface, BaseActor, Start()
     └── cluster/
         └── ClusterMessages.pb.go     ← generated Protobuf types (Apache 2.0)
 scala-server/
@@ -604,16 +1007,18 @@ scala-server/
 
 | Constant | Value | Meaning |
 |----------|-------|---------|
-| Frame length prefix | 4-byte **little-endian** | |
+| Frame length prefix | 4-byte **little-endian** | Outer TCP framing |
 | Connection magic | `[A,K,K,A,streamId]` | 5 bytes; outbound sender writes this |
-| StreamId 1 | Control stream | |
-| StreamId 2 | Ordinary messages | |
-| Serializer ID 2 | ProtobufSerializer | |
-| Serializer ID 4 | ByteArraySerializer | raw `[]byte`, empty manifest |
-| Serializer ID 5 | ClusterMessageSerializer | short manifests: `"IJ"`, `"W"`, `"GE"`, … |
-| Serializer ID 17 | ArteryMessageSerializer | handshake frames |
+| StreamId 1 | Control stream | Handshake, heartbeats, compression advertisments |
+| StreamId 2 | Ordinary messages | User-level application messages |
+| Serializer ID 2 | ProtobufSerializer | `proto.Message` types |
+| Serializer ID 4 | ByteArraySerializer | Raw `[]byte`, empty manifest |
+| Serializer ID 5 | ClusterMessageSerializer | Short manifests: `"IJ"`, `"W"`, `"GE"`, `"HB"`, … |
+| Serializer ID 17 | ArteryMessageSerializer | Artery transport frames; used by both handshake (`"d"`/`"e"`) and `RemoteWatcher` heartbeats (`"Heartbeat"` / `"HeartbeatRsp"`) |
 | Welcome payload | GZIP-compressed | |
 | GossipEnvelope.serializedGossip | GZIP-compressed | |
+
+> **Artery heartbeats vs. Cluster heartbeats:** Pekko's `RemoteWatcher` sends `ArteryHeartbeat` (Serializer 17, manifest `"Heartbeat"`) on the **Control stream** to each watched remote node. These are distinct from Cluster-level heartbeats (Serializer 5, manifest `"HB"`) used by `ClusterHeartbeatSender`. gekka handles both: Cluster heartbeats are sent via `ClusterManager.StartHeartbeat`; Artery-level heartbeats are handled automatically in the Association dispatcher.
 
 ---
 

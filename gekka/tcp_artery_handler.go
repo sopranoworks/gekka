@@ -46,37 +46,28 @@ var DefaultFrameHandler FrameHandler = ArteryDispatcher
 func TcpArteryHandlerWithNodeManager(nm *NodeManager) TcpHandler {
 	return func(ctx context.Context, conn net.Conn) error {
 		// Existing tests assume INBOUND behavior for this handler.
-		return nm.ProcessConnection(ctx, conn, INBOUND, nil)
+		return nm.ProcessConnection(ctx, conn, INBOUND, nil, 0) // Unknown streamId
 	}
 }
 
-// TcpArteryHandlerWithCallback is an inbound handler (reads magic from peer first).
-func TcpArteryHandlerWithCallback(ctx context.Context, conn net.Conn, handler FrameHandler, ctm *CompressionTableManager, remoteUid uint64) error {
-	// Inbound: read and validate magic header from peer
-	peerMagic := make([]byte, 5)
-	if _, err := io.ReadFull(conn, peerMagic); err != nil {
-		return fmt.Errorf("failed to read stream magic header: %w", err)
-	}
-	if string(peerMagic[:4]) != "AKKA" {
-		return fmt.Errorf("invalid stream magic header: %x", peerMagic)
-	}
-	log.Printf("TcpArteryHandler: inbound connection accepted, streamId=%d", peerMagic[4])
-	return tcpArteryReadLoop(ctx, conn, handler, ctm, remoteUid)
+// TcpArteryHandlerWithCallback is an inbound handler that proceeds directly to the read loop with a known streamId.
+func TcpArteryHandlerWithCallback(ctx context.Context, conn net.Conn, handler FrameHandler, ctm *CompressionTableManager, remoteUid uint64, streamId int32) error {
+	return tcpArteryReadLoop(ctx, conn, handler, ctm, remoteUid, streamId)
 }
 
-func TcpArteryOutboundHandler(ctx context.Context, conn net.Conn, handler FrameHandler, ctm *CompressionTableManager, remoteUid uint64) error {
+func TcpArteryOutboundHandler(ctx context.Context, conn net.Conn, handler FrameHandler, ctm *CompressionTableManager, remoteUid uint64, streamId int32) error {
 	// Outbound: write magic header (streamId=1 for Control stream), then enter read loop
 	// Pekko Artery: ControlStreamId = 1, OrdinaryStreamId = 2, LargeStreamId = 3
-	magicHeader := []byte{'A', 'K', 'K', 'A', 2}
+	magicHeader := []byte{'A', 'K', 'K', 'A', byte(streamId)}
 	if _, err := conn.Write(magicHeader); err != nil {
 		return fmt.Errorf("failed to write stream magic header: %w", err)
 	}
-	log.Printf("TcpArteryOutboundHandler: magic header [AKKA\\x02] written, entering read loop")
+	log.Printf("TcpArteryOutboundHandler: magic header [AKKA\\x%02x] written, entering read loop", streamId)
 
-	return tcpArteryReadLoop(ctx, conn, handler, ctm, remoteUid)
+	return tcpArteryReadLoop(ctx, conn, handler, ctm, remoteUid, streamId)
 }
 
-func tcpArteryReadLoop(ctx context.Context, conn net.Conn, handler FrameHandler, ctm *CompressionTableManager, remoteUid uint64) error {
+func tcpArteryReadLoop(ctx context.Context, conn net.Conn, handler FrameHandler, ctm *CompressionTableManager, remoteUid uint64, streamId int32) error {
 	headerBuf := make([]byte, 4)
 	payloadBuf := make([]byte, 64*1024)
 
@@ -147,12 +138,12 @@ func DecodeArteryEnvelope(payload []byte, ctm *CompressionTableManager, remoteUi
 }
 
 // SendArteryMessage is a convenience wrapper for SendArteryMessageWithAck without an ack.
-func SendArteryMessage(conn net.Conn, remoteUid int64, serializerId int32, manifest string, message proto.Message, control bool) error {
-	return SendArteryMessageWithAck(conn, remoteUid, serializerId, manifest, message, nil, control)
+func SendArteryMessage(conn net.Conn, localUid int64, serializerId int32, manifest string, message proto.Message, control bool) error {
+	return SendArteryMessageWithAck(conn, localUid, serializerId, manifest, message, nil, control)
 }
 
 // SendArteryMessageWithAck marshals the message and sends it as a proper Artery binary frame.
-func SendArteryMessageWithAck(conn net.Conn, remoteUid int64, serializerId int32, manifest string, message proto.Message, sender *UniqueAddress, control bool) error {
+func SendArteryMessageWithAck(conn net.Conn, localUid int64, serializerId int32, manifest string, message proto.Message, sender *UniqueAddress, control bool) error {
 	msgPayload, err := proto.Marshal(message)
 	if err != nil {
 		return fmt.Errorf("failed to marshal artery message: %w", err)
@@ -164,7 +155,7 @@ func SendArteryMessageWithAck(conn net.Conn, remoteUid int64, serializerId int32
 		senderPath = fmt.Sprintf("%s://%s@%s:%d", a.GetProtocol(), a.GetSystem(), a.GetHostname(), a.GetPort())
 	}
 
-	frame, err := BuildArteryFrame(remoteUid, serializerId, senderPath, "", manifest, msgPayload, control)
+	frame, err := BuildArteryFrame(localUid, serializerId, senderPath, "", manifest, msgPayload, control)
 	if err != nil {
 		return err
 	}

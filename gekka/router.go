@@ -75,6 +75,8 @@ func (r *Router) Send(ctx context.Context, path string, msg interface{}) error {
 	switch msgType {
 	case reflect.TypeOf((*cluster.InitJoin)(nil)):
 		finalSerializerId, finalManifest = ClusterSerializerID, "IJ"
+	case reflect.TypeOf((*cluster.InitJoinAck)(nil)):
+		finalSerializerId, finalManifest = ClusterSerializerID, "IJA"
 	case reflect.TypeOf((*cluster.Join)(nil)):
 		finalSerializerId, finalManifest = ClusterSerializerID, "J"
 	case reflect.TypeOf((*cluster.Welcome)(nil)):
@@ -104,8 +106,16 @@ func (r *Router) Send(ctx context.Context, path string, msg interface{}) error {
 		}
 	}
 
-	// Serialize: proto.Messages use proto.Marshal; []byte pass through; others use registry.
-	if pmsg, ok := msg.(proto.Message); ok {
+	// Serialize: Welcome uses gzip(proto) per Pekko wire format; all other protos use plain proto.Marshal.
+	if finalManifest == "W" {
+		if pmsg, ok := msg.(proto.Message); ok {
+			raw, err := proto.Marshal(pmsg)
+			if err != nil {
+				return fmt.Errorf("marshal Welcome: %w", err)
+			}
+			payload, errSerialize = gzipCompress(raw)
+		}
+	} else if pmsg, ok := msg.(proto.Message); ok {
 		payload, errSerialize = proto.Marshal(pmsg)
 	} else if b, ok := msg.([]byte); ok {
 		payload = b
@@ -128,7 +138,111 @@ func (r *Router) Send(ctx context.Context, path string, msg interface{}) error {
 		return fmt.Errorf("failed to dial remote: association is nil")
 	}
 
+	// Track user message metrics (cluster-internal messages are excluded).
+	if r.nodeMgr.metrics != nil &&
+		finalSerializerId != ClusterSerializerID &&
+		finalSerializerId != ArteryInternalSerializerID {
+		r.nodeMgr.metrics.MessagesSent.Add(1)
+		r.nodeMgr.metrics.BytesSent.Add(int64(len(payload)))
+	}
+
 	return assoc.Send(path, payload, finalSerializerId, finalManifest)
+}
+
+// SendWithSender resolves the path, serializes msg, and delivers it to the remote
+// actor with senderPath set as the Artery sender (used by the Ask pattern so the
+// remote actor can reply to the temporary sender path).
+func (r *Router) SendWithSender(ctx context.Context, path string, senderPath string, msg interface{}) error {
+	ap, err := ParseActorPath(path)
+	if err != nil {
+		return err
+	}
+
+	targetAddr := ap.ToAddress()
+	assoc, ok := r.getAssociationByHost(targetAddr.GetHostname(), targetAddr.GetPort())
+	if !ok {
+		assoc, err = r.dialRemote(ctx, targetAddr)
+		if err != nil {
+			return fmt.Errorf("failed to dial remote: %w", err)
+		}
+	}
+
+	var payload []byte
+	var errSerialize error
+	var finalSerializerId int32
+	var finalManifest string
+
+	msgType := reflect.TypeOf(msg)
+	switch msgType {
+	case reflect.TypeOf((*cluster.InitJoin)(nil)):
+		finalSerializerId, finalManifest = ClusterSerializerID, "IJ"
+	case reflect.TypeOf((*cluster.InitJoinAck)(nil)):
+		finalSerializerId, finalManifest = ClusterSerializerID, "IJA"
+	case reflect.TypeOf((*cluster.Join)(nil)):
+		finalSerializerId, finalManifest = ClusterSerializerID, "J"
+	case reflect.TypeOf((*cluster.Welcome)(nil)):
+		finalSerializerId, finalManifest = ClusterSerializerID, "W"
+	case reflect.TypeOf((*cluster.Heartbeat)(nil)):
+		finalSerializerId, finalManifest = ClusterSerializerID, "HB"
+	case reflect.TypeOf((*cluster.HeartBeatResponse)(nil)):
+		finalSerializerId, finalManifest = ClusterSerializerID, "HBR"
+	case reflect.TypeOf((*cluster.GossipStatus)(nil)):
+		finalSerializerId, finalManifest = ClusterSerializerID, "GS"
+	case reflect.TypeOf((*cluster.GossipEnvelope)(nil)):
+		finalSerializerId, finalManifest = ClusterSerializerID, "GE"
+	case reflect.TypeOf((*cluster.Address)(nil)):
+		finalSerializerId, finalManifest = ClusterSerializerID, "L"
+	default:
+		if _, isProto := msg.(proto.Message); isProto {
+			finalSerializerId = 2
+			finalManifest = msgType.String()
+		} else if _, isBytes := msg.([]byte); isBytes {
+			finalSerializerId = 4
+			finalManifest = ""
+		} else {
+			finalSerializerId = 4
+			finalManifest = msgType.String()
+		}
+	}
+
+	if finalManifest == "W" {
+		if pmsg, ok := msg.(proto.Message); ok {
+			raw, err := proto.Marshal(pmsg)
+			if err != nil {
+				return fmt.Errorf("marshal Welcome: %w", err)
+			}
+			payload, errSerialize = gzipCompress(raw)
+		}
+	} else if pmsg, ok := msg.(proto.Message); ok {
+		payload, errSerialize = proto.Marshal(pmsg)
+	} else if b, ok := msg.([]byte); ok {
+		payload = b
+	} else if r.nodeMgr.SerializerRegistry != nil {
+		s, err := r.nodeMgr.SerializerRegistry.GetSerializer(finalSerializerId)
+		if err == nil {
+			payload, errSerialize = s.ToBinary(msg)
+		} else {
+			errSerialize = err
+		}
+	} else {
+		errSerialize = fmt.Errorf("cannot serialize non-proto message without registry")
+	}
+
+	if errSerialize != nil {
+		return fmt.Errorf("serialize error: %w", errSerialize)
+	}
+
+	if assoc == nil {
+		return fmt.Errorf("failed to dial remote: association is nil")
+	}
+
+	// SendWithSender is only used by the Ask pattern — always a user message.
+	if r.nodeMgr.metrics != nil {
+		r.nodeMgr.metrics.MessagesSent.Add(1)
+		r.nodeMgr.metrics.BytesSent.Add(int64(len(payload)))
+	}
+
+	return assoc.SendWithSender(path, senderPath, payload, finalSerializerId, finalManifest)
 }
 
 func (r *Router) getAssociationByHost(host string, port uint32) (*GekkaAssociation, bool) {
@@ -160,7 +274,7 @@ func (r *Router) dialRemote(ctx context.Context, target *Address) (*GekkaAssocia
 	client, err := NewTcpClient(TcpClientConfig{
 		Addr: addrStr,
 		Handler: func(ctx context.Context, conn net.Conn) error {
-			return r.nodeMgr.ProcessConnection(ctx, conn, OUTBOUND, target)
+			return r.nodeMgr.ProcessConnection(ctx, conn, OUTBOUND, target, 1) // Default to Control stream for outbound
 		},
 	})
 	if err != nil {

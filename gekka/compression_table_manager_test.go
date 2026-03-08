@@ -17,7 +17,7 @@ import (
 )
 
 func TestCompressionTableManager_UpdateAndLookup(t *testing.T) {
-	nm := NewNodeManager(&Address{Hostname: proto.String("local")})
+	nm := NewNodeManager(&Address{Hostname: proto.String("local")}, 0)
 	router := NewRouter(nm)
 	ctm := NewCompressionTableManager(router)
 
@@ -77,7 +77,7 @@ func TestCompressionTableManager_UpdateAndLookup(t *testing.T) {
 }
 
 func TestCompressionTableManager_ConcurrentAccess(t *testing.T) {
-	nm := NewNodeManager(&Address{Hostname: proto.String("local")})
+	nm := NewNodeManager(&Address{Hostname: proto.String("local")}, 0)
 	router := NewRouter(nm)
 	ctm := NewCompressionTableManager(router)
 
@@ -111,7 +111,7 @@ func TestCompressionTableManager_ConcurrentAccess(t *testing.T) {
 }
 
 func TestHandleAdvertisement(t *testing.T) {
-	nm := NewNodeManager(&Address{Hostname: proto.String("local")})
+	nm := NewNodeManager(&Address{Hostname: proto.String("local")}, 0)
 	router := NewRouter(nm)
 	ctm := NewCompressionTableManager(router)
 

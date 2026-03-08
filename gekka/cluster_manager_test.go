@@ -60,7 +60,7 @@ func TestCheckConvergence(t *testing.T) {
 		Address: &Address{System: proto.String("sys"), Hostname: proto.String("localhost"), Port: proto.Uint32(2552)},
 		Uid:     proto.Uint64(123),
 	}
-	nm := NewNodeManager(local.Address)
+	nm := NewNodeManager(local.Address, 0)
 	router := NewRouter(nm)
 	cm := NewClusterManager(local, router)
 

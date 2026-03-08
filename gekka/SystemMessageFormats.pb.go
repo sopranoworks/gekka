@@ -198,8 +198,8 @@ func (x *SystemMessage) GetDwNotificationData() *DeathWatchNotificationData {
 
 type WatchData struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Watchee       *ActorRef              `protobuf:"bytes,1,req,name=watchee" json:"watchee,omitempty"`
-	Watcher       *ActorRef              `protobuf:"bytes,2,req,name=watcher" json:"watcher,omitempty"`
+	Watchee       *ProtoActorRef              `protobuf:"bytes,1,req,name=watchee" json:"watchee,omitempty"`
+	Watcher       *ProtoActorRef              `protobuf:"bytes,2,req,name=watcher" json:"watcher,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -234,14 +234,14 @@ func (*WatchData) Descriptor() ([]byte, []int) {
 	return file_SystemMessageFormats_proto_rawDescGZIP(), []int{1}
 }
 
-func (x *WatchData) GetWatchee() *ActorRef {
+func (x *WatchData) GetWatchee() *ProtoActorRef {
 	if x != nil {
 		return x.Watchee
 	}
 	return nil
 }
 
-func (x *WatchData) GetWatcher() *ActorRef {
+func (x *WatchData) GetWatcher() *ProtoActorRef {
 	if x != nil {
 		return x.Watcher
 	}
@@ -250,7 +250,7 @@ func (x *WatchData) GetWatcher() *ActorRef {
 
 type SuperviseData struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Child         *ActorRef              `protobuf:"bytes,1,req,name=child" json:"child,omitempty"`
+	Child         *ProtoActorRef              `protobuf:"bytes,1,req,name=child" json:"child,omitempty"`
 	Async         *bool                  `protobuf:"varint,2,req,name=async" json:"async,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -286,7 +286,7 @@ func (*SuperviseData) Descriptor() ([]byte, []int) {
 	return file_SystemMessageFormats_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *SuperviseData) GetChild() *ActorRef {
+func (x *SuperviseData) GetChild() *ProtoActorRef {
 	if x != nil {
 		return x.Child
 	}
@@ -302,7 +302,7 @@ func (x *SuperviseData) GetAsync() bool {
 
 type FailedData struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Child         *ActorRef              `protobuf:"bytes,1,req,name=child" json:"child,omitempty"`
+	Child         *ProtoActorRef              `protobuf:"bytes,1,req,name=child" json:"child,omitempty"`
 	Uid           *uint64                `protobuf:"varint,2,req,name=uid" json:"uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -338,7 +338,7 @@ func (*FailedData) Descriptor() ([]byte, []int) {
 	return file_SystemMessageFormats_proto_rawDescGZIP(), []int{3}
 }
 
-func (x *FailedData) GetChild() *ActorRef {
+func (x *FailedData) GetChild() *ProtoActorRef {
 	if x != nil {
 		return x.Child
 	}
@@ -354,7 +354,7 @@ func (x *FailedData) GetUid() uint64 {
 
 type DeathWatchNotificationData struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
-	Actor              *ActorRef              `protobuf:"bytes,1,req,name=actor" json:"actor,omitempty"`
+	Actor              *ProtoActorRef              `protobuf:"bytes,1,req,name=actor" json:"actor,omitempty"`
 	ExistenceConfirmed *bool                  `protobuf:"varint,2,req,name=existenceConfirmed" json:"existenceConfirmed,omitempty"`
 	AddressTerminated  *bool                  `protobuf:"varint,3,req,name=addressTerminated" json:"addressTerminated,omitempty"`
 	unknownFields      protoimpl.UnknownFields
@@ -391,7 +391,7 @@ func (*DeathWatchNotificationData) Descriptor() ([]byte, []int) {
 	return file_SystemMessageFormats_proto_rawDescGZIP(), []int{4}
 }
 
-func (x *DeathWatchNotificationData) GetActor() *ActorRef {
+func (x *DeathWatchNotificationData) GetActor() *ProtoActorRef {
 	if x != nil {
 		return x.Actor
 	}
@@ -479,7 +479,7 @@ var file_SystemMessageFormats_proto_goTypes = []any{
 	(*FailedData)(nil),                 // 4: FailedData
 	(*DeathWatchNotificationData)(nil), // 5: DeathWatchNotificationData
 	(*Payload)(nil),                    // 6: Payload
-	(*ActorRef)(nil),                   // 7: ActorRef
+	(*ProtoActorRef)(nil),                   // 7: ProtoActorRef
 }
 var file_SystemMessageFormats_proto_depIdxs = []int32{
 	0,  // 0: SystemMessage.type:type_name -> SystemMessage.Type
@@ -488,11 +488,11 @@ var file_SystemMessageFormats_proto_depIdxs = []int32{
 	3,  // 3: SystemMessage.superviseData:type_name -> SuperviseData
 	4,  // 4: SystemMessage.failedData:type_name -> FailedData
 	5,  // 5: SystemMessage.dwNotificationData:type_name -> DeathWatchNotificationData
-	7,  // 6: WatchData.watchee:type_name -> ActorRef
-	7,  // 7: WatchData.watcher:type_name -> ActorRef
-	7,  // 8: SuperviseData.child:type_name -> ActorRef
-	7,  // 9: FailedData.child:type_name -> ActorRef
-	7,  // 10: DeathWatchNotificationData.actor:type_name -> ActorRef
+	7,  // 6: WatchData.watchee:type_name -> ProtoActorRef
+	7,  // 7: WatchData.watcher:type_name -> ProtoActorRef
+	7,  // 8: SuperviseData.child:type_name -> ProtoActorRef
+	7,  // 9: FailedData.child:type_name -> ProtoActorRef
+	7,  // 10: DeathWatchNotificationData.actor:type_name -> ProtoActorRef
 	11, // [11:11] is the sub-list for method output_type
 	11, // [11:11] is the sub-list for method input_type
 	11, // [11:11] is the sub-list for extension type_name

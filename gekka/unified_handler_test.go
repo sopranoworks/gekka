@@ -31,8 +31,8 @@ func TestUnifiedHandler_FullDuplexHandshake(t *testing.T) {
 		Port:     proto.Uint32(2553),
 	}
 
-	nmA := NewNodeManager(nodeAAddr)
-	nmB := NewNodeManager(nodeBAddr)
+	nmA := NewNodeManager(nodeAAddr, 0)
+	nmB := NewNodeManager(nodeBAddr, 0)
 
 	server, client := net.Pipe()
 	defer server.Close()
@@ -43,25 +43,26 @@ func TestUnifiedHandler_FullDuplexHandshake(t *testing.T) {
 
 	// Node B accepts connection (Inbound)
 	go func() {
-		_ = nmB.ProcessConnection(ctx, server, INBOUND, nil)
+		_ = nmB.ProcessConnection(ctx, server, INBOUND, nil, 0)
 	}()
 
 	// Node A initiates connection (Outbound)
 	errChan := make(chan error, 1)
 	go func() {
-		errChan <- nmA.ProcessConnection(ctx, client, OUTBOUND, nodeBAddr)
+		errChan <- nmA.ProcessConnection(ctx, client, OUTBOUND, nodeBAddr, 1) // Use 1 for test
 	}()
 
-	// Wait for associations to be established
-	time.Sleep(200 * time.Millisecond)
+	// initiateHandshake sleeps 500 ms before sending HandshakeReq, so wait longer.
+	time.Sleep(700 * time.Millisecond)
 
-	uniqueB := &UniqueAddress{Address: nodeBAddr, Uid: proto.Uint64(1)}
+	// NewNodeManager(addr, 0) assigns localUid=0, so HandshakeReq/Rsp carry Uid=0.
+	uniqueB := &UniqueAddress{Address: nodeBAddr, Uid: proto.Uint64(0)}
 	assocA, okA := nmA.GetAssociation(uniqueB)
 	if !okA || assocA.GetState() != ASSOCIATED {
 		t.Errorf("Node A association failed: ok=%v, state=%v", okA, assocA.GetState())
 	}
 
-	uniqueA := &UniqueAddress{Address: nodeAAddr, Uid: proto.Uint64(1)}
+	uniqueA := &UniqueAddress{Address: nodeAAddr, Uid: proto.Uint64(0)}
 	assocB, okB := nmB.GetAssociation(uniqueA)
 	if !okB || assocB.GetState() != ASSOCIATED {
 		t.Errorf("Node B association failed: ok=%v, state=%v", okB, assocB.GetState())
@@ -75,7 +76,7 @@ func TestUnifiedHandler_RegistryReuse(t *testing.T) {
 		Hostname: proto.String("127.0.0.1"),
 		Port:     proto.Uint32(2552),
 	}
-	nm := NewNodeManager(nodeAAddr)
+	nm := NewNodeManager(nodeAAddr, 0)
 
 	// Pre-register an association
 	dummyConn, _ := net.Pipe()

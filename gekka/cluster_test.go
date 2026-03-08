@@ -29,7 +29,7 @@ func TestCluster_JoinHandshake(t *testing.T) {
 		Protocol: proto.String("pekko"),
 	}
 	seedUA := &UniqueAddress{Address: seedAddr, Uid: proto.Uint64(1)}
-	seedNM := NewNodeManager(seedAddr)
+	seedNM := NewNodeManager(seedAddr, 1)
 	seedRouter := NewRouter(seedNM)
 	seedCM := NewClusterManager(seedUA, seedRouter)
 	seedNM.SetClusterManager(seedCM)
@@ -46,7 +46,7 @@ func TestCluster_JoinHandshake(t *testing.T) {
 			if err != nil {
 				return
 			}
-			go seedNM.ProcessConnection(ctx, conn, INBOUND, nil)
+			go seedNM.ProcessConnection(ctx, conn, INBOUND, nil, 0)
 		}
 	}()
 
@@ -58,7 +58,7 @@ func TestCluster_JoinHandshake(t *testing.T) {
 		Protocol: proto.String("pekko"),
 	}
 	joinUA := &UniqueAddress{Address: joinAddr, Uid: proto.Uint64(2)}
-	joinNM := NewNodeManager(joinAddr)
+	joinNM := NewNodeManager(joinAddr, 2)
 	joinRouter := NewRouter(joinNM)
 	joinCM := NewClusterManager(joinUA, joinRouter)
 	joinNM.SetClusterManager(joinCM)
@@ -93,7 +93,7 @@ func TestCluster_GossipConvergence(t *testing.T) {
 	// Node 1 (Seed)
 	addr1 := &Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2560), System: proto.String("sys"), Protocol: proto.String("pekko")}
 	ua1 := &UniqueAddress{Address: addr1, Uid: proto.Uint64(111)}
-	nm1 := NewNodeManager(addr1)
+	nm1 := NewNodeManager(addr1, 0)
 	router1 := NewRouter(nm1)
 	cm1 := NewClusterManager(ua1, router1)
 	nm1.SetClusterManager(cm1)
@@ -106,14 +106,14 @@ func TestCluster_GossipConvergence(t *testing.T) {
 			if err != nil {
 				return
 			}
-			go nm1.ProcessConnection(context.Background(), conn, INBOUND, nil)
+			go nm1.ProcessConnection(context.Background(), conn, INBOUND, nil, 0)
 		}
 	}()
 
 	// Node 2 (Joining)
 	addr2 := &Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2561), System: proto.String("sys"), Protocol: proto.String("pekko")}
 	ua2 := &UniqueAddress{Address: addr2, Uid: proto.Uint64(222)}
-	nm2 := NewNodeManager(addr2)
+	nm2 := NewNodeManager(addr2, 0)
 	router2 := NewRouter(nm2)
 	cm2 := NewClusterManager(ua2, router2)
 	nm2.SetClusterManager(cm2)
@@ -126,7 +126,7 @@ func TestCluster_GossipConvergence(t *testing.T) {
 			if err != nil {
 				return
 			}
-			go nm2.ProcessConnection(context.Background(), conn, INBOUND, nil)
+			go nm2.ProcessConnection(context.Background(), conn, INBOUND, nil, 0)
 		}
 	}()
 
@@ -174,7 +174,7 @@ func TestCluster_LeaderElection(t *testing.T) {
 	setup := func(port uint32, uid uint64) (*ClusterManager, *NodeManager, net.Listener) {
 		addr := &Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(port), System: proto.String("leaderSys"), Protocol: proto.String("pekko")}
 		ua := &UniqueAddress{Address: addr, Uid: proto.Uint64(uid)}
-		nm := NewNodeManager(addr)
+		nm := NewNodeManager(addr, uid)
 		cm := NewClusterManager(ua, NewRouter(nm))
 		nm.SetClusterManager(cm)
 		ln, _ := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
@@ -184,7 +184,7 @@ func TestCluster_LeaderElection(t *testing.T) {
 				if err != nil {
 					return
 				}
-				go nm.ProcessConnection(context.Background(), conn, INBOUND, nil)
+				go nm.ProcessConnection(context.Background(), conn, INBOUND, nil, 0)
 			}
 		}()
 		return cm, nm, ln
@@ -240,7 +240,7 @@ func TestCluster_LeaderElection(t *testing.T) {
 func TestCluster_ReachabilityFailure(t *testing.T) {
 	// Node setup
 	addr1 := &Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2580), System: proto.String("sys"), Protocol: proto.String("pekko")}
-	cm1 := NewClusterManager(&UniqueAddress{Address: addr1, Uid: proto.Uint64(1)}, NewRouter(NewNodeManager(addr1)))
+	cm1 := NewClusterManager(&UniqueAddress{Address: addr1, Uid: proto.Uint64(1)}, NewRouter(NewNodeManager(addr1, 0)))
 
 	addr2 := &Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2581), System: proto.String("sys"), Protocol: proto.String("pekko")}
 	ua2 := &UniqueAddress{Address: addr2, Uid: proto.Uint64(2)}

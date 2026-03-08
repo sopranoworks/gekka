@@ -9,12 +9,16 @@
 package gekka
 
 import (
+	"context"
 	"fmt"
+	"strings"
+	"sync/atomic"
 
 	"gekka/gekka/actor"
 )
 
 // Props is a factory specification for creating an actor.
+// It is an alias for actor.Props so that both packages refer to the same type.
 //
 // The New field is a constructor function that returns a fresh Actor instance.
 // Dependencies (node references, configuration, etc.) should be captured by the
@@ -29,12 +33,7 @@ import (
 //	        }
 //	    },
 //	}, "my-actor")
-type Props struct {
-	// New is called once to create the actor instance. It must not be nil.
-	// The returned actor must embed actor.BaseActor (or otherwise implement
-	// the actor.Actor interface including a valid Mailbox channel).
-	New func() actor.Actor
-}
+type Props = actor.Props
 
 // ActorSystem manages the lifecycle of actors on this node: creation,
 // goroutine start, path registration, and ActorRef construction.
@@ -43,6 +42,10 @@ type Props struct {
 //
 //	ref, err := node.System.ActorOf(props, "worker")
 //	ref.Tell([]byte("start"))
+//
+// From inside actor code use BaseActor.System() which returns the equivalent
+// actor.ActorContext interface (actor.Ref instead of ActorRef, avoids import
+// cycle).
 type ActorSystem interface {
 	// ActorOf creates a new actor using props, registers it at /user/<name>,
 	// starts its receive goroutine, and returns a location-transparent ActorRef.
@@ -50,9 +53,37 @@ type ActorSystem interface {
 	// name should be a simple identifier without slashes, e.g. "echo" or
 	// "worker-1".  The actor's full path becomes /user/<name>.
 	//
-	// An error is returned if Props.New is nil.
+	// Returns an error when:
+	//   - Props.New is nil
+	//   - name contains '/'
+	//   - an actor is already registered at /user/<name>
 	ActorOf(props Props, name string) (ActorRef, error)
+
+	// Context returns the root context of the node that owns this system.
+	// It is cancelled when the node shuts down.
+	//
+	// Use it as the parent context for background goroutines so they stop
+	// automatically when the node does:
+	//
+	//	go doWork(node.System.Context())
+	Context() context.Context
+
+	// Watch monitors the target actor. If the target actor stops (or its node
+	// leaves the cluster), the watcher receives a Terminated message containing
+	// the target's ActorRef.
+	Watch(watcher ActorRef, target ActorRef)
+
+	// Unwatch removes a previously established watch.
+	Unwatch(watcher ActorRef, target ActorRef)
+
+	// Stop gracefully terminates a local actor by closing its mailbox.
+	// Has no effect on remote actors.
+	Stop(target ActorRef)
 }
+
+// autoNameCounter is a global counter used to generate unique actor names
+// when ActorOf is called with an empty name.
+var autoNameCounter atomic.Uint64
 
 // nodeActorSystem implements ActorSystem on top of GekkaNode.
 type nodeActorSystem struct {
@@ -60,11 +91,91 @@ type nodeActorSystem struct {
 }
 
 // ActorOf implements ActorSystem.
+//
+// Name validation and path rules:
+//   - name must not contain '/' (use a simple identifier such as "echo" or "worker-1")
+//   - if name is empty a unique name of the form "$<n>" is generated automatically
+//   - the actor is registered at /user/<name>; if an actor is already registered
+//     there an error is returned (duplicate detection)
 func (s *nodeActorSystem) ActorOf(props Props, name string) (ActorRef, error) {
 	if props.New == nil {
-		return ActorRef{}, fmt.Errorf("actorOf %q: Props.New must not be nil", name)
+		return ActorRef{}, fmt.Errorf("actorOf: Props.New must not be nil")
 	}
-	a := props.New()
+
+	// Generate a unique name when none is supplied.
+	if name == "" {
+		n := autoNameCounter.Add(1)
+		name = fmt.Sprintf("$%d", n)
+	}
+
+	// Reject names that contain '/' — they would silently create nested paths.
+	if strings.ContainsRune(name, '/') {
+		return ActorRef{}, fmt.Errorf("actorOf: name %q must not contain '/'", name)
+	}
+
 	path := "/user/" + name
+
+	// Check for duplicates before constructing the actor.
+	s.node.actorsMu.RLock()
+	_, exists := s.node.actors[path]
+	s.node.actorsMu.RUnlock()
+	if exists {
+		return ActorRef{}, fmt.Errorf("actorOf: actor already registered at %q", path)
+	}
+
+	a := props.New()
 	return s.node.SpawnActor(path, a), nil
+}
+
+// Context implements ActorSystem.
+func (s *nodeActorSystem) Context() context.Context {
+	return s.node.ctx
+}
+
+// asActorContext returns a bridge that satisfies actor.ActorContext, allowing
+// this ActorSystem to be injected into BaseActor without an import cycle.
+// The bridge adapts the richer ActorRef return type down to actor.Ref.
+func (s *nodeActorSystem) asActorContext() actor.ActorContext {
+	return &actorContextBridge{sys: s}
+}
+
+// actorContextBridge adapts nodeActorSystem to the actor.ActorContext interface.
+// It is injected into every BaseActor by SpawnActor so actors can call
+// a.System().ActorOf(...) and a.System().Context() without importing gekka.
+type actorContextBridge struct{ sys *nodeActorSystem }
+
+func (b *actorContextBridge) ActorOf(props actor.Props, name string) (actor.Ref, error) {
+	// nodeActorSystem.ActorOf returns (ActorRef, error); ActorRef satisfies actor.Ref.
+	return b.sys.ActorOf(props, name)
+}
+
+func (b *actorContextBridge) Context() context.Context {
+	return b.sys.node.ctx
+}
+
+// Watch implements ActorSystem.
+func (s *nodeActorSystem) Watch(watcher ActorRef, target ActorRef) {
+	if target.local != nil {
+		target.local.AddWatcher(watcher)
+	} else {
+		// Target is remote
+		s.node.watchRemote(watcher, target)
+	}
+}
+
+// Unwatch implements ActorSystem.
+func (s *nodeActorSystem) Unwatch(watcher ActorRef, target ActorRef) {
+	if target.local != nil {
+		target.local.RemoveWatcher(watcher)
+	} else {
+		// Target is remote
+		s.node.unwatchRemote(watcher, target)
+	}
+}
+
+// Stop implements ActorSystem.
+func (s *nodeActorSystem) Stop(target ActorRef) {
+	if target.local != nil {
+		close(target.local.Mailbox())
+	}
 }

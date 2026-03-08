@@ -825,6 +825,18 @@ func TestClusterChurn(t *testing.T) {
 	log.Printf("[SUCCESS] TestClusterChurn passed!")
 }
 
+// eventForwarderActor simply pipes all received ClusterDomainEvent values to a channel.
+type eventForwarderActor struct {
+	actor.BaseActor
+	ch chan<- ClusterDomainEvent
+}
+
+func (a *eventForwarderActor) Receive(msg any) {
+	if evt, ok := msg.(ClusterDomainEvent); ok {
+		a.ch <- evt
+	}
+}
+
 // waitForUpMembers blocks until node's cluster gossip contains at least
 // expected Up members, or until timeout elapses.
 //
@@ -838,8 +850,18 @@ func waitForUpMembers(node *GekkaNode, expected int, timeout time.Duration) erro
 
 	// Subscribe to membership transitions that can change the Up count.
 	ch := make(chan ClusterDomainEvent, 32)
-	node.Subscribe(ch, EventMemberUp, EventMemberRemoved)
-	defer node.Unsubscribe(ch)
+	forwarderRef, _ := node.System.ActorOf(Props{
+		New: func() actor.Actor {
+			return &eventForwarderActor{
+				BaseActor: actor.NewBaseActor(),
+				ch:        ch,
+			}
+		},
+	}, "waitUpSubscriber")
+
+	node.Subscribe(forwarderRef, EventMemberUp, EventMemberRemoved)
+	defer node.Unsubscribe(forwarderRef)
+	defer node.System.Stop(forwarderRef)
 
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
@@ -1157,12 +1179,13 @@ func TestMultiNodeDynamicJoin(t *testing.T) {
 // CRDT increments: goSeed=10, go2=20, go3=30, go4=40  → expectedTotal=100.
 //
 // Timeline:
-//   Phase 0 — 5 nodes Up, all-to-all replicator gossip for 3 s
-//   Phase 1 — goSeed.StopHeartbeat() for 3 s
-//   Phase 2 — go4.Leave() + stop go4 replicator, wait 2 s
-//   Phase 3 — goSeed.StartHeartbeat()
-//   Phase 4 — wait for 4 Up members (goSeed+go2+go3+Scala)
-//   Verify  — goSeed, go2, go3 each see counter == 100
+//
+//	Phase 0 — 5 nodes Up, all-to-all replicator gossip for 3 s
+//	Phase 1 — goSeed.StopHeartbeat() for 3 s
+//	Phase 2 — go4.Leave() + stop go4 replicator, wait 2 s
+//	Phase 3 — goSeed.StartHeartbeat()
+//	Phase 4 — wait for 4 Up members (goSeed+go2+go3+Scala)
+//	Verify  — goSeed, go2, go3 each see counter == 100
 func TestCluster_CRDT_Consistency_Under_Failure(t *testing.T) {
 	const goSeedPort = uint32(2550)
 	const expectedTotal = uint64(100)

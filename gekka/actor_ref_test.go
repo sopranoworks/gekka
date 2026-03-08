@@ -29,11 +29,17 @@ func newTestNode(t *testing.T, system, host string, port uint32) *GekkaNode {
 		Port:     proto.Uint32(port),
 	}
 	nm := NewNodeManager(addr, 0)
-	return &GekkaNode{
-		nm:        nm,
-		localAddr: addr,
-		actors:    make(map[string]actor.Actor),
+	ctx, cancel := context.WithCancel(context.Background())
+	node := &GekkaNode{
+		nm:             nm,
+		localAddr:      addr,
+		actors:         make(map[string]actor.Actor),
+		remoteWatchers: make(map[string]map[string][]ActorRef),
+		ctx:            ctx,
+		cancel:         cancel,
 	}
+	node.System = &nodeActorSystem{node: node}
+	return node
 }
 
 // echoActor records the last received message.
@@ -242,5 +248,118 @@ func TestSelfPathURI_AlreadyAbsolute(t *testing.T) {
 	got := node.selfPathURI(abs)
 	if got != abs {
 		t.Errorf("selfPathURI modified absolute path: got %q, want %q", got, abs)
+	}
+}
+
+// ── Sender / Self support ─────────────────────────────────────────────────────
+
+// senderCapture records the Sender and Self seen inside its Receive loop.
+type senderCapture struct {
+	actor.BaseActor
+	gotSender actor.Ref
+	gotSelf   actor.Ref
+	done      chan struct{}
+}
+
+func (a *senderCapture) Receive(msg any) {
+	a.gotSender = a.Sender()
+	a.gotSelf = a.Self()
+	select {
+	case a.done <- struct{}{}:
+	default:
+	}
+}
+
+func waitMsg(t *testing.T, done <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("actor did not receive message within 500ms")
+	}
+}
+
+func TestActorRef_Tell_SenderIsPropagated(t *testing.T) {
+	node := newTestNode(t, "Sys", "127.0.0.1", 2552)
+	target := &senderCapture{BaseActor: actor.NewBaseActor(), done: make(chan struct{}, 1)}
+	targetRef := node.SpawnActor("/user/target", target)
+
+	sender := &senderCapture{BaseActor: actor.NewBaseActor(), done: make(chan struct{}, 1)}
+	senderRef := node.SpawnActor("/user/sender", sender)
+
+	targetRef.Tell("hello", senderRef)
+	waitMsg(t, target.done)
+
+	if target.gotSender == nil || target.gotSender.Path() != senderRef.Path() {
+		t.Errorf("Sender() = %v, want %s", target.gotSender, senderRef.Path())
+	}
+}
+
+func TestActorRef_Tell_NoSender_IsNil(t *testing.T) {
+	node := newTestNode(t, "Sys", "127.0.0.1", 2552)
+	target := &senderCapture{BaseActor: actor.NewBaseActor(), done: make(chan struct{}, 1)}
+	node.SpawnActor("/user/target", target)
+
+	ref := ActorRef{fullPath: "pekko://Sys@127.0.0.1:2552/user/target", node: node, local: target}
+	ref.Tell("hello") // no sender
+	waitMsg(t, target.done)
+
+	if target.gotSender != nil {
+		t.Errorf("Sender() = %v, want nil", target.gotSender)
+	}
+}
+
+func TestActorRef_Tell_NoSender_ExplicitZero(t *testing.T) {
+	node := newTestNode(t, "Sys", "127.0.0.1", 2552)
+	target := &senderCapture{BaseActor: actor.NewBaseActor(), done: make(chan struct{}, 1)}
+	node.SpawnActor("/user/target", target)
+
+	ref := ActorRef{fullPath: "pekko://Sys@127.0.0.1:2552/user/target", node: node, local: target}
+	ref.Tell("hello", NoSender) // NoSender = zero ActorRef
+	waitMsg(t, target.done)
+
+	if target.gotSender != nil {
+		t.Errorf("Sender() with NoSender = %v, want nil", target.gotSender)
+	}
+}
+
+func TestSpawnActor_InjectsSelf(t *testing.T) {
+	node := newTestNode(t, "Sys", "127.0.0.1", 2552)
+	a := &senderCapture{BaseActor: actor.NewBaseActor(), done: make(chan struct{}, 1)}
+	ref := node.SpawnActor("/user/self-test", a)
+
+	// Self should be set immediately after SpawnActor (before any message).
+	if a.Self() == nil || a.Self().Path() != ref.Path() {
+		t.Errorf("Self() = %v, want %s", a.Self(), ref.Path())
+	}
+}
+
+func TestActorRef_Tell_SenderSelf_RoundTrip(t *testing.T) {
+	// actor A tells actor B with A as sender; B checks Sender() == A.
+	node := newTestNode(t, "Sys", "127.0.0.1", 2552)
+
+	b := &senderCapture{BaseActor: actor.NewBaseActor(), done: make(chan struct{}, 1)}
+	bRef := node.SpawnActor("/user/b", b)
+
+	a := &senderCapture{BaseActor: actor.NewBaseActor(), done: make(chan struct{}, 1)}
+	aRef := node.SpawnActor("/user/a", a)
+
+	// A sends to B with itself as sender.
+	bRef.Tell("ping", aRef)
+	waitMsg(t, b.done)
+
+	if b.gotSender == nil || b.gotSender.Path() != aRef.Path() {
+		t.Errorf("B.Sender() = %v, want %s", b.gotSender, aRef.Path())
+	}
+}
+
+// ── NoSender constant ─────────────────────────────────────────────────────────
+
+func TestNoSender_IsZeroValue(t *testing.T) {
+	if NoSender.Path() != "" {
+		t.Errorf("NoSender.Path() = %q, want empty", NoSender.Path())
+	}
+	if NoSender != (ActorRef{}) {
+		t.Error("NoSender must equal zero-value ActorRef")
 	}
 }

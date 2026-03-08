@@ -9,6 +9,7 @@
 package gekka
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"sync"
@@ -76,11 +77,22 @@ type SerializationRegistry struct {
 	manifests   map[string]reflect.Type
 }
 
-// NewSerializationRegistry creates a registry pre-populated with the two
+// Well-known serializer IDs used in Artery frames.
+const (
+	// JSONSerializerID is the Artery serializer ID for the built-in
+	// JSONSerializer.  This is a Gekka-internal ID (not a Pekko standard);
+	// choose a value that does not collide with your cluster peers.
+	//
+	// Pekko occupies IDs 1–31; IDs ≥ 100 are safe for application use.
+	JSONSerializerID int32 = 9
+)
+
+// NewSerializationRegistry creates a registry pre-populated with three
 // built-in serializers:
 //
 //	ID 2 — ProtobufSerializer  (google.golang.org/protobuf/proto)
 //	ID 4 — ByteArraySerializer (raw []byte passthrough, Pekko ByteArraySerializer)
+//	ID 9 — JSONSerializer      (encoding/json + manifest-to-type registry)
 func NewSerializationRegistry() *SerializationRegistry {
 	reg := &SerializationRegistry{
 		serializers: make(map[int32]Serializer),
@@ -88,6 +100,7 @@ func NewSerializationRegistry() *SerializationRegistry {
 	}
 	reg.RegisterSerializer(2, &ProtobufSerializer{registry: reg})
 	reg.RegisterSerializer(4, &ByteArraySerializer{})
+	reg.RegisterSerializer(JSONSerializerID, &JSONSerializer{registry: reg})
 	return reg
 }
 
@@ -192,4 +205,53 @@ func (p *ProtobufSerializer) FromBinary(data []byte, manifest string) (interface
 		return nil, err
 	}
 	return msg, nil
+}
+
+// JSONSerializer is the built-in serializer for ID 9. It encodes arbitrary Go
+// values as JSON (encoding/json) and uses the manifest string together with the
+// registry's type table to instantiate the correct target type on decode.
+//
+// Register a manifest-to-type mapping before receiving messages:
+//
+//	node.RegisterType("com.example.OrderPlaced", reflect.TypeOf(OrderPlaced{}))
+//
+// Then send any struct via Tell; the router will automatically select ID 9 and
+// use the reflect type name as the manifest.
+type JSONSerializer struct {
+	registry *SerializationRegistry
+}
+
+func (j *JSONSerializer) Identifier() int32 { return JSONSerializerID }
+
+// ToBinary encodes obj as JSON. Any value supported by encoding/json is accepted.
+func (j *JSONSerializer) ToBinary(obj interface{}) ([]byte, error) {
+	return json.Marshal(obj)
+}
+
+// FromBinary decodes data as JSON into a new instance of the type registered for
+// manifest.  Returns an error when no type is registered for the manifest or the
+// JSON is malformed.
+//
+// The returned value has the same type that was passed to RegisterManifest:
+// if a pointer type (*T) was registered the result is *T; if a value type (T)
+// was registered the result is T.
+func (j *JSONSerializer) FromBinary(data []byte, manifest string) (interface{}, error) {
+	typ, ok := j.registry.GetTypeByManifest(manifest)
+	if !ok {
+		return nil, fmt.Errorf("JSONSerializer: no type registered for manifest %q", manifest)
+	}
+	// Allocate a pointer to the registered type so json.Unmarshal can populate it.
+	var ptr reflect.Value
+	if typ.Kind() == reflect.Ptr {
+		ptr = reflect.New(typ.Elem()) // *T → **T, elem = *T
+	} else {
+		ptr = reflect.New(typ) // T → *T
+	}
+	if err := json.Unmarshal(data, ptr.Interface()); err != nil {
+		return nil, fmt.Errorf("JSONSerializer: unmarshal into %v: %w", typ, err)
+	}
+	if typ.Kind() == reflect.Ptr {
+		return ptr.Interface(), nil // return *T
+	}
+	return ptr.Elem().Interface(), nil // return T
 }

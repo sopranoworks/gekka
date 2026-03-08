@@ -17,12 +17,94 @@
 package actor
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/url"
 	"strconv"
 	"strings"
 )
+
+// Ref is the interface satisfied by all actor references, both local and remote.
+//
+// It enables location-transparent messaging: the caller does not need to know
+// where the target actor lives.
+//
+// gekka.ActorRef implements Ref. Use actor.Ref as the parameter/return type
+// inside actor code (e.g. BaseActor.Sender / Self) to avoid import cycles.
+type Ref interface {
+	// Tell delivers msg to the actor without waiting for a reply.
+	// sender is the originating actor reference; pass nil (or actor.NoSender)
+	// when no reply is expected.
+	Tell(msg any, sender ...Ref)
+	// Path returns the full actor-path URI for this reference,
+	// e.g. "pekko://ClusterSystem@127.0.0.1:2552/user/myActor".
+	Path() string
+}
+
+// NoSender is the nil Ref value — the default sender when no explicit origin
+// is provided. Pass it (or omit the sender argument) to Tell when the
+// recipient should not reply to the caller.
+var NoSender Ref
+
+// Envelope wraps a message together with its sender reference for internal
+// delivery through the actor mailbox.
+//
+// Tell creates an Envelope when a non-nil sender is supplied; Start detects
+// Envelopes and sets BaseActor.currentSender before calling Receive, then
+// clears it afterwards. User code never needs to create or inspect Envelope
+// directly.
+type Envelope struct {
+	Payload any // the actual message delivered to Receive
+	Sender  Ref // nil ↔ NoSender
+}
+
+// Props is a factory specification for creating an actor instance.
+//
+// New is called once per actor creation; dependencies (node references,
+// configuration, etc.) should be captured by the closure rather than embedded
+// in Props, keeping Props itself data-free.
+//
+// Props lives in the actor package (not in gekka) so that ActorContext can
+// reference it without introducing an import cycle.
+//
+//	props := actor.Props{New: func() actor.Actor {
+//	    return &MyActor{BaseActor: actor.NewBaseActor()}
+//	}}
+//	ref, err := self.System().ActorOf(props, "child")
+type Props struct {
+	// New must not be nil; it is called exactly once during actor creation.
+	New func() Actor
+}
+
+// ActorContext is the subset of the ActorSystem API that is safe to use from
+// within actor code (i.e. from the actor package) without introducing an import
+// cycle.
+//
+// Obtain it inside Receive via BaseActor.System():
+//
+//	func (a *MyActor) Receive(msg any) {
+//	    // Spawn a peer actor:
+//	    ref, _ := a.System().ActorOf(actor.Props{New: func() actor.Actor {
+//	        return &ChildActor{BaseActor: actor.NewBaseActor()}
+//	    }}, "child")
+//
+//	    // Start a goroutine tied to the node's lifecycle:
+//	    go doWork(a.System().Context())
+//	}
+//
+// gekka.ActorSystem embeds all ActorContext methods and additionally exposes
+// richer return types (e.g. gekka.ActorRef instead of actor.Ref).
+type ActorContext interface {
+	// ActorOf creates a new actor, registers it at /user/<name>, starts its
+	// receive goroutine, and returns a location-transparent Ref.
+	ActorOf(props Props, name string) (Ref, error)
+
+	// Context returns the root context of the node that owns this system.
+	// It is cancelled when the node shuts down, making it suitable as the
+	// parent context for background goroutines started by actors.
+	Context() context.Context
+}
 
 // Address identifies an actor system on the network.
 // It is the Go equivalent of org.apache.pekko.actor.Address.

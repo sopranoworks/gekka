@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"net"
 	"net/url"
-	"regexp"
 	"strconv"
 
 	"google.golang.org/protobuf/proto"
@@ -26,8 +25,6 @@ type ActorPath struct {
 	Port     uint32
 	Path     string
 }
-
-var pathRegex = regexp.Regexp{} // Fallback to manual parsing if URL is tricky
 
 // ParseActorPath parses a string like "pekko://system@host:port/user/actor".
 func ParseActorPath(raw string) (*ActorPath, error) {

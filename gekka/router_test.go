@@ -68,7 +68,7 @@ func TestRouter_Send_AutoDial(t *testing.T) {
 		if err != nil {
 			return
 		}
-		remoteNM.ProcessConnection(serverCtx, conn, INBOUND, nil, 0)
+		_ = remoteNM.ProcessConnection(serverCtx, conn, INBOUND, nil, 0)
 	}()
 
 	// 2. Setup Local Router

@@ -287,7 +287,9 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 		go func() {
 			// Give handler a moment to start and send magic header
 			time.Sleep(500 * time.Millisecond)
-			assoc.initiateHandshake(remote)
+			if err := assoc.initiateHandshake(remote); err != nil {
+				log.Printf("Association %p: initiateHandshake error: %v", assoc, err)
+			}
 		}()
 	}
 

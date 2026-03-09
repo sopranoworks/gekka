@@ -14,7 +14,7 @@ import (
 	"reflect"
 	"sync"
 
-	"github.com/golang/protobuf/proto"
+	"google.golang.org/protobuf/proto"
 )
 
 // Serializer defines the contract for encoding and decoding Artery messages.

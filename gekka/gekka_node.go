@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"net"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -65,15 +66,15 @@ type NodeConfig struct {
 
 	// SystemName is the actor system name shared by all cluster members.
 	// Ignored when Address is set. Defaults to "GekkaSystem".
-	SystemName string
+	SystemName string `hocon:"pekko.actor.system-name"`
 
 	// Host is the TCP bind/advertised address (e.g. "127.0.0.1").
 	// Ignored when Address is set. Defaults to "127.0.0.1".
-	Host string
+	Host string `hocon:"pekko.remote.artery.canonical.hostname"`
 
 	// Port is the TCP listen port. 0 lets the OS assign a free port.
 	// Ignored when Address is set.
-	Port uint32
+	Port uint32 `hocon:"pekko.remote.artery.canonical.port"`
 
 	// Provider selects the actor-path protocol prefix.
 	// Ignored when Address is set. Defaults to ProviderPekko.
@@ -88,7 +89,7 @@ type NodeConfig struct {
 
 	// EnableMonitoring starts the built-in HTTP monitoring server.
 	// MonitoringPort must be > 0.
-	EnableMonitoring bool
+	EnableMonitoring bool `hocon:"gekka.monitoring.enabled"`
 
 	// MonitoringPort is the TCP port for the HTTP monitoring server.
 	// Setting this to a non-zero value implies EnableMonitoring = true.
@@ -98,7 +99,7 @@ type NodeConfig struct {
 	//   /healthz  — readiness probe (200 OK when joined, 503 otherwise)
 	//   /metrics  — JSON snapshot of internal counters
 	//   /metrics?fmt=prom — Prometheus text exposition format
-	MonitoringPort int
+	MonitoringPort int `hocon:"gekka.monitoring.port"`
 
 	// LogHandler is a custom slog.Handler used for all actor-aware loggers
 	// created on this node. When nil the default slog handler is used.
@@ -185,6 +186,7 @@ type GekkaNode struct {
 
 	clusterWatcherRef ActorRef
 	logHandler        slog.Handler // nil = use slog.Default().Handler()
+	onMessage         func(ctx context.Context, msg *IncomingMessage) error
 }
 
 // Spawn creates, wires, and starts a GekkaNode. The TCP listener is bound
@@ -267,6 +269,9 @@ func Spawn(cfg NodeConfig) (*GekkaNode, error) {
 	}
 	node.System = &nodeActorSystem{node: node}
 
+	// Set default Artery message dispatcher to handle registered actors.
+	nm.UserMessageCallback = node.handleArteryMessage
+
 	// Internal watcher to track remote node failures and synthesize Terminated messages
 	remoteDeathWatcherProps := Props{
 		New: func() actor.Actor {
@@ -287,7 +292,7 @@ func Spawn(cfg NodeConfig) (*GekkaNode, error) {
 		ms, err := newMonitoringServer(node, monPort)
 		if err != nil {
 			cancel()
-			server.Shutdown()
+			_ = server.Shutdown()
 			return nil, fmt.Errorf("gekka: monitoring server: %w", err)
 		}
 		ms.start(ctx)
@@ -357,47 +362,56 @@ func (n *GekkaNode) Context() context.Context {
 // recipient path matches a registered actor are dispatched to that actor's
 // mailbox and do not reach this callback.
 func (n *GekkaNode) OnMessage(fn func(ctx context.Context, msg *IncomingMessage) error) {
-	n.nm.UserMessageCallback = func(ctx context.Context, meta *ArteryMetadata) error {
-		var recipientPath string
-		if meta.Recipient != nil {
-			recipientPath = meta.Recipient.GetPath()
-		}
+	n.onMessage = fn
+}
 
-		// Build a sender ActorRef from the Artery envelope's sender field.
-		// This allows the receiving actor to reply via a.Sender().Tell(…, a.Self()).
-		var senderRef ActorRef
-		if meta.Sender != nil && meta.Sender.GetPath() != "" {
-			senderRef = ActorRef{fullPath: meta.Sender.GetPath(), node: n}
-		}
-
-		incoming := &IncomingMessage{
-			RecipientPath: recipientPath,
-			Payload:       meta.Payload,
-			SerializerId:  meta.SerializerId,
-			Manifest:      string(meta.MessageManifest),
-			Sender:        senderRef,
-		}
-
-		// Try registered actors first; deliver via actor.Envelope so that
-		// BaseActor.currentSender is set before Receive is called.
-		n.actorsMu.RLock()
-		a, found := n.actors[recipientPath]
-		n.actorsMu.RUnlock()
-		if found {
-			env := actor.Envelope{Payload: incoming, Sender: senderRef}
-			select {
-			case a.Mailbox() <- env:
-			default:
-				// Mailbox full — drop, just like a dead-letter in Pekko.
-			}
-			return nil
-		}
-
-		if fn == nil {
-			return nil
-		}
-		return fn(ctx, incoming)
+func (n *GekkaNode) handleArteryMessage(ctx context.Context, meta *ArteryMetadata) error {
+	var recipientPath string
+	if meta.Recipient != nil {
+		recipientPath = meta.Recipient.GetPath()
 	}
+
+	// If the recipient is a full URI, extract the path segment for local actor lookup.
+	if strings.HasPrefix(recipientPath, "pekko://") || strings.HasPrefix(recipientPath, "akka://") {
+		if ap, err := ParseActorPath(recipientPath); err == nil {
+			recipientPath = ap.Path
+		}
+	}
+
+	// Build a sender ActorRef from the Artery envelope's sender field.
+	// This allows the receiving actor to reply via a.Sender().Tell(…, a.Self()).
+	var senderRef ActorRef
+	if meta.Sender != nil && meta.Sender.GetPath() != "" {
+		senderRef = ActorRef{fullPath: meta.Sender.GetPath(), node: n}
+	}
+
+	incoming := &IncomingMessage{
+		RecipientPath: recipientPath,
+		Payload:       meta.Payload,
+		SerializerId:  meta.SerializerId,
+		Manifest:      string(meta.MessageManifest),
+		Sender:        senderRef,
+	}
+
+	// Try registered actors first; deliver via actor.Envelope so that
+	// BaseActor.currentSender is set before Receive is called.
+	n.actorsMu.RLock()
+	a, found := n.actors[recipientPath]
+	n.actorsMu.RUnlock()
+	if found {
+		env := actor.Envelope{Payload: incoming, Sender: senderRef}
+		select {
+		case a.Mailbox() <- env:
+		default:
+			// Mailbox full — drop, just like a dead-letter in Pekko.
+		}
+		return nil
+	}
+
+	if n.onMessage == nil {
+		return nil
+	}
+	return n.onMessage(ctx, incoming)
 }
 
 // RegisterActor wires an Actor to a local actor path so that incoming Artery

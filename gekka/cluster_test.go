@@ -46,7 +46,7 @@ func TestCluster_JoinHandshake(t *testing.T) {
 			if err != nil {
 				return
 			}
-			go seedNM.ProcessConnection(ctx, conn, INBOUND, nil, 0)
+			go func() { _ = seedNM.ProcessConnection(ctx, conn, INBOUND, nil, 0) }()
 		}
 	}()
 
@@ -106,7 +106,7 @@ func TestCluster_GossipConvergence(t *testing.T) {
 			if err != nil {
 				return
 			}
-			go nm1.ProcessConnection(context.Background(), conn, INBOUND, nil, 0)
+			go func() { _ = nm1.ProcessConnection(context.Background(), conn, INBOUND, nil, 0) }()
 		}
 	}()
 
@@ -126,7 +126,7 @@ func TestCluster_GossipConvergence(t *testing.T) {
 			if err != nil {
 				return
 			}
-			go nm2.ProcessConnection(context.Background(), conn, INBOUND, nil, 0)
+			go func() { _ = nm2.ProcessConnection(context.Background(), conn, INBOUND, nil, 0) }()
 		}
 	}()
 
@@ -184,7 +184,7 @@ func TestCluster_LeaderElection(t *testing.T) {
 				if err != nil {
 					return
 				}
-				go nm.ProcessConnection(context.Background(), conn, INBOUND, nil, 0)
+				go func() { _ = nm.ProcessConnection(context.Background(), conn, INBOUND, nil, 0) }()
 			}
 		}()
 		return cm, nm, ln

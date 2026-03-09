@@ -169,10 +169,31 @@ type ActorSelection struct {
 // shuts down. This is a convenient default when no per-call deadline is needed:
 //
 //	ref, err := node.ActorSelection("/user/myActor").Resolve(nil)
-func (s ActorSelection) Resolve(ctx context.Context) (ActorRef, error) {
-	if ctx == nil {
-		ctx = s.node.ctx
+func (s ActorSelection) Resolve(_ context.Context) (ActorRef, error) {
+
+	// ── Absolute URI ──────────────────────────────────────────────────────
+	if strings.Contains(s.rawPath, "://") {
+		ap, err := actor.ParseActorPath(s.rawPath)
+		if err != nil {
+			return ActorRef{}, fmt.Errorf("actorselection: invalid path %q: %w", s.rawPath, err)
+		}
+
+		// Check whether this URI addresses a local actor on this node.
+		self := s.node.SelfAddress()
+		if ap.Address.System == self.System && ap.Address.Host == self.Host && ap.Address.Port == self.Port {
+			localPath := "/" + strings.Join(ap.Elements(), "/")
+			s.node.actorsMu.RLock()
+			a, found := s.node.actors[localPath]
+			s.node.actorsMu.RUnlock()
+			if found {
+				return ActorRef{fullPath: s.rawPath, node: s.node, local: a}, nil
+			}
+			// Local URI but actor not registered — fall through to remote ref.
+			// The message will reach the dead-letter queue on delivery.
+		}
+		return ActorRef{fullPath: s.rawPath, node: s.node}, nil
 	}
+
 	// ── Local relative path ───────────────────────────────────────────────
 	if strings.HasPrefix(s.rawPath, "/") {
 		s.node.actorsMu.RLock()
@@ -186,26 +207,7 @@ func (s ActorSelection) Resolve(ctx context.Context) (ActorRef, error) {
 		return ActorRef{}, fmt.Errorf("actorselection: no actor registered at %q", s.rawPath)
 	}
 
-	// ── Absolute URI ──────────────────────────────────────────────────────
-	ap, err := ParseActorPath(s.rawPath)
-	if err != nil {
-		return ActorRef{}, fmt.Errorf("actorselection: invalid path %q: %w", s.rawPath, err)
-	}
-
-	// Check whether this URI addresses a local actor on this node.
-	self := s.node.SelfAddress()
-	if ap.System == self.System && ap.Host == self.Host && ap.Port == uint32(self.Port) {
-		s.node.actorsMu.RLock()
-		a, found := s.node.actors[ap.Path]
-		s.node.actorsMu.RUnlock()
-		if found {
-			return ActorRef{fullPath: s.rawPath, node: s.node, local: a}, nil
-		}
-		// Local URI but actor not registered — fall through to remote ref.
-		// The message will reach the dead-letter queue on delivery.
-	}
-
-	return ActorRef{fullPath: s.rawPath, node: s.node}, nil
+	return ActorRef{}, fmt.Errorf("actorselection: invalid path format %q (must be absolute URI or start with /)", s.rawPath)
 }
 
 // Tell resolves the selection and delivers msg. For unresolved local actors an
@@ -276,7 +278,7 @@ func (n *GekkaNode) ActorSelection(path string) ActorSelection {
 // path must be the full path suffix as used in Artery envelopes, e.g.
 // "/user/myActor". Do NOT call actor.Start yourself before SpawnActor — that
 // would launch two receive goroutines.
-func (n *GekkaNode) SpawnActor(path string, a actor.Actor) ActorRef {
+func (n *GekkaNode) SpawnActor(path string, a actor.Actor, props actor.Props) ActorRef {
 	ref := ActorRef{fullPath: n.selfPathURI(path), node: n, local: a}
 
 	// Inject the actor's own reference so it can use Self() inside Receive.
@@ -285,11 +287,37 @@ func (n *GekkaNode) SpawnActor(path string, a actor.Actor) ActorRef {
 		ss.SetSelf(ref)
 	}
 
+	// Resolve the parent path (e.g., "/user/parent/child" -> "/user/parent")
+	parentPath := "/user"
+	lastSlash := strings.LastIndex(path, "/")
+	if lastSlash > 0 {
+		parentPath = path[:lastSlash]
+	}
+
 	// Inject the ActorContext so actors can spawn peers and access the
 	// node lifecycle context via a.System(). Uses actor.InjectSystem so that
 	// the package-local type assertion reaches the unexported setSystem method.
 	if nas, ok := n.System.(*nodeActorSystem); ok {
-		actor.InjectSystem(a, nas.asActorContext())
+		actor.InjectSystem(a, nas.asActorContext(path))
+	}
+
+	// Inject SupervisorStrategy from Props
+	actor.InjectSupervisorStrategy(a, props.SupervisorStrategy)
+
+	// Inject parent reference if this is a child actor.
+	if parentPath != "/user" {
+		if parentActor, found := n.actors[parentPath]; found {
+			if parentRef, err := n.ActorSelection(n.selfPathURI(parentPath)).Resolve(context.TODO()); err == nil {
+				actor.InjectParent(a, parentRef)
+				// Also register this child with the parent
+				type childAdder interface {
+					AddChild(string, actor.Ref, actor.Props)
+				}
+				if ca, ok := parentActor.(childAdder); ok {
+					ca.AddChild(path[lastSlash+1:], ref, props)
+				}
+			}
+		}
 	}
 
 	// Initialise the actor-aware logger. Uses actor.InjectLog for the same
@@ -297,11 +325,31 @@ func (n *GekkaNode) SpawnActor(path string, a actor.Actor) ActorRef {
 	actor.InjectLog(a, n.logHandler, ref)
 
 	a.SetOnStop(func() {
+		// Stop all children recursively
+		type childrenGetter interface{ Children() map[string]actor.Ref }
+		if cg, ok := any(a).(childrenGetter); ok {
+			for _, child := range cg.Children() {
+				if childRef, ok := child.(ActorRef); ok {
+					n.System.Stop(childRef)
+				}
+			}
+		}
+
 		n.UnregisterActor(path)
 		terminatedMsg := Terminated{Actor: ref}
 		for _, w := range a.Watchers() {
 			if watcherRef, ok := w.(ActorRef); ok {
 				watcherRef.Tell(terminatedMsg)
+			}
+		}
+
+		// Remove from parent's children list
+		if parentPath != "/user" {
+			if parentActor, found := n.actors[parentPath]; found {
+				type childRemover interface{ RemoveChild(string) }
+				if cr, ok := parentActor.(childRemover); ok {
+					cr.RemoveChild(path[lastSlash+1:])
+				}
 			}
 		}
 	})

@@ -79,6 +79,11 @@ type ActorSystem interface {
 	// Stop gracefully terminates a local actor by closing its mailbox.
 	// Has no effect on remote actors.
 	Stop(target ActorRef)
+
+	// RemoteActorOf returns an ActorRef for an actor at the given remote address.
+	// No validation is performed: the reference is created immediately and
+	// messages are delivered lazily via Artery.
+	RemoteActorOf(address actor.Address, path string) ActorRef
 }
 
 // autoNameCounter is a global counter used to generate unique actor names
@@ -98,6 +103,11 @@ type nodeActorSystem struct {
 //   - the actor is registered at /user/<name>; if an actor is already registered
 //     there an error is returned (duplicate detection)
 func (s *nodeActorSystem) ActorOf(props Props, name string) (ActorRef, error) {
+	return s.ActorOfHierarchical(props, name, "/user")
+}
+
+// ActorOfHierarchical creates a new actor as a child of parentPath.
+func (s *nodeActorSystem) ActorOfHierarchical(props Props, name string, parentPath string) (ActorRef, error) {
 	if props.New == nil {
 		return ActorRef{}, fmt.Errorf("actorOf: Props.New must not be nil")
 	}
@@ -113,7 +123,10 @@ func (s *nodeActorSystem) ActorOf(props Props, name string) (ActorRef, error) {
 		return ActorRef{}, fmt.Errorf("actorOf: name %q must not contain '/'", name)
 	}
 
-	path := "/user/" + name
+	if parentPath == "" {
+		parentPath = "/user"
+	}
+	path := parentPath + "/" + name
 
 	// Check for duplicates before constructing the actor.
 	s.node.actorsMu.RLock()
@@ -124,7 +137,7 @@ func (s *nodeActorSystem) ActorOf(props Props, name string) (ActorRef, error) {
 	}
 
 	a := props.New()
-	return s.node.SpawnActor(path, a), nil
+	return s.node.SpawnActor(path, a, props), nil
 }
 
 // Context implements ActorSystem.
@@ -135,18 +148,20 @@ func (s *nodeActorSystem) Context() context.Context {
 // asActorContext returns a bridge that satisfies actor.ActorContext, allowing
 // this ActorSystem to be injected into BaseActor without an import cycle.
 // The bridge adapts the richer ActorRef return type down to actor.Ref.
-func (s *nodeActorSystem) asActorContext() actor.ActorContext {
-	return &actorContextBridge{sys: s}
+func (s *nodeActorSystem) asActorContext(parentPath string) actor.ActorContext {
+	return &actorContextBridge{sys: s, parentPath: parentPath}
 }
 
 // actorContextBridge adapts nodeActorSystem to the actor.ActorContext interface.
 // It is injected into every BaseActor by SpawnActor so actors can call
 // a.System().ActorOf(...) and a.System().Context() without importing gekka.
-type actorContextBridge struct{ sys *nodeActorSystem }
+type actorContextBridge struct {
+	sys        *nodeActorSystem
+	parentPath string // full path of the parent actor, e.g. "/user/parent"
+}
 
 func (b *actorContextBridge) ActorOf(props actor.Props, name string) (actor.Ref, error) {
-	// nodeActorSystem.ActorOf returns (ActorRef, error); ActorRef satisfies actor.Ref.
-	return b.sys.ActorOf(props, name)
+	return b.sys.ActorOfHierarchical(props, name, b.parentPath)
 }
 
 func (b *actorContextBridge) Context() context.Context {
@@ -178,4 +193,14 @@ func (s *nodeActorSystem) Stop(target ActorRef) {
 	if target.local != nil {
 		close(target.local.Mailbox())
 	}
+}
+
+// RemoteActorOf implements ActorSystem.
+func (s *nodeActorSystem) RemoteActorOf(address actor.Address, path string) ActorRef {
+	fullPath := address.String()
+	if !strings.HasPrefix(path, "/") {
+		fullPath += "/"
+	}
+	fullPath += path
+	return ActorRef{fullPath: fullPath, node: s.node}
 }

@@ -24,8 +24,8 @@ type simpleActor struct {
 
 func (a *simpleActor) Receive(_ any) {}
 
-func newSimpleProps() Props {
-	return Props{New: func() actor.Actor {
+func newSimpleProps() actor.Props {
+	return actor.Props{New: func() actor.Actor {
 		return &simpleActor{BaseActor: actor.NewBaseActor()}
 	}}
 }
@@ -106,7 +106,7 @@ func TestActorOf_NameWithSlash_ReturnsError(t *testing.T) {
 func TestActorOf_NilNew_ReturnsError(t *testing.T) {
 	node := newTestNode(t, "Sys", "127.0.0.1", 2552)
 
-	_, err := node.System.ActorOf(Props{New: nil}, "nilTest")
+	_, err := node.System.ActorOf(actor.Props{New: nil}, "nilTest")
 	if err == nil {
 		t.Error("ActorOf with nil Props.New should return an error")
 	}
@@ -156,7 +156,7 @@ func TestBaseActor_System_NilBeforeSpawn(t *testing.T) {
 func TestBaseActor_System_SetAfterSpawnActor(t *testing.T) {
 	node := newTestNode(t, "Sys", "127.0.0.1", 2552)
 	a := &simpleActor{BaseActor: actor.NewBaseActor()}
-	node.SpawnActor("/user/sys-test", a)
+	node.SpawnActor("/user/sys-test", a, actor.Props{New: func() actor.Actor { return a }})
 
 	if a.System() == nil {
 		t.Fatal("System() is nil after SpawnActor")
@@ -166,7 +166,7 @@ func TestBaseActor_System_SetAfterSpawnActor(t *testing.T) {
 func TestBaseActor_System_SetAfterActorOf(t *testing.T) {
 	node := newTestNode(t, "Sys", "127.0.0.1", 2552)
 	var captured actor.ActorContext
-	props := Props{New: func() actor.Actor {
+	props := actor.Props{New: func() actor.Actor {
 		a := &systemCaptureActor{BaseActor: actor.NewBaseActor()}
 		return a
 	}}
@@ -223,7 +223,7 @@ func TestBaseActor_System_ActorOf_SpawnsPeer(t *testing.T) {
 		BaseActor: actor.NewBaseActor(),
 		done:      make(chan struct{}, 1),
 	}
-	ref := node.SpawnActor("/user/spawner", sp)
+	ref := node.SpawnActor("/user/spawner", sp, actor.Props{New: func() actor.Actor { return sp }})
 	ref.Tell("go")
 
 	select {
@@ -235,8 +235,9 @@ func TestBaseActor_System_ActorOf_SpawnsPeer(t *testing.T) {
 	if sp.peerRef == nil {
 		t.Fatal("spawner actor did not create a peer actor")
 	}
-	if !strings.Contains(sp.peerRef.Path(), "/user/spawned-by-actor") {
-		t.Errorf("peer path = %q, expected to contain /user/spawned-by-actor", sp.peerRef.Path())
+	// Path should be hierarchical now: /user/spawner/spawned-by-actor
+	if !strings.Contains(sp.peerRef.Path(), "/user/spawner/spawned-by-actor") {
+		t.Errorf("peer path = %q, expected to contain /user/spawner/spawned-by-actor", sp.peerRef.Path())
 	}
 }
 
@@ -263,7 +264,7 @@ func TestBaseActor_System_Context_IsNodeContext(t *testing.T) {
 		BaseActor: actor.NewBaseActor(),
 		done:      make(chan struct{}, 1),
 	}
-	ref := node.SpawnActor("/user/ctx-capture", ca)
+	ref := node.SpawnActor("/user/ctx-capture", ca, actor.Props{New: func() actor.Actor { return ca }})
 	ref.Tell("check")
 
 	select {

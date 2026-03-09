@@ -183,6 +183,7 @@ func (cm *ClusterManager) LeaveCluster() error {
 	leave := toClusterAddress(cm.localAddress.Address)
 
 	// Send to all known members or just the leader/seed. For simplicity, broadcast to all UP members.
+	var lastErr error
 	for _, m := range state.GetMembers() {
 		if m.GetStatus() == cluster.MemberStatus_Up || m.GetStatus() == cluster.MemberStatus_WeaklyUp {
 			addr := state.GetAllAddresses()[m.GetAddressIndex()]
@@ -190,10 +191,12 @@ func (cm *ClusterManager) LeaveCluster() error {
 				addr.GetAddress().GetSystem(),
 				addr.GetAddress().GetHostname(),
 				addr.GetAddress().GetPort())
-			cm.router.Send(context.Background(), path, leave)
+			if err := cm.router.Send(context.Background(), path, leave); err != nil {
+				lastErr = err
+			}
 		}
 	}
-	return nil
+	return lastErr
 }
 
 // HandleIncomingClusterMessage dispatches cluster-level messages.
@@ -204,8 +207,6 @@ func (cm *ClusterManager) HandleIncomingClusterMessage(ctx context.Context, meta
 	log.Printf("Cluster: HandleIncomingClusterMessage manifest=%q", manifest)
 	switch manifest {
 	case "IJ": // InitJoin — we are the seed; reply with InitJoinAck
-		if _, err := proto.Marshal(&cluster.InitJoin{}); err == nil { // parse is optional; CurrentConfig is advisory
-		}
 		if remoteAddr == nil {
 			log.Printf("Cluster: InitJoin: no remote address (handshake pending), ignoring")
 			return nil
@@ -711,12 +712,6 @@ func (cm *ClusterManager) connectToNewMembers(gossip *cluster.Gossip) {
 	}
 }
 
-func (cm *ClusterManager) incrementVersion() {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-	cm.incrementVersionWithLockHeld()
-}
-
 func (cm *ClusterManager) incrementVersionWithLockHeld() {
 	if cm.state.Version == nil {
 		cm.state.Version = &cluster.VectorClock{}
@@ -1087,7 +1082,7 @@ func (cm *ClusterManager) gossipTick() {
 		targetAddr.GetAddress().GetHostname(),
 		targetAddr.GetAddress().GetPort())
 
-	cm.router.Send(context.Background(), path, status)
+	_ = cm.router.Send(context.Background(), path, status)
 }
 
 // StartGossipLoop begins the background gossip process.
@@ -1140,7 +1135,9 @@ func (cm *ClusterManager) StartHeartbeat(target *Address) {
 					From:       toClusterAddress(cm.localAddress.Address),
 					SequenceNr: proto.Int64(seq),
 				}
-				cm.router.Send(context.Background(), path, hb)
+				if err := cm.router.Send(context.Background(), path, hb); err != nil {
+					log.Printf("Cluster: failed to send heartbeat to %v: %v", target, err)
+				}
 			}
 		}
 	}()

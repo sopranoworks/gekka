@@ -9,6 +9,7 @@
 package actor
 
 import (
+	"fmt"
 	"log/slog"
 	"sync"
 )
@@ -36,31 +37,45 @@ type Actor interface {
 	// Mailbox returns the channel on which callers should push messages.
 	Mailbox() chan any
 
-	// System returns the ActorContext for this actor's node, giving access to
-	// ActorOf (to spawn peers/children) and Context (the node's lifecycle
 	// context). It returns nil until the actor has been registered via
 	// SpawnActor or ActorOf.
 	System() ActorContext
+
+	// Self returns this actor's own reference.
+	Self() Ref
 
 	// Death Watch internals
 	AddWatcher(watcher any)
 	RemoveWatcher(watcher any)
 	Watchers() []any
 	SetOnStop(f func())
+
+	// Lifecycle hooks
+	PreStart()
+	PostStop()
+	PreRestart(reason error, message any)
+
+	// Internals for Supervision
+	SupervisorStrategy() SupervisorStrategy
+	HandleFailure(child Ref, childActor Actor, err error)
 }
 
 // BaseActor provides a default Mailbox implementation and should be embedded
 // in every user-defined actor struct.  The default buffer size is 256; call
 // NewBaseActorWithSize to override it.
 type BaseActor struct {
-	mailbox       chan any
-	currentSender Ref          // set for the duration of each Receive call; nil otherwise
-	selfRef       Ref          // this actor's own reference, injected by SpawnActor/ActorOf
-	systemRef     ActorContext // injected by SpawnActor/ActorOf
-	actorLog      ActorLogger
-	watchersMu    sync.Mutex
-	watchers      []any
-	onStop        func()
+	mailbox            chan any
+	currentSender      Ref          // set for the duration of each Receive call; nil otherwise
+	selfRef            Ref          // this actor's own reference, injected by SpawnActor/ActorOf
+	systemRef          ActorContext // injected by SpawnActor/ActorOf
+	parentRef          Ref          // injected by SpawnActor/ActorOf for children
+	supervisorStrategy SupervisorStrategy
+	actorLog           ActorLogger
+	watchersMu         sync.Mutex
+	watchers           []any
+	children           map[string]Ref   // children spawned by this actor
+	childProps         map[string]Props // props used to spawn children, for Restart
+	onStop             func()
 }
 
 // Sender returns the actor reference that sent the currently-processed message.
@@ -212,6 +227,90 @@ func (b *BaseActor) initMailbox() {
 	if b.mailbox == nil {
 		b.mailbox = make(chan any, 256)
 	}
+	if b.children == nil {
+		b.children = make(map[string]Ref)
+	}
+}
+
+// Lifecycle hooks default implementations
+
+func (b *BaseActor) PreStart() {}
+func (b *BaseActor) PostStop() {}
+func (b *BaseActor) PreRestart(reason error, message any) {
+	b.PostStop()
+}
+
+// Parent/Child tracking
+
+func (b *BaseActor) Parent() Ref     { return b.parentRef }
+func (b *BaseActor) setParent(p Ref) { b.parentRef = p }
+
+func (b *BaseActor) SupervisorStrategy() SupervisorStrategy     { return b.supervisorStrategy }
+func (b *BaseActor) setSupervisorStrategy(s SupervisorStrategy) { b.supervisorStrategy = s }
+
+func (b *BaseActor) AddChild(name string, ref Ref, props Props) {
+	b.watchersMu.Lock()
+	defer b.watchersMu.Unlock()
+	if b.children == nil {
+		b.children = make(map[string]Ref)
+	}
+	if b.childProps == nil {
+		b.childProps = make(map[string]Props)
+	}
+	b.children[name] = ref
+	b.childProps[name] = props
+}
+
+func (b *BaseActor) RemoveChild(name string) {
+	b.watchersMu.Lock()
+	defer b.watchersMu.Unlock()
+	if b.children != nil {
+		delete(b.children, name)
+	}
+	if b.childProps != nil {
+		delete(b.childProps, name)
+	}
+}
+
+func (b *BaseActor) HandleFailure(child Ref, childActor Actor, err error) {
+	if child == nil {
+		return
+	}
+	strategy := b.SupervisorStrategy()
+	if strategy == nil {
+		strategy = DefaultSupervisorStrategy
+	}
+
+	directive := strategy.Decide(err)
+	switch directive {
+	case Resume:
+		child.Tell(resumeSignal{})
+	case Restart:
+		child.Tell(restartSignal{reason: err})
+	case Stop:
+		// We need to stop the child. GekkaNode.Stop takes ActorRef.
+		// Since we are in the actor package, we might need a bridge.
+		// For now, let's just close the mailbox if we can.
+		type stopper interface{ Stop(Ref) }
+		if s, ok := b.System().(stopper); ok {
+			s.Stop(child)
+		}
+	case Escalate:
+		panic(err)
+	}
+}
+
+type resumeSignal struct{}
+type restartSignal struct{ reason error }
+
+func (b *BaseActor) Children() map[string]Ref {
+	b.watchersMu.Lock()
+	defer b.watchersMu.Unlock()
+	res := make(map[string]Ref)
+	for k, v := range b.children {
+		res[k] = v
+	}
+	return res
 }
 
 // InjectSystem sets the ActorContext on any actor that embeds BaseActor.
@@ -237,6 +336,22 @@ func InjectLog(a Actor, h slog.Handler, self Ref) {
 	}
 }
 
+// InjectSupervisorStrategy sets the supervisor strategy for an actor.
+func InjectSupervisorStrategy(a Actor, s SupervisorStrategy) {
+	type strategySetter interface{ setSupervisorStrategy(SupervisorStrategy) }
+	if ss, ok := a.(strategySetter); ok {
+		ss.setSupervisorStrategy(s)
+	}
+}
+
+// InjectParent sets the parent reference for an actor.
+func InjectParent(a Actor, parent Ref) {
+	type parentSetter interface{ setParent(Ref) }
+	if ps, ok := a.(parentSetter); ok {
+		ps.setParent(parent)
+	}
+}
+
 // Start runs a dedicated goroutine that reads from a.Mailbox() and calls
 // a.Receive for each message.  The goroutine exits when the channel is closed.
 //
@@ -258,25 +373,77 @@ func Start(a Actor) {
 	type senderSetter interface{ setSender(Ref) }
 	ss, hasSS := any(a).(senderSetter)
 
+	type parentGetter interface{ Parent() Ref }
+	pg, hasParent := any(a).(parentGetter)
+
 	go func() {
-		for raw := range a.Mailbox() {
-			// Unwrap Envelope to extract sender and payload.
-			msg := raw
-			var sender Ref
-			if env, ok := raw.(Envelope); ok {
-				msg = env.Payload
-				sender = env.Sender
+		defer func() {
+			if trig, ok := any(a).(interface{ triggerStop() }); ok {
+				trig.triggerStop()
 			}
-			if hasSS {
-				ss.setSender(sender)
+			a.PostStop()
+		}()
+
+		a.PreStart()
+
+		for {
+			var shouldContinue bool
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						err, ok := r.(error)
+						if !ok {
+							err = fmt.Errorf("%v", r)
+						}
+						if hasParent {
+							if parent := pg.Parent(); parent != nil {
+								if p, ok := parent.(interface {
+									HandleFailure(Ref, Actor, error)
+								}); ok {
+									p.HandleFailure(a.Self(), a, err)
+								} else {
+									parent.Tell(Failure{Actor: a.Self(), Reason: err})
+								}
+							}
+						}
+						shouldContinue = true
+					}
+				}()
+
+				for raw := range a.Mailbox() {
+					switch m := raw.(type) {
+					case resumeSignal:
+						shouldContinue = true
+						return
+					case restartSignal:
+						a.PreRestart(m.reason, nil)
+						shouldContinue = true
+						return
+					case Envelope:
+						if hasSS {
+							ss.setSender(m.Sender)
+						}
+						a.Receive(m.Payload)
+						if hasSS {
+							ss.setSender(nil)
+						}
+					default:
+						if hasSS {
+							ss.setSender(nil)
+						}
+						a.Receive(m)
+					}
+				}
+			}()
+			if !shouldContinue {
+				break
 			}
-			a.Receive(msg)
-			if hasSS {
-				ss.setSender(nil)
-			}
-		}
-		if trig, ok := any(a).(interface{ triggerStop() }); ok {
-			trig.triggerStop()
 		}
 	}()
+}
+
+// Failure is sent to the parent actor when a child actor panics.
+type Failure struct {
+	Actor  Ref
+	Reason error
 }

@@ -13,7 +13,7 @@ import (
 	"os"
 	"strings"
 
-	goacfg "github.com/go-akka/configuration"
+	"github.com/sopranoworks/gekka-config/pkg/hocon"
 
 	"gekka/gekka/actor"
 )
@@ -34,25 +34,45 @@ import (
 // lets you layer a reference.conf under an application.conf:
 //
 //	cfg, err := gekka.LoadConfig("application.conf", "reference.conf")
+//
+// LoadConfig reads a HOCON configuration file and converts it to a NodeConfig.
+//
+// The following HOCON paths are recognised (replace "pekko" with "akka" for
+// Lightbend Akka clusters — the protocol is auto-detected):
+//
+//	pekko.remote.artery.canonical.hostname  → Address.Host
+//	pekko.remote.artery.canonical.port      → Address.Port
+//	pekko.cluster.seed-nodes               → SeedNodes ([]actor.Address)
+//
+// The actor system name and protocol prefix are derived from the first
+// seed-node URI (e.g. "pekko://ClusterSystem@127.0.0.1:2552").
+//
+// Optional fallback paths are loaded and merged with lower priority, which
+// lets you layer a reference.conf under an application.conf:
+//
+//	cfg, err := gekka.LoadConfig("application.conf", "reference.conf")
 func LoadConfig(path string, fallbacks ...string) (NodeConfig, error) {
-	// HOCON merges in text order: later assignments override earlier ones.
-	// Load fallbacks first so the primary file's values always win.
-	var combined strings.Builder
+	primaryData, err := os.ReadFile(path)
+	if err != nil {
+		return NodeConfig{}, fmt.Errorf("gekka: read config %q: %w", path, err)
+	}
+	cfg, err := hocon.ParseString(string(primaryData))
+	if err != nil {
+		return NodeConfig{}, fmt.Errorf("gekka: parse primary config: %w", err)
+	}
+
 	for _, fb := range fallbacks {
 		data, err := os.ReadFile(fb)
 		if err != nil {
 			return NodeConfig{}, fmt.Errorf("gekka: read fallback %q: %w", fb, err)
 		}
-		combined.Write(data)
-		combined.WriteByte('\n')
+		fallbackCfg, err := hocon.ParseString(string(data))
+		if err != nil {
+			return NodeConfig{}, fmt.Errorf("gekka: parse fallback %q: %w", fb, err)
+		}
+		*cfg = cfg.WithFallback(*fallbackCfg)
 	}
-	primary, err := os.ReadFile(path)
-	if err != nil {
-		return NodeConfig{}, fmt.Errorf("gekka: read config %q: %w", path, err)
-	}
-	combined.Write(primary)
 
-	cfg := goacfg.ParseString(combined.String())
 	return hoconToNodeConfig(cfg)
 }
 
@@ -79,21 +99,61 @@ func ParseHOCONString(text string) (NodeConfig, error) {
 }
 
 func parseHOCONString(text string) (NodeConfig, error) {
-	cfg := goacfg.ParseString(text)
+	cfg, err := hocon.ParseString(text)
+	if err != nil {
+		return NodeConfig{}, fmt.Errorf("gekka: parse config: %w", err)
+	}
 	return hoconToNodeConfig(cfg)
 }
 
 // hoconToNodeConfig maps a parsed HOCON Config to a NodeConfig.
-func hoconToNodeConfig(cfg *goacfg.Config) (NodeConfig, error) {
+func hoconToNodeConfig(cfg *hocon.Config) (NodeConfig, error) {
+	var nodeCfg NodeConfig
+	if err := cfg.Unmarshal(&nodeCfg); err != nil {
+		return NodeConfig{}, fmt.Errorf("gekka: unmarshal config: %w", err)
+	}
+
 	// Auto-detect protocol: prefer "pekko", fall back to "akka".
 	proto := detectProtocol(cfg)
 	prefix := proto // "pekko" or "akka"
 
-	hostname := cfg.GetString(prefix+".remote.artery.canonical.hostname", "127.0.0.1")
-	port := int(cfg.GetInt32(prefix+".remote.artery.canonical.port", 0))
+	// Use the detected prefix for manual fallbacks if unmarshal didn't fill everything.
+	if nodeCfg.Host == "" || nodeCfg.Host == "127.0.0.1" {
+		if h, err := cfg.GetString(prefix + ".remote.artery.canonical.hostname"); err == nil {
+			nodeCfg.Host = h
+		}
+	}
+	if nodeCfg.Port == 0 {
+		if p, err := cfg.GetInt(prefix + ".remote.artery.canonical.port"); err == nil {
+			nodeCfg.Port = uint32(p)
+		}
+	}
+	if nodeCfg.SystemName == "" {
+		if s, err := cfg.GetString(prefix + ".actor.system-name"); err == nil {
+			nodeCfg.SystemName = s
+		}
+	}
+
+	// Provider
+	if proto == "akka" {
+		nodeCfg.Provider = ProviderAkka
+	} else {
+		nodeCfg.Provider = ProviderPekko
+	}
 
 	// Parse seed nodes.
-	seedURIs := cfg.GetStringList(prefix + ".cluster.seed-nodes")
+	var seedURIs []string
+	val, err := cfg.GetValue(prefix + ".cluster.seed-nodes")
+	if err == nil {
+		if list, ok := val.(*hocon.List); ok {
+			for _, elem := range list.Elements {
+				if lit, ok := elem.(*hocon.Literal); ok {
+					seedURIs = append(seedURIs, fmt.Sprint(lit.Value))
+				}
+			}
+		}
+	}
+
 	seeds := make([]actor.Address, 0, len(seedURIs))
 	var systemName string
 	for _, uri := range seedURIs {
@@ -108,29 +168,49 @@ func hoconToNodeConfig(cfg *goacfg.Config) (NodeConfig, error) {
 			systemName = addr.System
 		}
 	}
-	if systemName == "" {
-		systemName = "GekkaSystem"
+	nodeCfg.SeedNodes = seeds
+
+	if nodeCfg.SystemName == "" && systemName != "" {
+		nodeCfg.SystemName = systemName
+	}
+	if nodeCfg.SystemName == "" {
+		nodeCfg.SystemName = "GekkaSystem"
 	}
 
-	self := actor.Address{
+	if nodeCfg.Host == "" {
+		nodeCfg.Host = "127.0.0.1"
+	}
+
+	nodeCfg.Address = actor.Address{
 		Protocol: proto,
-		System:   systemName,
-		Host:     hostname,
-		Port:     port,
+		System:   nodeCfg.SystemName,
+		Host:     nodeCfg.Host,
+		Port:     int(nodeCfg.Port),
 	}
 
-	return NodeConfig{
-		Address:   self,
-		SeedNodes: seeds,
-	}, nil
+	return nodeCfg, nil
 }
 
 // detectProtocol returns "pekko" or "akka" by checking which top-level key
-// is present in the config.
-func detectProtocol(cfg *goacfg.Config) string {
-	if cfg.HasPath("akka.remote.artery.canonical.hostname") ||
-		cfg.HasPath("akka.cluster.seed-nodes") ||
-		cfg.HasPath("akka.actor.provider") {
+// is present in the config. It prefers "pekko" if both are present.
+func detectProtocol(cfg *hocon.Config) string {
+	if _, err := cfg.GetValue("pekko.remote.artery.canonical.hostname"); err == nil {
+		return "pekko"
+	}
+	if _, err := cfg.GetValue("pekko.cluster.seed-nodes"); err == nil {
+		return "pekko"
+	}
+	if _, err := cfg.GetValue("pekko.actor.provider"); err == nil {
+		return "pekko"
+	}
+
+	if _, err := cfg.GetValue("akka.remote.artery.canonical.hostname"); err == nil {
+		return "akka"
+	}
+	if _, err := cfg.GetValue("akka.cluster.seed-nodes"); err == nil {
+		return "akka"
+	}
+	if _, err := cfg.GetValue("akka.actor.provider"); err == nil {
 		return "akka"
 	}
 	return "pekko"

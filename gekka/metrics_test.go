@@ -41,7 +41,7 @@ func TestMonitoring_Healthz_NotReady_BeforeJoin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	defer node.Shutdown()
+	defer func() { _ = node.Shutdown() }()
 
 	port := monPort(node)
 	if port == 0 {
@@ -71,7 +71,7 @@ func TestMonitoring_Healthz_Ready_AfterJoin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn node1: %v", err)
 	}
-	defer node1.Shutdown()
+	defer func() { _ = node1.Shutdown() }()
 
 	// Spawn the monitored client node (node2).
 	node2, err := Spawn(NodeConfig{
@@ -84,7 +84,7 @@ func TestMonitoring_Healthz_Ready_AfterJoin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn node2: %v", err)
 	}
-	defer node2.Shutdown()
+	defer func() { _ = node2.Shutdown() }()
 
 	port := monPort(node2)
 	if port == 0 {
@@ -150,7 +150,7 @@ func TestMonitoring_Metrics_JSONShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	defer node.Shutdown()
+	defer func() { _ = node.Shutdown() }()
 
 	port := monPort(node)
 	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/metrics", port))
@@ -194,7 +194,7 @@ func TestMonitoring_Metrics_PrometheusFormat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	defer node.Shutdown()
+	defer func() { _ = node.Shutdown() }()
 
 	port := monPort(node)
 	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/metrics?fmt=prom", port))
@@ -237,7 +237,7 @@ func TestMonitoring_Metrics_MessageCounters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn nodeA: %v", err)
 	}
-	defer nodeA.Shutdown()
+	defer func() { _ = nodeA.Shutdown() }()
 
 	nodeB, err := Spawn(NodeConfig{
 		SystemName:       "CtrTest",
@@ -249,7 +249,7 @@ func TestMonitoring_Metrics_MessageCounters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn nodeB: %v", err)
 	}
-	defer nodeB.Shutdown()
+	defer func() { _ = nodeB.Shutdown() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -271,7 +271,7 @@ func TestMonitoring_Metrics_MessageCounters(t *testing.T) {
 		nodeA.localAddr.GetHostname(), nodeA.localAddr.GetPort())
 
 	// Send an initial probe from nodeB to nodeA to trigger the Artery handshake.
-	go nodeB.Send(ctx, targetPath, []byte("probe"))
+	go func() { _ = nodeB.Send(ctx, targetPath, []byte("probe")) }()
 
 	// Wait for the Artery handshake to complete on nodeB's OUTBOUND association.
 	if err := nodeB.WaitForHandshake(ctx, nodeA.localAddr.GetHostname(), nodeA.localAddr.GetPort()); err != nil {
@@ -432,7 +432,7 @@ func TestMonitoring_MonitoringPort_ImpliesEnabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	defer node.Shutdown()
+	defer func() { _ = node.Shutdown() }()
 	if node.monitoring != nil {
 		t.Error("monitoring should be nil when MonitoringPort==0 and EnableMonitoring==false")
 	}
@@ -443,7 +443,7 @@ func TestMonitoring_MonitoringAddr_NilWhenDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	defer node.Shutdown()
+	defer func() { _ = node.Shutdown() }()
 	if addr := node.MonitoringAddr(); addr != nil {
 		t.Errorf("MonitoringAddr() should be nil when monitoring is disabled, got %v", addr)
 	}
@@ -458,13 +458,13 @@ func TestMonitoring_GossipCounter_Incremented(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn node1: %v", err)
 	}
-	defer node1.Shutdown()
+	defer func() { _ = node1.Shutdown() }()
 
 	node2, err := Spawn(NodeConfig{SystemName: "GossipCtr", Host: "127.0.0.1", Port: 0})
 	if err != nil {
 		t.Fatalf("Spawn node2: %v", err)
 	}
-	defer node2.Shutdown()
+	defer func() { _ = node2.Shutdown() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -498,7 +498,7 @@ func TestMonitoring_CountAssociations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn node1: %v", err)
 	}
-	defer node1.Shutdown()
+	defer func() { _ = node1.Shutdown() }()
 
 	if n := node1.nm.CountAssociations(); n != 0 {
 		t.Errorf("CountAssociations before any connection: got %d, want 0", n)
@@ -508,7 +508,7 @@ func TestMonitoring_CountAssociations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn node2: %v", err)
 	}
-	defer node2.Shutdown()
+	defer func() { _ = node2.Shutdown() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()

@@ -239,7 +239,7 @@ func TestJSONSerializer_ActorReceivesGoStruct_LocalDelivery(t *testing.T) {
 		BaseActor: actor.NewBaseActor(),
 		received:  make(chan any, 1),
 	}
-	ref := node.SpawnActor("/user/captor", cap)
+	ref := node.SpawnActor("/user/captor", cap, actor.Props{New: func() actor.Actor { return cap }})
 
 	// Deliver a struct directly — local mailbox bypasses the serializer.
 	event := shippingEvent{OrderID: "E-001", Warehouse: "W1", Qty: 5, Weight: 2.3}
@@ -270,7 +270,7 @@ func TestJSONSerializer_ActorReceivesGoStruct_ViaSerializer(t *testing.T) {
 		BaseActor: actor.NewBaseActor(),
 		received:  make(chan any, 1),
 	}
-	ref := node.SpawnActor("/user/captor", cap)
+	ref := node.SpawnActor("/user/captor", cap, actor.Props{New: func() actor.Actor { return cap }})
 
 	// --- Sender side: serialize ---
 	original := shippingEvent{OrderID: "E-002", Warehouse: "W2", Qty: 2, Weight: 1.1}

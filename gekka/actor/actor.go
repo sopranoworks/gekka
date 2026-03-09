@@ -42,6 +42,26 @@ type Ref interface {
 	Path() string
 }
 
+// Directive defines the action a supervisor takes in response to a child's failure.
+type Directive int
+
+const (
+	// Resume continues processing the next message, keeping the current state.
+	Resume Directive = iota
+	// Restart stops the actor and starts it again, resetting its state.
+	Restart
+	// Stop permanently terminates the actor.
+	Stop
+	// Escalate notifies the parent's supervisor about the failure.
+	Escalate
+)
+
+// SupervisorStrategy defines how to handle failures in child actors.
+type SupervisorStrategy interface {
+	// Decide returns the Directive for a given error.
+	Decide(err error) Directive
+}
+
 // NoSender is the nil Ref value — the default sender when no explicit origin
 // is provided. Pass it (or omit the sender argument) to Tell when the
 // recipient should not reply to the caller.
@@ -75,6 +95,11 @@ type Envelope struct {
 type Props struct {
 	// New must not be nil; it is called exactly once during actor creation.
 	New func() Actor
+
+	// SupervisorStrategy defines how failures in children spawned by this
+	// actor should be handled. If nil, a default strategy (usually Restart)
+	// is used.
+	SupervisorStrategy SupervisorStrategy
 }
 
 // ActorContext is the subset of the ActorSystem API that is safe to use from

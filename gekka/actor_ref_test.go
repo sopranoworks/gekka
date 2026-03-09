@@ -104,7 +104,7 @@ func TestActorRef_Tell_LocalMailboxFull(t *testing.T) {
 func TestSpawnActor_ReturnsRef(t *testing.T) {
 	node := newTestNode(t, "Sys", "127.0.0.1", 2552)
 	a := &echoActor{BaseActor: actor.NewBaseActor()}
-	ref := node.SpawnActor("/user/myActor", a)
+	ref := node.SpawnActor("/user/myActor", a, actor.Props{New: func() actor.Actor { return a }})
 
 	want := "pekko://Sys@127.0.0.1:2552/user/myActor"
 	if ref.Path() != want {
@@ -118,7 +118,7 @@ func TestSpawnActor_ReturnsRef(t *testing.T) {
 func TestSpawnActor_RegistersActor(t *testing.T) {
 	node := newTestNode(t, "Sys", "127.0.0.1", 2552)
 	a := &echoActor{BaseActor: actor.NewBaseActor()}
-	node.SpawnActor("/user/reg", a)
+	node.SpawnActor("/user/reg", a, actor.Props{New: func() actor.Actor { return a }})
 
 	node.actorsMu.RLock()
 	got, ok := node.actors["/user/reg"]
@@ -134,7 +134,7 @@ func TestSpawnActor_RegistersActor(t *testing.T) {
 func TestActorSelection_Resolve_LocalPath(t *testing.T) {
 	node := newTestNode(t, "Sys", "127.0.0.1", 2552)
 	a := &echoActor{BaseActor: actor.NewBaseActor()}
-	node.SpawnActor("/user/echo", a)
+	node.SpawnActor("/user/echo", a, actor.Props{New: func() actor.Actor { return a }})
 
 	sel := node.ActorSelection("/user/echo")
 	ref, err := sel.Resolve(context.Background())
@@ -179,7 +179,7 @@ func TestActorSelection_Resolve_SelfAbsoluteURI(t *testing.T) {
 	// An absolute URI pointing to a local actor should resolve to a local ref.
 	node := newTestNode(t, "Sys", "127.0.0.1", 2552)
 	a := &echoActor{BaseActor: actor.NewBaseActor()}
-	node.SpawnActor("/user/echo", a)
+	node.SpawnActor("/user/echo", a, actor.Props{New: func() actor.Actor { return a }})
 
 	selfURI := "pekko://Sys@127.0.0.1:2552/user/echo"
 	sel := node.ActorSelection(selfURI)
@@ -201,7 +201,7 @@ func TestActorSelection_Resolve_NilContext(t *testing.T) {
 	node.ctx = ctx // wire a real context so the nil fallback has somewhere to fall
 
 	a := &echoActor{BaseActor: actor.NewBaseActor()}
-	node.SpawnActor("/user/echo", a)
+	node.SpawnActor("/user/echo", a, actor.Props{New: func() actor.Actor { return a }})
 
 	ref, err := node.ActorSelection("/user/echo").Resolve(nil) //nolint:staticcheck // intentional: testing nil-ctx fallback
 	if err != nil {
@@ -221,7 +221,7 @@ func TestActorSelection_Resolve_NilContext(t *testing.T) {
 func TestActorSelection_Tell_Local(t *testing.T) {
 	node := newTestNode(t, "Sys", "127.0.0.1", 2552)
 	a := &echoActor{BaseActor: actor.NewBaseActor()}
-	node.SpawnActor("/user/echo", a)
+	node.SpawnActor("/user/echo", a, actor.Props{New: func() actor.Actor { return a }})
 
 	node.ActorSelection("/user/echo").Tell("ping")
 	time.Sleep(20 * time.Millisecond)
@@ -282,10 +282,10 @@ func waitMsg(t *testing.T, done <-chan struct{}) {
 func TestActorRef_Tell_SenderIsPropagated(t *testing.T) {
 	node := newTestNode(t, "Sys", "127.0.0.1", 2552)
 	target := &senderCapture{BaseActor: actor.NewBaseActor(), done: make(chan struct{}, 1)}
-	targetRef := node.SpawnActor("/user/target", target)
+	targetRef := node.SpawnActor("/user/target", target, actor.Props{New: func() actor.Actor { return target }})
 
 	sender := &senderCapture{BaseActor: actor.NewBaseActor(), done: make(chan struct{}, 1)}
-	senderRef := node.SpawnActor("/user/sender", sender)
+	senderRef := node.SpawnActor("/user/sender", sender, actor.Props{New: func() actor.Actor { return sender }})
 
 	targetRef.Tell("hello", senderRef)
 	waitMsg(t, target.done)
@@ -298,7 +298,7 @@ func TestActorRef_Tell_SenderIsPropagated(t *testing.T) {
 func TestActorRef_Tell_NoSender_IsNil(t *testing.T) {
 	node := newTestNode(t, "Sys", "127.0.0.1", 2552)
 	target := &senderCapture{BaseActor: actor.NewBaseActor(), done: make(chan struct{}, 1)}
-	node.SpawnActor("/user/target", target)
+	node.SpawnActor("/user/target", target, actor.Props{New: func() actor.Actor { return target }})
 
 	ref := ActorRef{fullPath: "pekko://Sys@127.0.0.1:2552/user/target", node: node, local: target}
 	ref.Tell("hello") // no sender
@@ -312,7 +312,7 @@ func TestActorRef_Tell_NoSender_IsNil(t *testing.T) {
 func TestActorRef_Tell_NoSender_ExplicitZero(t *testing.T) {
 	node := newTestNode(t, "Sys", "127.0.0.1", 2552)
 	target := &senderCapture{BaseActor: actor.NewBaseActor(), done: make(chan struct{}, 1)}
-	node.SpawnActor("/user/target", target)
+	node.SpawnActor("/user/target", target, actor.Props{New: func() actor.Actor { return target }})
 
 	ref := ActorRef{fullPath: "pekko://Sys@127.0.0.1:2552/user/target", node: node, local: target}
 	ref.Tell("hello", NoSender) // NoSender = zero ActorRef
@@ -326,7 +326,7 @@ func TestActorRef_Tell_NoSender_ExplicitZero(t *testing.T) {
 func TestSpawnActor_InjectsSelf(t *testing.T) {
 	node := newTestNode(t, "Sys", "127.0.0.1", 2552)
 	a := &senderCapture{BaseActor: actor.NewBaseActor(), done: make(chan struct{}, 1)}
-	ref := node.SpawnActor("/user/self-test", a)
+	ref := node.SpawnActor("/user/self-test", a, actor.Props{New: func() actor.Actor { return a }})
 
 	// Self should be set immediately after SpawnActor (before any message).
 	if a.Self() == nil || a.Self().Path() != ref.Path() {
@@ -339,10 +339,10 @@ func TestActorRef_Tell_SenderSelf_RoundTrip(t *testing.T) {
 	node := newTestNode(t, "Sys", "127.0.0.1", 2552)
 
 	b := &senderCapture{BaseActor: actor.NewBaseActor(), done: make(chan struct{}, 1)}
-	bRef := node.SpawnActor("/user/b", b)
+	bRef := node.SpawnActor("/user/b", b, actor.Props{New: func() actor.Actor { return b }})
 
 	a := &senderCapture{BaseActor: actor.NewBaseActor(), done: make(chan struct{}, 1)}
-	aRef := node.SpawnActor("/user/a", a)
+	aRef := node.SpawnActor("/user/a", a, actor.Props{New: func() actor.Actor { return a }})
 
 	// A sends to B with itself as sender.
 	bRef.Tell("ping", aRef)

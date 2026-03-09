@@ -70,10 +70,10 @@ func TestLocalDeathWatch(t *testing.T) {
 
 func TestRemoteDeathWatch(t *testing.T) {
 	node1 := newTestNode(t, "ClusterSys", "127.0.0.1", 0)
-	defer node1.Shutdown()
+	defer func() { _ = node1.Shutdown() }()
 
 	node2 := newTestNode(t, "ClusterSys", "127.0.0.1", 0) // dynamic port
-	defer node2.Shutdown()
+	defer func() { _ = node2.Shutdown() }()
 
 	// Spawn target on node2
 	targetRef, err := node2.System.ActorOf(Props{

@@ -102,8 +102,8 @@ func TestCompressionTableManager_ConcurrentAccess(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < 100; i++ {
 			// Ignore errors, just checking for race panics
-			ctm.LookupManifest(originUid, 1)
-			ctm.LookupManifest(originUid, 100)
+			_, _ = ctm.LookupManifest(originUid, 1)
+			_, _ = ctm.LookupManifest(originUid, 100)
 		}
 	}()
 

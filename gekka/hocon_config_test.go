@@ -56,6 +56,25 @@ func TestLoadConfig_Akka(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_Precedence(t *testing.T) {
+	// precedence.conf has both akka and pekko blocks.
+	// detectProtocol should prefer pekko.
+	cfg, err := LoadConfig("testdata/precedence.conf")
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	if cfg.Address.Protocol != "pekko" {
+		t.Errorf("Protocol = %q, want pekko", cfg.Address.Protocol)
+	}
+	if cfg.Address.Host != "127.0.0.1" {
+		t.Errorf("Host = %q, want 127.0.0.1", cfg.Address.Host)
+	}
+	if cfg.Address.Port != 2552 {
+		t.Errorf("Port = %d, want 2552", cfg.Address.Port)
+	}
+}
+
 func TestLoadConfig_WithFallback(t *testing.T) {
 	// no-seeds.conf has hostname/port but no seed-nodes.
 	// reference.conf has a different default port — the app config wins.
@@ -113,7 +132,7 @@ func TestSpawnFromConfig_Pekko(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SpawnFromConfig: %v", err)
 	}
-	defer node.Shutdown()
+	defer func() { _ = node.Shutdown() }()
 
 	self := node.SelfAddress()
 	if self.Protocol != "pekko" {
@@ -143,7 +162,7 @@ func TestJoinSeeds_NoSeeds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	defer node.Shutdown()
+	defer func() { _ = node.Shutdown() }()
 
 	err = node.JoinSeeds()
 	if err == nil {

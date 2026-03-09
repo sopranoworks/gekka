@@ -194,8 +194,8 @@ func TestDispatcher_Heuristic(t *testing.T) {
 	envPayload, _ := proto.Marshal(env)
 	header := make([]byte, 4)
 	binary.LittleEndian.PutUint32(header, uint32(len(envPayload)))
-	client.Write(header)
-	client.Write(envPayload)
+	_, _ = client.Write(header)
+	_, _ = client.Write(envPayload)
 
 	// If heuristic works, it should print "heuristic match: HeartbeatRsp" in logs (we can't easily verify logs here)
 	// But we can verify it doesn't crash.

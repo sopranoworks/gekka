@@ -44,7 +44,7 @@ func TestProvider_SpawnPekko_UsesCorrectProtocol(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	defer node.Shutdown()
+	defer func() { _ = node.Shutdown() }()
 
 	if got := node.localAddr.GetProtocol(); got != "pekko" {
 		t.Errorf("localAddr.Protocol = %q, want %q", got, "pekko")
@@ -64,7 +64,7 @@ func TestProvider_SpawnAkka_UsesCorrectProtocol(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	defer node.Shutdown()
+	defer func() { _ = node.Shutdown() }()
 
 	if got := node.localAddr.GetProtocol(); got != "akka" {
 		t.Errorf("localAddr.Protocol = %q, want %q", got, "akka")
@@ -88,7 +88,7 @@ func TestProvider_ClusterCorePath(t *testing.T) {
 			t.Fatalf("Spawn: %v", err)
 		}
 		got := node.cm.clusterCorePath("ClusterSystem", "127.0.0.1", 2552)
-		node.Shutdown()
+		_ = node.Shutdown()
 		if got != tt.want {
 			t.Errorf("provider=%v clusterCorePath = %q, want %q", tt.provider, got, tt.want)
 		}
@@ -109,7 +109,7 @@ func TestProvider_HeartbeatPath(t *testing.T) {
 			t.Fatalf("Spawn: %v", err)
 		}
 		got := node.cm.heartbeatPath("ClusterSystem", "127.0.0.1", 2552)
-		node.Shutdown()
+		_ = node.Shutdown()
 		if got != tt.want {
 			t.Errorf("provider=%v heartbeatPath = %q, want %q", tt.provider, got, tt.want)
 		}
@@ -128,7 +128,7 @@ func TestProvider_JoinUsesCorrectScheme(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	defer node.Shutdown()
+	defer func() { _ = node.Shutdown() }()
 
 	// Join will fail (no Akka server), but seedAddr is set before the dial.
 	// Use a background context that we cancel immediately to abort the dial fast.

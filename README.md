@@ -1,28 +1,20 @@
-# gekka &nbsp;[![Version](https://img.shields.io/badge/version-0.3.0--dev-blue)](https://github.com/gekka/gekka) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+# gekka &nbsp;[![Version](https://img.shields.io/badge/version-0.3.0-blue)](https://github.com/sopranoworks/gekka) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Go CI](https://github.com/sopranoworks/gekka/actions/workflows/go.yml/badge.svg)](https://github.com/sopranoworks/gekka/actions/workflows/go.yml)
 
-**Version 0.3.0-dev**
+**Version 0.3.0**
+`gekka` is a distributed actor model library for Go, engineered for seamless interoperability with [Apache Pekko](https://pekko.apache.org/) via the Artery TCP protocol. Moving beyond simple messaging, it provides a robust **Hierarchical Actor System**, **Self-Healing Supervision**, and true **Location Transparency**.
+Powered by its own high-performance HOCON engine, [`gekka-config`](https://github.com/sopranoworks/gekka-config), `gekka` supports both automatic cluster formation and direct node-to-node communication using the standard `pekko://` URI scheme.
 
-A Go library for connecting to [Apache Pekko](https://pekko.apache.org/) clusters over the Artery TCP remoting protocol. Write Go services that participate in Pekko clusters alongside Scala/Java actors — joining, sending messages, routing to cluster singletons, sharing distributed state via CRDTs, and handling messages through an advanced Actor model.
+## Key Features
 
-> ⚠️ **Warning**: This project is under active development. The public API and interfaces are subject to change without notice until the 1.0.0 release.
-
-## Features
-
-- **ActorSystem & ActorOf** — create actors the Pekko way: `ref, _ := node.System.ActorOf(Props{...}, "my-service")`; the system registers the actor, starts its goroutine, and returns a location-transparent `ActorRef`.
-- **Hierarchical Actor Paths** — `ActorOf` enforces the `/user/` namespace and ensures name uniqueness within the system.
-- **System & Context access from Actors** — `a.System()` inside `Receive` gives each actor its `ActorContext`; use `a.System().ActorOf(...)` to spawn peer actors and `a.System().Context()` to tie background goroutines to the node's lifecycle.
-- **Location-transparent ActorRef** — `ref.Tell(msg)` and `ref.Ask(ctx, msg)` work identically for local and remote actors; local delivery skips serialization; remote delivery uses Artery TCP.
-- **Actor-aware Logging** — `a.Log()` provides structured logging (via `log/slog`) that automatically includes actor paths, system name, and the current sender's context.
-- **Location Transparent Senders** — use `a.Sender()` inside `Receive` to reply to the message originator (local or remote/Scala) without manual tracking.
-- **Death Watch (Watch/Unwatch)** — monitor the lifecycle of other actors; receive a `Terminated` message automatically when a watched actor stops or its node becomes unreachable.
-- **Advanced Serialization** — built-in support for Protobuf (ID 2), Raw Bytes (ID 4), and JSON (Jackson-compatible, ID 9). Extensible registry for custom serializers.
-- **Reactive Cluster Events** — push-based subscription (`node.Subscribe(ref, types...)`) delivers `MemberUp`, `UnreachableMember`, and other `ClusterDomainEvent` values natively to a subscriber actor.
-- **Artery TCP remoting** — binary-compatible framing, compression-table handshake, sequence/ACK; Artery heartbeats (Serializer ID 17) ensure stable transport-layer liveness.
-- **Cluster membership** — InitJoin → Join → Welcome flow, gossip, vector-clock convergence, cluster heartbeat/failure detection.
-- **Cluster Singleton Proxy** — route to the singleton on the current oldest node with automatic failover.
-- **Distributed Data (CRDTs)** — G-Counter and OR-Set with JSON gossip propagation to Scala peers.
-- **Observability** — built-in HTTP server (`/healthz`, `/metrics`, `/metrics?fmt=prom`) exposing a live snapshot of internal counters with zero external dependencies.
-- **Type-safe actor paths** — `actor.Address` and `actor.ActorPath` builder API (equivalent to Pekko's `Address` / `ActorPath`).
+- **Hierarchical Actor System** — Create actors using `node.System.ActorOf(Props{...}, "name")`. `gekka` enforces the `/user/` namespace and manages parent-child relationships, ensuring reliable actor lifecycle management.
+- **Self-Healing Supervision** — Implement robust fault tolerance with `OneForOneStrategy`. Supported directives include `Restart`, `Resume`, `Stop`, and `Escalate` to automatically handle child actor failures.
+- **Pekko Remote & Cluster Compatibility** — Seamlessly communicate with Scala/Java actors. Supports the standard `pekko://` URI scheme for direct node-to-node addressing via `ActorSelection`.
+- **Location Transparency** — `ActorRef.Tell(msg)` and `ActorRef.Ask(ctx, msg)` work identically for local and remote actors, abstracting away the network layer.
+- **Location Transparent Senders** — Access the originator of any message using `a.Sender()`. Reply directly with `a.Sender().Tell(reply, a.Self())` without manual address tracking.
+- **Extensible Serialization** — Built-in support for **Protobuf** (ID 2), **Raw Bytes** (ID 4), and **JSON** (Jackson-compatible, ID 9) via `gekka-config`. Easily register custom serializers for domain-specific types.
+- **Actor-aware Logging** — Integrated structured logging (via `log/slog`) that automatically contextualizes entries with actor paths, system names, and current sender information.
+- **High-Performance Remoting** — Binary-compatible Artery TCP implementation featuring handshake authentication, sequence management, and transport-level heartbeats.
+- **Observability** — Built-in monitoring server providing health checks (`/healthz`) and live metrics (`/metrics`) in JSON and Prometheus formats with zero external dependencies.
 
 ---
 
@@ -125,7 +117,7 @@ if b, ok := reply.([]byte); ok {
 
 ## Configuration via HOCON
 
-If you already have a Pekko or Akka `application.conf`, you can load it directly instead of constructing `NodeConfig` manually. gekka reads the same HOCON paths that Pekko uses.
+`gekka` uses the `gekka-config` library to parse and unmarshal HOCON files. If you already have a Pekko or Akka `application.conf`, you can load it directly instead of constructing `NodeConfig` manually. `gekka` reads the same HOCON paths that Pekko uses.
 
 ### Example `application.conf`
 
@@ -1012,7 +1004,7 @@ gekka/
 ├── README.md
 ├── go.mod
 └── gekka/
-    ├── version.go                    ← const Version = "0.2.0"
+    ├── version.go                    ← const Version = "0.3.0"
     ├── gekka_node.go                 ← top-level API (Spawn, Join, RegisterActor, Subscribe, …)
     ├── actor_system.go               ← ActorSystem interface, Props, nodeActorSystem
     ├── actor_ref.go                  ← ActorRef, ActorSelection, SpawnActor
@@ -1068,7 +1060,7 @@ gekka uses a flexible `SerializationRegistry` to map Artery serializer IDs and m
 
 ### Registering Custom Types (JSON)
 
-By default, any struct sent via `Tell` is serialized as JSON (ID 9) using its reflect type name as the manifest. To receive these messages, the remote node must register the manifest:
+By default, any struct sent via `Tell` is serialized as JSON (ID 9) using its reflect type name as the manifest, powered by the [`gekka-config`](https://github.com/sopranoworks/gekka-config) engine for Jackson compatibility. To receive these messages, the remote node must register the manifest:
 
 ```go
 import "reflect"

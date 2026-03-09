@@ -42,12 +42,6 @@ func newCaptureHandler() *captureHandler {
 
 func (c *captureHandler) output() string { return c.buf.String() }
 
-// withAttr is a passthrough handler that pre-sets additional attributes.
-type withAttr struct {
-	inner slog.Handler
-	attrs []slog.Attr
-}
-
 func (h *captureHandler) Enabled(ctx context.Context, l slog.Level) bool {
 	return h.h.Enabled(ctx, l)
 }

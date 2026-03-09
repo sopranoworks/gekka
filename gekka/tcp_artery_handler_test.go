@@ -82,7 +82,7 @@ func TestTcpArteryHandler_InvalidLength(t *testing.T) {
 	// 0xFFFFFFFF > MaxArteryPayloadLength — should trigger length check.
 	header := make([]byte, 4)
 	putUint32LE(header, 0xFFFFFFFF)
-	client.Write(header)
+	_, _ = client.Write(header)
 
 	select {
 	case err := <-errChan:
@@ -107,7 +107,7 @@ func TestTcpArteryHandler_Oversized(t *testing.T) {
 
 	header := make([]byte, 4)
 	putUint32LE(header, MaxArteryPayloadLength+1)
-	client.Write(header)
+	_, _ = client.Write(header)
 
 	select {
 	case err := <-errChan:

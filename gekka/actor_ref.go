@@ -51,6 +51,11 @@ type Terminated struct {
 	Actor ActorRef
 }
 
+// TerminatedActor implements actor.TerminatedMessage so that Terminated can be
+// handled by actors in the actor package (e.g. PoolRouter) without an import
+// cycle.
+func (t Terminated) TerminatedActor() actor.Ref { return t.Actor }
+
 // Path returns the full actor-path URI for this reference.
 func (r ActorRef) Path() string { return r.fullPath }
 

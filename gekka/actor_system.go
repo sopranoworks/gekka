@@ -108,10 +108,6 @@ func (s *nodeActorSystem) ActorOf(props Props, name string) (ActorRef, error) {
 
 // ActorOfHierarchical creates a new actor as a child of parentPath.
 func (s *nodeActorSystem) ActorOfHierarchical(props Props, name string, parentPath string) (ActorRef, error) {
-	if props.New == nil {
-		return ActorRef{}, fmt.Errorf("actorOf: Props.New must not be nil")
-	}
-
 	// Generate a unique name when none is supplied.
 	if name == "" {
 		n := autoNameCounter.Add(1)
@@ -136,6 +132,32 @@ func (s *nodeActorSystem) ActorOfHierarchical(props Props, name string, parentPa
 		return ActorRef{}, fmt.Errorf("actorOf: actor already registered at %q", path)
 	}
 
+	// Deployment interception: auto-provision a router when the path has a
+	// matching deployment entry. GroupRouters do not need props.New (they route
+	// to pre-existing actors); PoolRouters do need it (to create workers).
+	if d, ok := s.node.lookupDeployment(path); ok && d.Router != "" {
+		if isGroupRouter(d.Router) {
+			group, err := DeploymentToGroupRouter(d)
+			if err != nil {
+				return ActorRef{}, fmt.Errorf("actorOf: deployment config for %q: %w", path, err)
+			}
+			return s.node.SpawnActor(path, group, Props{}), nil
+		}
+		// Pool router — worker factory is required.
+		if props.New == nil {
+			return ActorRef{}, fmt.Errorf("actorOf: Props.New must not be nil for pool router deployment at %q", path)
+		}
+		pool, err := DeploymentToPoolRouter(d, props)
+		if err != nil {
+			return ActorRef{}, fmt.Errorf("actorOf: deployment config for %q: %w", path, err)
+		}
+		return s.node.SpawnActor(path, pool, Props{}), nil
+	}
+
+	// Plain actor — Props.New is required.
+	if props.New == nil {
+		return ActorRef{}, fmt.Errorf("actorOf: Props.New must not be nil")
+	}
 	a := props.New()
 	return s.node.SpawnActor(path, a, props), nil
 }
@@ -166,6 +188,34 @@ func (b *actorContextBridge) ActorOf(props actor.Props, name string) (actor.Ref,
 
 func (b *actorContextBridge) Context() context.Context {
 	return b.sys.node.ctx
+}
+
+// Watch implements actor.ActorContext. It registers watcher to receive a
+// Terminated message when target stops. Both arguments must be ActorRef values
+// (which they always are when actors are spawned via SpawnActor or ActorOf).
+func (b *actorContextBridge) Watch(watcher actor.Ref, target actor.Ref) {
+	w, wOK := watcher.(ActorRef)
+	tgt, tOK := target.(ActorRef)
+	if wOK && tOK {
+		// Both sides are full ActorRefs — delegate to the rich ActorSystem.Watch.
+		b.sys.Watch(w, tgt)
+		return
+	}
+	// Fallback: register the watcher directly on the local target actor.
+	if tOK && tgt.local != nil {
+		tgt.local.AddWatcher(watcher)
+	}
+}
+
+// Resolve implements actor.ActorContext. It looks up the actor at path and
+// returns its Ref, allowing GroupRouter.PreStart to resolve routee paths
+// without importing the gekka package.
+func (b *actorContextBridge) Resolve(path string) (actor.Ref, error) {
+	ref, err := b.sys.node.ActorSelection(path).Resolve(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	return ref, nil
 }
 
 // Watch implements ActorSystem.

@@ -188,6 +188,11 @@ func hoconToNodeConfig(cfg *hocon.Config) (NodeConfig, error) {
 		Port:     int(nodeCfg.Port),
 	}
 
+	// Extract deployment configs from the HOCON deployment block.
+	if deps := extractDeployments(cfg); len(deps) > 0 {
+		nodeCfg.Deployments = deps
+	}
+
 	return nodeCfg, nil
 }
 

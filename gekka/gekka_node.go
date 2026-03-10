@@ -112,6 +112,22 @@ type NodeConfig struct {
 	//	    LogHandler: h,
 	//	})
 	LogHandler slog.Handler
+
+	// Deployments maps actor paths to their router deployment configurations.
+	// When ActorOf is called for a path that has a Deployments entry with a
+	// non-empty Router field, the system automatically wraps the supplied Props
+	// in the appropriate PoolRouter instead of spawning a plain actor.
+	//
+	// Populated automatically by LoadConfig / SpawnFromConfig from the
+	// HOCON akka.actor.deployment (or pekko.actor.deployment) block.
+	// Can also be set directly for programmatic configuration:
+	//
+	//	gekka.Spawn(gekka.NodeConfig{
+	//	    Deployments: map[string]gekka.DeploymentConfig{
+	//	        "/user/myRouter": {Router: "round-robin-pool", NrOfInstances: 5},
+	//	    },
+	//	})
+	Deployments map[string]DeploymentConfig
 }
 
 // resolve returns the effective (scheme, system, host, port) for this config.
@@ -187,6 +203,7 @@ type GekkaNode struct {
 	clusterWatcherRef ActorRef
 	logHandler        slog.Handler // nil = use slog.Default().Handler()
 	onMessage         func(ctx context.Context, msg *IncomingMessage) error
+	deployments       map[string]DeploymentConfig // keyed by actor path; nil = no deployments
 }
 
 // Spawn creates, wires, and starts a GekkaNode. The TCP listener is bound
@@ -266,6 +283,7 @@ func Spawn(cfg NodeConfig) (*GekkaNode, error) {
 		actors:         make(map[string]actor.Actor),
 		remoteWatchers: make(map[string]map[string][]ActorRef),
 		logHandler:     cfg.LogHandler,
+		deployments:    cfg.Deployments,
 	}
 	node.System = &nodeActorSystem{node: node}
 
@@ -412,6 +430,21 @@ func (n *GekkaNode) handleArteryMessage(ctx context.Context, meta *ArteryMetadat
 		return nil
 	}
 	return n.onMessage(ctx, incoming)
+}
+
+// lookupDeployment returns the DeploymentConfig for the given actor path, if any.
+// It tries both the exact path and the alternate short/full form so that
+// "/user/myRouter" and "/myRouter" both resolve to the same deployment entry.
+func (n *GekkaNode) lookupDeployment(path string) (DeploymentConfig, bool) {
+	if len(n.deployments) == 0 {
+		return DeploymentConfig{}, false
+	}
+	for _, candidate := range deploymentKeyCandidates(path) {
+		if d, ok := n.deployments[candidate]; ok {
+			return d, true
+		}
+	}
+	return DeploymentConfig{}, false
 }
 
 // RegisterActor wires an Actor to a local actor path so that incoming Artery

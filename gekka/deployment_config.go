@@ -12,24 +12,24 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/sopranoworks/gekka-config/pkg/hocon"
-
 	"gekka/gekka/actor"
+
+	hocon "github.com/sopranoworks/gekka-config"
 )
 
 // ClusterRouterSettings holds the cluster-aware routing configuration.
 type ClusterRouterSettings struct {
 	// Enabled reports whether cluster-aware routing is active.
-	Enabled bool
+	Enabled bool `hocon:"enabled"`
 
 	// AllowLocalRoutees allows the router to include routees on the local node.
-	AllowLocalRoutees bool
+	AllowLocalRoutees bool `hocon:"allow-local-routees"`
 
 	// UseRole restricts routing to nodes with a specific role.
-	UseRole string
+	UseRole string `hocon:"use-role"`
 
 	// TotalInstances is the target total number of routees across the entire cluster.
-	TotalInstances int
+	TotalInstances int `hocon:"total-instances"`
 }
 
 // DeploymentConfig holds the router deployment settings parsed from the
@@ -52,20 +52,20 @@ type ClusterRouterSettings struct {
 type DeploymentConfig struct {
 	// Router is the router-type identifier, e.g. "round-robin-pool".
 	// An empty string means no router is configured (plain actor).
-	Router string
+	Router string `hocon:"router"`
 
 	// NrOfInstances is the pool size for local-only pool routers.
 	// For cluster-aware pools, use TotalInstances.
-	NrOfInstances int
+	NrOfInstances int `hocon:"nr-of-instances"`
 
 	// RouteesPaths holds the explicit routee paths for group routers.
-	RouteesPaths []string
+	RouteesPaths []string `hocon:"routees.paths"`
 
 	// VirtualNodesFactor is the number of tokens per routee on the hash ring.
-	VirtualNodesFactor int
+	VirtualNodesFactor int `hocon:"virtual-nodes-factor"`
 
 	// Cluster holds settings for cluster-aware routing.
-	Cluster ClusterRouterSettings
+	Cluster ClusterRouterSettings `hocon:"cluster"`
 }
 
 // LookupDeployment finds the deployment block for actorPath inside a parsed
@@ -100,21 +100,11 @@ func lookupDeploymentUnder(cfg *hocon.Config, prefix, actorPath string) (Deploym
 		return DeploymentConfig{}, false
 	}
 
-	root := depCfg.Root()
-	if root == nil {
-		return DeploymentConfig{}, false
-	}
-
 	for _, key := range deploymentKeyCandidates(actorPath) {
-		val, ok := root.Fields[key]
-		if !ok {
-			continue
+		actorCfg, err := depCfg.GetConfig(key)
+		if err == nil {
+			return parseDeploymentObject(actorCfg), true
 		}
-		obj, ok := val.(*hocon.Object)
-		if !ok {
-			continue
-		}
-		return parseDeploymentObject(hocon.NewConfig(obj)), true
 	}
 	return DeploymentConfig{}, false
 }
@@ -146,17 +136,11 @@ func parseDeploymentObject(cfg hocon.Config) DeploymentConfig {
 		dc.NrOfInstances = n
 	}
 
-	// routees.paths is a list of path strings for group routers.
-	if v, err := cfg.GetValue("routees.paths"); err == nil {
-		if list, ok := v.(*hocon.List); ok {
-			for _, elem := range list.Elements {
-				if lit, ok := elem.(*hocon.Literal); ok {
-					p := strings.Trim(fmt.Sprint(lit.Value), `"`)
-					dc.RouteesPaths = append(dc.RouteesPaths, p)
-				}
-			}
-		}
+	var tmp struct {
+		Paths []string `hocon:"routees.paths"`
 	}
+	_ = cfg.Unmarshal(&tmp)
+	dc.RouteesPaths = append(dc.RouteesPaths, tmp.Paths...)
 
 	if f, err := cfg.GetInt("virtual-nodes-factor"); err == nil {
 		dc.VirtualNodesFactor = f
@@ -199,7 +183,7 @@ func isGroupRouter(routerType string) bool {
 // Returns an error if Router is not a recognised pool-router type or if
 // NrOfInstances is zero (use the returned PoolRouter's AdjustPoolSize message
 // to resize at runtime instead).
-func DeploymentToPoolRouter(d DeploymentConfig, props actor.Props) (actor.Actor, error) {
+func DeploymentToPoolRouter(cm *ClusterManager, d DeploymentConfig, props actor.Props) (actor.Actor, error) {
 	if !d.Cluster.Enabled && d.NrOfInstances <= 0 {
 		return nil, fmt.Errorf("deployment: nr-of-instances must be > 0, got %d", d.NrOfInstances)
 	}
@@ -213,7 +197,7 @@ func DeploymentToPoolRouter(d DeploymentConfig, props actor.Props) (actor.Actor,
 	}
 
 	if d.Cluster.Enabled {
-		return NewClusterPoolRouter(logic, d.Cluster.TotalInstances, d.Cluster.AllowLocalRoutees, d.Cluster.UseRole, props), nil
+		return NewClusterPoolRouter(cm, logic, d.Cluster.TotalInstances, d.Cluster.AllowLocalRoutees, d.Cluster.UseRole, props), nil
 	}
 	return actor.NewPoolRouter(logic, d.NrOfInstances, props), nil
 }
@@ -241,7 +225,7 @@ func routingLogicFor(routerType string) (actor.RoutingLogic, error) {
 //
 // d.RouteesPaths must not be empty; use NewGroupRouter with explicit Ref values
 // when routees are known at construction time.
-func DeploymentToGroupRouter(d DeploymentConfig) (actor.Actor, error) {
+func DeploymentToGroupRouter(cm *ClusterManager, d DeploymentConfig) (actor.Actor, error) {
 	if !d.Cluster.Enabled && len(d.RouteesPaths) == 0 {
 		return nil, fmt.Errorf("deployment: group router requires non-empty routees.paths or cluster enabled")
 	}
@@ -256,7 +240,7 @@ func DeploymentToGroupRouter(d DeploymentConfig) (actor.Actor, error) {
 
 	if d.Cluster.Enabled {
 		// Cluster group router typically resolves its own relative path on remote nodes.
-		return NewClusterGroupRouter(logic, d.RouteesPaths, d.Cluster.AllowLocalRoutees, d.Cluster.UseRole), nil
+		return NewClusterGroupRouter(cm, logic, d.RouteesPaths, d.Cluster.AllowLocalRoutees, d.Cluster.UseRole), nil
 	}
 	return actor.NewGroupRouterWithPaths(logic, d.RouteesPaths), nil
 }
@@ -275,26 +259,15 @@ func extractDeployments(cfg *hocon.Config) map[string]DeploymentConfig {
 		if err != nil {
 			continue
 		}
-		root := depCfg.Root()
-		if root == nil {
-			continue
-		}
-		for key, val := range root.Fields {
-			obj, ok := val.(*hocon.Object)
-			if !ok {
-				continue
-			}
-			dc := parseDeploymentObject(hocon.NewConfig(obj))
-			if dc.Router == "" {
-				continue
-			}
-			// Store under the key as written.
-			result[key] = dc
-			// Also store under the alternate form (full ↔ short) so both
-			// "/user/myRouter" and "/myRouter" resolve to the same config.
-			for _, alt := range deploymentKeyCandidates(key)[1:] {
-				if _, exists := result[alt]; !exists {
-					result[alt] = dc
+		var m map[string]DeploymentConfig
+		if err := depCfg.Unmarshal(&m); err == nil && m != nil {
+			for k, v := range m {
+				result[k] = v
+				// Also store under the alternate form (full ↔ short)
+				for _, alt := range deploymentKeyCandidates(k)[1:] {
+					if _, exists := result[alt]; !exists {
+						result[alt] = v
+					}
 				}
 			}
 		}

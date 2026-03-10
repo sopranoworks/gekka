@@ -256,6 +256,14 @@ func (p ActorPath) String() string {
 	return p.Address.String() + "/" + strings.Join(p.elements, "/")
 }
 
+// Path returns the path part of the actor path, e.g. "/user/myActor".
+func (p ActorPath) Path() string {
+	if len(p.elements) == 0 {
+		return "/"
+	}
+	return "/" + strings.Join(p.elements, "/")
+}
+
 // Child appends name as a child element and returns the new ActorPath.
 // The receiver is not modified.
 //

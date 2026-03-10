@@ -285,7 +285,9 @@ func Spawn(cfg NodeConfig) (*GekkaNode, error) {
 		logHandler:     cfg.LogHandler,
 		deployments:    cfg.Deployments,
 	}
-	node.System = &nodeActorSystem{node: node}
+	sys := &nodeActorSystem{node: node}
+	node.System = sys
+	node.cm.Sys = sys.asActorContext("")
 
 	// Set default Artery message dispatcher to handle registered actors.
 	nm.UserMessageCallback = node.handleArteryMessage

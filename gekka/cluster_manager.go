@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"gekka/gekka/actor"
 	"gekka/gekka/cluster"
 
 	"google.golang.org/protobuf/proto"
@@ -71,6 +72,9 @@ type ClusterManager struct {
 	// metrics is the shared NodeMetrics instance (set by GekkaNode.Spawn).
 	// Nil-safe: all callers check before touching.
 	metrics *NodeMetrics
+
+	// Sys is the actor system context used for resolving actor paths.
+	Sys actor.ActorContext
 
 	// Cluster event subscribers — managed by cluster_events.go methods.
 	subMu sync.RWMutex

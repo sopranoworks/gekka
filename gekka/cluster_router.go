@@ -145,21 +145,20 @@ type ClusterPoolRouter struct {
 	totalInstances    int
 	allowLocalRoutees bool
 	useRole           string
+	cm                *ClusterManager
 
 	// nodeAddr -> []Ref
 	remoteRoutees map[string][]actor.Ref
 	mu            sync.RWMutex
 }
 
-func NewClusterPoolRouter(logic actor.RoutingLogic, totalInstances int, allowLocalRoutees bool, useRole string, props actor.Props) *ClusterPoolRouter {
-	// Local share of instances: we'll calculate this in PreStart or based on current cluster size.
-	// For now, let's start with 0 and adjust as nodes join.
-	// Simplified logic: each node creates (TotalInstances / N) workers.
+func NewClusterPoolRouter(cm *ClusterManager, logic actor.RoutingLogic, totalInstances int, allowLocalRoutees bool, useRole string, props actor.Props) *ClusterPoolRouter {
 	return &ClusterPoolRouter{
 		PoolRouter:        *actor.NewPoolRouter(logic, 0, props),
 		totalInstances:    totalInstances,
 		allowLocalRoutees: allowLocalRoutees,
 		useRole:           useRole,
+		cm:                cm,
 		remoteRoutees:     make(map[string][]actor.Ref),
 	}
 }
@@ -175,13 +174,7 @@ func (r *ClusterPoolRouter) PreStart() {
 }
 
 func (r *ClusterPoolRouter) refreshRoutees() {
-	bridge, ok := r.System().(*actorContextBridge)
-	if !ok {
-		return
-	}
-
-	node := bridge.sys.node
-	cm := node.cm
+	cm := r.cm
 	cm.mu.RLock()
 	state := cm.state
 	cm.mu.RUnlock()
@@ -229,14 +222,14 @@ func (r *ClusterPoolRouter) refreshRoutees() {
 
 	// Discover remote routees (symmetric: we assume other nodes have the same router at the same path)
 	selfPath := r.Self().Path()
-	ap, _ := ParseActorPath(selfPath)
+	ap, _ := actor.ParseActorPath(selfPath)
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.remoteRoutees = make(map[string][]actor.Ref)
 
 	for _, ma := range eligibleNodes {
-		isLocal := ma.Host == node.localAddr.GetHostname() && ma.Port == node.localAddr.GetPort()
+		isLocal := ma.Host == cm.localAddress.Address.GetHostname() && ma.Port == cm.localAddress.Address.GetPort()
 		if isLocal {
 			if !r.allowLocalRoutees {
 				// We still spawn local ones because we are part of the cluster pool,
@@ -260,7 +253,7 @@ func (r *ClusterPoolRouter) refreshRoutees() {
 
 		// For simplicity/gekka-style: we route to the PoolRouter on the remote node.
 		// The remote PoolRouter will then distribute to its local workers.
-		remoteRef := bridge.sys.RemoteActorOf(remoteAddr, ap.Path)
+		remoteRef, _ := r.cm.Sys.Resolve(remoteAddr.String() + ap.Path())
 		r.remoteRoutees[ma.String()] = []actor.Ref{remoteRef}
 	}
 }
@@ -302,16 +295,18 @@ type ClusterGroupRouter struct {
 	actor.GroupRouter
 	allowLocalRoutees bool
 	useRole           string
+	cm                *ClusterManager
 
 	remoteRoutees map[string][]actor.Ref
 	mu            sync.RWMutex
 }
 
-func NewClusterGroupRouter(logic actor.RoutingLogic, paths []string, allowLocalRoutees bool, useRole string) *ClusterGroupRouter {
+func NewClusterGroupRouter(cm *ClusterManager, logic actor.RoutingLogic, paths []string, allowLocalRoutees bool, useRole string) *ClusterGroupRouter {
 	return &ClusterGroupRouter{
 		GroupRouter:       *actor.NewGroupRouterWithPaths(logic, paths),
 		allowLocalRoutees: allowLocalRoutees,
 		useRole:           useRole,
+		cm:                cm,
 		remoteRoutees:     make(map[string][]actor.Ref),
 	}
 }
@@ -325,13 +320,7 @@ func (r *ClusterGroupRouter) PreStart() {
 }
 
 func (r *ClusterGroupRouter) refreshRoutees() {
-	bridge, ok := r.System().(*actorContextBridge)
-	if !ok {
-		return
-	}
-
-	node := bridge.sys.node
-	cm := node.cm
+	cm := r.cm
 	cm.mu.RLock()
 	state := cm.state
 	cm.mu.RUnlock()
@@ -353,7 +342,7 @@ func (r *ClusterGroupRouter) refreshRoutees() {
 		ua := state.AllAddresses[m.GetAddressIndex()]
 		ma := memberAddressFromUA(ua)
 
-		isLocal := ma.Host == node.localAddr.GetHostname() && ma.Port == node.localAddr.GetPort()
+		isLocal := ma.Host == r.cm.localAddress.Address.GetHostname() && ma.Port == r.cm.localAddress.Address.GetPort()
 		if isLocal && !r.allowLocalRoutees {
 			continue
 		}
@@ -385,7 +374,8 @@ func (r *ClusterGroupRouter) refreshRoutees() {
 
 		var refs []actor.Ref
 		for _, path := range paths {
-			refs = append(refs, bridge.sys.RemoteActorOf(remoteAddr, path))
+			ref, _ := r.cm.Sys.Resolve(remoteAddr.String() + path)
+			refs = append(refs, ref)
 		}
 		if len(refs) > 0 {
 			r.remoteRoutees[ma.String()] = refs

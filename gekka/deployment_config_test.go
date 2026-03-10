@@ -11,9 +11,9 @@ package gekka
 import (
 	"testing"
 
-	"github.com/sopranoworks/gekka-config/pkg/hocon"
-
 	"gekka/gekka/actor"
+
+	hocon "github.com/sopranoworks/gekka-config"
 )
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -211,7 +211,7 @@ func TestDeploymentToPoolRouter_RoundRobin(t *testing.T) {
 		return &deployTestActor{BaseActor: actor.NewBaseActor()}
 	}}
 
-	pool, err := DeploymentToPoolRouter(d, props)
+	pool, err := DeploymentToPoolRouter(nil, d, props)
 	if err != nil {
 		t.Fatalf("DeploymentToPoolRouter: %v", err)
 	}
@@ -228,7 +228,7 @@ func TestDeploymentToPoolRouter_UnknownRouter(t *testing.T) {
 		Router:        "bogus-pool",
 		NrOfInstances: 3,
 	}
-	_, err := DeploymentToPoolRouter(d, actor.Props{New: func() actor.Actor {
+	_, err := DeploymentToPoolRouter(nil, d, actor.Props{New: func() actor.Actor {
 		return &deployTestActor{BaseActor: actor.NewBaseActor()}
 	}})
 	if err == nil {
@@ -241,7 +241,7 @@ func TestDeploymentToPoolRouter_ZeroInstances(t *testing.T) {
 		Router:        "round-robin-pool",
 		NrOfInstances: 0,
 	}
-	_, err := DeploymentToPoolRouter(d, actor.Props{New: func() actor.Actor {
+	_, err := DeploymentToPoolRouter(nil, d, actor.Props{New: func() actor.Actor {
 		return &deployTestActor{BaseActor: actor.NewBaseActor()}
 	}})
 	if err == nil {
@@ -272,7 +272,7 @@ pekko.actor.deployment {
 	props := actor.Props{New: func() actor.Actor {
 		return &deployTestActor{BaseActor: actor.NewBaseActor()}
 	}}
-	pool, err := DeploymentToPoolRouter(d, props)
+	pool, err := DeploymentToPoolRouter(nil, d, props)
 	if err != nil {
 		t.Fatalf("DeploymentToPoolRouter: %v", err)
 	}

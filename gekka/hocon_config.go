@@ -13,9 +13,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/sopranoworks/gekka-config/pkg/hocon"
-
 	"gekka/gekka/actor"
+
+	hocon "github.com/sopranoworks/gekka-config"
 )
 
 // LoadConfig reads a HOCON configuration file and converts it to a NodeConfig.
@@ -141,17 +141,16 @@ func hoconToNodeConfig(cfg *hocon.Config) (NodeConfig, error) {
 		nodeCfg.Provider = ProviderPekko
 	}
 
-	// Parse seed nodes.
 	var seedURIs []string
-	val, err := cfg.GetValue(prefix + ".cluster.seed-nodes")
-	if err == nil {
-		if list, ok := val.(*hocon.List); ok {
-			for _, elem := range list.Elements {
-				if lit, ok := elem.(*hocon.Literal); ok {
-					seedURIs = append(seedURIs, fmt.Sprint(lit.Value))
-				}
-			}
-		}
+	var tmp struct {
+		PekkoSeeds []string `hocon:"pekko.cluster.seed-nodes"`
+		AkkaSeeds  []string `hocon:"akka.cluster.seed-nodes"`
+	}
+	_ = cfg.Unmarshal(&tmp)
+	if prefix == "pekko" {
+		seedURIs = tmp.PekkoSeeds
+	} else {
+		seedURIs = tmp.AkkaSeeds
 	}
 
 	seeds := make([]actor.Address, 0, len(seedURIs))
@@ -199,23 +198,23 @@ func hoconToNodeConfig(cfg *hocon.Config) (NodeConfig, error) {
 // detectProtocol returns "pekko" or "akka" by checking which top-level key
 // is present in the config. It prefers "pekko" if both are present.
 func detectProtocol(cfg *hocon.Config) string {
-	if _, err := cfg.GetValue("pekko.remote.artery.canonical.hostname"); err == nil {
+	if _, err := cfg.GetString("pekko.remote.artery.canonical.hostname"); err == nil {
 		return "pekko"
 	}
-	if _, err := cfg.GetValue("pekko.cluster.seed-nodes"); err == nil {
+	if _, err := cfg.GetString("pekko.cluster.seed-nodes"); err == nil {
 		return "pekko"
 	}
-	if _, err := cfg.GetValue("pekko.actor.provider"); err == nil {
+	if _, err := cfg.GetString("pekko.actor.provider"); err == nil {
 		return "pekko"
 	}
 
-	if _, err := cfg.GetValue("akka.remote.artery.canonical.hostname"); err == nil {
+	if _, err := cfg.GetString("akka.remote.artery.canonical.hostname"); err == nil {
 		return "akka"
 	}
-	if _, err := cfg.GetValue("akka.cluster.seed-nodes"); err == nil {
+	if _, err := cfg.GetString("akka.cluster.seed-nodes"); err == nil {
 		return "akka"
 	}
-	if _, err := cfg.GetValue("akka.actor.provider"); err == nil {
+	if _, err := cfg.GetString("akka.actor.provider"); err == nil {
 		return "akka"
 	}
 	return "pekko"

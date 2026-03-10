@@ -22,7 +22,7 @@ func TestDeploymentToGroupRouter_RoundRobin(t *testing.T) {
 		Router:       "round-robin-group",
 		RouteesPaths: []string{"/user/w1", "/user/w2"},
 	}
-	g, err := DeploymentToGroupRouter(d)
+	g, err := DeploymentToGroupRouter(nil, d)
 	if err != nil {
 		t.Fatalf("DeploymentToGroupRouter: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestDeploymentToGroupRouter_Random(t *testing.T) {
 		Router:       "random-group",
 		RouteesPaths: []string{"/user/a", "/user/b", "/user/c"},
 	}
-	g, err := DeploymentToGroupRouter(d)
+	g, err := DeploymentToGroupRouter(nil, d)
 	if err != nil {
 		t.Fatalf("DeploymentToGroupRouter: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestDeploymentToGroupRouter_Random(t *testing.T) {
 
 func TestDeploymentToGroupRouter_EmptyPaths_Error(t *testing.T) {
 	d := DeploymentConfig{Router: "round-robin-group", RouteesPaths: nil}
-	_, err := DeploymentToGroupRouter(d)
+	_, err := DeploymentToGroupRouter(nil, d)
 	if err == nil {
 		t.Error("expected error for empty RouteesPaths, got nil")
 	}
@@ -58,7 +58,7 @@ func TestDeploymentToGroupRouter_EmptyPaths_Error(t *testing.T) {
 
 func TestDeploymentToGroupRouter_UnknownRouter_Error(t *testing.T) {
 	d := DeploymentConfig{Router: "bogus-group", RouteesPaths: []string{"/user/a"}}
-	_, err := DeploymentToGroupRouter(d)
+	_, err := DeploymentToGroupRouter(nil, d)
 	if err == nil {
 		t.Error("expected error for unknown router type, got nil")
 	}

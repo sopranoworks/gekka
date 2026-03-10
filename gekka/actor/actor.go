@@ -102,6 +102,18 @@ type Props struct {
 	SupervisorStrategy SupervisorStrategy
 }
 
+// TerminatedMessage is implemented by actor-stopped notifications.
+//
+// PoolRouter and other lifecycle-aware actors type-assert incoming messages
+// against this interface so they can react to child termination without
+// importing the gekka package (which would create a circular dependency).
+//
+// gekka.Terminated satisfies this interface.
+type TerminatedMessage interface {
+	// TerminatedActor returns the Ref of the actor that stopped.
+	TerminatedActor() Ref
+}
+
 // ActorContext is the subset of the ActorSystem API that is safe to use from
 // within actor code (i.e. from the actor package) without introducing an import
 // cycle.
@@ -109,12 +121,14 @@ type Props struct {
 // Obtain it inside Receive via BaseActor.System():
 //
 //	func (a *MyActor) Receive(msg any) {
-//	    // Spawn a peer actor:
+//	    // Spawn a child actor:
 //	    ref, _ := a.System().ActorOf(actor.Props{New: func() actor.Actor {
 //	        return &ChildActor{BaseActor: actor.NewBaseActor()}
 //	    }}, "child")
+//	    // Watch the child so Receive gets a TerminatedMessage when it stops:
+//	    a.System().Watch(a.Self(), ref)
 //
-//	    // Start a goroutine tied to the node's lifecycle:
+//	    // Tie a background goroutine to the node's lifecycle:
 //	    go doWork(a.System().Context())
 //	}
 //
@@ -129,6 +143,21 @@ type ActorContext interface {
 	// It is cancelled when the node shuts down, making it suitable as the
 	// parent context for background goroutines started by actors.
 	Context() context.Context
+
+	// Watch registers watcher to receive a TerminatedMessage when target
+	// stops. Use it inside PreStart or Receive to monitor children:
+	//
+	//	a.System().Watch(a.Self(), childRef)
+	Watch(watcher Ref, target Ref)
+
+	// Resolve looks up and returns the Ref for an already-registered actor at
+	// path. For local paths (starting with "/") the actor must be registered;
+	// for remote absolute URIs the ref is returned immediately.
+	// Returns an error when the local actor is not found.
+	//
+	// Used by GroupRouter.PreStart to convert routee path strings into live
+	// Refs without importing the gekka package.
+	Resolve(path string) (Ref, error)
 }
 
 // Address identifies an actor system on the network.

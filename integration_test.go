@@ -21,8 +21,8 @@ import (
 	"testing"
 	"time"
 
-	"gekka/actor"
-	"gekka/cluster"
+	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/cluster"
 )
 
 // remoteSystem constructs an actor.Address for the Scala test server.
@@ -522,7 +522,7 @@ func TestClusterFailureRecovery(t *testing.T) {
 				default:
 				}
 			}
-			if strings.Contains(line, "[MULTI] ReachableMember") {
+			if strings.Contains(line, "[MULTI] cluster.ReachableMember") {
 				select {
 				case reachableChan <- struct{}{}:
 				default:
@@ -671,7 +671,7 @@ func TestClusterChurn(t *testing.T) {
 	}()
 
 	// nodeUpChan fires each time the cluster reaches size 3 (GoNode-A joined).
-	// nodeRemovedChan fires each time a MemberRemoved event is logged (GoNode-A left).
+	// nodeRemovedChan fires each time a cluster.MemberRemoved event is logged (GoNode-A left).
 	// Both are buffered generously so the scanner goroutine never blocks.
 	ready := make(chan struct{})
 	nodeUpChan := make(chan struct{}, iterations+2)
@@ -694,8 +694,8 @@ func TestClusterChurn(t *testing.T) {
 				default:
 				}
 			}
-			// "[MULTI] MemberRemoved" means a member completed the Leave lifecycle.
-			if strings.Contains(line, "[MULTI] MemberRemoved") {
+			// "[MULTI] cluster.MemberRemoved" means a member completed the Leave lifecycle.
+			if strings.Contains(line, "[MULTI] cluster.MemberRemoved") {
 				select {
 				case nodeRemovedChan <- struct{}{}:
 				default:
@@ -825,14 +825,14 @@ func TestClusterChurn(t *testing.T) {
 	log.Printf("[SUCCESS] TestClusterChurn passed!")
 }
 
-// eventForwarderActor simply pipes all received ClusterDomainEvent values to a channel.
+// eventForwarderActor simply pipes all received cluster.ClusterDomainEvent values to a channel.
 type eventForwarderActor struct {
 	actor.BaseActor
-	ch chan<- ClusterDomainEvent
+	ch chan<- cluster.ClusterDomainEvent
 }
 
 func (a *eventForwarderActor) Receive(msg any) {
-	if evt, ok := msg.(ClusterDomainEvent); ok {
+	if evt, ok := msg.(cluster.ClusterDomainEvent); ok {
 		a.ch <- evt
 	}
 }
@@ -841,7 +841,7 @@ func (a *eventForwarderActor) Receive(msg any) {
 // expected Up members, or until timeout elapses.
 //
 // Uses the ClusterEvent subscription API (push-based) rather than polling, so
-// it reacts immediately to each MemberUp / MemberRemoved transition.
+// it reacts immediately to each cluster.MemberUp / cluster.MemberRemoved transition.
 func waitForUpMembers(node *GekkaNode, expected int, timeout time.Duration) error {
 	// Fast path: already satisfied — no need to subscribe at all.
 	if countUpMembers(node) >= expected {
@@ -849,7 +849,7 @@ func waitForUpMembers(node *GekkaNode, expected int, timeout time.Duration) erro
 	}
 
 	// Subscribe to membership transitions that can change the Up count.
-	ch := make(chan ClusterDomainEvent, 32)
+	ch := make(chan cluster.ClusterDomainEvent, 32)
 	forwarderRef, _ := node.System.ActorOf(Props{
 		New: func() actor.Actor {
 			return &eventForwarderActor{
@@ -859,7 +859,7 @@ func waitForUpMembers(node *GekkaNode, expected int, timeout time.Duration) erro
 		},
 	}, "waitUpSubscriber")
 
-	node.Subscribe(forwarderRef, EventMemberUp, EventMemberRemoved)
+	node.Subscribe(forwarderRef, cluster.EventMemberUp, cluster.EventMemberRemoved)
 	defer node.Unsubscribe(forwarderRef)
 	defer node.System.Stop(forwarderRef)
 

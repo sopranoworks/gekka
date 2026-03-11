@@ -11,7 +11,7 @@ package gekka
 import (
 	"testing"
 
-	"gekka/actor"
+	"github.com/sopranoworks/gekka/actor"
 )
 
 func TestLoadConfig_Pekko(t *testing.T) {

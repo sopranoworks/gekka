@@ -27,8 +27,8 @@ import (
 	"syscall"
 	"time"
 
-	"gekka"
-	"gekka/actor"
+	"github.com/sopranoworks/gekka"
+	"github.com/sopranoworks/gekka/actor"
 )
 
 func main() {

@@ -40,6 +40,9 @@ type NodeMetrics struct {
 	// GossipsReceived counts every successfully processed GossipEnvelope.
 	GossipsReceived atomic.Int64
 
+	// GossipsSent counts every GossipEnvelope or GossipStatus sent.
+	GossipsSent atomic.Int64
+
 	// lastConvergenceNs is the UnixNano timestamp of the most recent gossip
 	// convergence (all Up members have seen the current state).  Zero means
 	// convergence has never been observed.
@@ -80,8 +83,24 @@ type MetricsSnapshot struct {
 // RecordConvergence stamps the current wall-clock time as the most recent
 // gossip convergence.  Call this after verifying that all Up members have
 // seen the current gossip version.
-func (m *NodeMetrics) RecordConvergence() {
+func (m *NodeMetrics) RecordConvergence(duration time.Duration) {
 	m.lastConvergenceNs.Store(time.Now().UnixNano())
+}
+
+func (m *NodeMetrics) IncrementGossipSent() {
+	m.GossipsSent.Add(1)
+}
+
+func (m *NodeMetrics) IncrementGossipReceived() {
+	m.GossipsReceived.Add(1)
+}
+
+func (m *NodeMetrics) IncrementMemberUp() {
+	m.MemberUpEvents.Add(1)
+}
+
+func (m *NodeMetrics) IncrementMemberRemoved() {
+	m.MemberRemovedEvents.Add(1)
 }
 
 // Snapshot returns an instantaneous, consistent copy of all counters.

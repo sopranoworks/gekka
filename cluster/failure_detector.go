@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-package gekka
+package cluster
 
 import (
 	"math"
@@ -16,7 +16,7 @@ import (
 
 // PhiAccrualFailureDetector implements the failure detector as described in Hayashibara et al.
 type PhiAccrualFailureDetector struct {
-	mu            sync.RWMutex
+	Mu            sync.RWMutex
 	lastHeartbeat map[string]time.Time
 	intervals     map[string][]float64
 	windowSize    int
@@ -35,8 +35,8 @@ func NewPhiAccrualFailureDetector(threshold float64, windowSize int) *PhiAccrual
 }
 
 func (fd *PhiAccrualFailureDetector) Heartbeat(nodeKey string) {
-	fd.mu.Lock()
-	defer fd.mu.Unlock()
+	fd.Mu.Lock()
+	defer fd.Mu.Unlock()
 
 	now := time.Now()
 	if last, ok := fd.lastHeartbeat[nodeKey]; ok {
@@ -50,10 +50,10 @@ func (fd *PhiAccrualFailureDetector) Heartbeat(nodeKey string) {
 }
 
 func (fd *PhiAccrualFailureDetector) Phi(nodeKey string) float64 {
-	fd.mu.RLock()
+	fd.Mu.RLock()
 	last, ok := fd.lastHeartbeat[nodeKey]
 	intervals := fd.intervals[nodeKey]
-	fd.mu.RUnlock()
+	fd.Mu.RUnlock()
 
 	if !ok || len(intervals) < 1 {
 		return 0.0
@@ -89,9 +89,9 @@ func (fd *PhiAccrualFailureDetector) Phi(nodeKey string) float64 {
 }
 
 func (fd *PhiAccrualFailureDetector) IsAvailable(nodeKey string) bool {
-	fd.mu.RLock()
+	fd.Mu.RLock()
 	_, ok := fd.lastHeartbeat[nodeKey]
-	fd.mu.RUnlock()
+	fd.Mu.RUnlock()
 	if !ok {
 		return false
 	}

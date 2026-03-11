@@ -12,7 +12,8 @@ import (
 	"fmt"
 	"strings"
 
-	"gekka/actor"
+	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/cluster"
 
 	hocon "github.com/sopranoworks/gekka-config"
 )
@@ -183,7 +184,7 @@ func isGroupRouter(routerType string) bool {
 // Returns an error if Router is not a recognised pool-router type or if
 // NrOfInstances is zero (use the returned PoolRouter's AdjustPoolSize message
 // to resize at runtime instead).
-func DeploymentToPoolRouter(cm *ClusterManager, d DeploymentConfig, props actor.Props) (actor.Actor, error) {
+func DeploymentToPoolRouter(cm *cluster.ClusterManager, d DeploymentConfig, props actor.Props) (actor.Actor, error) {
 	if !d.Cluster.Enabled && d.NrOfInstances <= 0 {
 		return nil, fmt.Errorf("deployment: nr-of-instances must be > 0, got %d", d.NrOfInstances)
 	}
@@ -197,7 +198,7 @@ func DeploymentToPoolRouter(cm *ClusterManager, d DeploymentConfig, props actor.
 	}
 
 	if d.Cluster.Enabled {
-		return NewClusterPoolRouter(cm, logic, d.Cluster.TotalInstances, d.Cluster.AllowLocalRoutees, d.Cluster.UseRole, props), nil
+		return cluster.NewClusterPoolRouter(cm, logic, d.Cluster.TotalInstances, d.Cluster.AllowLocalRoutees, d.Cluster.UseRole, props), nil
 	}
 	return actor.NewPoolRouter(logic, d.NrOfInstances, props), nil
 }
@@ -225,7 +226,7 @@ func routingLogicFor(routerType string) (actor.RoutingLogic, error) {
 //
 // d.RouteesPaths must not be empty; use NewGroupRouter with explicit Ref values
 // when routees are known at construction time.
-func DeploymentToGroupRouter(cm *ClusterManager, d DeploymentConfig) (actor.Actor, error) {
+func DeploymentToGroupRouter(cm *cluster.ClusterManager, d DeploymentConfig) (actor.Actor, error) {
 	if !d.Cluster.Enabled && len(d.RouteesPaths) == 0 {
 		return nil, fmt.Errorf("deployment: group router requires non-empty routees.paths or cluster enabled")
 	}
@@ -240,7 +241,7 @@ func DeploymentToGroupRouter(cm *ClusterManager, d DeploymentConfig) (actor.Acto
 
 	if d.Cluster.Enabled {
 		// Cluster group router typically resolves its own relative path on remote nodes.
-		return NewClusterGroupRouter(cm, logic, d.RouteesPaths, d.Cluster.AllowLocalRoutees, d.Cluster.UseRole), nil
+		return cluster.NewClusterGroupRouter(cm, logic, d.RouteesPaths, d.Cluster.AllowLocalRoutees, d.Cluster.UseRole), nil
 	}
 	return actor.NewGroupRouterWithPaths(logic, d.RouteesPaths), nil
 }

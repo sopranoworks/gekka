@@ -8,8 +8,6 @@
 
 package actor
 
-import ()
-
 // OneForOneStrategy is a supervisor strategy that applies the decider's
 // directive only to the child actor that failed.
 type OneForOneStrategy struct {

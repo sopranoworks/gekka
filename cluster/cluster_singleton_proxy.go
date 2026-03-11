@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-package gekka
+package cluster
 
 import (
 	"context"
@@ -18,12 +18,12 @@ import (
 // So a manager at "/user/singletonManager" hosts the singleton at "/user/singletonManager/singleton".
 type ClusterSingletonProxy struct {
 	cm          *ClusterManager
-	router      *Router
+	router      Router
 	managerPath string // relative actor path of the singleton manager, e.g. "/user/singletonManager"
 	role        string // optional role filter; empty means any node
 }
 
-func NewClusterSingletonProxy(cm *ClusterManager, router *Router, managerPath, role string) *ClusterSingletonProxy {
+func NewClusterSingletonProxy(cm *ClusterManager, router Router, managerPath, role string) *ClusterSingletonProxy {
 	return &ClusterSingletonProxy{
 		cm:          cm,
 		router:      router,

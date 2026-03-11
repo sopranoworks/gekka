@@ -22,8 +22,9 @@ import (
 	"syscall"
 	"time"
 
-	"gekka"
-	"gekka/actor"
+	"github.com/sopranoworks/gekka"
+	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/cluster"
 )
 
 // ── Actor definitions ─────────────────────────────────────────────────────────
@@ -35,19 +36,19 @@ type clusterWatcherActor struct {
 }
 
 func (a *clusterWatcherActor) Receive(msg any) {
-	if evt, ok := msg.(gekka.ClusterDomainEvent); ok {
+	if evt, ok := msg.(cluster.ClusterDomainEvent); ok {
 		switch e := evt.(type) {
-		case gekka.MemberUp:
+		case cluster.MemberUp:
 			a.Log().Info("MemberUp", "member", e.Member)
-		case gekka.MemberLeft:
+		case cluster.MemberLeft:
 			a.Log().Info("MemberLeft", "member", e.Member)
-		case gekka.MemberExited:
+		case cluster.MemberExited:
 			a.Log().Info("MemberExited", "member", e.Member)
-		case gekka.MemberRemoved:
+		case cluster.MemberRemoved:
 			a.Log().Info("MemberRemoved", "member", e.Member)
-		case gekka.UnreachableMember:
+		case cluster.UnreachableMember:
 			a.Log().Warn("Unreachable", "member", e.Member)
-		case gekka.ReachableMember:
+		case cluster.ReachableMember:
 			a.Log().Info("Reachable", "member", e.Member)
 		}
 	}

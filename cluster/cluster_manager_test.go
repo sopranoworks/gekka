@@ -6,33 +6,33 @@
  * SPDX-License-Identifier: MIT
  */
 
-package gekka
+package cluster
 
 import (
-	"gekka/cluster"
+	"context"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
 )
 
 func TestVectorClockComparison(t *testing.T) {
-	v1 := &cluster.VectorClock{
-		Versions: []*cluster.VectorClock_Version{
+	v1 := &VectorClock{
+		Versions: []*VectorClock_Version{
 			{HashIndex: proto.Int32(1), Timestamp: proto.Int64(1)},
 		},
 	}
-	v2 := &cluster.VectorClock{
-		Versions: []*cluster.VectorClock_Version{
+	v2 := &VectorClock{
+		Versions: []*VectorClock_Version{
 			{HashIndex: proto.Int32(1), Timestamp: proto.Int64(2)},
 		},
 	}
-	v3 := &cluster.VectorClock{
-		Versions: []*cluster.VectorClock_Version{
+	v3 := &VectorClock{
+		Versions: []*VectorClock_Version{
 			{HashIndex: proto.Int32(2), Timestamp: proto.Int64(1)},
 		},
 	}
-	v4 := &cluster.VectorClock{
-		Versions: []*cluster.VectorClock_Version{
+	v4 := &VectorClock{
+		Versions: []*VectorClock_Version{
 			{HashIndex: proto.Int32(1), Timestamp: proto.Int64(1)},
 			{HashIndex: proto.Int32(2), Timestamp: proto.Int64(1)},
 		},
@@ -58,10 +58,11 @@ func TestVectorClockComparison(t *testing.T) {
 func TestCheckConvergence(t *testing.T) {
 	local := &UniqueAddress{
 		Address: &Address{System: proto.String("sys"), Hostname: proto.String("localhost"), Port: proto.Uint32(2552)},
-		Uid:     proto.Uint64(123),
+		Uid:     proto.Uint32(123),
+		Uid2:    proto.Uint32(0),
 	}
-	nm := NewNodeManager(local.Address, 0)
-	router := NewRouter(nm)
+	// No-op router
+	router := func(ctx context.Context, path string, msg any) error { return nil }
 	cm := NewClusterManager(local, router)
 
 	// Default state has only self. Convergence should be true.
@@ -70,14 +71,15 @@ func TestCheckConvergence(t *testing.T) {
 	}
 
 	// Add another member but not in seen set
-	addr2 := &cluster.UniqueAddress{
-		Address: &cluster.Address{System: proto.String("sys"), Hostname: proto.String("remote"), Port: proto.Uint32(2553)},
+	addr2 := &UniqueAddress{
+		Address: &Address{System: proto.String("sys"), Hostname: proto.String("remote"), Port: proto.Uint32(2553)},
 		Uid:     proto.Uint32(456),
+		Uid2:    proto.Uint32(0),
 	}
-	cm.state.AllAddresses = append(cm.state.AllAddresses, addr2)
-	cm.state.Members = append(cm.state.Members, &cluster.Member{
+	cm.State.AllAddresses = append(cm.State.AllAddresses, addr2)
+	cm.State.Members = append(cm.State.Members, &Member{
 		AddressIndex: proto.Int32(1),
-		Status:       cluster.MemberStatus_Up.Enum(),
+		Status:       MemberStatus_Up.Enum(),
 	})
 
 	if cm.CheckConvergence() {
@@ -85,7 +87,7 @@ func TestCheckConvergence(t *testing.T) {
 	}
 
 	// Add remote node to seen set
-	cm.state.Overview.Seen = append(cm.state.Overview.Seen, 1)
+	cm.State.Overview.Seen = append(cm.State.Overview.Seen, 1)
 
 	if !cm.CheckConvergence() {
 		t.Errorf("expected convergence, all nodes have seen state")

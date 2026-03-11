@@ -386,7 +386,7 @@ func TestNodeMetrics_ConvergenceTime(t *testing.T) {
 	}
 
 	before := time.Now().UTC().Truncate(time.Second)
-	m.RecordConvergence()
+	m.RecordConvergence(0)
 	after := time.Now().UTC().Add(time.Second)
 
 	snap = m.Snapshot(0)
@@ -449,7 +449,7 @@ func TestMonitoring_MonitoringAddr_NilWhenDisabled(t *testing.T) {
 	}
 }
 
-// ── Metrics wired into ClusterManager ────────────────────────────────────────
+// ── Metrics wired into cluster.ClusterManager ────────────────────────────────────────
 
 func TestMonitoring_GossipCounter_Incremented(t *testing.T) {
 	// Two Go nodes: when node1 sends a GossipEnvelope to node2, the

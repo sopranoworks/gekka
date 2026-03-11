@@ -6,6 +6,9 @@
 
 Powered by its own high-performance HOCON engine, [`gekka-config`](https://github.com/sopranoworks/gekka-config), `gekka` supports both automatic cluster formation and direct node-to-node communication using the standard `pekko://` and `akka://` URI schemes.
 
+> [!WARNING]
+> Development Status: This project is in active development (v0.4.0-dev). We are currently undergoing major refactoring to stabilize the Public API and encapsulate internal logic. Breaking changes are expected until the v1.0.0 release.
+
 ## Key Features
 
 - **Hierarchical Actor System** — Parent-child relationships with reliable lifecycle management.
@@ -124,7 +127,7 @@ See [ROUTING.md](docs/ROUTING.md) for more details.
 - [**API Reference**](docs/API.md) — Detailed function and method signatures.
 - [**Protocol Notes**](docs/PROTOCOL.md) — Artery TCP framing, serialization IDs, and CRDTs.
 - [**Routing Features**](docs/ROUTING.md) — Pool/Group routers and HOCON deployment.
-- [**Integration Tests**](gekka/integration_test.go) — End-to-end tests against Scala/Pekko.
+- [**Integration Tests**](integration_test.go) — End-to-end tests against Scala/Pekko.
 
 ## License
 
@@ -132,4 +135,4 @@ This project is licensed under the **MIT License** — see [LICENSE](LICENSE) fo
 
 This library is a Go implementation that interacts with and references the [Apache Pekko](https://pekko.apache.org/) project.
 
-Specific files, such as `gekka/cluster/ClusterMessages.pb.go`, are generated from Protobuf definitions provided by the Apache Pekko project and retain their original **Apache License 2.0** and copyright notices from the **Apache Software Foundation** and **Lightbend Inc.** Those notices are reproduced in full within the respective files, as required by the Apache License 2.0.
+Specific files, such as `internal/proto/cluster/ClusterMessages.pb.go`, are generated from Protobuf definitions provided by the Apache Pekko project and retain their original **Apache License 2.0** and copyright notices from the **Apache Software Foundation** and **Lightbend Inc.** Those notices are reproduced in full within the respective files, as required by the Apache License 2.0.

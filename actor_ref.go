@@ -13,7 +13,7 @@ import (
 	"fmt"
 	"strings"
 
-	"gekka/gekka/actor"
+	"gekka/actor"
 )
 
 // ActorRef is a location-transparent reference to a specific actor. It

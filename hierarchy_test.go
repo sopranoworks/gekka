@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"gekka/gekka/actor"
+	"gekka/actor"
 )
 
 type parentActor struct {

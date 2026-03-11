@@ -24,8 +24,8 @@ import (
 	"syscall"
 	"time"
 
-	"gekka/gekka"
-	"gekka/gekka/actor"
+	"gekka"
+	"gekka/actor"
 )
 
 // Job is sent to the cluster singleton for processing.

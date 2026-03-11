@@ -14,7 +14,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"gekka/gekka/actor"
+	"gekka/actor"
 )
 
 // Props is a factory specification for creating an actor.

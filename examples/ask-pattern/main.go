@@ -27,8 +27,8 @@ import (
 	"syscall"
 	"time"
 
-	"gekka/gekka"
-	"gekka/gekka/actor"
+	"gekka"
+	"gekka/actor"
 )
 
 func main() {

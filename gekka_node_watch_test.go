@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"gekka/gekka/actor"
+	"gekka/actor"
 )
 
 // watcherTestingActor simply records any Terminated messages it receives.

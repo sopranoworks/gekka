@@ -21,8 +21,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"gekka/gekka/actor"
-	"gekka/gekka/cluster"
+	"gekka/actor"
+	"gekka/cluster"
 
 	"google.golang.org/protobuf/proto"
 )

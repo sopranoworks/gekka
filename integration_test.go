@@ -21,8 +21,8 @@ import (
 	"testing"
 	"time"
 
-	"gekka/gekka/actor"
-	"gekka/gekka/cluster"
+	"gekka/actor"
+	"gekka/cluster"
 )
 
 // remoteSystem constructs an actor.Address for the Scala test server.

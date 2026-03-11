@@ -13,7 +13,7 @@ import (
 	"os"
 	"strings"
 
-	"gekka/gekka/actor"
+	"gekka/actor"
 
 	hocon "github.com/sopranoworks/gekka-config"
 )

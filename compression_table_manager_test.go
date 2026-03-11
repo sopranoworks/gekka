@@ -13,11 +13,12 @@ import (
 	"sync"
 	"testing"
 
+	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 	"google.golang.org/protobuf/proto"
 )
 
 func TestCompressionTableManager_UpdateAndLookup(t *testing.T) {
-	nm := NewNodeManager(&Address{Hostname: proto.String("local")}, 0)
+	nm := NewNodeManager(&gproto_remote.Address{Hostname: proto.String("local")}, 0)
 	router := NewRouter(nm)
 	ctm := NewCompressionTableManager(router)
 
@@ -77,7 +78,7 @@ func TestCompressionTableManager_UpdateAndLookup(t *testing.T) {
 }
 
 func TestCompressionTableManager_ConcurrentAccess(t *testing.T) {
-	nm := NewNodeManager(&Address{Hostname: proto.String("local")}, 0)
+	nm := NewNodeManager(&gproto_remote.Address{Hostname: proto.String("local")}, 0)
 	router := NewRouter(nm)
 	ctm := NewCompressionTableManager(router)
 
@@ -111,7 +112,7 @@ func TestCompressionTableManager_ConcurrentAccess(t *testing.T) {
 }
 
 func TestHandleAdvertisement(t *testing.T) {
-	nm := NewNodeManager(&Address{Hostname: proto.String("local")}, 0)
+	nm := NewNodeManager(&gproto_remote.Address{Hostname: proto.String("local")}, 0)
 	router := NewRouter(nm)
 	ctm := NewCompressionTableManager(router)
 
@@ -120,15 +121,15 @@ func TestHandleAdvertisement(t *testing.T) {
 	keys := []string{"ActorX"}
 	values := []uint32{42}
 
-	adv := &CompressionTableAdvertisement{
-		From:         &UniqueAddress{Address: &Address{System: proto.String("sys"), Hostname: proto.String("remote"), Port: proto.Uint32(2552)}},
+	adv := &gproto_remote.CompressionTableAdvertisement{
+		From:         &gproto_remote.UniqueAddress{Address: &gproto_remote.Address{System: proto.String("sys"), Hostname: proto.String("remote"), Port: proto.Uint32(2552)}},
 		OriginUid:    &originUid,
 		TableVersion: &version,
 		Keys:         keys,
 		Values:       values,
 	}
 
-	local := &UniqueAddress{Address: &Address{System: proto.String("sys"), Hostname: proto.String("local"), Port: proto.Uint32(2552)}}
+	local := &gproto_remote.UniqueAddress{Address: &gproto_remote.Address{System: proto.String("sys"), Hostname: proto.String("local"), Port: proto.Uint32(2552)}}
 
 	// Since router has no real connection, it might error on send, but we mainly care if table updates
 	_ = ctm.HandleAdvertisement(context.Background(), adv, true, local)

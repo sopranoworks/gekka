@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"log"
 	"sync"
+
+	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 )
 
 // CompressionTableManager holds mapping tables for ActorRef and ClassManifest strings to integer IDs.
@@ -115,7 +117,7 @@ func (ctm *CompressionTableManager) LookupManifest(originUid uint64, id uint32) 
 }
 
 // HandleAdvertisement processes an incoming advertisement and sends an Ack.
-func (ctm *CompressionTableManager) HandleAdvertisement(ctx context.Context, adv *CompressionTableAdvertisement, isActorRef bool, localAddress *UniqueAddress) error {
+func (ctm *CompressionTableManager) HandleAdvertisement(ctx context.Context, adv *gproto_remote.CompressionTableAdvertisement, isActorRef bool, localAddress *gproto_remote.UniqueAddress) error {
 	originUid := adv.GetOriginUid()
 	version := adv.GetTableVersion()
 	keys := adv.GetKeys()
@@ -128,7 +130,7 @@ func (ctm *CompressionTableManager) HandleAdvertisement(ctx context.Context, adv
 	}
 
 	// Send Ack
-	ack := &CompressionTableAdvertisementAck{
+	ack := &gproto_remote.CompressionTableAdvertisementAck{
 		From:    localAddress,
 		Version: adv.TableVersion,
 	}

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -130,16 +131,16 @@ func putUint32LE(b []byte, v uint32) {
 func TestDecodeArteryEnvelope_SystemMessage(t *testing.T) {
 	// Build an Artery binary frame carrying a SystemMessageEnvelope as its payload.
 	// This is how Pekko actually sends system messages over the wire.
-	inner := &SystemMessage{Type: SystemMessage_WATCH.Enum()}
+	inner := &gproto_remote.SystemMessage{Type: gproto_remote.SystemMessage_WATCH.Enum()}
 	innerBytes, _ := proto.Marshal(inner)
 
-	sme := &SystemMessageEnvelope{
+	sme := &gproto_remote.SystemMessageEnvelope{
 		Message:         innerBytes,
 		SerializerId:    proto.Int32(ArteryInternalSerializerID),
 		SeqNo:           proto.Uint64(456),
 		MessageManifest: []byte("SystemMessage"),
-		AckReplyTo: &UniqueAddress{
-			Address: &Address{
+		AckReplyTo: &gproto_remote.UniqueAddress{
+			Address: &gproto_remote.Address{
 				Protocol: proto.String("pekko"),
 				System:   proto.String("system"),
 				Hostname: proto.String("127.0.0.1"),
@@ -169,7 +170,7 @@ func TestDecodeArteryEnvelope_SystemMessage(t *testing.T) {
 	}
 
 	// The payload is the serialised SystemMessageEnvelope — verify it round-trips.
-	var decoded SystemMessageEnvelope
+	var decoded gproto_remote.SystemMessageEnvelope
 	if err := proto.Unmarshal(meta.Payload, &decoded); err != nil {
 		t.Fatalf("unmarshal SystemMessageEnvelope from payload: %v", err)
 	}

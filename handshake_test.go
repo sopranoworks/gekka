@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -68,7 +69,7 @@ func TestArteryHandshake_Success(t *testing.T) {
 	defer client.Close()
 	defer server.Close()
 
-	localAddr := &Address{
+	localAddr := &gproto_remote.Address{
 		Protocol: proto.String("pekko"),
 		System:   proto.String("localSystem"),
 		Hostname: proto.String("127.0.0.1"),
@@ -84,8 +85,8 @@ func TestArteryHandshake_Success(t *testing.T) {
 		_ = handler(ctx, server)
 	}()
 
-	remoteAddr := &UniqueAddress{
-		Address: &Address{
+	remoteAddr := &gproto_remote.UniqueAddress{
+		Address: &gproto_remote.Address{
 			Protocol: proto.String("pekko"),
 			System:   proto.String("remoteSystem"),
 			Hostname: proto.String("10.0.0.1"),
@@ -98,7 +99,7 @@ func TestArteryHandshake_Success(t *testing.T) {
 	sendMagic(t, client, 1)
 
 	// 2. Send HandshakeReq with correct 'To' address.
-	req := &HandshakeReq{From: remoteAddr, To: localAddr}
+	req := &gproto_remote.HandshakeReq{From: remoteAddr, To: localAddr}
 	sendArteryFrame(t, client, "d", req)
 
 	// 3. Read HandshakeRsp (manifest "e", payload = MessageWithAddress).
@@ -106,7 +107,7 @@ func TestArteryHandshake_Success(t *testing.T) {
 	if string(meta.MessageManifest) != "e" {
 		t.Errorf("expected manifest %q, got %q", "e", string(meta.MessageManifest))
 	}
-	mwa := &MessageWithAddress{}
+	mwa := &gproto_remote.MessageWithAddress{}
 	if err := proto.Unmarshal(meta.Payload, mwa); err != nil {
 		t.Fatalf("unmarshal HandshakeRsp: %v", err)
 	}
@@ -129,7 +130,7 @@ func TestArteryHandshake_AddressMismatch(t *testing.T) {
 	defer client.Close()
 	defer server.Close()
 
-	localAddr := &Address{
+	localAddr := &gproto_remote.Address{
 		Protocol: proto.String("pekko"),
 		System:   proto.String("localSystem"),
 		Hostname: proto.String("127.0.0.1"),
@@ -150,15 +151,15 @@ func TestArteryHandshake_AddressMismatch(t *testing.T) {
 	sendMagic(t, client, 1)
 
 	// Send HandshakeReq with WRONG 'To' system name.
-	wrongTo := &Address{
+	wrongTo := &gproto_remote.Address{
 		Protocol: proto.String("pekko"),
 		System:   proto.String("wrongSystem"),
 		Hostname: proto.String("127.0.0.1"),
 		Port:     proto.Uint32(2552),
 	}
-	req := &HandshakeReq{
-		From: &UniqueAddress{
-			Address: &Address{
+	req := &gproto_remote.HandshakeReq{
+		From: &gproto_remote.UniqueAddress{
+			Address: &gproto_remote.Address{
 				Protocol: proto.String("pekko"),
 				System:   proto.String("remoteSystem"),
 				Hostname: proto.String("10.0.0.1"),
@@ -186,7 +187,7 @@ func TestArteryControl_HeartbeatAndQuarantine(t *testing.T) {
 	defer client.Close()
 	defer server.Close()
 
-	localAddr := &Address{
+	localAddr := &gproto_remote.Address{
 		Protocol: proto.String("pekko"),
 		System:   proto.String("localSystem"),
 		Hostname: proto.String("127.0.0.1"),
@@ -202,8 +203,8 @@ func TestArteryControl_HeartbeatAndQuarantine(t *testing.T) {
 		_ = handler(ctx, server)
 	}()
 
-	remoteUA := &UniqueAddress{
-		Address: &Address{
+	remoteUA := &gproto_remote.UniqueAddress{
+		Address: &gproto_remote.Address{
 			Protocol: proto.String("pekko"),
 			System:   proto.String("remoteSystem"),
 			Hostname: proto.String("10.0.0.1"),
@@ -214,18 +215,18 @@ func TestArteryControl_HeartbeatAndQuarantine(t *testing.T) {
 
 	// 0. Handshake.
 	sendMagic(t, client, 1)
-	sendArteryFrame(t, client, "d", &HandshakeReq{From: remoteUA, To: localAddr})
+	sendArteryFrame(t, client, "d", &gproto_remote.HandshakeReq{From: remoteUA, To: localAddr})
 
 	// Drain HandshakeRsp.
 	readArteryFrame(t, client)
 
 	// 1. Send ArteryHeartbeatRsp (manifest "n").
-	sendArteryFrame(t, client, "n", &ArteryHeartbeatRsp{Uid: proto.Uint64(123)})
+	sendArteryFrame(t, client, "n", &gproto_remote.ArteryHeartbeatRsp{Uid: proto.Uint64(123)})
 
 	// 2. Send Quarantined (manifest "Quarantined").
-	quar := &Quarantined{
+	quar := &gproto_remote.Quarantined{
 		From: remoteUA,
-		To: &UniqueAddress{
+		To: &gproto_remote.UniqueAddress{
 			Address: localAddr,
 			Uid:     proto.Uint64(1),
 		},

@@ -12,27 +12,28 @@ import (
 	"context"
 	"testing"
 
+	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 	"google.golang.org/protobuf/proto"
 )
 
 func TestVectorClockComparison(t *testing.T) {
-	v1 := &VectorClock{
-		Versions: []*VectorClock_Version{
+	v1 := &gproto_cluster.VectorClock{
+		Versions: []*gproto_cluster.VectorClock_Version{
 			{HashIndex: proto.Int32(1), Timestamp: proto.Int64(1)},
 		},
 	}
-	v2 := &VectorClock{
-		Versions: []*VectorClock_Version{
+	v2 := &gproto_cluster.VectorClock{
+		Versions: []*gproto_cluster.VectorClock_Version{
 			{HashIndex: proto.Int32(1), Timestamp: proto.Int64(2)},
 		},
 	}
-	v3 := &VectorClock{
-		Versions: []*VectorClock_Version{
+	v3 := &gproto_cluster.VectorClock{
+		Versions: []*gproto_cluster.VectorClock_Version{
 			{HashIndex: proto.Int32(2), Timestamp: proto.Int64(1)},
 		},
 	}
-	v4 := &VectorClock{
-		Versions: []*VectorClock_Version{
+	v4 := &gproto_cluster.VectorClock{
+		Versions: []*gproto_cluster.VectorClock_Version{
 			{HashIndex: proto.Int32(1), Timestamp: proto.Int64(1)},
 			{HashIndex: proto.Int32(2), Timestamp: proto.Int64(1)},
 		},
@@ -56,8 +57,8 @@ func TestVectorClockComparison(t *testing.T) {
 }
 
 func TestCheckConvergence(t *testing.T) {
-	local := &UniqueAddress{
-		Address: &Address{System: proto.String("sys"), Hostname: proto.String("localhost"), Port: proto.Uint32(2552)},
+	local := &gproto_cluster.UniqueAddress{
+		Address: &gproto_cluster.Address{System: proto.String("sys"), Hostname: proto.String("localhost"), Port: proto.Uint32(2552)},
 		Uid:     proto.Uint32(123),
 		Uid2:    proto.Uint32(0),
 	}
@@ -71,15 +72,15 @@ func TestCheckConvergence(t *testing.T) {
 	}
 
 	// Add another member but not in seen set
-	addr2 := &UniqueAddress{
-		Address: &Address{System: proto.String("sys"), Hostname: proto.String("remote"), Port: proto.Uint32(2553)},
+	addr2 := &gproto_cluster.UniqueAddress{
+		Address: &gproto_cluster.Address{System: proto.String("sys"), Hostname: proto.String("remote"), Port: proto.Uint32(2553)},
 		Uid:     proto.Uint32(456),
 		Uid2:    proto.Uint32(0),
 	}
 	cm.State.AllAddresses = append(cm.State.AllAddresses, addr2)
-	cm.State.Members = append(cm.State.Members, &Member{
+	cm.State.Members = append(cm.State.Members, &gproto_cluster.Member{
 		AddressIndex: proto.Int32(1),
-		Status:       MemberStatus_Up.Enum(),
+		Status:       gproto_cluster.MemberStatus_Up.Enum(),
 	})
 
 	if cm.CheckConvergence() {

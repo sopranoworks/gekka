@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka/cluster"
+	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -52,7 +53,7 @@ type GekkaAssociation struct {
 	state     AssociationState
 	role      AssociationRole
 	conn      net.Conn
-	remote    *UniqueAddress
+	remote    *gproto_remote.UniqueAddress
 	lastSeen  time.Time
 	nodeMgr   *NodeManager
 	handshake chan struct{} // signaled when associated
@@ -67,7 +68,7 @@ type GekkaAssociation struct {
 // NodeManager manages all active associations.
 type NodeManager struct {
 	mu                  sync.RWMutex
-	localAddress        *Address
+	localAddress        *gproto_remote.Address
 	associations        map[string]*GekkaAssociation // key: host:port, or UID string
 	localUid            uint64
 	clusterMgr          *cluster.ClusterManager
@@ -83,7 +84,7 @@ type NodeManager struct {
 	metrics *NodeMetrics
 }
 
-func NewNodeManager(local *Address, uid uint64) *NodeManager {
+func NewNodeManager(local *gproto_remote.Address, uid uint64) *NodeManager {
 	return &NodeManager{
 		localAddress:       local,
 		associations:       make(map[string]*GekkaAssociation),
@@ -156,16 +157,16 @@ func (nm *NodeManager) SetCompressionManager(ctm *CompressionTableManager) {
 
 // MessageContext carries metadata about an incoming Artery message.
 type MessageContext struct {
-	Sender     *UniqueAddress
-	Recipient  *Address
+	Sender     *gproto_remote.UniqueAddress
+	Recipient  *gproto_remote.Address
 	Serializer int32
 	Manifest   string
 	SeqNo      uint64
-	AckReplyTo *UniqueAddress
+	AckReplyTo *gproto_remote.UniqueAddress
 }
 
 // GetAssociation looks up an existing association by unique address.
-func (nm *NodeManager) GetAssociation(remote *UniqueAddress) (*GekkaAssociation, bool) {
+func (nm *NodeManager) GetAssociation(remote *gproto_remote.UniqueAddress) (*GekkaAssociation, bool) {
 	if remote == nil || remote.Address == nil {
 		return nil, false
 	}
@@ -178,7 +179,7 @@ func (nm *NodeManager) GetAssociation(remote *UniqueAddress) (*GekkaAssociation,
 }
 
 // RegisterAssociation stores an association in the registry.
-func (nm *NodeManager) RegisterAssociation(remote *UniqueAddress, assoc *GekkaAssociation) {
+func (nm *NodeManager) RegisterAssociation(remote *gproto_remote.UniqueAddress, assoc *GekkaAssociation) {
 	if remote == nil || remote.Address == nil {
 		return
 	}
@@ -235,7 +236,7 @@ func (nm *NodeManager) RegisterAssociation(remote *UniqueAddress, assoc *GekkaAs
 }
 
 // ProcessConnection is the unified entry point for both inbound and outbound connections.
-func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, role AssociationRole, remote *Address, streamId int32) error {
+func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, role AssociationRole, remote *gproto_remote.Address, streamId int32) error {
 	if role == INBOUND {
 		magic := make([]byte, 5)
 		if _, err := io.ReadFull(conn, magic); err != nil {
@@ -257,7 +258,7 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 		handshake: make(chan struct{}),
 		localUid:  nm.localUid,
 		outbox:    make(chan []byte, 100),
-		remote:    &UniqueAddress{Address: remote, Uid: proto.Uint64(0)},
+		remote:    &gproto_remote.UniqueAddress{Address: remote, Uid: proto.Uint64(0)},
 		streamId:  streamId,
 	}
 	// Register early so handleHandshakeRsp can find it
@@ -297,15 +298,15 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 	return assoc.Process(ctx)
 }
 
-func (assoc *GekkaAssociation) initiateHandshake(to *Address) error {
+func (assoc *GekkaAssociation) initiateHandshake(to *gproto_remote.Address) error {
 	assoc.mu.Lock()
 	assoc.state = WAITING_FOR_HANDSHAKE
 	uid := assoc.localUid
 	assoc.mu.Unlock()
 
 	// Correctly initialize HandshakeReq using pointer types from proto package
-	req := &HandshakeReq{
-		From: &UniqueAddress{
+	req := &gproto_remote.HandshakeReq{
+		From: &gproto_remote.UniqueAddress{
 			Address: assoc.nodeMgr.localAddress,
 			Uid:     proto.Uint64(uid),
 		},
@@ -363,10 +364,10 @@ func (assoc *GekkaAssociation) dispatch(ctx context.Context, meta *ArteryMetadat
 	}
 }
 
-func (assoc *GekkaAssociation) sendSystemAck(seq uint64, to *UniqueAddress) error {
-	ack := &SystemMessageDeliveryAck{
+func (assoc *GekkaAssociation) sendSystemAck(seq uint64, to *gproto_remote.UniqueAddress) error {
+	ack := &gproto_remote.SystemMessageDeliveryAck{
 		SeqNo: proto.Uint64(seq),
-		From: &UniqueAddress{
+		From: &gproto_remote.UniqueAddress{
 			Address: assoc.nodeMgr.localAddress,
 			Uid:     proto.Uint64(assoc.localUid),
 		},
@@ -377,7 +378,7 @@ func (assoc *GekkaAssociation) sendSystemAck(seq uint64, to *UniqueAddress) erro
 func (assoc *GekkaAssociation) handleSystemMessage(meta *ArteryMetadata) error {
 	// The Artery payload for manifest "SystemMessage" is a SystemMessageEnvelope
 	// which carries the SeqNo, AckReplyTo, and the inner SystemMessage bytes.
-	env := &SystemMessageEnvelope{}
+	env := &gproto_remote.SystemMessageEnvelope{}
 	if err := proto.Unmarshal(meta.Payload, env); err != nil {
 		return fmt.Errorf("failed to unmarshal SystemMessageEnvelope: %w", err)
 	}
@@ -386,7 +387,7 @@ func (assoc *GekkaAssociation) handleSystemMessage(meta *ArteryMetadata) error {
 			log.Printf("Association: failed to send ACK for seq %d: %v", env.GetSeqNo(), err)
 		}
 	}
-	sm := &SystemMessage{}
+	sm := &gproto_remote.SystemMessage{}
 	if err := proto.Unmarshal(env.Message, sm); err != nil {
 		return fmt.Errorf("failed to unmarshal inner SystemMessage: %w", err)
 	}
@@ -522,14 +523,14 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 	log.Printf("Association %p: handling control message with manifest %q", assoc, manifest)
 	switch manifest {
 	case "d": // HandshakeReq
-		req := &HandshakeReq{}
+		req := &gproto_remote.HandshakeReq{}
 		if err := proto.Unmarshal(meta.Payload, req); err != nil {
 			return err
 		}
 		return assoc.handleHandshakeReq(req)
 
 	case "e": // HandshakeRsp
-		mwa := &MessageWithAddress{}
+		mwa := &gproto_remote.MessageWithAddress{}
 		if err := proto.Unmarshal(meta.Payload, mwa); err != nil {
 			return err
 		}
@@ -540,7 +541,7 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 		// Reply immediately with ArteryHeartbeatRsp containing our local UID so
 		// Pekko's RemoteWatcher does not mark the Go node as unreachable.
 		log.Printf("Association %p: ArteryHeartbeat received — replying with ArteryHeartbeatRsp (uid=%d)", assoc, assoc.localUid)
-		rsp := &ArteryHeartbeatRsp{Uid: proto.Uint64(assoc.localUid)}
+		rsp := &gproto_remote.ArteryHeartbeatRsp{Uid: proto.Uint64(assoc.localUid)}
 		payload, err := proto.Marshal(rsp)
 		if err != nil {
 			return fmt.Errorf("failed to marshal ArteryHeartbeatRsp: %w", err)
@@ -557,7 +558,7 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 		return nil
 
 	case "n": // ArteryHeartbeatRsp — Pekko's reply to a heartbeat we sent
-		hb := &ArteryHeartbeatRsp{}
+		hb := &gproto_remote.ArteryHeartbeatRsp{}
 		if err := proto.Unmarshal(meta.Payload, hb); err != nil {
 			return err
 		}
@@ -566,13 +567,13 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 
 	case "ActorRefCompressionAdvertisement", "ClassManifestCompressionAdvertisement":
 		if assoc.nodeMgr.compressionMgr != nil {
-			adv := &CompressionTableAdvertisement{}
+			adv := &gproto_remote.CompressionTableAdvertisement{}
 			if err := proto.Unmarshal(meta.Payload, adv); err != nil {
 				return err
 			}
 			isActorRef := manifest == "ActorRefCompressionAdvertisement"
 			// Get local address from NodeManager to use in the Ack
-			localUA := &UniqueAddress{
+			localUA := &gproto_remote.UniqueAddress{
 				Address: assoc.nodeMgr.localAddress,
 				Uid:     proto.Uint64(assoc.nodeMgr.localUid),
 			}
@@ -582,7 +583,7 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 
 	case "Quarantined":
 		// Remote has detected a UID conflict and is notifying us. Quarantine the association.
-		quar := &Quarantined{}
+		quar := &gproto_remote.Quarantined{}
 		if err := proto.Unmarshal(meta.Payload, quar); err != nil {
 			return err
 		}
@@ -595,7 +596,7 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 	case "ActorRefCompressionAdvertisementAck", "ClassManifestCompressionAdvertisementAck":
 		// We log the ack, but we don't block on receiving it yet.
 		// In a full implementation, we'd wait for this before transitioning to using the compressed IDs.
-		ack := &CompressionTableAdvertisementAck{}
+		ack := &gproto_remote.CompressionTableAdvertisementAck{}
 		if err := proto.Unmarshal(meta.Payload, ack); err != nil {
 			return err
 		}
@@ -606,7 +607,7 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 		// If ID 6 and no manifest, it's likely a CompressionTableAdvertisement
 		if meta.SerializerId == 6 && manifest == "" {
 			// Try to unmarshal as CompressionTableAdvertisement
-			adv := &CompressionTableAdvertisement{}
+			adv := &gproto_remote.CompressionTableAdvertisement{}
 			if err := proto.Unmarshal(meta.Payload, adv); err == nil {
 				if assoc.nodeMgr.compressionMgr != nil {
 					// Guess if it's ActorRef or ClassManifest based on typical Pekko behavior
@@ -624,7 +625,7 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 					// If it's missing, Pekko might be using a different scheme.
 
 					log.Printf("Association: Received Advertisement with ID 6 and empty manifest. Guessing isActorRef=%v", isActorRef)
-					localUA := &UniqueAddress{
+					localUA := &gproto_remote.UniqueAddress{
 						Address: assoc.nodeMgr.localAddress,
 						Uid:     proto.Uint64(assoc.nodeMgr.localUid),
 					}
@@ -637,7 +638,7 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 	}
 }
 
-func (assoc *GekkaAssociation) handleHandshakeReq(req *HandshakeReq) error {
+func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeReq) error {
 	log.Printf("Association %p: received HandshakeReq from %s (role=%v)", assoc, req.From.String(), assoc.role)
 
 	// Validate that the 'To' address matches our local node (Pekko protocol requirement).
@@ -697,8 +698,8 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *HandshakeReq) error {
 		// transition to ASSOCIATED.  This is correct Artery protocol for both
 		// Pekko and Go peers: the outbound side reads HandshakeRsp after sending
 		// HandshakeReq.
-		localUA := &UniqueAddress{Address: assoc.nodeMgr.localAddress, Uid: proto.Uint64(assoc.localUid)}
-		rspProto := &MessageWithAddress{Address: localUA}
+		localUA := &gproto_remote.UniqueAddress{Address: assoc.nodeMgr.localAddress, Uid: proto.Uint64(assoc.localUid)}
+		rspProto := &gproto_remote.MessageWithAddress{Address: localUA}
 		if rspPayload, err2 := proto.Marshal(rspProto); err2 == nil {
 			if frame, err2 := BuildArteryFrame(int64(assoc.localUid), ArteryInternalSerializerID, "", "", "e", rspPayload, true); err2 == nil {
 				log.Printf("Association %p (INBOUND): sending HandshakeRsp to remote", assoc)
@@ -738,8 +739,8 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *HandshakeReq) error {
 	assoc.pending = nil
 	assoc.mu.Unlock()
 
-	localUA := &UniqueAddress{Address: assoc.nodeMgr.localAddress, Uid: proto.Uint64(assoc.localUid)}
-	rsp := &MessageWithAddress{Address: localUA}
+	localUA := &gproto_remote.UniqueAddress{Address: assoc.nodeMgr.localAddress, Uid: proto.Uint64(assoc.localUid)}
+	rsp := &gproto_remote.MessageWithAddress{Address: localUA}
 
 	// Write HandshakeRsp to outbox
 	payload, err := proto.Marshal(rsp)
@@ -755,7 +756,7 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *HandshakeReq) error {
 	return nil
 }
 
-func (assoc *GekkaAssociation) handleHandshakeRsp(mwa *MessageWithAddress) error {
+func (assoc *GekkaAssociation) handleHandshakeRsp(mwa *gproto_remote.MessageWithAddress) error {
 	log.Printf("Association %p: received HandshakeRsp from %s", assoc, mwa.Address.String())
 
 	assoc.nodeMgr.mu.RLock()

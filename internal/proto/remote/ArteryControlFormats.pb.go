@@ -1,4 +1,4 @@
-package gekka
+package remote
 
 import (
 	reflect "reflect"

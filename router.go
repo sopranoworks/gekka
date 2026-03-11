@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka/cluster"
+	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
+	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 
 	"google.golang.org/protobuf/proto"
 )
@@ -74,23 +76,23 @@ func (r *Router) Send(ctx context.Context, path string, msg interface{}) error {
 	// Check cluster message registry first: Pekko's ClusterMessageSerializer (ID=5) uses short manifests.
 	msgType := reflect.TypeOf(msg)
 	switch msgType {
-	case reflect.TypeOf((*cluster.InitJoin)(nil)):
+	case reflect.TypeOf((*gproto_cluster.InitJoin)(nil)):
 		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "IJ"
-	case reflect.TypeOf((*cluster.InitJoinAck)(nil)):
+	case reflect.TypeOf((*gproto_cluster.InitJoinAck)(nil)):
 		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "IJA"
-	case reflect.TypeOf((*cluster.Join)(nil)):
+	case reflect.TypeOf((*gproto_cluster.Join)(nil)):
 		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "J"
-	case reflect.TypeOf((*cluster.Welcome)(nil)):
+	case reflect.TypeOf((*gproto_cluster.Welcome)(nil)):
 		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "W"
-	case reflect.TypeOf((*cluster.Heartbeat)(nil)):
+	case reflect.TypeOf((*gproto_cluster.Heartbeat)(nil)):
 		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "HB"
-	case reflect.TypeOf((*cluster.HeartBeatResponse)(nil)):
+	case reflect.TypeOf((*gproto_cluster.HeartBeatResponse)(nil)):
 		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "HBR"
-	case reflect.TypeOf((*cluster.GossipStatus)(nil)):
+	case reflect.TypeOf((*gproto_cluster.GossipStatus)(nil)):
 		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "GS"
-	case reflect.TypeOf((*cluster.GossipEnvelope)(nil)):
+	case reflect.TypeOf((*gproto_cluster.GossipEnvelope)(nil)):
 		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "GE"
-	case reflect.TypeOf((*cluster.Address)(nil)):
+	case reflect.TypeOf((*gproto_cluster.Address)(nil)):
 		// Leave message — serialized as an Address proto
 		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "L"
 	default:
@@ -177,23 +179,23 @@ func (r *Router) SendWithSender(ctx context.Context, path string, senderPath str
 
 	msgType := reflect.TypeOf(msg)
 	switch msgType {
-	case reflect.TypeOf((*cluster.InitJoin)(nil)):
+	case reflect.TypeOf((*gproto_cluster.InitJoin)(nil)):
 		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "IJ"
-	case reflect.TypeOf((*cluster.InitJoinAck)(nil)):
+	case reflect.TypeOf((*gproto_cluster.InitJoinAck)(nil)):
 		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "IJA"
-	case reflect.TypeOf((*cluster.Join)(nil)):
+	case reflect.TypeOf((*gproto_cluster.Join)(nil)):
 		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "J"
-	case reflect.TypeOf((*cluster.Welcome)(nil)):
+	case reflect.TypeOf((*gproto_cluster.Welcome)(nil)):
 		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "W"
-	case reflect.TypeOf((*cluster.Heartbeat)(nil)):
+	case reflect.TypeOf((*gproto_cluster.Heartbeat)(nil)):
 		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "HB"
-	case reflect.TypeOf((*cluster.HeartBeatResponse)(nil)):
+	case reflect.TypeOf((*gproto_cluster.HeartBeatResponse)(nil)):
 		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "HBR"
-	case reflect.TypeOf((*cluster.GossipStatus)(nil)):
+	case reflect.TypeOf((*gproto_cluster.GossipStatus)(nil)):
 		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "GS"
-	case reflect.TypeOf((*cluster.GossipEnvelope)(nil)):
+	case reflect.TypeOf((*gproto_cluster.GossipEnvelope)(nil)):
 		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "GE"
-	case reflect.TypeOf((*cluster.Address)(nil)):
+	case reflect.TypeOf((*gproto_cluster.Address)(nil)):
 		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "L"
 	default:
 		if _, isProto := msg.(proto.Message); isProto {
@@ -270,7 +272,7 @@ func (r *Router) getAssociationByHost(host string, port uint32) (*GekkaAssociati
 	return nil, false
 }
 
-func (r *Router) dialRemote(ctx context.Context, target *Address) (*GekkaAssociation, error) {
+func (r *Router) dialRemote(ctx context.Context, target *gproto_remote.Address) (*GekkaAssociation, error) {
 	addrStr := fmt.Sprintf("%s:%d", target.GetHostname(), target.GetPort())
 
 	// Create a temporary client to perform the handshake.

@@ -13,6 +13,7 @@ import (
 	"reflect"
 
 	"github.com/sopranoworks/gekka/actor"
+	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 )
 
 // ── Event types ───────────────────────────────────────────────────────────────
@@ -158,14 +159,14 @@ func (cm *ClusterManager) publishEvent(evt ClusterDomainEvent) {
 // diffGossipMembers computes the ClusterDomainEvents implied by member status
 // changes between oldState and newState.  Called by processIncomingGossip to
 // emit events for transitions that Pekko's remote leader already performed.
-func diffGossipMembers(oldState, newState *Gossip) []ClusterDomainEvent {
+func diffGossipMembers(oldState, newState *gproto_cluster.Gossip) []ClusterDomainEvent {
 	type key struct {
 		host string
 		port uint32
 	}
 
 	// Build a snapshot of the old member statuses.
-	old := make(map[key]MemberStatus)
+	old := make(map[key]gproto_cluster.MemberStatus)
 	if oldState != nil {
 		for _, m := range oldState.Members {
 			a := oldState.AllAddresses[m.GetAddressIndex()].GetAddress()
@@ -185,13 +186,13 @@ func diffGossipMembers(oldState, newState *Gossip) []ClusterDomainEvent {
 		}
 		ma := memberAddressFromUA(ua)
 		switch newSt {
-		case MemberStatus_Up:
+		case gproto_cluster.MemberStatus_Up:
 			events = append(events, MemberUp{Member: ma})
-		case MemberStatus_Leaving:
+		case gproto_cluster.MemberStatus_Leaving:
 			events = append(events, MemberLeft{Member: ma})
-		case MemberStatus_Exiting:
+		case gproto_cluster.MemberStatus_Exiting:
 			events = append(events, MemberExited{Member: ma})
-		case MemberStatus_Removed:
+		case gproto_cluster.MemberStatus_Removed:
 			events = append(events, MemberRemoved{Member: ma})
 		}
 	}
@@ -199,7 +200,7 @@ func diffGossipMembers(oldState, newState *Gossip) []ClusterDomainEvent {
 }
 
 // memberAddressFromUA converts a UniqueAddress to a MemberAddress.
-func memberAddressFromUA(ua *UniqueAddress) MemberAddress {
+func memberAddressFromUA(ua *gproto_cluster.UniqueAddress) MemberAddress {
 	a := ua.GetAddress()
 	return MemberAddress{
 		Protocol: a.GetProtocol(),

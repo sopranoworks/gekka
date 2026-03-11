@@ -13,7 +13,8 @@ import (
 	"compress/gzip"
 	"io"
 
-	"github.com/sopranoworks/gekka/cluster"
+	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
+	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -40,11 +41,11 @@ func gzipDecompress(data []byte) ([]byte, error) {
 	return io.ReadAll(r)
 }
 
-func toClusterAddress(a *Address) *cluster.Address {
+func toClusterAddress(a *gproto_remote.Address) *gproto_cluster.Address {
 	if a == nil {
 		return nil
 	}
-	return &cluster.Address{
+	return &gproto_cluster.Address{
 		Protocol: a.Protocol,
 		System:   a.System,
 		Hostname: a.Hostname,
@@ -52,12 +53,12 @@ func toClusterAddress(a *Address) *cluster.Address {
 	}
 }
 
-func toClusterUniqueAddress(ua *UniqueAddress) *cluster.UniqueAddress {
+func toClusterUniqueAddress(ua *gproto_remote.UniqueAddress) *gproto_cluster.UniqueAddress {
 	if ua == nil {
 		return nil
 	}
 	uid64 := *ua.Uid
-	return &cluster.UniqueAddress{
+	return &gproto_cluster.UniqueAddress{
 		Address: toClusterAddress(ua.Address),
 		Uid:     proto.Uint32(uint32(uid64 & 0xFFFFFFFF)),
 		Uid2:    proto.Uint32(uint32(uid64 >> 32)),

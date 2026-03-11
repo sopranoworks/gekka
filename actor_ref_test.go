@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
+	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 
 	"google.golang.org/protobuf/proto"
 )
@@ -22,7 +23,7 @@ import (
 
 func newTestNode(t *testing.T, system, host string, port uint32) *GekkaNode {
 	t.Helper()
-	addr := &Address{
+	addr := &gproto_remote.Address{
 		Protocol: proto.String("pekko"),
 		System:   proto.String(system),
 		Hostname: proto.String(host),

@@ -13,6 +13,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+
+	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 )
 
 // Artery EnvelopeBuffer binary frame layout (all fields Little-Endian):
@@ -193,8 +195,8 @@ func ParseArteryFrame(data []byte, ctm *CompressionTableManager, remoteUid uint6
 	payload := data[maxEnd:]
 
 	return &ArteryMetadata{
-		Sender:          &ActorRefData{Path: &senderPath},
-		Recipient:       &ActorRefData{Path: &recipientPath},
+		Sender:          &gproto_remote.ActorRefData{Path: &senderPath},
+		Recipient:       &gproto_remote.ActorRefData{Path: &recipientPath},
 		SerializerId:    serializerID,
 		MessageManifest: []byte(manifestStr),
 		Payload:         payload,

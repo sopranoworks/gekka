@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"strconv"
 
+	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -57,8 +58,8 @@ func ParseActorPath(raw string) (*ActorPath, error) {
 }
 
 // ToAddress converts the parsed path into a Protobuf Address.
-func (ap *ActorPath) ToAddress() *Address {
-	return &Address{
+func (ap *ActorPath) ToAddress() *gproto_remote.Address {
+	return &gproto_remote.Address{
 		Protocol: proto.String(ap.Protocol),
 		System:   proto.String(ap.System),
 		Hostname: proto.String(ap.Host),
@@ -67,8 +68,8 @@ func (ap *ActorPath) ToAddress() *Address {
 }
 
 // ToUniqueAddress converts the parsed path into a Protobuf UniqueAddress (UID unknown).
-func (ap *ActorPath) ToUniqueAddress(uid uint64) *UniqueAddress {
-	return &UniqueAddress{
+func (ap *ActorPath) ToUniqueAddress(uid uint64) *gproto_remote.UniqueAddress {
+	return &gproto_remote.UniqueAddress{
 		Address: ap.ToAddress(),
 		Uid:     proto.Uint64(uid),
 	}

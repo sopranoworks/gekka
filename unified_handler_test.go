@@ -14,17 +14,18 @@ import (
 	"testing"
 	"time"
 
+	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 	"google.golang.org/protobuf/proto"
 )
 
 func TestUnifiedHandler_FullDuplexHandshake(t *testing.T) {
-	nodeAAddr := &Address{
+	nodeAAddr := &gproto_remote.Address{
 		Protocol: proto.String("pekko"),
 		System:   proto.String("nodeA"),
 		Hostname: proto.String("127.0.0.1"),
 		Port:     proto.Uint32(2552),
 	}
-	nodeBAddr := &Address{
+	nodeBAddr := &gproto_remote.Address{
 		Protocol: proto.String("pekko"),
 		System:   proto.String("nodeB"),
 		Hostname: proto.String("127.0.0.1"),
@@ -56,13 +57,13 @@ func TestUnifiedHandler_FullDuplexHandshake(t *testing.T) {
 	time.Sleep(700 * time.Millisecond)
 
 	// NewNodeManager(addr, 0) assigns localUid=0, so HandshakeReq/Rsp carry Uid=0.
-	uniqueB := &UniqueAddress{Address: nodeBAddr, Uid: proto.Uint64(0)}
+	uniqueB := &gproto_remote.UniqueAddress{Address: nodeBAddr, Uid: proto.Uint64(0)}
 	assocA, okA := nmA.GetAssociation(uniqueB)
 	if !okA || assocA.GetState() != ASSOCIATED {
 		t.Errorf("Node A association failed: ok=%v, state=%v", okA, assocA.GetState())
 	}
 
-	uniqueA := &UniqueAddress{Address: nodeAAddr, Uid: proto.Uint64(0)}
+	uniqueA := &gproto_remote.UniqueAddress{Address: nodeAAddr, Uid: proto.Uint64(0)}
 	assocB, okB := nmB.GetAssociation(uniqueA)
 	if !okB || assocB.GetState() != ASSOCIATED {
 		t.Errorf("Node B association failed: ok=%v, state=%v", okB, assocB.GetState())
@@ -70,7 +71,7 @@ func TestUnifiedHandler_FullDuplexHandshake(t *testing.T) {
 }
 
 func TestUnifiedHandler_RegistryReuse(t *testing.T) {
-	nodeAAddr := &Address{
+	nodeAAddr := &gproto_remote.Address{
 		Protocol: proto.String("pekko"),
 		System:   proto.String("nodeA"),
 		Hostname: proto.String("127.0.0.1"),
@@ -82,8 +83,8 @@ func TestUnifiedHandler_RegistryReuse(t *testing.T) {
 	dummyConn, _ := net.Pipe()
 	defer dummyConn.Close()
 
-	remoteUnique := &UniqueAddress{
-		Address: &Address{
+	remoteUnique := &gproto_remote.UniqueAddress{
+		Address: &gproto_remote.Address{
 			Hostname: proto.String("10.0.0.1"),
 			Port:     proto.Uint32(2552),
 		},

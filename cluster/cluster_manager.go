@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
+	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 
 	"google.golang.org/protobuf/proto"
 )
@@ -57,9 +58,9 @@ func gzipCompress(data []byte) ([]byte, error) {
 // ClusterManager handles node membership and gossip.
 type ClusterManager struct {
 	Mu              sync.RWMutex
-	LocalAddress    *UniqueAddress
+	LocalAddress    *gproto_cluster.UniqueAddress
 	LocalHash       int32 // for VectorClock version
-	State           *Gossip
+	State           *gproto_cluster.Gossip
 	Metrics         Metrics
 	Fd              *PhiAccrualFailureDetector
 	Sys             actor.ActorContext // bridge back to the node's actor system
@@ -104,27 +105,27 @@ func (cm *ClusterManager) HeartbeatPath(system, host string, port uint32) string
 	return fmt.Sprintf("%s://%s@%s:%d/system/cluster/heartbeatReceiver", cm.Proto(), system, host, port)
 }
 
-func NewClusterManager(local *UniqueAddress, router func(context.Context, string, any) error) *ClusterManager {
-	clLocal := local                   // Already a cluster.UniqueAddress
+func NewClusterManager(local *gproto_cluster.UniqueAddress, router func(context.Context, string, any) error) *ClusterManager {
+	clLocal := local                   // Already a gproto_cluster.UniqueAddress
 	localHash := int32(local.GetUid()) // simplified hash as UID
 	return &ClusterManager{
 		LocalAddress: local,
 		LocalHash:    localHash,
 		Router:       router,
 		Fd:           NewPhiAccrualFailureDetector(8.0, 1000),
-		State: &Gossip{
-			Members: []*Member{
+		State: &gproto_cluster.Gossip{
+			Members: []*gproto_cluster.Member{
 				{
 					AddressIndex: proto.Int32(0),
-					Status:       MemberStatus_Joining.Enum(),
+					Status:       gproto_cluster.MemberStatus_Joining.Enum(),
 					UpNumber:     proto.Int32(0),
 				},
 			},
-			AllAddresses: []*UniqueAddress{clLocal},
+			AllAddresses: []*gproto_cluster.UniqueAddress{clLocal},
 			AllHashes:    []string{fmt.Sprintf("%d", localHash)},
-			Overview:     &GossipOverview{},
-			Version: &VectorClock{
-				Versions: []*VectorClock_Version{
+			Overview:     &gproto_cluster.GossipOverview{},
+			Version: &gproto_cluster.VectorClock{
+				Versions: []*gproto_cluster.VectorClock_Version{
 					{
 						HashIndex: proto.Int32(0),
 						Timestamp: proto.Int64(1),
@@ -135,11 +136,11 @@ func NewClusterManager(local *UniqueAddress, router func(context.Context, string
 	}
 }
 
-func toClusterAddress(a *Address) *Address {
+func toClusterAddress(a *gproto_cluster.Address) *gproto_cluster.Address {
 	if a == nil {
 		return nil
 	}
-	return &Address{
+	return &gproto_cluster.Address{
 		System:   a.System,
 		Hostname: a.Hostname,
 		Port:     a.Port,
@@ -157,13 +158,13 @@ func (cm *ClusterManager) JoinCluster(ctx context.Context, seedHost string, seed
 	// Send a minimal config so Pekko's JoinConfigCompatCheckCluster.check
 	// can call getString("pekko.downing-provider-class") without throwing.
 	minConfig := proto.String(`pekko.downing-provider-class = "org.apache.pekko.sbr.SplitBrainResolverProvider"`)
-	initJoin := &InitJoin{CurrentConfig: minConfig}
+	initJoin := &gproto_cluster.InitJoin{CurrentConfig: minConfig}
 	return cm.Router(ctx, path, initJoin)
 }
 
 // ProceedJoin sends the actual Join message after receiving InitJoinAck
 func (cm *ClusterManager) ProceedJoin(ctx context.Context, actorPath string) error {
-	join := &Join{
+	join := &gproto_cluster.Join{
 		Node:  cm.LocalAddress,
 		Roles: []string{"default"},
 	}
@@ -182,7 +183,7 @@ func (cm *ClusterManager) LeaveCluster() error {
 	// Send to all known members or just the leader/seed. For simplicity, broadcast to all UP members.
 	var lastErr error
 	for _, m := range state.GetMembers() {
-		if m.GetStatus() == MemberStatus_Up || m.GetStatus() == MemberStatus_WeaklyUp {
+		if m.GetStatus() == gproto_cluster.MemberStatus_Up || m.GetStatus() == gproto_cluster.MemberStatus_WeaklyUp {
 			addr := state.GetAllAddresses()[m.GetAddressIndex()]
 			path := fmt.Sprintf("pekko://%s@%s:%d/system/cluster/core/daemon",
 				addr.GetAddress().GetSystem(),
@@ -199,7 +200,7 @@ func (cm *ClusterManager) LeaveCluster() error {
 // HandleIncomingClusterMessage dispatches cluster-level messages.
 // Pekko's ClusterMessageSerializer uses short manifests: "IJ", "IJA", "J", "W", "GE", "GS", "HB", "HBR", "L".
 // remoteAddr is the UniqueAddress of the node that sent this message (from the association handshake).
-func (cm *ClusterManager) HandleIncomingClusterMessage(ctx context.Context, payload []byte, manifest string, remoteAddr *UniqueAddress) error {
+func (cm *ClusterManager) HandleIncomingClusterMessage(ctx context.Context, payload []byte, manifest string, remoteAddr *gproto_cluster.UniqueAddress) error {
 	log.Printf("Cluster: HandleIncomingClusterMessage manifest=%q", manifest)
 	switch manifest {
 	case "IJ": // InitJoin — we are the seed; reply with InitJoinAck
@@ -208,16 +209,16 @@ func (cm *ClusterManager) HandleIncomingClusterMessage(ctx context.Context, payl
 			return nil
 		}
 		log.Printf("Cluster: received InitJoin from %v — sending InitJoinAck", remoteAddr.GetAddress())
-		ack := &InitJoinAck{
+		ack := &gproto_cluster.InitJoinAck{
 			Address:     toClusterAddress(cm.LocalAddress.Address),
-			ConfigCheck: &ConfigCheck{Type: ConfigCheck_CompatibleConfig.Enum()},
+			ConfigCheck: &gproto_cluster.ConfigCheck{Type: gproto_cluster.ConfigCheck_CompatibleConfig.Enum()},
 		}
 		raddr := remoteAddr.GetAddress()
 		system := cm.LocalAddress.GetAddress().GetSystem()
 		path := cm.ClusterCorePath(system, raddr.GetHostname(), raddr.GetPort())
 		return cm.Router(ctx, path, ack)
 	case "IJA": // InitJoinAck — received Ack, now send Join
-		ack := &InitJoinAck{}
+		ack := &gproto_cluster.InitJoinAck{}
 		if err := proto.Unmarshal(payload, ack); err != nil {
 			return err
 		}
@@ -237,7 +238,7 @@ func (cm *ClusterManager) HandleIncomingClusterMessage(ctx context.Context, payl
 	case "GS": // GossipStatus
 		return cm.handleGossipStatus(payload, manifest)
 	case "L": // Leave — a member is requesting graceful departure
-		leave := &Address{}
+		leave := &gproto_cluster.Address{}
 		if err := proto.Unmarshal(payload, leave); err != nil {
 			return err
 		}
@@ -253,13 +254,13 @@ func (cm *ClusterManager) HandleIncomingClusterMessage(ctx context.Context, payl
 }
 
 func (cm *ClusterManager) handleHeartbeat(payload []byte, manifest string) error {
-	hb := &Heartbeat{}
+	hb := &gproto_cluster.Heartbeat{}
 	if err := proto.Unmarshal(payload, hb); err != nil {
 		return err
 	}
 
 	// Reply with HeartBeatResponse
-	rsp := &HeartBeatResponse{
+	rsp := &gproto_cluster.HeartBeatResponse{
 		From:         cm.LocalAddress,
 		SequenceNr:   hb.SequenceNr,
 		CreationTime: hb.CreationTime,
@@ -271,7 +272,7 @@ func (cm *ClusterManager) handleHeartbeat(payload []byte, manifest string) error
 }
 
 func (cm *ClusterManager) handleHeartbeatRsp(payload []byte, manifest string) error {
-	rsp := &HeartBeatResponse{}
+	rsp := &gproto_cluster.HeartBeatResponse{}
 	if err := proto.Unmarshal(payload, rsp); err != nil {
 		return err
 	}
@@ -284,7 +285,7 @@ func (cm *ClusterManager) handleHeartbeatRsp(payload []byte, manifest string) er
 }
 
 func (cm *ClusterManager) handleJoin(payload []byte, manifest string) error {
-	join := &Join{}
+	join := &gproto_cluster.Join{}
 	if err := proto.Unmarshal(payload, join); err != nil {
 		return err
 	}
@@ -296,11 +297,11 @@ func (cm *ClusterManager) handleJoin(payload []byte, manifest string) error {
 	// Joining → Up on the next tick.
 	cm.Mu.Lock()
 	cm.addMemberToGossipLocked(joiningNode)
-	welcomeGossip := proto.Clone(cm.State).(*Gossip)
+	welcomeGossip := proto.Clone(cm.State).(*gproto_cluster.Gossip)
 	cm.connectToNewMembers(cm.State)
 	cm.Mu.Unlock()
 
-	welcome := &Welcome{
+	welcome := &gproto_cluster.Welcome{
 		From:   cm.LocalAddress,
 		Gossip: welcomeGossip,
 	}
@@ -315,7 +316,7 @@ func (cm *ClusterManager) handleJoin(payload []byte, manifest string) error {
 
 // addMemberToGossipLocked adds a joining node to the gossip Members list (as Joining).
 // Must be called with cm.Mu held.
-func (cm *ClusterManager) addMemberToGossipLocked(joiningAddr *UniqueAddress) {
+func (cm *ClusterManager) addMemberToGossipLocked(joiningAddr *gproto_cluster.UniqueAddress) {
 	// Look for an existing AllAddresses entry by host:port.
 	for i, addr := range cm.State.AllAddresses {
 		if addr.GetAddress().GetHostname() == joiningAddr.GetAddress().GetHostname() &&
@@ -326,9 +327,9 @@ func (cm *ClusterManager) addMemberToGossipLocked(joiningAddr *UniqueAddress) {
 					return // already a member
 				}
 			}
-			cm.State.Members = append(cm.State.Members, &Member{
+			cm.State.Members = append(cm.State.Members, &gproto_cluster.Member{
 				AddressIndex: proto.Int32(int32(i)),
-				Status:       MemberStatus_Joining.Enum(),
+				Status:       gproto_cluster.MemberStatus_Joining.Enum(),
 				UpNumber:     proto.Int32(int32(len(cm.State.Members) + 1)),
 			})
 			cm.incrementVersionWithLockHeld()
@@ -339,9 +340,9 @@ func (cm *ClusterManager) addMemberToGossipLocked(joiningAddr *UniqueAddress) {
 	// New address — append to AllAddresses and create a Member.
 	addrIdx := int32(len(cm.State.AllAddresses))
 	cm.State.AllAddresses = append(cm.State.AllAddresses, joiningAddr)
-	cm.State.Members = append(cm.State.Members, &Member{
+	cm.State.Members = append(cm.State.Members, &gproto_cluster.Member{
 		AddressIndex: proto.Int32(addrIdx),
-		Status:       MemberStatus_Joining.Enum(),
+		Status:       gproto_cluster.MemberStatus_Joining.Enum(),
 		UpNumber:     proto.Int32(int32(len(cm.State.Members) + 1)),
 	})
 	cm.incrementVersionWithLockHeld()
@@ -349,13 +350,13 @@ func (cm *ClusterManager) addMemberToGossipLocked(joiningAddr *UniqueAddress) {
 
 // markMemberLeavingLocked transitions an Up/WeaklyUp member to Leaving status.
 // Must be called with cm.Mu held.
-func (cm *ClusterManager) markMemberLeavingLocked(leaveAddr *Address) {
+func (cm *ClusterManager) markMemberLeavingLocked(leaveAddr *gproto_cluster.Address) {
 	for _, m := range cm.State.Members {
 		addr := cm.State.AllAddresses[m.GetAddressIndex()]
 		if addr.GetAddress().GetHostname() == leaveAddr.GetHostname() &&
 			addr.GetAddress().GetPort() == leaveAddr.GetPort() {
-			if m.GetStatus() == MemberStatus_Up || m.GetStatus() == MemberStatus_WeaklyUp {
-				m.Status = MemberStatus_Leaving.Enum()
+			if m.GetStatus() == gproto_cluster.MemberStatus_Up || m.GetStatus() == gproto_cluster.MemberStatus_WeaklyUp {
+				m.Status = gproto_cluster.MemberStatus_Leaving.Enum()
 				cm.incrementVersionWithLockHeld()
 				log.Printf("Cluster: marked %s:%d as Leaving", leaveAddr.GetHostname(), leaveAddr.GetPort())
 				// publishEvent is safe while holding cm.Mu — it only acquires cm.SubMu.
@@ -377,7 +378,7 @@ func (cm *ClusterManager) handleWelcome(payload []byte, manifest string) error {
 	if err != nil {
 		return fmt.Errorf("failed to decompress Welcome payload: %w", err)
 	}
-	welcome := &Welcome{}
+	welcome := &gproto_cluster.Welcome{}
 	if err := proto.Unmarshal(decompressed, welcome); err != nil {
 		return err
 	}
@@ -395,7 +396,7 @@ func (cm *ClusterManager) handleGossipEnvelope(payload []byte, manifest string) 
 	if cm.Metrics != nil {
 		cm.Metrics.IncrementGossipReceived()
 	}
-	envelope := &GossipEnvelope{}
+	envelope := &gproto_cluster.GossipEnvelope{}
 	if err := proto.Unmarshal(payload, envelope); err != nil {
 		return err
 	}
@@ -406,7 +407,7 @@ func (cm *ClusterManager) handleGossipEnvelope(payload []byte, manifest string) 
 	if err != nil {
 		return fmt.Errorf("failed to decompress GossipEnvelope.serializedGossip: %w", err)
 	}
-	gossip := &Gossip{}
+	gossip := &gproto_cluster.Gossip{}
 	if err := proto.Unmarshal(decompressed, gossip); err != nil {
 		return fmt.Errorf("failed to unmarshal gossip inside envelope: %w", err)
 	}
@@ -423,7 +424,7 @@ const (
 	ClockConcurrent
 )
 
-func CompareVectorClock(v1, v2 *VectorClock) ClockOrdering {
+func CompareVectorClock(v1, v2 *gproto_cluster.VectorClock) ClockOrdering {
 	m1 := make(map[int32]int64)
 	if v1 != nil {
 		for _, v := range v1.Versions {
@@ -470,7 +471,7 @@ func CompareVectorClock(v1, v2 *VectorClock) ClockOrdering {
 	return ClockSame
 }
 
-func (cm *ClusterManager) vectorClockToMap(vc *VectorClock, hashes []string) map[string]int64 {
+func (cm *ClusterManager) vectorClockToMap(vc *gproto_cluster.VectorClock, hashes []string) map[string]int64 {
 	m := make(map[string]int64)
 	if vc == nil {
 		return m
@@ -522,14 +523,14 @@ func (cm *ClusterManager) compareResolvedClocks(m1, m2 map[string]int64) ClockOr
 // It takes the union of AllAddresses and Members (keeping higher member status
 // for duplicates), and the pairwise-max of the VectorClocks.
 // Must be called with cm.Mu held (read or write).
-func (cm *ClusterManager) mergeGossipStates(local, incoming *Gossip) *Gossip {
+func (cm *ClusterManager) mergeGossipStates(local, incoming *gproto_cluster.Gossip) *gproto_cluster.Gossip {
 	type addrKey struct {
 		host string
 		port uint32
 	}
 
 	// ── AllAddresses (union, dedup by host:port) ─────────────────────────────
-	mergedAddresses := make([]*UniqueAddress, 0, len(local.AllAddresses)+len(incoming.AllAddresses))
+	mergedAddresses := make([]*gproto_cluster.UniqueAddress, 0, len(local.AllAddresses)+len(incoming.AllAddresses))
 	addrIndexMap := make(map[addrKey]int32)
 
 	for _, addr := range local.AllAddresses {
@@ -554,24 +555,24 @@ func (cm *ClusterManager) mergeGossipStates(local, incoming *Gossip) *Gossip {
 
 	// ── Members (union, higher status wins for duplicates) ───────────────────
 	// Status lifecycle order: Joining < WeaklyUp < Up < Leaving < Exiting < Removed / Down
-	statusOrd := map[MemberStatus]int{
-		MemberStatus_Joining:  0,
-		MemberStatus_WeaklyUp: 1,
-		MemberStatus_Up:       2,
-		MemberStatus_Leaving:  3,
-		MemberStatus_Exiting:  4,
-		MemberStatus_Removed:  5,
-		MemberStatus_Down:     6,
+	statusOrd := map[gproto_cluster.MemberStatus]int{
+		gproto_cluster.MemberStatus_Joining:  0,
+		gproto_cluster.MemberStatus_WeaklyUp: 1,
+		gproto_cluster.MemberStatus_Up:       2,
+		gproto_cluster.MemberStatus_Leaving:  3,
+		gproto_cluster.MemberStatus_Exiting:  4,
+		gproto_cluster.MemberStatus_Removed:  5,
+		gproto_cluster.MemberStatus_Down:     6,
 	}
 
-	mergedMembers := make([]*Member, 0, len(local.Members)+len(incoming.Members))
-	memberByMergedIdx := make(map[int32]*Member)
+	mergedMembers := make([]*gproto_cluster.Member, 0, len(local.Members)+len(incoming.Members))
+	memberByMergedIdx := make(map[int32]*gproto_cluster.Member)
 
 	for _, m := range local.Members {
 		addr := local.AllAddresses[m.GetAddressIndex()]
 		k := addrKey{addr.GetAddress().GetHostname(), addr.GetAddress().GetPort()}
 		mergedIdx := addrIndexMap[k]
-		newM := proto.Clone(m).(*Member)
+		newM := proto.Clone(m).(*gproto_cluster.Member)
 		newM.AddressIndex = proto.Int32(mergedIdx)
 		memberByMergedIdx[mergedIdx] = newM
 		mergedMembers = append(mergedMembers, newM)
@@ -583,7 +584,7 @@ func (cm *ClusterManager) mergeGossipStates(local, incoming *Gossip) *Gossip {
 				existing.Status = m.Status
 			}
 		} else {
-			newM := proto.Clone(m).(*Member)
+			newM := proto.Clone(m).(*gproto_cluster.Member)
 			newM.AddressIndex = proto.Int32(mergedIdx)
 			memberByMergedIdx[mergedIdx] = newM
 			mergedMembers = append(mergedMembers, newM)
@@ -609,7 +610,7 @@ func (cm *ClusterManager) mergeGossipStates(local, incoming *Gossip) *Gossip {
 	localVCMap := cm.vectorClockToMap(local.Version, local.AllHashes)
 	incomingVCMap := cm.vectorClockToMap(incoming.Version, incoming.AllHashes)
 
-	mergedVC := &VectorClock{}
+	mergedVC := &gproto_cluster.VectorClock{}
 	for h, idx := range hashIdxMap {
 		t1, t2 := localVCMap[h], incomingVCMap[h]
 		maxT := t1
@@ -617,24 +618,24 @@ func (cm *ClusterManager) mergeGossipStates(local, incoming *Gossip) *Gossip {
 			maxT = t2
 		}
 		if maxT > 0 {
-			mergedVC.Versions = append(mergedVC.Versions, &VectorClock_Version{
+			mergedVC.Versions = append(mergedVC.Versions, &gproto_cluster.VectorClock_Version{
 				HashIndex: proto.Int32(idx),
 				Timestamp: proto.Int64(maxT),
 			})
 		}
 	}
 
-	return &Gossip{
+	return &gproto_cluster.Gossip{
 		AllAddresses: mergedAddresses,
 		Members:      mergedMembers,
 		AllHashes:    mergedHashes,
 		Version:      mergedVC,
-		Overview:     &GossipOverview{},
+		Overview:     &gproto_cluster.GossipOverview{},
 	}
 }
 
 func (cm *ClusterManager) handleGossipStatus(payload []byte, manifest string) error {
-	status := &GossipStatus{}
+	status := &gproto_cluster.GossipStatus{}
 	if err := proto.Unmarshal(payload, status); err != nil {
 		return err
 	}
@@ -651,7 +652,7 @@ func (cm *ClusterManager) handleGossipStatus(payload []byte, manifest string) er
 	log.Printf("Cluster: handleGossipStatus from %v, ordering=%v localHashes=%v statusHashes=%v", status.GetFrom(), ordering, cm.State.AllHashes, status.AllHashes)
 
 	var statePayload []byte
-	var localVersion *VectorClock
+	var localVersion *gproto_cluster.VectorClock
 	var localHashes []string
 	if ordering == ClockAfter || ordering == ClockConcurrent {
 		statePayload, _ = proto.Marshal(cm.State)
@@ -669,7 +670,7 @@ func (cm *ClusterManager) handleGossipStatus(payload []byte, manifest string) er
 			if err != nil {
 				return fmt.Errorf("failed to compress gossip: %w", err)
 			}
-			env := &GossipEnvelope{
+			env := &gproto_cluster.GossipEnvelope{
 				From:             cm.LocalAddress,
 				To:               status.From,
 				SerializedGossip: compressedGossip,
@@ -678,7 +679,7 @@ func (cm *ClusterManager) handleGossipStatus(payload []byte, manifest string) er
 		}
 	} else if ordering == ClockBefore {
 		// Their state is newer, reply with our GossipStatus so they will send us their GossipEnvelope
-		myStatus := &GossipStatus{
+		myStatus := &gproto_cluster.GossipStatus{
 			From:      cm.LocalAddress,
 			AllHashes: localHashes,
 			Version:   localVersion,
@@ -689,7 +690,7 @@ func (cm *ClusterManager) handleGossipStatus(payload []byte, manifest string) er
 	return nil
 }
 
-func (cm *ClusterManager) processIncomingGossip(gossip *Gossip) error {
+func (cm *ClusterManager) processIncomingGossip(gossip *gproto_cluster.Gossip) error {
 	cm.Mu.Lock()
 
 	m1 := cm.vectorClockToMap(cm.State.Version, cm.State.AllHashes)
@@ -734,11 +735,11 @@ func (cm *ClusterManager) processIncomingGossip(gossip *Gossip) error {
 }
 
 // connectToNewMembers must be called with cm.Mu held (read or write).
-func (cm *ClusterManager) connectToNewMembers(gossip *Gossip) {
+func (cm *ClusterManager) connectToNewMembers(gossip *gproto_cluster.Gossip) {
 	localState := cm.State
 
 	for _, m := range gossip.Members {
-		if m.GetStatus() == MemberStatus_Removed || m.GetStatus() == MemberStatus_Down {
+		if m.GetStatus() == gproto_cluster.MemberStatus_Removed || m.GetStatus() == gproto_cluster.MemberStatus_Down {
 			continue
 		}
 
@@ -754,7 +755,7 @@ func (cm *ClusterManager) connectToNewMembers(gossip *Gossip) {
 			addr.GetAddress().GetPort())
 
 		// Sending a GossipStatus to standard cluster path triggers a connection if one doesn't exist
-		status := &GossipStatus{
+		status := &gproto_cluster.GossipStatus{
 			From:      cm.LocalAddress,
 			AllHashes: localState.AllHashes,
 			Version:   localState.Version,
@@ -766,7 +767,7 @@ func (cm *ClusterManager) connectToNewMembers(gossip *Gossip) {
 
 func (cm *ClusterManager) incrementVersionWithLockHeld() {
 	if cm.State.Version == nil {
-		cm.State.Version = &VectorClock{}
+		cm.State.Version = &gproto_cluster.VectorClock{}
 	}
 
 	myHashStr := fmt.Sprintf("%d", cm.LocalHash)
@@ -792,7 +793,7 @@ func (cm *ClusterManager) incrementVersionWithLockHeld() {
 		}
 	}
 	if !found {
-		cm.State.Version.Versions = append(cm.State.Version.Versions, &VectorClock_Version{
+		cm.State.Version.Versions = append(cm.State.Version.Versions, &gproto_cluster.VectorClock_Version{
 			HashIndex: proto.Int32(int32(myIndex)),
 			Timestamp: proto.Int64(1),
 		})
@@ -802,20 +803,20 @@ func (cm *ClusterManager) incrementVersionWithLockHeld() {
 // OldestNode returns the oldest Up/WeaklyUp member, optionally filtered by role.
 // "Oldest" = member with the lowest upNumber (the one that became Up first).
 // This matches Pekko's ClusterSingletonManager oldest-member selection.
-func (cm *ClusterManager) OldestNode(role string) *UniqueAddress {
+func (cm *ClusterManager) OldestNode(role string) *gproto_cluster.UniqueAddress {
 	cm.Mu.RLock()
 	defer cm.Mu.RUnlock()
 
 	type candidate struct {
-		ua       *UniqueAddress
+		ua       *gproto_cluster.UniqueAddress
 		upNumber int32
-		addr     *Address
+		addr     *gproto_cluster.Address
 	}
 	var best *candidate
 
 	for _, m := range cm.State.Members {
 		st := m.GetStatus()
-		if st != MemberStatus_Up && st != MemberStatus_WeaklyUp {
+		if st != gproto_cluster.MemberStatus_Up && st != gproto_cluster.MemberStatus_WeaklyUp {
 			continue
 		}
 		if role != "" {
@@ -855,18 +856,18 @@ func (cm *ClusterManager) OldestNode(role string) *UniqueAddress {
 }
 
 // DetermineLeader selects the leader based on sorted UniqueAddress.
-func (cm *ClusterManager) DetermineLeader() *UniqueAddress {
+func (cm *ClusterManager) DetermineLeader() *gproto_cluster.UniqueAddress {
 	cm.Mu.RLock()
 	defer cm.Mu.RUnlock()
 
 	type memberInfo struct {
-		ua     *UniqueAddress
-		status MemberStatus
+		ua     *gproto_cluster.UniqueAddress
+		status gproto_cluster.MemberStatus
 	}
 	var available []memberInfo
 	for _, m := range cm.State.Members {
 		ua := cm.State.AllAddresses[m.GetAddressIndex()]
-		if m.GetStatus() != MemberStatus_Removed && m.GetStatus() != MemberStatus_Down {
+		if m.GetStatus() != gproto_cluster.MemberStatus_Removed && m.GetStatus() != gproto_cluster.MemberStatus_Down {
 			available = append(available, memberInfo{ua: ua, status: m.GetStatus()})
 		}
 	}
@@ -909,8 +910,8 @@ func (cm *ClusterManager) performLeaderActions() {
 			ua := cm.State.AllAddresses[m.GetAddressIndex()]
 			ma := memberAddressFromUA(ua)
 			switch m.GetStatus() {
-			case MemberStatus_Joining:
-				m.Status = MemberStatus_Up.Enum()
+			case gproto_cluster.MemberStatus_Joining:
+				m.Status = gproto_cluster.MemberStatus_Up.Enum()
 				m.UpNumber = proto.Int32(m.GetUpNumber() + 1)
 				events = append(events, MemberUp{Member: ma})
 				if cm.Metrics != nil {
@@ -918,13 +919,13 @@ func (cm *ClusterManager) performLeaderActions() {
 				}
 				changed = true
 				log.Printf("Leader: transitioned member %d Joining → Up", m.GetAddressIndex())
-			case MemberStatus_Leaving:
-				m.Status = MemberStatus_Exiting.Enum()
+			case gproto_cluster.MemberStatus_Leaving:
+				m.Status = gproto_cluster.MemberStatus_Exiting.Enum()
 				events = append(events, MemberExited{Member: ma})
 				changed = true
 				log.Printf("Leader: transitioned member %d Leaving → Exiting", m.GetAddressIndex())
-			case MemberStatus_Exiting:
-				m.Status = MemberStatus_Removed.Enum()
+			case gproto_cluster.MemberStatus_Exiting:
+				m.Status = gproto_cluster.MemberStatus_Removed.Enum()
 				events = append(events, MemberRemoved{Member: ma})
 				if cm.Metrics != nil {
 					cm.Metrics.IncrementMemberRemoved()
@@ -950,7 +951,7 @@ func (cm *ClusterManager) performLeaderActions() {
 
 func (cm *ClusterManager) CheckReachability() {
 	cm.Mu.Lock()
-	addresses := make([]*UniqueAddress, len(cm.State.AllAddresses))
+	addresses := make([]*gproto_cluster.UniqueAddress, len(cm.State.AllAddresses))
 	copy(addresses, cm.State.AllAddresses)
 	cm.Mu.Unlock()
 
@@ -963,20 +964,20 @@ func (cm *ClusterManager) CheckReachability() {
 			// Mark as UNREACHABLE
 			log.Printf("FailureDetector: node %s is UNREACHABLE (phi=%.2f)", key, phi)
 			cm.Mu.Lock()
-			cm.updateReachability(int32(i), ReachabilityStatus_Unreachable)
+			cm.updateReachability(int32(i), gproto_cluster.ReachabilityStatus_Unreachable)
 			cm.Mu.Unlock()
 		} else if phi < 1.0 {
 			// Mark as REACHABLE if it was previously unreachable
 			cm.Mu.Lock()
-			cm.updateReachability(int32(i), ReachabilityStatus_Reachable)
+			cm.updateReachability(int32(i), gproto_cluster.ReachabilityStatus_Reachable)
 			cm.Mu.Unlock()
 		}
 	}
 }
 
-func (cm *ClusterManager) updateReachability(addrIdx int32, status ReachabilityStatus) {
+func (cm *ClusterManager) updateReachability(addrIdx int32, status gproto_cluster.ReachabilityStatus) {
 	if cm.State.Overview == nil {
-		cm.State.Overview = &GossipOverview{}
+		cm.State.Overview = &gproto_cluster.GossipOverview{}
 	}
 
 	// Build the MemberAddress for event publishing (safe: addrIdx is always valid here).
@@ -997,9 +998,9 @@ func (cm *ClusterManager) updateReachability(addrIdx int32, status ReachabilityS
 						// Fix: use lock-held variant — caller holds cm.Mu (write).
 						cm.incrementVersionWithLockHeld()
 						// publishEvent is safe here: only acquires cm.SubMu, not cm.Mu.
-						if status == ReachabilityStatus_Unreachable {
+						if status == gproto_cluster.ReachabilityStatus_Unreachable {
 							cm.publishEvent(UnreachableMember{Member: ma})
-						} else if oldStatus == ReachabilityStatus_Unreachable {
+						} else if oldStatus == gproto_cluster.ReachabilityStatus_Unreachable {
 							cm.publishEvent(ReachableMember{Member: ma})
 						}
 					}
@@ -1008,13 +1009,13 @@ func (cm *ClusterManager) updateReachability(addrIdx int32, status ReachabilityS
 				}
 			}
 			if !found {
-				r.SubjectReachability = append(r.SubjectReachability, &SubjectReachability{
+				r.SubjectReachability = append(r.SubjectReachability, &gproto_cluster.SubjectReachability{
 					AddressIndex: proto.Int32(addrIdx),
 					Status:       status.Enum(),
 					Version:      proto.Int64(1),
 				})
 				cm.incrementVersionWithLockHeld()
-				if status == ReachabilityStatus_Unreachable {
+				if status == gproto_cluster.ReachabilityStatus_Unreachable {
 					cm.publishEvent(UnreachableMember{Member: ma})
 				}
 			}
@@ -1024,10 +1025,10 @@ func (cm *ClusterManager) updateReachability(addrIdx int32, status ReachabilityS
 	}
 
 	if !found {
-		cm.State.Overview.ObserverReachability = append(cm.State.Overview.ObserverReachability, &ObserverReachability{
+		cm.State.Overview.ObserverReachability = append(cm.State.Overview.ObserverReachability, &gproto_cluster.ObserverReachability{
 			AddressIndex: proto.Int32(0),
 			Version:      proto.Int64(1),
-			SubjectReachability: []*SubjectReachability{
+			SubjectReachability: []*gproto_cluster.SubjectReachability{
 				{
 					AddressIndex: proto.Int32(addrIdx),
 					Status:       status.Enum(),
@@ -1036,7 +1037,7 @@ func (cm *ClusterManager) updateReachability(addrIdx int32, status ReachabilityS
 			},
 		})
 		cm.incrementVersionWithLockHeld()
-		if status == ReachabilityStatus_Unreachable {
+		if status == gproto_cluster.ReachabilityStatus_Unreachable {
 			cm.publishEvent(UnreachableMember{Member: ma})
 		}
 	}
@@ -1067,7 +1068,7 @@ func (cm *ClusterManager) gossipTick() {
 		return
 	}
 
-	status := &GossipStatus{
+	status := &gproto_cluster.GossipStatus{
 		From:      cm.LocalAddress,
 		AllHashes: cm.State.AllHashes,
 		Version:   version,
@@ -1097,14 +1098,14 @@ func (cm *ClusterManager) StartGossipLoop(ctx context.Context) {
 }
 
 // GetState returns the current gossip state.
-func (cm *ClusterManager) GetState() *Gossip {
+func (cm *ClusterManager) GetState() *gproto_cluster.Gossip {
 	cm.Mu.RLock()
 	defer cm.Mu.RUnlock()
 	return cm.State
 }
 
 // StartHeartbeat begins sending Heartbeat messages to a specific node (usually the seed).
-func (cm *ClusterManager) StartHeartbeat(target *Address) {
+func (cm *ClusterManager) StartHeartbeat(target *gproto_cluster.Address) {
 	cm.Mu.Lock()
 	defer cm.Mu.Unlock()
 
@@ -1127,7 +1128,7 @@ func (cm *ClusterManager) StartHeartbeat(target *Address) {
 				return
 			case <-ticker.C:
 				seq++
-				hb := &Heartbeat{
+				hb := &gproto_cluster.Heartbeat{
 					From:       toClusterAddress(cm.LocalAddress.Address),
 					SequenceNr: proto.Int64(seq),
 				}
@@ -1142,7 +1143,7 @@ func (cm *ClusterManager) StartHeartbeat(target *Address) {
 }
 
 // StopHeartbeat stops sending heartbeats to simulate failure.
-func (cm *ClusterManager) StopHeartbeat(target *Address) {
+func (cm *ClusterManager) StopHeartbeat(target *gproto_cluster.Address) {
 	cm.Mu.Lock()
 	defer cm.Mu.Unlock()
 	if cm.CancelHeartbeat != nil {
@@ -1152,7 +1153,7 @@ func (cm *ClusterManager) StopHeartbeat(target *Address) {
 }
 
 // GetLocalAddress returns the local unique address.
-func (cm *ClusterManager) GetLocalAddress() *UniqueAddress {
+func (cm *ClusterManager) GetLocalAddress() *gproto_cluster.UniqueAddress {
 	return cm.LocalAddress
 }
 
@@ -1162,7 +1163,7 @@ func (cm *ClusterManager) GetFailureDetector() *PhiAccrualFailureDetector {
 }
 
 // GetRolesForMember maps the rolesIndexes in a Member to the string roles in the Gossip message.
-func GetRolesForMember(gossip *Gossip, member *Member) []string {
+func GetRolesForMember(gossip *gproto_cluster.Gossip, member *gproto_cluster.Member) []string {
 	var roles []string
 	if gossip == nil || member == nil {
 		return roles
@@ -1207,7 +1208,7 @@ func (cm *ClusterManager) CheckConvergence() bool {
 
 	for _, m := range state.Members {
 		st := m.GetStatus()
-		if st == MemberStatus_Up || st == MemberStatus_Leaving {
+		if st == gproto_cluster.MemberStatus_Up || st == gproto_cluster.MemberStatus_Leaving {
 			if !seenSet[m.GetAddressIndex()] {
 				return false
 			}
@@ -1228,7 +1229,7 @@ func (cm *ClusterManager) IsUp() bool {
 	cm.Mu.RLock()
 	defer cm.Mu.RUnlock()
 	for _, m := range cm.State.GetMembers() {
-		if m.GetStatus() == MemberStatus_Up {
+		if m.GetStatus() == gproto_cluster.MemberStatus_Up {
 			return true
 		}
 	}

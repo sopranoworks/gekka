@@ -11,7 +11,7 @@ package gekka
 import (
 	"testing"
 
-	"gekka/gekka/actor"
+	"gekka/actor"
 
 	hocon "github.com/sopranoworks/gekka-config"
 )

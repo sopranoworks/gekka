@@ -16,7 +16,7 @@ import (
 	"net/http"
 	"time"
 
-	"gekka/gekka/cluster"
+	"gekka/cluster"
 )
 
 // monitoringServer hosts the optional HTTP monitoring endpoints.

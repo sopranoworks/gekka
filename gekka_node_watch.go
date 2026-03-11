@@ -10,7 +10,7 @@ package gekka
 
 import (
 	"fmt"
-	"gekka/gekka/actor"
+	"gekka/actor"
 )
 
 // ── Remote Death Watch ────────────────────────────────────────────────────────

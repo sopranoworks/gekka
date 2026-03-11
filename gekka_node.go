@@ -20,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	"gekka/gekka/actor"
+	"gekka/actor"
 
 	"google.golang.org/protobuf/proto"
 )

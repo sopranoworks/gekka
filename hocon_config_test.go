@@ -11,7 +11,7 @@ package gekka
 import (
 	"testing"
 
-	"gekka/gekka/actor"
+	"gekka/actor"
 )
 
 func TestLoadConfig_Pekko(t *testing.T) {

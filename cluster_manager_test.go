@@ -9,7 +9,7 @@
 package gekka
 
 import (
-	"gekka/gekka/cluster"
+	"gekka/cluster"
 	"testing"
 
 	"google.golang.org/protobuf/proto"

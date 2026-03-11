@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"gekka/gekka/actor"
+	"gekka/actor"
 )
 
 // ── DeploymentToGroupRouter ───────────────────────────────────────────────────

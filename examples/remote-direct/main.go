@@ -9,8 +9,8 @@ import (
 	"syscall"
 	"time"
 
-	"gekka/gekka"
-	"gekka/gekka/actor"
+	"gekka"
+	"gekka/actor"
 )
 
 // EchoActor simply logs received messages and replies to the sender.

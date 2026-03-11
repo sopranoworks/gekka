@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"gekka/gekka/actor"
+	"gekka/actor"
 )
 
 // simpleActor is a minimal actor used in ActorSystem tests.

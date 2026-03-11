@@ -16,7 +16,7 @@ import (
 	"fmt"
 	"reflect"
 
-	"gekka/gekka/cluster"
+	"gekka/cluster"
 )
 
 // ── Event types ───────────────────────────────────────────────────────────────

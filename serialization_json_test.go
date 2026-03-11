@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"gekka/gekka/actor"
+	"gekka/actor"
 )
 
 // ── shared domain types ────────────────────────────────────────────────────────

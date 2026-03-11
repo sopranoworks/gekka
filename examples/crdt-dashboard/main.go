@@ -32,7 +32,7 @@ import (
 	"syscall"
 	"time"
 
-	"gekka/gekka"
+	"gekka"
 )
 
 const (

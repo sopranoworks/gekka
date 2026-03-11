@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"testing"
 
-	"gekka/gekka/cluster"
+	"gekka/cluster"
 
 	"google.golang.org/protobuf/proto"
 )

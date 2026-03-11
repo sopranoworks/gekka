@@ -11,7 +11,7 @@ package gekka
 import (
 	"context"
 	"fmt"
-	"gekka/gekka/cluster"
+	"gekka/cluster"
 	"log"
 	"net"
 	"testing"

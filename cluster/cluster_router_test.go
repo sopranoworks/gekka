@@ -12,11 +12,12 @@ import (
 	"fmt"
 	"testing"
 
+	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 	"google.golang.org/protobuf/proto"
 )
 
-func newUniqueAddress(addr *Address, uid uint64) *UniqueAddress {
-	return &UniqueAddress{
+func newUniqueAddress(addr *gproto_cluster.Address, uid uint64) *gproto_cluster.UniqueAddress {
+	return &gproto_cluster.UniqueAddress{
 		Address: addr,
 		Uid:     proto.Uint32(uint32(uid & 0xFFFFFFFF)),
 		Uid2:    proto.Uint32(uint32(uid >> 32)),
@@ -25,26 +26,26 @@ func newUniqueAddress(addr *Address, uid uint64) *UniqueAddress {
 
 func TestClusterRouter_RoundRobinSelection(t *testing.T) {
 	// 1. Setup Cluster State with 3 UP nodes
-	localAddr := &Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2590), System: proto.String("sys"), Protocol: proto.String("pekko")}
-	localUA := &UniqueAddress{Address: localAddr, Uid: proto.Uint32(1), Uid2: proto.Uint32(0)}
+	localAddr := &gproto_cluster.Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2590), System: proto.String("sys"), Protocol: proto.String("pekko")}
+	localUA := &gproto_cluster.UniqueAddress{Address: localAddr, Uid: proto.Uint32(1), Uid2: proto.Uint32(0)}
 
 	cm := NewClusterManager(localUA, nil)
 	
 	// Prepare state
 	cm.Mu.Lock()
-	cm.State.Members[0].Status = MemberStatus_Up.Enum()
+	cm.State.Members[0].Status = gproto_cluster.MemberStatus_Up.Enum()
 	
 	cm.State.AllAddresses = append(cm.State.AllAddresses,
-		newUniqueAddress(&Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2591), System: proto.String("sys"), Protocol: proto.String("pekko")}, 2),
-		newUniqueAddress(&Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2592), System: proto.String("sys"), Protocol: proto.String("pekko")}, 3))
+		newUniqueAddress(&gproto_cluster.Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2591), System: proto.String("sys"), Protocol: proto.String("pekko")}, 2),
+		newUniqueAddress(&gproto_cluster.Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2592), System: proto.String("sys"), Protocol: proto.String("pekko")}, 3))
 
 	cm.State.Members = append(cm.State.Members,
-		&Member{AddressIndex: proto.Int32(1), Status: MemberStatus_Up.Enum()},
-		&Member{AddressIndex: proto.Int32(2), Status: MemberStatus_Up.Enum()})
+		&gproto_cluster.Member{AddressIndex: proto.Int32(1), Status: gproto_cluster.MemberStatus_Up.Enum()},
+		&gproto_cluster.Member{AddressIndex: proto.Int32(2), Status: gproto_cluster.MemberStatus_Up.Enum()})
 	cm.Mu.Unlock()
 
 	router := NewClusterRouter(cm, nil)
-	settings := &ClusterRouterPoolSettings{
+	settings := &gproto_cluster.ClusterRouterPoolSettings{
 		TotalInstances:    proto.Uint32(10),
 		AllowLocalRoutees: proto.Bool(true),
 	}
@@ -79,22 +80,22 @@ func TestClusterRouter_RoundRobinSelection(t *testing.T) {
 }
 
 func TestClusterRouter_HealthFiltering(t *testing.T) {
-	localAddr := &Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2600), System: proto.String("sys"), Protocol: proto.String("pekko")}
-	localUA := &UniqueAddress{Address: localAddr, Uid: proto.Uint32(1), Uid2: proto.Uint32(0)}
+	localAddr := &gproto_cluster.Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2600), System: proto.String("sys"), Protocol: proto.String("pekko")}
+	localUA := &gproto_cluster.UniqueAddress{Address: localAddr, Uid: proto.Uint32(1), Uid2: proto.Uint32(0)}
 	cm := NewClusterManager(localUA, nil)
 	
 	cm.Mu.Lock()
-	cm.State.Members[0].Status = MemberStatus_Up.Enum()
+	cm.State.Members[0].Status = gproto_cluster.MemberStatus_Up.Enum()
 	
 	// Add a remote node but don't give it heartbeats
 	cm.State.AllAddresses = append(cm.State.AllAddresses,
-		newUniqueAddress(&Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2601), System: proto.String("sys"), Protocol: proto.String("pekko")}, 2))
+		newUniqueAddress(&gproto_cluster.Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2601), System: proto.String("sys"), Protocol: proto.String("pekko")}, 2))
 	cm.State.Members = append(cm.State.Members,
-		&Member{AddressIndex: proto.Int32(1), Status: MemberStatus_Up.Enum()})
+		&gproto_cluster.Member{AddressIndex: proto.Int32(1), Status: gproto_cluster.MemberStatus_Up.Enum()})
 	cm.Mu.Unlock()
 
 	router := NewClusterRouter(cm, nil)
-	settings := &ClusterRouterPoolSettings{
+	settings := &gproto_cluster.ClusterRouterPoolSettings{
 		AllowLocalRoutees: proto.Bool(false), // Only remote
 	}
 
@@ -120,12 +121,12 @@ func TestClusterRouter_HealthFiltering(t *testing.T) {
 }
 
 func TestClusterRouter_LocalAffinity(t *testing.T) {
-	localAddr := &Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2610), System: proto.String("sys"), Protocol: proto.String("pekko")}
-	localUA := &UniqueAddress{Address: localAddr, Uid: proto.Uint32(1), Uid2: proto.Uint32(0)}
+	localAddr := &gproto_cluster.Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2610), System: proto.String("sys"), Protocol: proto.String("pekko")}
+	localUA := &gproto_cluster.UniqueAddress{Address: localAddr, Uid: proto.Uint32(1), Uid2: proto.Uint32(0)}
 	cm := NewClusterManager(localUA, nil)
 	
 	cm.Mu.Lock()
-	cm.State.Members[0].Status = MemberStatus_Up.Enum()
+	cm.State.Members[0].Status = gproto_cluster.MemberStatus_Up.Enum()
 	cm.Mu.Unlock()
 
 	// Make local healthy
@@ -137,7 +138,7 @@ func TestClusterRouter_LocalAffinity(t *testing.T) {
 	router := NewClusterRouter(cm, nil)
 
 	// Exclude local
-	settingsNoLocal := &ClusterRouterPoolSettings{
+	settingsNoLocal := &gproto_cluster.ClusterRouterPoolSettings{
 		AllowLocalRoutees: proto.Bool(false),
 	}
 	_, err := router.SelectRoutee(settingsNoLocal)
@@ -146,7 +147,7 @@ func TestClusterRouter_LocalAffinity(t *testing.T) {
 	}
 
 	// Include local
-	settingsWithLocal := &ClusterRouterPoolSettings{
+	settingsWithLocal := &gproto_cluster.ClusterRouterPoolSettings{
 		AllowLocalRoutees: proto.Bool(true),
 	}
 	ua, err := router.SelectRoutee(settingsWithLocal)
@@ -159,25 +160,25 @@ func TestClusterRouter_LocalAffinity(t *testing.T) {
 }
 
 func TestClusterRouter_RoleFiltering(t *testing.T) {
-	localAddr := &Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2620), System: proto.String("sys"), Protocol: proto.String("pekko")}
-	localUA := &UniqueAddress{Address: localAddr, Uid: proto.Uint32(1), Uid2: proto.Uint32(0)}
+	localAddr := &gproto_cluster.Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2620), System: proto.String("sys"), Protocol: proto.String("pekko")}
+	localUA := &gproto_cluster.UniqueAddress{Address: localAddr, Uid: proto.Uint32(1), Uid2: proto.Uint32(0)}
 	cm := NewClusterManager(localUA, nil)
 	
 	cm.Mu.Lock()
 	cm.State.AllRoles = []string{"compute", "storage"}
-	cm.State.Members[0].Status = MemberStatus_Up.Enum()
+	cm.State.Members[0].Status = gproto_cluster.MemberStatus_Up.Enum()
 	
 	// Add node 1 (compute)
 	cm.State.AllAddresses = append(cm.State.AllAddresses,
-		newUniqueAddress(&Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2621), System: proto.String("sys"), Protocol: proto.String("pekko")}, 2))
+		newUniqueAddress(&gproto_cluster.Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2621), System: proto.String("sys"), Protocol: proto.String("pekko")}, 2))
 	cm.State.Members = append(cm.State.Members,
-		&Member{AddressIndex: proto.Int32(1), Status: MemberStatus_Up.Enum(), RolesIndexes: []int32{0}})
+		&gproto_cluster.Member{AddressIndex: proto.Int32(1), Status: gproto_cluster.MemberStatus_Up.Enum(), RolesIndexes: []int32{0}})
 
 	// Add node 2 (storage)
 	cm.State.AllAddresses = append(cm.State.AllAddresses,
-		newUniqueAddress(&Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2622), System: proto.String("sys"), Protocol: proto.String("pekko")}, 3))
+		newUniqueAddress(&gproto_cluster.Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2622), System: proto.String("sys"), Protocol: proto.String("pekko")}, 3))
 	cm.State.Members = append(cm.State.Members,
-		&Member{AddressIndex: proto.Int32(2), Status: MemberStatus_Up.Enum(), RolesIndexes: []int32{1}})
+		&gproto_cluster.Member{AddressIndex: proto.Int32(2), Status: gproto_cluster.MemberStatus_Up.Enum(), RolesIndexes: []int32{1}})
 	cm.Mu.Unlock()
 
 	// Make them healthy
@@ -192,7 +193,7 @@ func TestClusterRouter_RoleFiltering(t *testing.T) {
 	router := NewClusterRouter(cm, nil)
 
 	// Test filtering for "storage"
-	settingsStorage := &ClusterRouterPoolSettings{
+	settingsStorage := &gproto_cluster.ClusterRouterPoolSettings{
 		UseRoles:          []string{"storage"},
 		AllowLocalRoutees: proto.Bool(false),
 	}
@@ -205,7 +206,7 @@ func TestClusterRouter_RoleFiltering(t *testing.T) {
 	}
 
 	// Test filtering for "compute"
-	settingsCompute := &ClusterRouterPoolSettings{
+	settingsCompute := &gproto_cluster.ClusterRouterPoolSettings{
 		UseRoles:          []string{"compute"},
 		AllowLocalRoutees: proto.Bool(false),
 	}

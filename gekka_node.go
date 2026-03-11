@@ -22,6 +22,8 @@ import (
 
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/cluster"
+	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
+	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 
 	"google.golang.org/protobuf/proto"
 )
@@ -180,8 +182,8 @@ type GekkaNode struct {
 	server     *TcpServer
 	ctx        context.Context
 	cancel     context.CancelFunc
-	localAddr  *Address
-	seedAddr   *Address        // set by the first Join call
+	localAddr  *gproto_remote.Address
+	seedAddr   *gproto_remote.Address // set by the first Join call
 	seeds      []actor.Address // from NodeConfig.SeedNodes (populated by LoadConfig)
 	metrics    *NodeMetrics
 	monitoring *monitoringServer // nil when monitoring is disabled
@@ -212,14 +214,14 @@ type GekkaNode struct {
 func Spawn(cfg NodeConfig) (*GekkaNode, error) {
 	scheme, system, host, port := cfg.resolve()
 
-	localAddr := &Address{
+	localAddr := &gproto_remote.Address{
 		Protocol: &scheme,
 		System:   proto.String(system),
 		Hostname: proto.String(host),
 		Port:     proto.Uint32(port),
 	}
 	uid := uint64(time.Now().UnixNano())
-	localUA := &UniqueAddress{
+	localUA := &gproto_remote.UniqueAddress{
 		Address: localAddr,
 		Uid:     proto.Uint64(uid),
 	}
@@ -266,11 +268,11 @@ func Spawn(cfg NodeConfig) (*GekkaNode, error) {
 			nm.localAddress = localAddr
 			clUA := toClusterUniqueAddress(localUA)
 			cm.LocalAddress = clUA
-			cm.State.AllAddresses = []*cluster.UniqueAddress{clUA}
-			cm.State.Members = []*cluster.Member{
+			cm.State.AllAddresses = []*gproto_cluster.UniqueAddress{clUA}
+			cm.State.Members = []*gproto_cluster.Member{
 				{
 					AddressIndex: proto.Int32(0),
-					Status:       cluster.MemberStatus_Joining.Enum(),
+					Status:       gproto_cluster.MemberStatus_Joining.Enum(),
 					UpNumber:     proto.Int32(0),
 				},
 			}
@@ -599,7 +601,7 @@ func (n *GekkaNode) Ask(ctx context.Context, dst interface{}, msg interface{}) (
 // asynchronously. Use WaitForHandshake to confirm the TCP association is up.
 func (n *GekkaNode) Join(seedHost string, seedPort uint32) error {
 	scheme := n.localAddr.GetProtocol() // "pekko" or "akka"
-	n.seedAddr = &Address{
+	n.seedAddr = &gproto_remote.Address{
 		Protocol: &scheme,
 		System:   proto.String(n.localAddr.GetSystem()),
 		Hostname: proto.String(seedHost),

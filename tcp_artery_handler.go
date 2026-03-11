@@ -16,6 +16,7 @@ import (
 	"log"
 	"net"
 
+	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -26,13 +27,13 @@ const (
 
 // ArteryMetadata holds decoded information from an Artery envelope.
 type ArteryMetadata struct {
-	Sender              *ActorRefData
-	Recipient           *ActorRefData
+	Sender              *gproto_remote.ActorRefData
+	Recipient           *gproto_remote.ActorRefData
 	SeqNo               uint64
 	SerializerId        int32
 	MessageManifest     []byte
 	Payload             []byte
-	AckReplyTo          *UniqueAddress // Only for SystemMessageEnvelope
+	AckReplyTo          *gproto_remote.UniqueAddress // Only for SystemMessageEnvelope
 	DeserializedMessage interface{}
 }
 
@@ -143,7 +144,7 @@ func SendArteryMessage(conn net.Conn, localUid int64, serializerId int32, manife
 }
 
 // SendArteryMessageWithAck marshals the message and sends it as a proper Artery binary frame.
-func SendArteryMessageWithAck(conn net.Conn, localUid int64, serializerId int32, manifest string, message proto.Message, sender *UniqueAddress, control bool) error {
+func SendArteryMessageWithAck(conn net.Conn, localUid int64, serializerId int32, manifest string, message proto.Message, sender *gproto_remote.UniqueAddress, control bool) error {
 	msgPayload, err := proto.Marshal(message)
 	if err != nil {
 		return fmt.Errorf("failed to marshal artery message: %w", err)
@@ -166,15 +167,15 @@ func SendArteryMessageWithAck(conn net.Conn, localUid int64, serializerId int32,
 }
 
 // BuildRemoteEnvelope constructs a 3-layer remote envelope for actor messages.
-func BuildRemoteEnvelope(recipient string, message []byte, serializerId int32, manifest string, seq uint64, sender *UniqueAddress) ([]byte, error) {
-	serMsg := &SerializedMessage{
+func BuildRemoteEnvelope(recipient string, message []byte, serializerId int32, manifest string, seq uint64, sender *gproto_remote.UniqueAddress) ([]byte, error) {
+	serMsg := &gproto_remote.SerializedMessage{
 		Message:         message,
 		SerializerId:    proto.Int32(serializerId),
 		MessageManifest: []byte(manifest),
 	}
 
-	env := &RemoteEnvelope{
-		Recipient: &ActorRefData{Path: proto.String(recipient)},
+	env := &gproto_remote.RemoteEnvelope{
+		Recipient: &gproto_remote.ActorRefData{Path: proto.String(recipient)},
 		Message:   serMsg,
 		Seq:       proto.Uint64(seq),
 	}
@@ -182,14 +183,14 @@ func BuildRemoteEnvelope(recipient string, message []byte, serializerId int32, m
 	if sender != nil {
 		// Artery uses ActorRefData for sender in RemoteEnvelope, but it often contains UniqueAddress logic.
 		// For simplicity, we just put the path if available or a dummy.
-		env.Sender = &ActorRefData{Path: proto.String(sender.GetAddress().GetHostname())}
+		env.Sender = &gproto_remote.ActorRefData{Path: proto.String(sender.GetAddress().GetHostname())}
 	}
 	return proto.Marshal(env)
 }
 
 // BuildSystemEnvelope constructs a system message envelope with a sequence number and optional ack reply.
-func BuildSystemEnvelope(message []byte, serializerId int32, manifest string, seqNo uint64, ackReplyTo *UniqueAddress) ([]byte, error) {
-	env := &SystemMessageEnvelope{
+func BuildSystemEnvelope(message []byte, serializerId int32, manifest string, seqNo uint64, ackReplyTo *gproto_remote.UniqueAddress) ([]byte, error) {
+	env := &gproto_remote.SystemMessageEnvelope{
 		Message:         message,
 		SerializerId:    proto.Int32(serializerId),
 		MessageManifest: []byte(manifest),

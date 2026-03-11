@@ -15,7 +15,7 @@
 // 	protoc        v5.29.3
 // source: SystemMessageFormats.proto
 
-package gekka
+package remote
 
 import (
 	reflect "reflect"

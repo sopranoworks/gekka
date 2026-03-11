@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -52,7 +53,7 @@ func TestRouter_Send_AutoDial(t *testing.T) {
 	}
 	defer ln.Close()
 
-	remoteLocalAddr := &Address{
+	remoteLocalAddr := &gproto_remote.Address{
 		Protocol: proto.String("pekko"),
 		System:   proto.String("remoteSystem"),
 		Hostname: proto.String("127.0.0.1"),
@@ -72,7 +73,7 @@ func TestRouter_Send_AutoDial(t *testing.T) {
 	}()
 
 	// 2. Setup Local Router
-	localAddr := &Address{
+	localAddr := &gproto_remote.Address{
 		Protocol: proto.String("pekko"),
 		System:   proto.String("localSystem"),
 		Hostname: proto.String("127.0.0.1"),
@@ -85,7 +86,7 @@ func TestRouter_Send_AutoDial(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	msg := &ArteryHeartbeatRsp{Uid: proto.Uint64(123)}
+	msg := &gproto_remote.ArteryHeartbeatRsp{Uid: proto.Uint64(123)}
 	if err := router.Send(ctx, "pekko://remoteSystem@127.0.0.1:2553/user/receiver", msg); err != nil {
 		t.Fatalf("Router.Send failed: %v", err)
 	}
@@ -114,13 +115,13 @@ func TestRouter_Buffering(t *testing.T) {
 	defer client.Close()
 	defer server.Close()
 
-	remoteAddr := &Address{
+	remoteAddr := &gproto_remote.Address{
 		Protocol: proto.String("pekko"),
 		System:   proto.String("remoteSystem"),
 		Hostname: proto.String("10.0.0.1"),
 		Port:     proto.Uint32(2552),
 	}
-	nm := NewNodeManager(&Address{Hostname: proto.String("127.0.0.1")}, 0)
+	nm := NewNodeManager(&gproto_remote.Address{Hostname: proto.String("127.0.0.1")}, 0)
 
 	// Build a fully-initialised outbound association that is registered in nm.
 	assoc := &GekkaAssociation{
@@ -131,7 +132,7 @@ func TestRouter_Buffering(t *testing.T) {
 		pending:   make([][]byte, 0),
 		handshake: make(chan struct{}),
 		outbox:    make(chan []byte, 100),
-		remote: &UniqueAddress{
+		remote: &gproto_remote.UniqueAddress{
 			Address: remoteAddr,
 			Uid:     proto.Uint64(0),
 		},
@@ -167,8 +168,8 @@ func TestRouter_Buffering(t *testing.T) {
 	}
 
 	// Complete handshake: mwa.Address matches assoc.remote (host/port).
-	mwa := &MessageWithAddress{
-		Address: &UniqueAddress{
+	mwa := &gproto_remote.MessageWithAddress{
+		Address: &gproto_remote.UniqueAddress{
 			Address: remoteAddr,
 			Uid:     proto.Uint64(1),
 		},

@@ -13,6 +13,7 @@ import (
 	"encoding/binary"
 	"testing"
 
+	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -23,8 +24,8 @@ func TestBuildRemoteEnvelope_Nesting(t *testing.T) {
 	manifest := "UserManifest"
 
 	seq := uint64(42)
-	sender := &UniqueAddress{
-		Address: &Address{Hostname: proto.String("localhost")},
+	sender := &gproto_remote.UniqueAddress{
+		Address: &gproto_remote.Address{Hostname: proto.String("localhost")},
 		Uid:     proto.Uint64(1),
 	}
 	envBytes, err := BuildRemoteEnvelope(recipient, payload, serializerId, manifest, seq, sender)
@@ -32,7 +33,7 @@ func TestBuildRemoteEnvelope_Nesting(t *testing.T) {
 		t.Fatalf("failed to build remote envelope: %v", err)
 	}
 
-	env := &RemoteEnvelope{}
+	env := &gproto_remote.RemoteEnvelope{}
 	if err := proto.Unmarshal(envBytes, env); err != nil {
 		t.Fatalf("failed to unmarshal RemoteEnvelope: %v", err)
 	}
@@ -60,8 +61,8 @@ func TestBuildSystemEnvelope_Reliability(t *testing.T) {
 	serializerId := int32(13)
 	manifest := "SystemMessage"
 	seqNo := uint64(12345)
-	ackReplyTo := &UniqueAddress{
-		Address: &Address{
+	ackReplyTo := &gproto_remote.UniqueAddress{
+		Address: &gproto_remote.Address{
 			Protocol: proto.String("pekko"),
 			System:   proto.String("sys"),
 			Hostname: proto.String("localhost"),
@@ -75,7 +76,7 @@ func TestBuildSystemEnvelope_Reliability(t *testing.T) {
 		t.Fatalf("failed to build system envelope: %v", err)
 	}
 
-	env := &SystemMessageEnvelope{}
+	env := &gproto_remote.SystemMessageEnvelope{}
 	if err := proto.Unmarshal(envBytes, env); err != nil {
 		t.Fatalf("failed to unmarshal SystemMessageEnvelope: %v", err)
 	}

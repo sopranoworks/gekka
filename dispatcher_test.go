@@ -16,11 +16,12 @@ import (
 	"testing"
 	"time"
 
+	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 	"google.golang.org/protobuf/proto"
 )
 
 func TestNodeRegistry_UIDRestart(t *testing.T) {
-	localAddr := &Address{
+	localAddr := &gproto_remote.Address{
 		Protocol: proto.String("pekko"),
 		System:   proto.String("localSystem"),
 		Hostname: proto.String("127.0.0.1"),
@@ -28,8 +29,8 @@ func TestNodeRegistry_UIDRestart(t *testing.T) {
 	}
 	nm := NewNodeManager(localAddr, 0)
 
-	remoteUA1 := &UniqueAddress{
-		Address: &Address{
+	remoteUA1 := &gproto_remote.UniqueAddress{
+		Address: &gproto_remote.Address{
 			Protocol: proto.String("pekko"),
 			System:   proto.String("remoteSystem"),
 			Hostname: proto.String("10.0.0.1"),
@@ -37,8 +38,8 @@ func TestNodeRegistry_UIDRestart(t *testing.T) {
 		},
 		Uid: proto.Uint64(1),
 	}
-	remoteUA2 := &UniqueAddress{
-		Address: &Address{
+	remoteUA2 := &gproto_remote.UniqueAddress{
+		Address: &gproto_remote.Address{
 			Protocol: proto.String("pekko"),
 			System:   proto.String("remoteSystem"),
 			Hostname: proto.String("10.0.0.1"),
@@ -80,7 +81,7 @@ func TestDispatcher_AutoACK(t *testing.T) {
 	defer client.Close()
 	defer server.Close()
 
-	localAddr := &Address{
+	localAddr := &gproto_remote.Address{
 		Protocol: proto.String("pekko"),
 		System:   proto.String("localSystem"),
 		Hostname: proto.String("127.0.0.1"),
@@ -88,8 +89,8 @@ func TestDispatcher_AutoACK(t *testing.T) {
 	}
 	nm := NewNodeManager(localAddr, 0)
 
-	remoteUA := &UniqueAddress{
-		Address: &Address{
+	remoteUA := &gproto_remote.UniqueAddress{
+		Address: &gproto_remote.Address{
 			Protocol: proto.String("pekko"),
 			System:   proto.String("remoteSystem"),
 			Hostname: proto.String("10.0.0.1"),
@@ -114,9 +115,9 @@ func TestDispatcher_AutoACK(t *testing.T) {
 
 	// Build a SystemMessageEnvelope (SeqNo=42 requires an ACK) and wrap it in
 	// a proper Artery binary frame with manifest "SystemMessage".
-	sm := &SystemMessage{Type: SystemMessage_WATCH.Enum()}
+	sm := &gproto_remote.SystemMessage{Type: gproto_remote.SystemMessage_WATCH.Enum()}
 	smBytes, _ := proto.Marshal(sm)
-	env := &SystemMessageEnvelope{
+	env := &gproto_remote.SystemMessageEnvelope{
 		Message:         smBytes,
 		SerializerId:    proto.Int32(ArteryInternalSerializerID),
 		SeqNo:           proto.Uint64(42),
@@ -152,7 +153,7 @@ func TestDispatcher_AutoACK(t *testing.T) {
 		t.Errorf("expected SystemMessageDeliveryAck manifest, got %q", string(ackMeta.MessageManifest))
 	}
 
-	ackBody := &SystemMessageDeliveryAck{}
+	ackBody := &gproto_remote.SystemMessageDeliveryAck{}
 	if err := proto.Unmarshal(ackMeta.Payload, ackBody); err != nil {
 		t.Fatalf("unmarshal SystemMessageDeliveryAck: %v", err)
 	}
@@ -166,7 +167,7 @@ func TestDispatcher_Heuristic(t *testing.T) {
 	defer client.Close()
 	defer server.Close()
 
-	nm := NewNodeManager(&Address{
+	nm := NewNodeManager(&gproto_remote.Address{
 		Protocol: proto.String("pekko"),
 		System:   proto.String("localSystem"),
 		Hostname: proto.String("127.0.0.1"),
@@ -184,9 +185,9 @@ func TestDispatcher_Heuristic(t *testing.T) {
 	}()
 
 	// Send HeartbeatRsp without manifest
-	hb := &ArteryHeartbeatRsp{Uid: proto.Uint64(999)}
+	hb := &gproto_remote.ArteryHeartbeatRsp{Uid: proto.Uint64(999)}
 	payload, _ := proto.Marshal(hb)
-	env := &SystemMessageEnvelope{
+	env := &gproto_remote.SystemMessageEnvelope{
 		Message:      payload,
 		SerializerId: proto.Int32(ArteryInternalSerializerID),
 		// No manifest

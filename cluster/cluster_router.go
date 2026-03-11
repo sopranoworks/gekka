@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 
 	"github.com/sopranoworks/gekka/actor"
+	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 
 	"google.golang.org/protobuf/proto"
 )
@@ -42,18 +43,18 @@ func NewClusterRouter(cm *ClusterManager, router Router) *ClusterRouter {
 }
 
 // SelectRoutee selects a node using role filtering, status, and reachability.
-func (cr *ClusterRouter) SelectRoutee(settings *ClusterRouterPoolSettings) (*UniqueAddress, error) {
+func (cr *ClusterRouter) SelectRoutee(settings *gproto_cluster.ClusterRouterPoolSettings) (*gproto_cluster.UniqueAddress, error) {
 	state := cr.cm.GetState()
 	localUA := cr.cm.GetLocalAddress()
 
-	var candidates []*UniqueAddress
+	var candidates []*gproto_cluster.UniqueAddress
 
 	// 1. Get Reachability Map
 	unreachable := make(map[int32]bool)
 	if state.Overview != nil {
 		for _, or := range state.Overview.ObserverReachability {
 			for _, sr := range or.SubjectReachability {
-				if sr.GetStatus() == ReachabilityStatus_Unreachable {
+				if sr.GetStatus() == gproto_cluster.ReachabilityStatus_Unreachable {
 					unreachable[sr.GetAddressIndex()] = true
 				}
 			}
@@ -62,7 +63,7 @@ func (cr *ClusterRouter) SelectRoutee(settings *ClusterRouterPoolSettings) (*Uni
 
 	for _, m := range state.Members {
 		// 2. Must be UP
-		if m.GetStatus() != MemberStatus_Up {
+		if m.GetStatus() != gproto_cluster.MemberStatus_Up {
 			continue
 		}
 
@@ -101,7 +102,7 @@ func (cr *ClusterRouter) SelectRoutee(settings *ClusterRouterPoolSettings) (*Uni
 	return candidates[idx], nil
 }
 
-func (cr *ClusterRouter) hasRequiredRoles(m *Member, state *Gossip, required []string) bool {
+func (cr *ClusterRouter) hasRequiredRoles(m *gproto_cluster.Member, state *gproto_cluster.Gossip, required []string) bool {
 	if len(required) == 0 {
 		return true
 	}
@@ -123,7 +124,7 @@ func (cr *ClusterRouter) hasRequiredRoles(m *Member, state *Gossip, required []s
 }
 
 // Route selects a node and sends the message (Pekko-style actor routing).
-func (cr *ClusterRouter) Route(ctx context.Context, relativePath string, serializerID int32, manifest string, msg proto.Message, settings *ClusterRouterPoolSettings) error {
+func (cr *ClusterRouter) Route(ctx context.Context, relativePath string, serializerID int32, manifest string, msg proto.Message, settings *gproto_cluster.ClusterRouterPoolSettings) error {
 	ua, err := cr.SelectRoutee(settings)
 	if err != nil {
 		return err
@@ -184,7 +185,7 @@ func (r *ClusterPoolRouter) refreshRoutees() {
 	// Find nodes matching role
 	var eligibleNodes []MemberAddress
 	for _, m := range state.Members {
-		if m.GetStatus() != MemberStatus_Up {
+		if m.GetStatus() != gproto_cluster.MemberStatus_Up {
 			continue
 		}
 		ua := state.AllAddresses[m.GetAddressIndex()]
@@ -331,7 +332,7 @@ func (r *ClusterGroupRouter) refreshRoutees() {
 	}
 
 	for _, m := range state.Members {
-		if m.GetStatus() != MemberStatus_Up {
+		if m.GetStatus() != gproto_cluster.MemberStatus_Up {
 			continue
 		}
 		ua := state.AllAddresses[m.GetAddressIndex()]

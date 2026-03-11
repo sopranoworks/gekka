@@ -6,17 +6,13 @@
  * SPDX-License-Identifier: MIT
  */
 
-package gekka
-
-// Package-level cluster event types and the subscriber management methods
-// for ClusterManager.  The struct fields (subMu, subs) are declared in
-// cluster_manager.go alongside the rest of the ClusterManager definition.
+package cluster
 
 import (
 	"fmt"
 	"reflect"
 
-	"gekka/cluster"
+	"github.com/sopranoworks/gekka/actor"
 )
 
 // ── Event types ───────────────────────────────────────────────────────────────
@@ -66,7 +62,7 @@ type MemberLeft struct{ Member MemberAddress }
 // and transitions to Exiting status.
 type MemberExited struct{ Member MemberAddress }
 
-// MemberRemoved is published when a member is fully evicted from the cluster.
+// MemberRemoved is published when a member is fully evicted from the
 // After this event the member's address may be reused by a new node.
 type MemberRemoved struct{ Member MemberAddress }
 
@@ -103,15 +99,15 @@ var (
 
 // eventSubscriber is an internal record for one registered subscriber.
 type eventSubscriber struct {
-	ref   ActorRef
+	ref   actor.Ref
 	types map[reflect.Type]struct{} // nil = subscribe to all event types
 }
 
-// Subscribe registers an ActorRef to receive cluster domain events.
+// Subscribe registers an actor.Ref to receive cluster domain events.
 //
 // Pass Event* values to receive only specific types; omit types to subscribe
 // to every ClusterDomainEvent.
-func (cm *ClusterManager) Subscribe(ref ActorRef, types ...reflect.Type) {
+func (cm *ClusterManager) Subscribe(ref actor.Ref, types ...reflect.Type) {
 	var typeSet map[reflect.Type]struct{}
 	if len(types) > 0 {
 		typeSet = make(map[reflect.Type]struct{}, len(types))
@@ -119,32 +115,32 @@ func (cm *ClusterManager) Subscribe(ref ActorRef, types ...reflect.Type) {
 			typeSet[t] = struct{}{}
 		}
 	}
-	cm.subMu.Lock()
-	cm.subs = append(cm.subs, eventSubscriber{ref: ref, types: typeSet})
-	cm.subMu.Unlock()
+	cm.SubMu.Lock()
+	cm.Subs = append(cm.Subs, eventSubscriber{ref: ref, types: typeSet})
+	cm.SubMu.Unlock()
 }
 
 // Unsubscribe removes the actor from the subscriber list. Safe to call even when
 // the actor was never subscribed or has already been unsubscribed.
-func (cm *ClusterManager) Unsubscribe(ref ActorRef) {
-	cm.subMu.Lock()
-	defer cm.subMu.Unlock()
-	kept := cm.subs[:0]
-	for _, s := range cm.subs {
+func (cm *ClusterManager) Unsubscribe(ref actor.Ref) {
+	cm.SubMu.Lock()
+	defer cm.SubMu.Unlock()
+	kept := cm.Subs[:0]
+	for _, s := range cm.Subs {
 		if s.ref.Path() != ref.Path() {
 			kept = append(kept, s)
 		}
 	}
-	cm.subs = kept
+	cm.Subs = kept
 }
 
 // publishEvent delivers evt to all matching subscribers.
 //
-// Safe to call while holding cm.mu because it only acquires cm.subMu (a separate lock).
+// Safe to call while holding cm.Mu because it only acquires cm.SubMu (a separate lock).
 func (cm *ClusterManager) publishEvent(evt ClusterDomainEvent) {
-	cm.subMu.RLock()
-	subs := append([]eventSubscriber(nil), cm.subs...)
-	cm.subMu.RUnlock()
+	cm.SubMu.RLock()
+	subs := append([]eventSubscriber(nil), cm.Subs...)
+	cm.SubMu.RUnlock()
 
 	evtType := reflect.TypeOf(evt)
 	for _, s := range subs {
@@ -162,14 +158,14 @@ func (cm *ClusterManager) publishEvent(evt ClusterDomainEvent) {
 // diffGossipMembers computes the ClusterDomainEvents implied by member status
 // changes between oldState and newState.  Called by processIncomingGossip to
 // emit events for transitions that Pekko's remote leader already performed.
-func diffGossipMembers(oldState, newState *cluster.Gossip) []ClusterDomainEvent {
+func diffGossipMembers(oldState, newState *Gossip) []ClusterDomainEvent {
 	type key struct {
 		host string
 		port uint32
 	}
 
 	// Build a snapshot of the old member statuses.
-	old := make(map[key]cluster.MemberStatus)
+	old := make(map[key]MemberStatus)
 	if oldState != nil {
 		for _, m := range oldState.Members {
 			a := oldState.AllAddresses[m.GetAddressIndex()].GetAddress()
@@ -189,21 +185,21 @@ func diffGossipMembers(oldState, newState *cluster.Gossip) []ClusterDomainEvent 
 		}
 		ma := memberAddressFromUA(ua)
 		switch newSt {
-		case cluster.MemberStatus_Up:
+		case MemberStatus_Up:
 			events = append(events, MemberUp{Member: ma})
-		case cluster.MemberStatus_Leaving:
+		case MemberStatus_Leaving:
 			events = append(events, MemberLeft{Member: ma})
-		case cluster.MemberStatus_Exiting:
+		case MemberStatus_Exiting:
 			events = append(events, MemberExited{Member: ma})
-		case cluster.MemberStatus_Removed:
+		case MemberStatus_Removed:
 			events = append(events, MemberRemoved{Member: ma})
 		}
 	}
 	return events
 }
 
-// memberAddressFromUA converts a cluster.UniqueAddress to a MemberAddress.
-func memberAddressFromUA(ua *cluster.UniqueAddress) MemberAddress {
+// memberAddressFromUA converts a UniqueAddress to a MemberAddress.
+func memberAddressFromUA(ua *UniqueAddress) MemberAddress {
 	a := ua.GetAddress()
 	return MemberAddress{
 		Protocol: a.GetProtocol(),

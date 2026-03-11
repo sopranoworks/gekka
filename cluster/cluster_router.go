@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-package gekka
+package cluster
 
 import (
 	"context"
@@ -15,22 +15,26 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"gekka/actor"
-	"gekka/cluster"
+	"github.com/sopranoworks/gekka/actor"
 
 	"google.golang.org/protobuf/proto"
 )
+
+// Router defines the interface for message delivery, decoupled from the root package.
+type Router interface {
+	Send(ctx context.Context, path string, msg any) error
+}
 
 // ── Original ClusterRouter (System) ──────────────────────────────────────────
 
 // ClusterRouter implements intelligent routing across the cluster.
 type ClusterRouter struct {
 	cm      *ClusterManager
-	router  *Router
+	router  Router
 	rrIndex uint64
 }
 
-func NewClusterRouter(cm *ClusterManager, router *Router) *ClusterRouter {
+func NewClusterRouter(cm *ClusterManager, router Router) *ClusterRouter {
 	return &ClusterRouter{
 		cm:     cm,
 		router: router,
@@ -38,18 +42,18 @@ func NewClusterRouter(cm *ClusterManager, router *Router) *ClusterRouter {
 }
 
 // SelectRoutee selects a node using role filtering, status, and reachability.
-func (cr *ClusterRouter) SelectRoutee(settings *cluster.ClusterRouterPoolSettings) (*cluster.UniqueAddress, error) {
+func (cr *ClusterRouter) SelectRoutee(settings *ClusterRouterPoolSettings) (*UniqueAddress, error) {
 	state := cr.cm.GetState()
 	localUA := cr.cm.GetLocalAddress()
 
-	var candidates []*cluster.UniqueAddress
+	var candidates []*UniqueAddress
 
 	// 1. Get Reachability Map
 	unreachable := make(map[int32]bool)
 	if state.Overview != nil {
 		for _, or := range state.Overview.ObserverReachability {
 			for _, sr := range or.SubjectReachability {
-				if sr.GetStatus() == cluster.ReachabilityStatus_Unreachable {
+				if sr.GetStatus() == ReachabilityStatus_Unreachable {
 					unreachable[sr.GetAddressIndex()] = true
 				}
 			}
@@ -58,7 +62,7 @@ func (cr *ClusterRouter) SelectRoutee(settings *cluster.ClusterRouterPoolSetting
 
 	for _, m := range state.Members {
 		// 2. Must be UP
-		if m.GetStatus() != cluster.MemberStatus_Up {
+		if m.GetStatus() != MemberStatus_Up {
 			continue
 		}
 
@@ -97,7 +101,7 @@ func (cr *ClusterRouter) SelectRoutee(settings *cluster.ClusterRouterPoolSetting
 	return candidates[idx], nil
 }
 
-func (cr *ClusterRouter) hasRequiredRoles(m *cluster.Member, state *cluster.Gossip, required []string) bool {
+func (cr *ClusterRouter) hasRequiredRoles(m *Member, state *Gossip, required []string) bool {
 	if len(required) == 0 {
 		return true
 	}
@@ -119,7 +123,7 @@ func (cr *ClusterRouter) hasRequiredRoles(m *cluster.Member, state *cluster.Goss
 }
 
 // Route selects a node and sends the message (Pekko-style actor routing).
-func (cr *ClusterRouter) Route(ctx context.Context, relativePath string, serializerID int32, manifest string, msg proto.Message, settings *cluster.ClusterRouterPoolSettings) error {
+func (cr *ClusterRouter) Route(ctx context.Context, relativePath string, serializerID int32, manifest string, msg proto.Message, settings *ClusterRouterPoolSettings) error {
 	ua, err := cr.SelectRoutee(settings)
 	if err != nil {
 		return err
@@ -149,7 +153,7 @@ type ClusterPoolRouter struct {
 
 	// nodeAddr -> []Ref
 	remoteRoutees map[string][]actor.Ref
-	mu            sync.RWMutex
+	Mu            sync.RWMutex
 }
 
 func NewClusterPoolRouter(cm *ClusterManager, logic actor.RoutingLogic, totalInstances int, allowLocalRoutees bool, useRole string, props actor.Props) *ClusterPoolRouter {
@@ -165,9 +169,7 @@ func NewClusterPoolRouter(cm *ClusterManager, logic actor.RoutingLogic, totalIns
 
 func (r *ClusterPoolRouter) PreStart() {
 	// 1. Subscribe to cluster events
-	if bridge, ok := r.System().(*actorContextBridge); ok {
-		bridge.sys.node.Subscribe(r.Self().(ActorRef), reflect.TypeOf(MemberUp{}), reflect.TypeOf(MemberRemoved{}), reflect.TypeOf(UnreachableMember{}), reflect.TypeOf(ReachableMember{}))
-	}
+	r.cm.Subscribe(r.Self(), reflect.TypeOf(MemberUp{}), reflect.TypeOf(MemberRemoved{}), reflect.TypeOf(UnreachableMember{}), reflect.TypeOf(ReachableMember{}))
 
 	// 2. Initial setup based on current cluster state
 	r.refreshRoutees()
@@ -175,14 +177,14 @@ func (r *ClusterPoolRouter) PreStart() {
 
 func (r *ClusterPoolRouter) refreshRoutees() {
 	cm := r.cm
-	cm.mu.RLock()
-	state := cm.state
-	cm.mu.RUnlock()
+	cm.Mu.RLock()
+	state := cm.State
+	cm.Mu.RUnlock()
 
 	// Find nodes matching role
 	var eligibleNodes []MemberAddress
 	for _, m := range state.Members {
-		if m.GetStatus() != cluster.MemberStatus_Up {
+		if m.GetStatus() != MemberStatus_Up {
 			continue
 		}
 		ua := state.AllAddresses[m.GetAddressIndex()]
@@ -224,12 +226,12 @@ func (r *ClusterPoolRouter) refreshRoutees() {
 	selfPath := r.Self().Path()
 	ap, _ := actor.ParseActorPath(selfPath)
 
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.Mu.Lock()
+	defer r.Mu.Unlock()
 	r.remoteRoutees = make(map[string][]actor.Ref)
 
 	for _, ma := range eligibleNodes {
-		isLocal := ma.Host == cm.localAddress.Address.GetHostname() && ma.Port == cm.localAddress.Address.GetPort()
+		isLocal := ma.Host == cm.LocalAddress.Address.GetHostname() && ma.Port == cm.LocalAddress.Address.GetPort()
 		if isLocal {
 			if !r.allowLocalRoutees {
 				// We still spawn local ones because we are part of the cluster pool,
@@ -246,12 +248,7 @@ func (r *ClusterPoolRouter) refreshRoutees() {
 			Host:     ma.Host,
 			Port:     int(ma.Port),
 		}
-		// In a symmetric pool, we route to the router on the remote node?
-		// No, usually we route to the WORKERS. But how do we find them?
-		// Pekko's ClusterRouterPool actually routes to the OTHER routers' members.
-		// Actually, ClusterRouterPool *manages* remote routees.
-
-		// For simplicity/gekka-style: we route to the PoolRouter on the remote node.
+		// In a symmetric pool, we route to the PoolRouter on the remote node.
 		// The remote PoolRouter will then distribute to its local workers.
 		remoteRef, _ := r.cm.Sys.Resolve(remoteAddr.String() + ap.Path())
 		r.remoteRoutees[ma.String()] = []actor.Ref{remoteRef}
@@ -264,12 +261,12 @@ func (r *ClusterPoolRouter) Receive(msg any) {
 		r.refreshRoutees()
 	default:
 		// Collect all effective routees: local + remote
-		r.mu.RLock()
+		r.Mu.RLock()
 		allRoutees := append([]actor.Ref(nil), r.PoolRouter.RouteesSnapshot()...)
 		for _, refs := range r.remoteRoutees {
 			allRoutees = append(allRoutees, refs...)
 		}
-		r.mu.RUnlock()
+		r.Mu.RUnlock()
 
 		// Pass to base logic
 		if len(allRoutees) == 0 {
@@ -298,7 +295,7 @@ type ClusterGroupRouter struct {
 	cm                *ClusterManager
 
 	remoteRoutees map[string][]actor.Ref
-	mu            sync.RWMutex
+	Mu            sync.RWMutex
 }
 
 func NewClusterGroupRouter(cm *ClusterManager, logic actor.RoutingLogic, paths []string, allowLocalRoutees bool, useRole string) *ClusterGroupRouter {
@@ -313,20 +310,18 @@ func NewClusterGroupRouter(cm *ClusterManager, logic actor.RoutingLogic, paths [
 
 func (r *ClusterGroupRouter) PreStart() {
 	r.GroupRouter.PreStart()
-	if bridge, ok := r.System().(*actorContextBridge); ok {
-		bridge.sys.node.Subscribe(r.Self().(ActorRef), reflect.TypeOf(MemberUp{}), reflect.TypeOf(MemberRemoved{}), reflect.TypeOf(UnreachableMember{}), reflect.TypeOf(ReachableMember{}))
-	}
+	r.cm.Subscribe(r.Self(), reflect.TypeOf(MemberUp{}), reflect.TypeOf(MemberRemoved{}), reflect.TypeOf(UnreachableMember{}), reflect.TypeOf(ReachableMember{}))
 	r.refreshRoutees()
 }
 
 func (r *ClusterGroupRouter) refreshRoutees() {
 	cm := r.cm
-	cm.mu.RLock()
-	state := cm.state
-	cm.mu.RUnlock()
+	cm.Mu.RLock()
+	state := cm.State
+	cm.Mu.RUnlock()
 
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.Mu.Lock()
+	defer r.Mu.Unlock()
 	r.remoteRoutees = make(map[string][]actor.Ref)
 
 	paths := r.GroupRouter.Paths
@@ -336,13 +331,13 @@ func (r *ClusterGroupRouter) refreshRoutees() {
 	}
 
 	for _, m := range state.Members {
-		if m.GetStatus() != cluster.MemberStatus_Up {
+		if m.GetStatus() != MemberStatus_Up {
 			continue
 		}
 		ua := state.AllAddresses[m.GetAddressIndex()]
 		ma := memberAddressFromUA(ua)
 
-		isLocal := ma.Host == r.cm.localAddress.Address.GetHostname() && ma.Port == r.cm.localAddress.Address.GetPort()
+		isLocal := ma.Host == r.cm.LocalAddress.Address.GetHostname() && ma.Port == r.cm.LocalAddress.Address.GetPort()
 		if isLocal && !r.allowLocalRoutees {
 			continue
 		}
@@ -388,12 +383,12 @@ func (r *ClusterGroupRouter) Receive(msg any) {
 	case MemberUp, MemberRemoved, UnreachableMember, ReachableMember:
 		r.refreshRoutees()
 	default:
-		r.mu.RLock()
+		r.Mu.RLock()
 		allRoutees := append([]actor.Ref(nil), r.GroupRouter.RouteesSnapshot()...)
 		for _, refs := range r.remoteRoutees {
 			allRoutees = append(allRoutees, refs...)
 		}
-		r.mu.RUnlock()
+		r.Mu.RUnlock()
 
 		if len(allRoutees) == 0 {
 			return

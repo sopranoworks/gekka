@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"gekka/actor"
+	"github.com/sopranoworks/gekka/actor"
 )
 
 // ── shared domain types ────────────────────────────────────────────────────────

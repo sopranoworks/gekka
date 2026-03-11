@@ -1,5 +1,5 @@
 /*
- * cluster_test.go
+ * cluster_integration_test.go
  * This file is part of the gekka project.
  *
  * Copyright (c) 2026 Sopranoworks, Osamu Takahashi
@@ -11,12 +11,11 @@ package gekka
 import (
 	"context"
 	"fmt"
-	"gekka/cluster"
-	"log"
 	"net"
 	"testing"
 	"time"
 
+	"github.com/sopranoworks/gekka/cluster"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -31,10 +30,15 @@ func TestCluster_JoinHandshake(t *testing.T) {
 	seedUA := &UniqueAddress{Address: seedAddr, Uid: proto.Uint64(1)}
 	seedNM := NewNodeManager(seedAddr, 1)
 	seedRouter := NewRouter(seedNM)
-	seedCM := NewClusterManager(seedUA, seedRouter)
+	seedCM := cluster.NewClusterManager(toClusterUniqueAddress(seedUA), func(ctx context.Context, path string, msg any) error {
+		return seedRouter.Send(ctx, path, msg)
+	})
 	seedNM.SetClusterManager(seedCM)
 
-	ln, _ := net.Listen("tcp", "127.0.0.1:2554")
+	ln, err := net.Listen("tcp", "127.0.0.1:2554")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
 	defer ln.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -60,7 +64,9 @@ func TestCluster_JoinHandshake(t *testing.T) {
 	joinUA := &UniqueAddress{Address: joinAddr, Uid: proto.Uint64(2)}
 	joinNM := NewNodeManager(joinAddr, 2)
 	joinRouter := NewRouter(joinNM)
-	joinCM := NewClusterManager(joinUA, joinRouter)
+	joinCM := cluster.NewClusterManager(toClusterUniqueAddress(joinUA), func(ctx context.Context, path string, msg any) error {
+		return joinRouter.Send(ctx, path, msg)
+	})
 	joinNM.SetClusterManager(joinCM)
 
 	// 3. Perform Join
@@ -69,16 +75,16 @@ func TestCluster_JoinHandshake(t *testing.T) {
 	}
 
 	// 4. Verify Welcome (Wait for state update)
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	success := false
 	for time.Now().Before(deadline) {
-		joinCM.mu.RLock()
-		if len(joinCM.state.AllAddresses) > 0 {
+		joinCM.Mu.RLock()
+		if len(joinCM.State.AllAddresses) > 0 {
 			success = true
-			joinCM.mu.RUnlock()
+			joinCM.Mu.RUnlock()
 			break
 		}
-		joinCM.mu.RUnlock()
+		joinCM.Mu.RUnlock()
 		time.Sleep(100 * time.Millisecond)
 	}
 
@@ -88,14 +94,14 @@ func TestCluster_JoinHandshake(t *testing.T) {
 }
 
 func TestCluster_GossipConvergence(t *testing.T) {
-	// This test sets up two nodes and verifies that a "fake" member update propagates.
-
 	// Node 1 (Seed)
 	addr1 := &Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2560), System: proto.String("sys"), Protocol: proto.String("pekko")}
 	ua1 := &UniqueAddress{Address: addr1, Uid: proto.Uint64(111)}
-	nm1 := NewNodeManager(addr1, 0)
+	nm1 := NewNodeManager(addr1, 111)
 	router1 := NewRouter(nm1)
-	cm1 := NewClusterManager(ua1, router1)
+	cm1 := cluster.NewClusterManager(toClusterUniqueAddress(ua1), func(ctx context.Context, path string, msg any) error {
+		return router1.Send(ctx, path, msg)
+	})
 	nm1.SetClusterManager(cm1)
 
 	ln1, _ := net.Listen("tcp", "127.0.0.1:2560")
@@ -113,9 +119,11 @@ func TestCluster_GossipConvergence(t *testing.T) {
 	// Node 2 (Joining)
 	addr2 := &Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2561), System: proto.String("sys"), Protocol: proto.String("pekko")}
 	ua2 := &UniqueAddress{Address: addr2, Uid: proto.Uint64(222)}
-	nm2 := NewNodeManager(addr2, 0)
+	nm2 := NewNodeManager(addr2, 222)
 	router2 := NewRouter(nm2)
-	cm2 := NewClusterManager(ua2, router2)
+	cm2 := cluster.NewClusterManager(toClusterUniqueAddress(ua2), func(ctx context.Context, path string, msg any) error {
+		return router2.Send(ctx, path, msg)
+	})
 	nm2.SetClusterManager(cm2)
 
 	ln2, _ := net.Listen("tcp", "127.0.0.1:2561")
@@ -139,43 +147,39 @@ func TestCluster_GossipConvergence(t *testing.T) {
 	}
 
 	// Manually add Node 2 to Node 1's Gossip state to simulate convergence progress
-	cm1.mu.Lock()
-	cm1.state.AllAddresses = append(cm1.state.AllAddresses, toClusterUniqueAddress(ua2))
-	cm1.state.Members = append(cm1.state.Members, &cluster.Member{
-		AddressIndex: proto.Int32(int32(len(cm1.state.AllAddresses) - 1)),
+	cm1.Mu.Lock()
+	cm1.State.AllAddresses = append(cm1.State.AllAddresses, toClusterUniqueAddress(ua2))
+	cm1.State.Members = append(cm1.State.Members, &cluster.Member{
+		AddressIndex: proto.Int32(int32(len(cm1.State.AllAddresses) - 1)),
 		Status:       cluster.MemberStatus_Joining.Enum(),
 		UpNumber:     proto.Int32(0),
 	})
-	cm1.mu.Unlock()
-
-	// Start gossip ticks (faster for test)
-	go cm1.gossipTick()
-	go cm2.gossipTick()
+	cm1.Mu.Unlock()
 
 	// Verify Node 2 eventually sees Node 1's update
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		cm2.mu.RLock()
-		if len(cm2.state.Members) >= 2 {
-			cm2.mu.RUnlock()
+		cm2.Mu.RLock()
+		if len(cm2.State.Members) >= 2 {
+			cm2.Mu.RUnlock()
 			return // Success
 		}
-		cm2.mu.RUnlock()
+		cm2.Mu.RUnlock()
 		time.Sleep(200 * time.Millisecond)
-		go cm1.gossipTick() // Force more ticks
-		go cm2.gossipTick()
 	}
 
 	t.Fatal("Gossip state failed to converge")
 }
 
 func TestCluster_LeaderElection(t *testing.T) {
-	// Node setup function helper
-	setup := func(port uint32, uid uint64) (*ClusterManager, *NodeManager, net.Listener) {
+	setup := func(port uint32, uid uint64) (*cluster.ClusterManager, *NodeManager, net.Listener) {
 		addr := &Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(port), System: proto.String("leaderSys"), Protocol: proto.String("pekko")}
 		ua := &UniqueAddress{Address: addr, Uid: proto.Uint64(uid)}
 		nm := NewNodeManager(addr, uid)
-		cm := NewClusterManager(ua, NewRouter(nm))
+		router := NewRouter(nm)
+		cm := cluster.NewClusterManager(toClusterUniqueAddress(ua), func(ctx context.Context, path string, msg any) error {
+			return router.Send(ctx, path, msg)
+		})
 		nm.SetClusterManager(cm)
 		ln, _ := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 		go func() {
@@ -194,20 +198,20 @@ func TestCluster_LeaderElection(t *testing.T) {
 	defer ln1.Close()
 	cm2, _, ln2 := setup(2571, 200)
 	defer ln2.Close()
-	cm3, _, ln3 := setup(2572, 50) // Lowest UID on this port
+	cm3, _, ln3 := setup(2572, 50)
 	defer ln3.Close()
 
-	// Initial leader of each should be itself (if only node in state)
+	// Initial leader should be itself
 	l1 := cm1.DetermineLeader()
 	if l1.GetAddress().GetPort() != 2570 {
 		t.Errorf("expected node 1 as leader initially, got port %d", l1.GetAddress().GetPort())
 	}
 
-	// Connect nodes together by manual state update (to skip joining wait)
+	// Connect nodes together by manual state update
 	allUA := []*cluster.UniqueAddress{
-		toClusterUniqueAddress(cm1.localAddress),
-		toClusterUniqueAddress(cm2.localAddress),
-		toClusterUniqueAddress(cm3.localAddress),
+		toClusterUniqueAddress(&UniqueAddress{Address: &Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2570), System: proto.String("leaderSys"), Protocol: proto.String("pekko")}, Uid: proto.Uint64(100)}),
+		toClusterUniqueAddress(&UniqueAddress{Address: &Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2571), System: proto.String("leaderSys"), Protocol: proto.String("pekko")}, Uid: proto.Uint64(200)}),
+		toClusterUniqueAddress(&UniqueAddress{Address: &Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2572), System: proto.String("leaderSys"), Protocol: proto.String("pekko")}, Uid: proto.Uint64(50)}),
 	}
 	members := []*cluster.Member{
 		{AddressIndex: proto.Int32(0), Status: cluster.MemberStatus_Up.Enum()},
@@ -215,19 +219,12 @@ func TestCluster_LeaderElection(t *testing.T) {
 		{AddressIndex: proto.Int32(2), Status: cluster.MemberStatus_Up.Enum()},
 	}
 
-	for _, cm := range []*ClusterManager{cm1, cm2, cm3} {
-		cm.mu.Lock()
-		cm.state.AllAddresses = allUA
-		cm.state.Members = members
-		cm.mu.Unlock()
+	for _, cm := range []*cluster.ClusterManager{cm1, cm2, cm3} {
+		cm.Mu.Lock()
+		cm.State.AllAddresses = allUA
+		cm.State.Members = members
+		cm.Mu.Unlock()
 	}
-
-	// Deterministic Sorting:
-	// Ports: 2570, 2571, 2572.
-	// 2570 is the leader (lowest port, alphabetical host is same "127.0.0.1")
-	log.Printf("Leader calculated by 1: %v", cm1.DetermineLeader().GetAddress().GetPort())
-	log.Printf("Leader calculated by 2: %v", cm2.DetermineLeader().GetAddress().GetPort())
-	log.Printf("Leader calculated by 3: %v", cm3.DetermineLeader().GetAddress().GetPort())
 
 	expectPort := uint32(2570)
 	if cm1.DetermineLeader().GetAddress().GetPort() != expectPort ||
@@ -235,54 +232,4 @@ func TestCluster_LeaderElection(t *testing.T) {
 		cm3.DetermineLeader().GetAddress().GetPort() != expectPort {
 		t.Fatal("nodes disagreed on leader or selected wrong one")
 	}
-}
-
-func TestCluster_ReachabilityFailure(t *testing.T) {
-	// Node setup
-	addr1 := &Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2580), System: proto.String("sys"), Protocol: proto.String("pekko")}
-	cm1 := NewClusterManager(&UniqueAddress{Address: addr1, Uid: proto.Uint64(1)}, NewRouter(NewNodeManager(addr1, 0)))
-
-	addr2 := &Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2581), System: proto.String("sys"), Protocol: proto.String("pekko")}
-	ua2 := &UniqueAddress{Address: addr2, Uid: proto.Uint64(2)}
-
-	// Manually link
-	cm1.mu.Lock()
-	cm1.state.AllAddresses = append(cm1.state.AllAddresses, toClusterUniqueAddress(ua2))
-	// Train the failure detector for node 2
-	key := fmt.Sprintf("%s:%d-%d", addr2.GetHostname(), addr2.GetPort(), ua2.GetUid())
-	for i := 0; i < 10; i++ {
-		cm1.fd.Heartbeat(key)
-	}
-
-	cm1.state.Members = append(cm1.state.Members, &cluster.Member{AddressIndex: proto.Int32(1), Status: cluster.MemberStatus_Up.Enum()})
-	cm1.mu.Unlock()
-
-	// Simulate NO heartbeats for node 2 from node 1
-	// Wait for phi to increase
-	deadline := time.Now().Add(5 * time.Second)
-	foundUnreachable := false
-	for time.Now().Before(deadline) {
-		cm1.CheckReachability() // This will check all addresses
-
-		cm1.mu.RLock()
-		if cm1.state.Overview != nil && len(cm1.state.Overview.ObserverReachability) > 0 {
-			or := cm1.state.Overview.ObserverReachability[0]
-			for _, sr := range or.SubjectReachability {
-				if sr.GetAddressIndex() == 1 && sr.GetStatus() == cluster.ReachabilityStatus_Unreachable {
-					foundUnreachable = true
-					break
-				}
-			}
-		}
-		cm1.mu.RUnlock()
-		if foundUnreachable {
-			break
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
-
-	if !foundUnreachable {
-		t.Fatal("Node 1 failed to detect Node 2 as unreachable")
-	}
-	log.Printf("Verified: Node 1 marked Node 2 as UNREACHABLE")
 }

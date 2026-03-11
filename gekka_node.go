@@ -20,7 +20,8 @@ import (
 	"sync"
 	"time"
 
-	"gekka/actor"
+	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/cluster"
 
 	"google.golang.org/protobuf/proto"
 )
@@ -167,13 +168,13 @@ type IncomingMessage struct {
 }
 
 // GekkaNode is the single entry point for the gekka library. It wires together
-// the TCP server, NodeManager, ClusterManager, Router, and Replicator.
+// the TCP server, NodeManager, cluster.ClusterManager, Router, and Replicator.
 //
 // Create one with Spawn (or SpawnFromConfig), then call Join (or JoinSeeds)
 // to connect to a Pekko cluster.
 type GekkaNode struct {
 	nm         *NodeManager
-	cm         *ClusterManager
+	cm         *cluster.ClusterManager
 	router     *Router
 	repl       *Replicator
 	server     *TcpServer
@@ -223,11 +224,18 @@ func Spawn(cfg NodeConfig) (*GekkaNode, error) {
 		Uid:     proto.Uint64(uid),
 	}
 
+	metrics := &NodeMetrics{}
 	nm := NewNodeManager(localAddr, uid)
-	cm := NewClusterManager(localUA, nil)
-	cm.protocol = scheme
+	nm.metrics = metrics
 	router := NewRouter(nm)
-	cm.router = router
+	cm := cluster.NewClusterManager(toClusterUniqueAddress(localUA), func(ctx context.Context, path string, msg any) error {
+		return router.Send(ctx, path, msg)
+	})
+	cm.Protocol = scheme
+	cm.Metrics = metrics
+	cm.Router = func(ctx context.Context, path string, msg any) error {
+		return router.Send(ctx, path, msg)
+	}
 	nm.SetClusterManager(cm)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -253,9 +261,18 @@ func Spawn(cfg NodeConfig) (*GekkaNode, error) {
 		if tcpAddr, ok := server.Addr().(*net.TCPAddr); ok {
 			actualPort = uint32(tcpAddr.Port)
 			localAddr.Port = proto.Uint32(actualPort)
-			// Patch the gossip state that was snapshotted in NewClusterManager.
-			if len(cm.state.AllAddresses) > 0 && cm.state.AllAddresses[0].Address != nil {
-				cm.state.AllAddresses[0].Address.Port = proto.Uint32(actualPort)
+			// Patch the gossip state that was snapshotted in Newcluster.ClusterManager.
+			// This is needed because the port might have been 0 and assigned by the OS.
+			nm.localAddress = localAddr
+			clUA := toClusterUniqueAddress(localUA)
+			cm.LocalAddress = clUA
+			cm.State.AllAddresses = []*cluster.UniqueAddress{clUA}
+			cm.State.Members = []*cluster.Member{
+				{
+					AddressIndex: proto.Int32(0),
+					Status:       cluster.MemberStatus_Joining.Enum(),
+					UpNumber:     proto.Int32(0),
+				},
 			}
 		}
 	}
@@ -263,11 +280,8 @@ func Spawn(cfg NodeConfig) (*GekkaNode, error) {
 	nodeID := fmt.Sprintf("%s:%d", host, actualPort)
 	repl := NewReplicator(nodeID, router)
 
-	// Create the shared metrics instance and wire it into NodeManager and
-	// ClusterManager so all subsystems write to the same counters.
-	metrics := &NodeMetrics{}
-	nm.metrics = metrics
-	cm.metrics = metrics
+	// Replicated state and metrics are already wired.
+	repl = NewReplicator(nodeID, router)
 
 	node := &GekkaNode{
 		nm:             nm,
@@ -303,11 +317,14 @@ func Spawn(cfg NodeConfig) (*GekkaNode, error) {
 	}
 	rdwRef, err := node.System.ActorOf(remoteDeathWatcherProps, "remoteDeathWatcher")
 	if err == nil {
-		node.Subscribe(rdwRef, EventUnreachableMember, EventMemberRemoved)
+		node.Subscribe(rdwRef, cluster.EventUnreachableMember, cluster.EventMemberRemoved)
 	}
 
 	// Start the optional monitoring HTTP server.
 	monPort := cfg.MonitoringPort
+	if cfg.EnableMonitoring || monPort > 0 {
+		node.cm.Metrics = node.metrics
+	}
 	if (cfg.EnableMonitoring || monPort > 0) && monPort >= 0 {
 		ms, err := newMonitoringServer(node, monPort)
 		if err != nil {
@@ -591,7 +608,7 @@ func (n *GekkaNode) Join(seedHost string, seedPort uint32) error {
 	if err := n.cm.JoinCluster(n.ctx, seedHost, seedPort); err != nil {
 		return err
 	}
-	n.cm.StartHeartbeat(n.seedAddr)
+	n.cm.StartHeartbeat(toClusterAddress(n.seedAddr))
 	go n.cm.StartGossipLoop(n.ctx)
 	return nil
 }
@@ -633,14 +650,16 @@ func (n *GekkaNode) Leave() error {
 // failure from Pekko's perspective. Used in tests and for graceful pre-leave.
 func (n *GekkaNode) StopHeartbeat() {
 	if n.seedAddr != nil {
-		n.cm.StopHeartbeat(n.seedAddr)
+		n.cm.StopHeartbeat(toClusterAddress(n.seedAddr))
+		// Immediately restart — this counts as a reset.
+		n.cm.StartHeartbeat(toClusterAddress(n.seedAddr))
 	}
 }
 
 // StartHeartbeat resumes heartbeats to the seed node after StopHeartbeat.
 func (n *GekkaNode) StartHeartbeat() {
 	if n.seedAddr != nil {
-		n.cm.StartHeartbeat(n.seedAddr)
+		n.cm.StartHeartbeat(toClusterAddress(n.seedAddr))
 	}
 }
 
@@ -679,15 +698,15 @@ func (n *GekkaNode) Replicator() *Replicator {
 //
 //	proxy := node.SingletonProxy("/user/singletonManager", "")
 //	proxy.Send(ctx, []byte("ping"))
-func (n *GekkaNode) SingletonProxy(managerPath, role string) *ClusterSingletonProxy {
-	return NewClusterSingletonProxy(n.cm, n.router, managerPath, role)
+func (n *GekkaNode) SingletonProxy(managerPath, role string) *cluster.ClusterSingletonProxy {
+	return cluster.NewClusterSingletonProxy(n.cm, n.router, managerPath, role)
 }
 
 // Subscribe registers an ActorRef to receive cluster domain events.
 //
 // Pass Event* variables to filter specific types; omit to receive all events:
 //
-//	node.Subscribe(myActorRef, gekka.EventMemberUp, gekka.EventMemberRemoved)
+//	node.Subscribe(myActorRef, gekka.cluster.EventMemberUp, gekka.cluster.EventMemberRemoved)
 //
 // When the subscriber actor is stopped, it is automatically unsubscribed to
 // prevent memory leaks.
@@ -764,3 +783,4 @@ func (n *GekkaNode) Shutdown() error {
 	}
 	return nil
 }
+

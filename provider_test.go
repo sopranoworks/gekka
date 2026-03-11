@@ -49,8 +49,8 @@ func TestProvider_SpawnPekko_UsesCorrectProtocol(t *testing.T) {
 	if got := node.localAddr.GetProtocol(); got != "pekko" {
 		t.Errorf("localAddr.Protocol = %q, want %q", got, "pekko")
 	}
-	if got := node.cm.proto(); got != "pekko" {
-		t.Errorf("cm.proto() = %q, want %q", got, "pekko")
+	if got := node.cm.Proto(); got != "pekko" {
+		t.Errorf("cm.Proto() = %q, want %q", got, "pekko")
 	}
 }
 
@@ -69,8 +69,8 @@ func TestProvider_SpawnAkka_UsesCorrectProtocol(t *testing.T) {
 	if got := node.localAddr.GetProtocol(); got != "akka" {
 		t.Errorf("localAddr.Protocol = %q, want %q", got, "akka")
 	}
-	if got := node.cm.proto(); got != "akka" {
-		t.Errorf("cm.proto() = %q, want %q", got, "akka")
+	if got := node.cm.Proto(); got != "akka" {
+		t.Errorf("cm.Proto() = %q, want %q", got, "akka")
 	}
 }
 
@@ -87,7 +87,7 @@ func TestProvider_ClusterCorePath(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Spawn: %v", err)
 		}
-		got := node.cm.clusterCorePath("ClusterSystem", "127.0.0.1", 2552)
+		got := node.cm.ClusterCorePath("ClusterSystem", "127.0.0.1", 2552)
 		_ = node.Shutdown()
 		if got != tt.want {
 			t.Errorf("provider=%v clusterCorePath = %q, want %q", tt.provider, got, tt.want)
@@ -108,7 +108,7 @@ func TestProvider_HeartbeatPath(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Spawn: %v", err)
 		}
-		got := node.cm.heartbeatPath("ClusterSystem", "127.0.0.1", 2552)
+		got := node.cm.HeartbeatPath("ClusterSystem", "127.0.0.1", 2552)
 		_ = node.Shutdown()
 		if got != tt.want {
 			t.Errorf("provider=%v heartbeatPath = %q, want %q", tt.provider, got, tt.want)

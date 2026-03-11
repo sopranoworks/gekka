@@ -10,7 +10,9 @@ package gekka
 
 import (
 	"fmt"
-	"gekka/actor"
+
+	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/cluster"
 )
 
 // ── Remote Death Watch ────────────────────────────────────────────────────────
@@ -56,7 +58,7 @@ func (n *GekkaNode) unwatchRemote(watcher ActorRef, target ActorRef) {
 	}
 }
 
-func (n *GekkaNode) triggerRemoteNodeDeath(addr MemberAddress) {
+func (n *GekkaNode) triggerRemoteNodeDeath(addr cluster.MemberAddress) {
 	nodeAddr := fmt.Sprintf("%s:%d", addr.Host, addr.Port)
 
 	n.remoteWatchersMu.Lock()
@@ -86,9 +88,9 @@ type remoteDeathWatcherActor struct {
 
 func (a *remoteDeathWatcherActor) Receive(msg any) {
 	switch e := msg.(type) {
-	case UnreachableMember:
+	case cluster.UnreachableMember:
 		a.node.triggerRemoteNodeDeath(e.Member)
-	case MemberRemoved:
+	case cluster.MemberRemoved:
 		a.node.triggerRemoteNodeDeath(e.Member)
 	}
 }

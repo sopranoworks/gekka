@@ -11,11 +11,12 @@ package gekka
 import (
 	"context"
 	"fmt"
-	"gekka/cluster"
 	"log"
 	"net"
 	reflect "reflect"
 	"time"
+
+	"github.com/sopranoworks/gekka/cluster"
 
 	"google.golang.org/protobuf/proto"
 )
@@ -74,24 +75,24 @@ func (r *Router) Send(ctx context.Context, path string, msg interface{}) error {
 	msgType := reflect.TypeOf(msg)
 	switch msgType {
 	case reflect.TypeOf((*cluster.InitJoin)(nil)):
-		finalSerializerId, finalManifest = ClusterSerializerID, "IJ"
+		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "IJ"
 	case reflect.TypeOf((*cluster.InitJoinAck)(nil)):
-		finalSerializerId, finalManifest = ClusterSerializerID, "IJA"
+		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "IJA"
 	case reflect.TypeOf((*cluster.Join)(nil)):
-		finalSerializerId, finalManifest = ClusterSerializerID, "J"
+		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "J"
 	case reflect.TypeOf((*cluster.Welcome)(nil)):
-		finalSerializerId, finalManifest = ClusterSerializerID, "W"
+		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "W"
 	case reflect.TypeOf((*cluster.Heartbeat)(nil)):
-		finalSerializerId, finalManifest = ClusterSerializerID, "HB"
+		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "HB"
 	case reflect.TypeOf((*cluster.HeartBeatResponse)(nil)):
-		finalSerializerId, finalManifest = ClusterSerializerID, "HBR"
+		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "HBR"
 	case reflect.TypeOf((*cluster.GossipStatus)(nil)):
-		finalSerializerId, finalManifest = ClusterSerializerID, "GS"
+		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "GS"
 	case reflect.TypeOf((*cluster.GossipEnvelope)(nil)):
-		finalSerializerId, finalManifest = ClusterSerializerID, "GE"
+		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "GE"
 	case reflect.TypeOf((*cluster.Address)(nil)):
 		// Leave message — serialized as an Address proto
-		finalSerializerId, finalManifest = ClusterSerializerID, "L"
+		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "L"
 	default:
 		if _, isProto := msg.(proto.Message); isProto {
 			finalSerializerId = 2
@@ -142,7 +143,7 @@ func (r *Router) Send(ctx context.Context, path string, msg interface{}) error {
 
 	// Track user message metrics (cluster-internal messages are excluded).
 	if r.nodeMgr.metrics != nil &&
-		finalSerializerId != ClusterSerializerID &&
+		finalSerializerId != cluster.ClusterSerializerID &&
 		finalSerializerId != ArteryInternalSerializerID {
 		r.nodeMgr.metrics.MessagesSent.Add(1)
 		r.nodeMgr.metrics.BytesSent.Add(int64(len(payload)))
@@ -177,23 +178,23 @@ func (r *Router) SendWithSender(ctx context.Context, path string, senderPath str
 	msgType := reflect.TypeOf(msg)
 	switch msgType {
 	case reflect.TypeOf((*cluster.InitJoin)(nil)):
-		finalSerializerId, finalManifest = ClusterSerializerID, "IJ"
+		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "IJ"
 	case reflect.TypeOf((*cluster.InitJoinAck)(nil)):
-		finalSerializerId, finalManifest = ClusterSerializerID, "IJA"
+		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "IJA"
 	case reflect.TypeOf((*cluster.Join)(nil)):
-		finalSerializerId, finalManifest = ClusterSerializerID, "J"
+		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "J"
 	case reflect.TypeOf((*cluster.Welcome)(nil)):
-		finalSerializerId, finalManifest = ClusterSerializerID, "W"
+		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "W"
 	case reflect.TypeOf((*cluster.Heartbeat)(nil)):
-		finalSerializerId, finalManifest = ClusterSerializerID, "HB"
+		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "HB"
 	case reflect.TypeOf((*cluster.HeartBeatResponse)(nil)):
-		finalSerializerId, finalManifest = ClusterSerializerID, "HBR"
+		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "HBR"
 	case reflect.TypeOf((*cluster.GossipStatus)(nil)):
-		finalSerializerId, finalManifest = ClusterSerializerID, "GS"
+		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "GS"
 	case reflect.TypeOf((*cluster.GossipEnvelope)(nil)):
-		finalSerializerId, finalManifest = ClusterSerializerID, "GE"
+		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "GE"
 	case reflect.TypeOf((*cluster.Address)(nil)):
-		finalSerializerId, finalManifest = ClusterSerializerID, "L"
+		finalSerializerId, finalManifest = cluster.ClusterSerializerID, "L"
 	default:
 		if _, isProto := msg.(proto.Message); isProto {
 			finalSerializerId = 2

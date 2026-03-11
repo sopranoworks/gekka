@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sopranoworks/gekka/cluster"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -69,7 +70,7 @@ type NodeManager struct {
 	localAddress        *Address
 	associations        map[string]*GekkaAssociation // key: host:port, or UID string
 	localUid            uint64
-	clusterMgr          *ClusterManager
+	clusterMgr          *cluster.ClusterManager
 	compressionMgr      *CompressionTableManager
 	SerializerRegistry  *SerializationRegistry
 	UserMessageCallback func(ctx context.Context, meta *ArteryMetadata) error
@@ -141,7 +142,7 @@ func (nm *NodeManager) routePendingReply(path string, meta *ArteryMetadata) bool
 	return true
 }
 
-func (nm *NodeManager) SetClusterManager(cm *ClusterManager) {
+func (nm *NodeManager) SetClusterManager(cm *cluster.ClusterManager) {
 	nm.mu.Lock()
 	defer nm.mu.Unlock()
 	nm.clusterMgr = cm
@@ -348,12 +349,12 @@ func (assoc *GekkaAssociation) dispatch(ctx context.Context, meta *ArteryMetadat
 		}
 		return assoc.handleControlMessage(ctx, meta)
 
-	case ClusterSerializerID:
+	case cluster.ClusterSerializerID:
 		if assoc.nodeMgr.clusterMgr != nil {
 			assoc.mu.RLock()
 			remote := assoc.remote
 			assoc.mu.RUnlock()
-			return assoc.nodeMgr.clusterMgr.HandleIncomingClusterMessage(ctx, meta, remote)
+			return assoc.nodeMgr.clusterMgr.HandleIncomingClusterMessage(ctx, meta.Payload, string(meta.MessageManifest), toClusterUniqueAddress(remote))
 		}
 		return nil
 
@@ -395,7 +396,7 @@ func (assoc *GekkaAssociation) handleSystemMessage(meta *ArteryMetadata) error {
 
 func (assoc *GekkaAssociation) handleUserMessage(meta *ArteryMetadata) error {
 	// Count every incoming user message (cluster-internal messages never
-	// reach this handler — they go to handleControlMessage/ClusterManager).
+	// reach this handler — they go to handleControlMessage/cluster.ClusterManager).
 	if assoc.nodeMgr.metrics != nil {
 		assoc.nodeMgr.metrics.MessagesReceived.Add(1)
 		assoc.nodeMgr.metrics.BytesReceived.Add(int64(len(meta.Payload)))

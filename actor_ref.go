@@ -13,7 +13,7 @@ import (
 	"fmt"
 	"strings"
 
-	"gekka/actor"
+	"github.com/sopranoworks/gekka/actor"
 )
 
 // ActorRef is a location-transparent reference to a specific actor. It

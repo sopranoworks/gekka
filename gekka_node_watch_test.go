@@ -13,7 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"gekka/actor"
+	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/cluster"
 )
 
 // watcherTestingActor simply records any Terminated messages it receives.
@@ -108,7 +109,7 @@ func TestRemoteDeathWatch(t *testing.T) {
 	// Simulate node2 failure explicitly by synthesising the cluster event logic
 	// directly onto node1.
 	node2Addr := node2.SelfAddress()
-	node1.triggerRemoteNodeDeath(MemberAddress{
+	node1.triggerRemoteNodeDeath(cluster.MemberAddress{
 		Protocol: node2Addr.Protocol,
 		System:   node2Addr.System,
 		Host:     node2Addr.Host,

@@ -24,8 +24,8 @@ import (
 	"syscall"
 	"time"
 
-	"gekka"
-	"gekka/actor"
+	"github.com/sopranoworks/gekka"
+	"github.com/sopranoworks/gekka/actor"
 )
 
 // Job is sent to the cluster singleton for processing.

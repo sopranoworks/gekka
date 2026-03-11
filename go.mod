@@ -1,4 +1,4 @@
-module gekka
+module github.com/sopranoworks/gekka
 
 go 1.24
 

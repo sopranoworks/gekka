@@ -9,37 +9,10 @@
 package core
 
 import (
-	"bytes"
-	"compress/gzip"
-	"io"
-
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 	"google.golang.org/protobuf/proto"
 )
-
-// gzipCompress compresses bytes with GZIP.
-func gzipCompress(data []byte) ([]byte, error) {
-	var buf bytes.Buffer
-	w := gzip.NewWriter(&buf)
-	if _, err := w.Write(data); err != nil {
-		return nil, err
-	}
-	if err := w.Close(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
-// gzipDecompress decompresses GZIP-compressed bytes.
-func gzipDecompress(data []byte) ([]byte, error) {
-	r, err := gzip.NewReader(bytes.NewReader(data))
-	if err != nil {
-		return nil, err
-	}
-	defer r.Close()
-	return io.ReadAll(r)
-}
 
 // ToClusterAddress converts a remote address to a cluster address.
 func ToClusterAddress(a *gproto_remote.Address) *gproto_cluster.Address {

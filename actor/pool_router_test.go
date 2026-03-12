@@ -25,7 +25,6 @@ type testActorContext struct {
 	mu      sync.Mutex
 	spawned map[string]Actor // path → actor instance
 	watches [][2]string      // [watcher.Path(), target.Path()]
-	self    *testNodeRef     // owner node ref (the pool router itself)
 }
 
 func newTestActorContext() *testActorContext {
@@ -92,11 +91,6 @@ func (r *testNodeRef) Tell(msg any, _ ...Ref) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.msgs = append(r.msgs, msg)
-}
-func (r *testNodeRef) msgCount() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return len(r.msgs)
 }
 
 // ── testTerminated satisfies TerminatedMessage ─────────────────────────────────

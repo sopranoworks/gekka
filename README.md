@@ -1,13 +1,10 @@
-# gekka &nbsp;[![Version](https://img.shields.io/badge/version-0.4.0--dev-blue)](https://github.com/sopranoworks/gekka) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Go CI](https://github.com/sopranoworks/gekka/actions/workflows/go.yml/badge.svg)](https://github.com/sopranoworks/gekka/actions/workflows/go.yml)
+# gekka &nbsp;[![Version](https://img.shields.io/badge/version-0.4.0-blue)](https://github.com/sopranoworks/gekka) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Go CI](https://github.com/sopranoworks/gekka/actions/workflows/go.yml/badge.svg)](https://github.com/sopranoworks/gekka/actions/workflows/go.yml)
 
 **Pekko/Akka Dual-Compatibility**
 
 `gekka` is a distributed actor model library for Go, engineered for seamless interoperability with [Apache Pekko](https://pekko.apache.org/) and [Lightbend Akka](https://www.lightbend.com/akka) via the Artery TCP protocol. It provides a robust **Hierarchical Actor System**, **Self-Healing Supervision**, and true **Location Transparency**.
 
 Powered by its own high-performance HOCON engine, [`gekka-config`](https://github.com/sopranoworks/gekka-config), `gekka` supports both automatic cluster formation and direct node-to-node communication using the standard `pekko://` and `akka://` URI schemes.
-
-> [!WARNING]
-> Development Status: This project is in active development (v0.4.0-dev). We are currently undergoing major refactoring to stabilize the Public API and encapsulate internal logic. Breaking changes are expected until the v1.0.0 release.
 
 ## Key Features
 

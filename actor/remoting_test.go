@@ -11,7 +11,6 @@ package actor
 import (
 	"context"
 	"encoding/binary"
-	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -21,25 +20,6 @@ import (
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 	"google.golang.org/protobuf/proto"
 )
-
-// mockRemoteMessagingProvider implements RemoteMessagingProvider for testing.
-type mockRemoteMessagingProvider struct {
-	localAddr *gproto_remote.Address
-	assocs    map[string]RemoteAssociation
-}
-
-func (m *mockRemoteMessagingProvider) LocalAddress() *gproto_remote.Address { return m.localAddr }
-func (m *mockRemoteMessagingProvider) GetAssociationByHost(host string, port uint32) (RemoteAssociation, bool) {
-	a, ok := m.assocs[net.JoinHostPort(host, fmt.Sprintf("%d", port))]
-	return a, ok
-}
-func (m *mockRemoteMessagingProvider) DialRemote(ctx context.Context, target *gproto_remote.Address) (RemoteAssociation, error) {
-	return nil, fmt.Errorf("not implemented")
-}
-func (m *mockRemoteMessagingProvider) Serializer(id int32) (RemoteSerializer, error) {
-	return nil, fmt.Errorf("not implemented")
-}
-func (m *mockRemoteMessagingProvider) Metrics() RemoteMetrics { return nil }
 
 func TestRouter_Buffering_Migrated(t *testing.T) {
 	client, server := net.Pipe()

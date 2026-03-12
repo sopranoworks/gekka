@@ -234,11 +234,6 @@ func (r *ClusterPoolRouter) refreshRoutees() {
 	for _, ma := range eligibleNodes {
 		isLocal := ma.Host == cm.LocalAddress.Address.GetHostname() && ma.Port == cm.LocalAddress.Address.GetPort()
 		if isLocal {
-			if !r.allowLocalRoutees {
-				// We still spawn local ones because we are part of the cluster pool,
-				// but we might choose not to ROUTE to them if allowLocalRoutees is false.
-				// (Wait, Pekko's allow-local-routees usually means "can this router send to local routees")
-			}
 			continue
 		}
 
@@ -326,10 +321,6 @@ func (r *ClusterGroupRouter) refreshRoutees() {
 	r.remoteRoutees = make(map[string][]actor.Ref)
 
 	paths := r.GroupRouter.Paths
-	if len(paths) == 0 {
-		// If no paths were provided, it might be that we route to the same path on other nodes.
-		// For GroupRouters, paths are usually required.
-	}
 
 	for _, m := range state.Members {
 		if m.GetStatus() != gproto_cluster.MemberStatus_Up {

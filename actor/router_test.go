@@ -43,31 +43,6 @@ func (a *collectActor) Receive(msg any) {
 	}
 }
 
-func (a *collectActor) waitFor(n int, timeout time.Duration) bool {
-	deadline := time.After(timeout)
-	for {
-		a.mu.Lock()
-		got := len(a.received)
-		a.mu.Unlock()
-		if got >= n {
-			return true
-		}
-		select {
-		case <-a.notify:
-		case <-deadline:
-			return false
-		}
-	}
-}
-
-func (a *collectActor) messages() []any {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	cp := make([]any, len(a.received))
-	copy(cp, a.received)
-	return cp
-}
-
 // routeeMock is a Ref that captures Tell calls.
 type routeeMock struct {
 	path     string

@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sopranoworks/gekka/actor"
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 	"google.golang.org/protobuf/proto"
 )
@@ -119,14 +120,14 @@ func TestDispatcher_AutoACK(t *testing.T) {
 	smBytes, _ := proto.Marshal(sm)
 	env := &gproto_remote.SystemMessageEnvelope{
 		Message:         smBytes,
-		SerializerId:    proto.Int32(ArteryInternalSerializerID),
+		SerializerId:    proto.Int32(actor.ArteryInternalSerializerID),
 		SeqNo:           proto.Uint64(42),
 		AckReplyTo:      remoteUA,
 		MessageManifest: []byte("SystemMessage"),
 	}
 	envPayload, _ := proto.Marshal(env)
 
-	frame, err := BuildArteryFrame(0, ArteryInternalSerializerID, "", "", "SystemMessage", envPayload, true)
+	frame, err := BuildArteryFrame(0, actor.ArteryInternalSerializerID, "", "", "SystemMessage", envPayload, true)
 	if err != nil {
 		t.Fatalf("BuildArteryFrame: %v", err)
 	}
@@ -189,7 +190,7 @@ func TestDispatcher_Heuristic(t *testing.T) {
 	payload, _ := proto.Marshal(hb)
 	env := &gproto_remote.SystemMessageEnvelope{
 		Message:      payload,
-		SerializerId: proto.Int32(ArteryInternalSerializerID),
+		SerializerId: proto.Int32(actor.ArteryInternalSerializerID),
 		// No manifest
 	}
 	envPayload, _ := proto.Marshal(env)

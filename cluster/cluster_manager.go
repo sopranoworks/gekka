@@ -28,9 +28,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-const (
-	ClusterSerializerID = 5 // Pekko's ClusterMessageSerializer ID
-)
+// Cluster-internal messages (heartbeats, gossip, etc.) are handled automatically
 
 // gzipDecompress decompresses GZIP-compressed bytes (used for Welcome and GossipEnvelope.serializedGossip).
 func gzipDecompress(data []byte) ([]byte, error) {

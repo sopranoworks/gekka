@@ -15,6 +15,8 @@ import (
 	"log"
 	"sync"
 	"time"
+
+	"github.com/sopranoworks/gekka/actor"
 )
 
 // ReplicatorMsg is the JSON envelope sent over Artery for gossip.
@@ -50,7 +52,7 @@ type Replicator struct {
 	sets     map[string]*ORSet
 
 	peers  []peerInfo // remote actor paths to gossip to
-	router *Router
+	router *actor.Router
 
 	GossipInterval time.Duration
 	stopCh         chan struct{}
@@ -65,7 +67,7 @@ type peerInfo struct {
 }
 
 // NewReplicator creates a Replicator for the given nodeID.
-func NewReplicator(nodeID string, router *Router) *Replicator {
+func NewReplicator(nodeID string, router *actor.Router) *Replicator {
 	return &Replicator{
 		nodeID:         nodeID,
 		counters:       make(map[string]*GCounter),

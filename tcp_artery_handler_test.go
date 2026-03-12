@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sopranoworks/gekka/actor"
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 	"google.golang.org/protobuf/proto"
 )
@@ -136,7 +137,7 @@ func TestDecodeArteryEnvelope_SystemMessage(t *testing.T) {
 
 	sme := &gproto_remote.SystemMessageEnvelope{
 		Message:         innerBytes,
-		SerializerId:    proto.Int32(ArteryInternalSerializerID),
+		SerializerId:    proto.Int32(actor.ArteryInternalSerializerID),
 		SeqNo:           proto.Uint64(456),
 		MessageManifest: []byte("SystemMessage"),
 		AckReplyTo: &gproto_remote.UniqueAddress{
@@ -152,7 +153,7 @@ func TestDecodeArteryEnvelope_SystemMessage(t *testing.T) {
 	smeBytes, _ := proto.Marshal(sme)
 
 	// Wrap in an Artery frame with manifest "SystemMessage".
-	frame, err := BuildArteryFrame(0, ArteryInternalSerializerID, "", "", "SystemMessage", smeBytes, true)
+	frame, err := BuildArteryFrame(0, actor.ArteryInternalSerializerID, "", "", "SystemMessage", smeBytes, true)
 	if err != nil {
 		t.Fatalf("BuildArteryFrame: %v", err)
 	}
@@ -162,8 +163,8 @@ func TestDecodeArteryEnvelope_SystemMessage(t *testing.T) {
 		t.Fatalf("DecodeArteryEnvelope: %v", err)
 	}
 
-	if meta.SerializerId != ArteryInternalSerializerID {
-		t.Errorf("expected serializerId %d, got %d", ArteryInternalSerializerID, meta.SerializerId)
+	if meta.SerializerId != actor.ArteryInternalSerializerID {
+		t.Errorf("expected serializerId %d, got %d", actor.ArteryInternalSerializerID, meta.SerializerId)
 	}
 	if string(meta.MessageManifest) != "SystemMessage" {
 		t.Errorf("expected manifest %q, got %q", "SystemMessage", string(meta.MessageManifest))

@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sopranoworks/gekka/actor"
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 	"google.golang.org/protobuf/proto"
 )
@@ -36,7 +37,7 @@ func sendArteryFrame(t *testing.T, conn net.Conn, manifest string, msg proto.Mes
 	if err != nil {
 		t.Fatalf("proto.Marshal: %v", err)
 	}
-	frame, err := BuildArteryFrame(0, ArteryInternalSerializerID, "", "", manifest, payload, true)
+	frame, err := BuildArteryFrame(0, actor.ArteryInternalSerializerID, "", "", manifest, payload, true)
 	if err != nil {
 		t.Fatalf("BuildArteryFrame: %v", err)
 	}

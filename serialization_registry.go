@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"sync"
 
+	"github.com/sopranoworks/gekka/actor"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -77,16 +78,6 @@ type SerializationRegistry struct {
 	manifests   map[string]reflect.Type
 }
 
-// Well-known serializer IDs used in Artery frames.
-const (
-	// JSONSerializerID is the Artery serializer ID for the built-in
-	// JSONSerializer.  This is a Gekka-internal ID (not a Pekko standard);
-	// choose a value that does not collide with your cluster peers.
-	//
-	// Pekko occupies IDs 1–31; IDs ≥ 100 are safe for application use.
-	JSONSerializerID int32 = 9
-)
-
 // NewSerializationRegistry creates a registry pre-populated with three
 // built-in serializers:
 //
@@ -100,7 +91,7 @@ func NewSerializationRegistry() *SerializationRegistry {
 	}
 	reg.RegisterSerializer(2, &ProtobufSerializer{registry: reg})
 	reg.RegisterSerializer(4, &ByteArraySerializer{})
-	reg.RegisterSerializer(JSONSerializerID, &JSONSerializer{registry: reg})
+	reg.RegisterSerializer(actor.JSONSerializerID, &JSONSerializer{registry: reg})
 	return reg
 }
 
@@ -221,7 +212,7 @@ type JSONSerializer struct {
 	registry *SerializationRegistry
 }
 
-func (j *JSONSerializer) Identifier() int32 { return JSONSerializerID }
+func (j *JSONSerializer) Identifier() int32 { return actor.JSONSerializerID }
 
 // ToBinary encodes obj as JSON. Any value supported by encoding/json is accepted.
 func (j *JSONSerializer) ToBinary(obj interface{}) ([]byte, error) {

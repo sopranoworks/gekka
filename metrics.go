@@ -103,6 +103,14 @@ func (m *NodeMetrics) IncrementMemberRemoved() {
 	m.MemberRemovedEvents.Add(1)
 }
 
+func (m *NodeMetrics) IncrementMessagesSent() {
+	m.MessagesSent.Add(1)
+}
+
+func (m *NodeMetrics) IncrementBytesSent(n int64) {
+	m.BytesSent.Add(n)
+}
+
 // Snapshot returns an instantaneous, consistent copy of all counters.
 // activeAssociations is supplied by the caller so the snapshot can include
 // the live association count without embedding a NodeManager reference here.

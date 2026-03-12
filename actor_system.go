@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/internal/core"
 )
 
 // Props is a factory specification for creating an actor.
@@ -136,8 +137,8 @@ func (s *nodeActorSystem) ActorOfHierarchical(props Props, name string, parentPa
 	// matching deployment entry. GroupRouters do not need props.New (they route
 	// to pre-existing actors); PoolRouters do need it (to create workers).
 	if d, ok := s.node.lookupDeployment(path); ok && d.Router != "" {
-		if isGroupRouter(d.Router) {
-			group, err := DeploymentToGroupRouter(s.node.cm, d)
+		if core.IsGroupRouter(d.Router) {
+			group, err := core.DeploymentToGroupRouter(s.node.cm, d)
 			if err != nil {
 				return ActorRef{}, fmt.Errorf("actorOf: deployment config for %q: %w", path, err)
 			}
@@ -147,7 +148,7 @@ func (s *nodeActorSystem) ActorOfHierarchical(props Props, name string, parentPa
 		if props.New == nil {
 			return ActorRef{}, fmt.Errorf("actorOf: Props.New must not be nil for pool router deployment at %q", path)
 		}
-		pool, err := DeploymentToPoolRouter(s.node.cm, d, props)
+		pool, err := core.DeploymentToPoolRouter(s.node.cm, d, props)
 		if err != nil {
 			return ActorRef{}, fmt.Errorf("actorOf: deployment config for %q: %w", path, err)
 		}

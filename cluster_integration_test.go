@@ -17,6 +17,7 @@ import (
 
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/cluster"
+	"github.com/sopranoworks/gekka/internal/core"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 	"google.golang.org/protobuf/proto"
@@ -31,9 +32,9 @@ func TestCluster_JoinHandshake(t *testing.T) {
 		Protocol: proto.String("pekko"),
 	}
 	seedUA := &gproto_remote.UniqueAddress{Address: seedAddr, Uid: proto.Uint64(1)}
-	seedNM := NewNodeManager(seedAddr, 1)
+	seedNM := core.NewNodeManager(seedAddr, 1)
 	seedRouter := actor.NewRouter(seedNM)
-	seedCM := cluster.NewClusterManager(toClusterUniqueAddress(seedUA), func(ctx context.Context, path string, msg any) error {
+	seedCM := cluster.NewClusterManager(core.ToClusterUniqueAddress(seedUA), func(ctx context.Context, path string, msg any) error {
 		return seedRouter.Send(ctx, path, msg)
 	})
 	seedNM.SetClusterManager(seedCM)
@@ -53,7 +54,7 @@ func TestCluster_JoinHandshake(t *testing.T) {
 			if err != nil {
 				return
 			}
-			go func() { _ = seedNM.ProcessConnection(ctx, conn, INBOUND, nil, 0) }()
+			go func() { _ = seedNM.ProcessConnection(ctx, conn, actor.INBOUND, nil, 0) }()
 		}
 	}()
 
@@ -65,9 +66,9 @@ func TestCluster_JoinHandshake(t *testing.T) {
 		Protocol: proto.String("pekko"),
 	}
 	joinUA := &gproto_remote.UniqueAddress{Address: joinAddr, Uid: proto.Uint64(2)}
-	joinNM := NewNodeManager(joinAddr, 2)
+	joinNM := core.NewNodeManager(joinAddr, 2)
 	joinRouter := actor.NewRouter(joinNM)
-	joinCM := cluster.NewClusterManager(toClusterUniqueAddress(joinUA), func(ctx context.Context, path string, msg any) error {
+	joinCM := cluster.NewClusterManager(core.ToClusterUniqueAddress(joinUA), func(ctx context.Context, path string, msg any) error {
 		return joinRouter.Send(ctx, path, msg)
 	})
 	joinNM.SetClusterManager(joinCM)
@@ -100,9 +101,9 @@ func TestCluster_GossipConvergence(t *testing.T) {
 	// Node 1 (Seed)
 	addr1 := &gproto_remote.Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2560), System: proto.String("sys"), Protocol: proto.String("pekko")}
 	ua1 := &gproto_remote.UniqueAddress{Address: addr1, Uid: proto.Uint64(111)}
-	nm1 := NewNodeManager(addr1, 111)
+	nm1 := core.NewNodeManager(addr1, 111)
 	router1 := actor.NewRouter(nm1)
-	cm1 := cluster.NewClusterManager(toClusterUniqueAddress(ua1), func(ctx context.Context, path string, msg any) error {
+	cm1 := cluster.NewClusterManager(core.ToClusterUniqueAddress(ua1), func(ctx context.Context, path string, msg any) error {
 		return router1.Send(ctx, path, msg)
 	})
 	nm1.SetClusterManager(cm1)
@@ -115,16 +116,16 @@ func TestCluster_GossipConvergence(t *testing.T) {
 			if err != nil {
 				return
 			}
-			go func() { _ = nm1.ProcessConnection(context.Background(), conn, INBOUND, nil, 0) }()
+			go func() { _ = nm1.ProcessConnection(context.Background(), conn, actor.INBOUND, nil, 0) }()
 		}
 	}()
 
 	// Node 2 (Joining)
 	addr2 := &gproto_remote.Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2561), System: proto.String("sys"), Protocol: proto.String("pekko")}
 	ua2 := &gproto_remote.UniqueAddress{Address: addr2, Uid: proto.Uint64(222)}
-	nm2 := NewNodeManager(addr2, 222)
+	nm2 := core.NewNodeManager(addr2, 222)
 	router2 := actor.NewRouter(nm2)
-	cm2 := cluster.NewClusterManager(toClusterUniqueAddress(ua2), func(ctx context.Context, path string, msg any) error {
+	cm2 := cluster.NewClusterManager(core.ToClusterUniqueAddress(ua2), func(ctx context.Context, path string, msg any) error {
 		return router2.Send(ctx, path, msg)
 	})
 	nm2.SetClusterManager(cm2)
@@ -137,7 +138,7 @@ func TestCluster_GossipConvergence(t *testing.T) {
 			if err != nil {
 				return
 			}
-			go func() { _ = nm2.ProcessConnection(context.Background(), conn, INBOUND, nil, 0) }()
+			go func() { _ = nm2.ProcessConnection(context.Background(), conn, actor.INBOUND, nil, 0) }()
 		}
 	}()
 
@@ -151,7 +152,7 @@ func TestCluster_GossipConvergence(t *testing.T) {
 
 	// Manually add Node 2 to Node 1's Gossip state to simulate convergence progress
 	cm1.Mu.Lock()
-	cm1.State.AllAddresses = append(cm1.State.AllAddresses, toClusterUniqueAddress(ua2))
+	cm1.State.AllAddresses = append(cm1.State.AllAddresses, core.ToClusterUniqueAddress(ua2))
 	cm1.State.Members = append(cm1.State.Members, &gproto_cluster.Member{
 		AddressIndex: proto.Int32(int32(len(cm1.State.AllAddresses) - 1)),
 		Status:       gproto_cluster.MemberStatus_Joining.Enum(),
@@ -175,12 +176,12 @@ func TestCluster_GossipConvergence(t *testing.T) {
 }
 
 func TestCluster_LeaderElection(t *testing.T) {
-	setup := func(port uint32, uid uint64) (*cluster.ClusterManager, *NodeManager, net.Listener) {
+	setup := func(port uint32, uid uint64) (*cluster.ClusterManager, *core.NodeManager, net.Listener) {
 		addr := &gproto_remote.Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(port), System: proto.String("leaderSys"), Protocol: proto.String("pekko")}
 		ua := &gproto_remote.UniqueAddress{Address: addr, Uid: proto.Uint64(uid)}
-		nm := NewNodeManager(addr, uid)
+		nm := core.NewNodeManager(addr, uid)
 		router := actor.NewRouter(nm)
-		cm := cluster.NewClusterManager(toClusterUniqueAddress(ua), func(ctx context.Context, path string, msg any) error {
+		cm := cluster.NewClusterManager(core.ToClusterUniqueAddress(ua), func(ctx context.Context, path string, msg any) error {
 			return router.Send(ctx, path, msg)
 		})
 		nm.SetClusterManager(cm)
@@ -191,7 +192,7 @@ func TestCluster_LeaderElection(t *testing.T) {
 				if err != nil {
 					return
 				}
-				go func() { _ = nm.ProcessConnection(context.Background(), conn, INBOUND, nil, 0) }()
+			go func() { _ = nm.ProcessConnection(context.Background(), conn, actor.INBOUND, nil, 0) }()
 			}
 		}()
 		return cm, nm, ln
@@ -212,9 +213,9 @@ func TestCluster_LeaderElection(t *testing.T) {
 
 	// Connect nodes together by manual state update
 	allUA := []*gproto_cluster.UniqueAddress{
-		toClusterUniqueAddress(&gproto_remote.UniqueAddress{Address: &gproto_remote.Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2570), System: proto.String("leaderSys"), Protocol: proto.String("pekko")}, Uid: proto.Uint64(100)}),
-		toClusterUniqueAddress(&gproto_remote.UniqueAddress{Address: &gproto_remote.Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2571), System: proto.String("leaderSys"), Protocol: proto.String("pekko")}, Uid: proto.Uint64(200)}),
-		toClusterUniqueAddress(&gproto_remote.UniqueAddress{Address: &gproto_remote.Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2572), System: proto.String("leaderSys"), Protocol: proto.String("pekko")}, Uid: proto.Uint64(50)}),
+		core.ToClusterUniqueAddress(&gproto_remote.UniqueAddress{Address: &gproto_remote.Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2570), System: proto.String("leaderSys"), Protocol: proto.String("pekko")}, Uid: proto.Uint64(100)}),
+		core.ToClusterUniqueAddress(&gproto_remote.UniqueAddress{Address: &gproto_remote.Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2571), System: proto.String("leaderSys"), Protocol: proto.String("pekko")}, Uid: proto.Uint64(200)}),
+		core.ToClusterUniqueAddress(&gproto_remote.UniqueAddress{Address: &gproto_remote.Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2572), System: proto.String("leaderSys"), Protocol: proto.String("pekko")}, Uid: proto.Uint64(50)}),
 	}
 	members := []*gproto_cluster.Member{
 		{AddressIndex: proto.Int32(0), Status: gproto_cluster.MemberStatus_Up.Enum()},

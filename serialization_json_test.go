@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/internal/core"
 )
 
 // ── shared domain types ────────────────────────────────────────────────────────
@@ -40,7 +41,7 @@ const (
 // ── JSONSerializer unit tests ─────────────────────────────────────────────────
 
 func TestJSONSerializer_IsRegisteredByDefault(t *testing.T) {
-	reg := NewSerializationRegistry()
+	reg := core.NewSerializationRegistry()
 	s, err := reg.GetSerializer(actor.JSONSerializerID)
 	if err != nil {
 		t.Fatalf("JSONSerializer not registered by default: %v", err)
@@ -51,7 +52,7 @@ func TestJSONSerializer_IsRegisteredByDefault(t *testing.T) {
 }
 
 func TestJSONSerializer_ToBinary_ProducesValidJSON(t *testing.T) {
-	reg := NewSerializationRegistry()
+	reg := core.NewSerializationRegistry()
 	s, _ := reg.GetSerializer(actor.JSONSerializerID)
 
 	event := shippingEvent{OrderID: "ORD-1", Warehouse: "WH-A", Qty: 3, Weight: 4.5}
@@ -69,7 +70,7 @@ func TestJSONSerializer_ToBinary_ProducesValidJSON(t *testing.T) {
 }
 
 func TestJSONSerializer_RoundTrip_ValueType(t *testing.T) {
-	reg := NewSerializationRegistry()
+	reg := core.NewSerializationRegistry()
 	// Register with value type (not pointer).
 	reg.RegisterManifest(manifestShipping, reflect.TypeOf(shippingEvent{}))
 
@@ -95,7 +96,7 @@ func TestJSONSerializer_RoundTrip_ValueType(t *testing.T) {
 }
 
 func TestJSONSerializer_RoundTrip_PointerType(t *testing.T) {
-	reg := NewSerializationRegistry()
+	reg := core.NewSerializationRegistry()
 	// Register with pointer type.
 	reg.RegisterManifest(manifestPayment, reflect.TypeOf((*paymentEvent)(nil)))
 
@@ -121,7 +122,7 @@ func TestJSONSerializer_RoundTrip_PointerType(t *testing.T) {
 }
 
 func TestJSONSerializer_UnknownManifest_ReturnsError(t *testing.T) {
-	reg := NewSerializationRegistry()
+	reg := core.NewSerializationRegistry()
 	_, err := reg.DeserializePayload(actor.JSONSerializerID, "com.example.Unknown", []byte(`{}`))
 	if err == nil {
 		t.Error("expected error for unknown manifest, got nil")
@@ -129,7 +130,7 @@ func TestJSONSerializer_UnknownManifest_ReturnsError(t *testing.T) {
 }
 
 func TestJSONSerializer_InvalidJSON_ReturnsError(t *testing.T) {
-	reg := NewSerializationRegistry()
+	reg := core.NewSerializationRegistry()
 	reg.RegisterManifest(manifestShipping, reflect.TypeOf(shippingEvent{}))
 
 	_, err := reg.DeserializePayload(actor.JSONSerializerID, manifestShipping, []byte(`not-json{`))
@@ -139,7 +140,7 @@ func TestJSONSerializer_InvalidJSON_ReturnsError(t *testing.T) {
 }
 
 func TestJSONSerializer_ManifestDispatch_TwoTypes(t *testing.T) {
-	reg := NewSerializationRegistry()
+	reg := core.NewSerializationRegistry()
 	reg.RegisterManifest(manifestShipping, reflect.TypeOf(shippingEvent{}))
 	reg.RegisterManifest(manifestPayment, reflect.TypeOf(paymentEvent{}))
 
@@ -172,7 +173,7 @@ func TestJSONSerializer_ManifestDispatch_TwoTypes(t *testing.T) {
 
 func TestGekkaNode_RegisterType_AndRetrieve(t *testing.T) {
 	node := newTestNode(t, "Sys", "127.0.0.1", 2552)
-	node.nm.SerializerRegistry = NewSerializationRegistry()
+	node.nm.SerializerRegistry = core.NewSerializationRegistry()
 
 	node.RegisterType(manifestShipping, reflect.TypeOf(shippingEvent{}))
 
@@ -187,7 +188,7 @@ func TestGekkaNode_RegisterType_AndRetrieve(t *testing.T) {
 
 func TestGekkaNode_RegisterSerializer_OverridesExisting(t *testing.T) {
 	node := newTestNode(t, "Sys", "127.0.0.1", 2552)
-	node.nm.SerializerRegistry = NewSerializationRegistry()
+	node.nm.SerializerRegistry = core.NewSerializationRegistry()
 
 	// Replace JSON serializer with a custom one keyed by its identifier.
 	custom := &customTestSerializer{}
@@ -232,7 +233,7 @@ func (a *eventCapture) Receive(msg any) {
 
 func TestJSONSerializer_ActorReceivesGoStruct_LocalDelivery(t *testing.T) {
 	node := newTestNode(t, "Sys", "127.0.0.1", 2552)
-	node.nm.SerializerRegistry = NewSerializationRegistry()
+	node.nm.SerializerRegistry = core.NewSerializationRegistry()
 	node.RegisterType(manifestShipping, reflect.TypeOf(shippingEvent{}))
 
 	cap := &eventCapture{

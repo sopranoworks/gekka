@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/sopranoworks/gekka/internal/core"
 	"io"
 	"net/http"
 	"strings"
@@ -166,7 +167,7 @@ func TestMonitoring_Metrics_JSONShape(t *testing.T) {
 		t.Errorf("Content-Type: got %q, want application/json", ct)
 	}
 
-	var snap MetricsSnapshot
+	var snap core.MetricsSnapshot
 	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
 		t.Fatalf("decode /metrics JSON: %v", err)
 	}
@@ -301,7 +302,7 @@ func TestMonitoring_Metrics_MessageCounters(t *testing.T) {
 
 	// Check nodeB's sent counter (probe + nSend, but probe may not have been
 	// counted if it was sent before ASSOCIATED; use >= nSend as the floor).
-	snapB := nodeB.Metrics()
+	snapB := nodeB.MetricsSnapshot()
 	if snapB.MessagesSent < int64(nSend) {
 		t.Errorf("nodeB MessagesSent: got %d, want >= %d", snapB.MessagesSent, nSend)
 	}
@@ -311,7 +312,7 @@ func TestMonitoring_Metrics_MessageCounters(t *testing.T) {
 
 	// Check nodeA's received counter (if messages arrived).
 	if got > 0 {
-		snapA := nodeA.Metrics()
+		snapA := nodeA.MetricsSnapshot()
 		if snapA.MessagesReceived < int64(got) {
 			t.Errorf("nodeA MessagesReceived: got %d, want >= %d", snapA.MessagesReceived, got)
 		}
@@ -329,7 +330,7 @@ func TestMonitoring_Metrics_MessageCounters(t *testing.T) {
 		t.Fatalf("GET /metrics: %v", err)
 	}
 	defer resp.Body.Close()
-	var httpSnap MetricsSnapshot
+	var httpSnap core.MetricsSnapshot
 	if err := json.NewDecoder(resp.Body).Decode(&httpSnap); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -338,10 +339,10 @@ func TestMonitoring_Metrics_MessageCounters(t *testing.T) {
 	}
 }
 
-// ── NodeMetrics unit tests (no network) ──────────────────────────────────────
+// ── core.NodeMetrics unit tests (no network) ──────────────────────────────────────
 
 func TestNodeMetrics_AtomicIncrement(t *testing.T) {
-	m := &NodeMetrics{}
+	m := &core.NodeMetrics{}
 	m.MessagesSent.Add(5)
 	m.MessagesReceived.Add(3)
 	m.BytesSent.Add(100)
@@ -378,7 +379,7 @@ func TestNodeMetrics_AtomicIncrement(t *testing.T) {
 }
 
 func TestNodeMetrics_ConvergenceTime(t *testing.T) {
-	m := &NodeMetrics{}
+	m := &core.NodeMetrics{}
 
 	snap := m.Snapshot(0)
 	if snap.LastConvergenceTime != "never" {
@@ -403,7 +404,7 @@ func TestNodeMetrics_ConvergenceTime(t *testing.T) {
 }
 
 func TestNodeMetrics_PrometheusText(t *testing.T) {
-	m := &NodeMetrics{}
+	m := &core.NodeMetrics{}
 	m.MessagesSent.Add(42)
 	m.GossipsReceived.Add(7)
 

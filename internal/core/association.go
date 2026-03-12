@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-package gekka
+package core
 
 import (
 	"context"
@@ -54,10 +54,10 @@ type GekkaAssociation struct {
 	remote    *gproto_remote.UniqueAddress
 	lastSeen  time.Time
 	nodeMgr   *NodeManager
-	handshake chan struct{} // signaled when associated
+	Handshake chan struct{} // signaled when associated
 	nextSeq   uint64        // for user messages
 	nextSeqNo uint64        // for system messages
-	pending   [][]byte      // buffered frames during handshake
+	pending   [][]byte      // buffered frames during Handshake
 	localUid  uint64
 	outbox    chan []byte
 	streamId  int32
@@ -65,10 +65,9 @@ type GekkaAssociation struct {
 
 var _ actor.RemoteAssociation = (*GekkaAssociation)(nil)
 
-// NodeManager manages all active associations.
 type NodeManager struct {
 	mu                  sync.RWMutex
-	localAddress        *gproto_remote.Address
+	LocalAddr           *gproto_remote.Address
 	associations        map[string]*GekkaAssociation // key: host:port, or UID string
 	localUid            uint64
 	clusterMgr          *cluster.ClusterManager
@@ -79,14 +78,14 @@ type NodeManager struct {
 	pendingRepliesMu sync.RWMutex
 	pendingReplies   map[string]chan *ArteryMetadata // keyed by temp actor path
 
-	// metrics is the shared NodeMetrics instance (set by GekkaNode.Spawn).
+	// NodeMetrics is the shared NodeMetrics instance (set by GekkaNode.Spawn).
 	// Nil-safe: all callers check before touching.
-	metrics *NodeMetrics
+	NodeMetrics *NodeMetrics
 }
 
 func NewNodeManager(local *gproto_remote.Address, uid uint64) *NodeManager {
 	return &NodeManager{
-		localAddress:       local,
+		LocalAddr:          local,
 		associations:       make(map[string]*GekkaAssociation),
 		localUid:           uid,
 		SerializerRegistry: NewSerializationRegistry(),
@@ -94,15 +93,15 @@ func NewNodeManager(local *gproto_remote.Address, uid uint64) *NodeManager {
 	}
 }
 
-// registerPendingReply records a channel to receive a single reply addressed to path.
-func (nm *NodeManager) registerPendingReply(path string, ch chan *ArteryMetadata) {
+// RegisterPendingReply records a channel to receive a single reply addressed to path.
+func (nm *NodeManager) RegisterPendingReply(path string, ch chan *ArteryMetadata) {
 	nm.pendingRepliesMu.Lock()
 	nm.pendingReplies[path] = ch
 	nm.pendingRepliesMu.Unlock()
 }
 
-// unregisterPendingReply removes the pending reply entry for path.
-func (nm *NodeManager) unregisterPendingReply(path string) {
+// UnregisterPendingReply removes the pending reply entry for path.
+func (nm *NodeManager) UnregisterPendingReply(path string) {
 	nm.pendingRepliesMu.Lock()
 	delete(nm.pendingReplies, path)
 	nm.pendingRepliesMu.Unlock()
@@ -146,7 +145,7 @@ func (nm *NodeManager) routePendingReply(path string, meta *ArteryMetadata) bool
 var _ actor.RemoteMessagingProvider = (*NodeManager)(nil)
 
 func (nm *NodeManager) LocalAddress() *gproto_remote.Address {
-	return nm.localAddress
+	return nm.LocalAddr
 }
 
 func (nm *NodeManager) GetAssociationByHost(host string, port uint32) (actor.RemoteAssociation, bool) {
@@ -213,7 +212,7 @@ func (nm *NodeManager) Serializer(id int32) (actor.RemoteSerializer, error) {
 }
 
 func (nm *NodeManager) Metrics() actor.RemoteMetrics {
-	return nm.metrics
+	return nm.NodeMetrics
 }
 
 func (nm *NodeManager) SetClusterManager(cm *cluster.ClusterManager) {
@@ -328,7 +327,7 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 		conn:      conn,
 		nodeMgr:   nm,
 		lastSeen:  time.Now(),
-		handshake: make(chan struct{}),
+		Handshake: make(chan struct{}),
 		localUid:  nm.localUid,
 		outbox:    make(chan []byte, 100),
 		remote:    &gproto_remote.UniqueAddress{Address: remote, Uid: proto.Uint64(0)},
@@ -380,7 +379,7 @@ func (assoc *GekkaAssociation) initiateHandshake(to *gproto_remote.Address) erro
 	// Correctly initialize HandshakeReq using pointer types from proto package
 	req := &gproto_remote.HandshakeReq{
 		From: &gproto_remote.UniqueAddress{
-			Address: assoc.nodeMgr.localAddress,
+			Address: assoc.nodeMgr.LocalAddr,
 			Uid:     proto.Uint64(uid),
 		},
 		To: to,
@@ -428,7 +427,7 @@ func (assoc *GekkaAssociation) dispatch(ctx context.Context, meta *ArteryMetadat
 			assoc.mu.RLock()
 			remote := assoc.remote
 			assoc.mu.RUnlock()
-			return assoc.nodeMgr.clusterMgr.HandleIncomingClusterMessage(ctx, meta.Payload, string(meta.MessageManifest), toClusterUniqueAddress(remote))
+			return assoc.nodeMgr.clusterMgr.HandleIncomingClusterMessage(ctx, meta.Payload, string(meta.MessageManifest), ToClusterUniqueAddress(remote))
 		}
 		return nil
 
@@ -441,7 +440,7 @@ func (assoc *GekkaAssociation) sendSystemAck(seq uint64, to *gproto_remote.Uniqu
 	ack := &gproto_remote.SystemMessageDeliveryAck{
 		SeqNo: proto.Uint64(seq),
 		From: &gproto_remote.UniqueAddress{
-			Address: assoc.nodeMgr.localAddress,
+			Address: assoc.nodeMgr.LocalAddr,
 			Uid:     proto.Uint64(assoc.localUid),
 		},
 	}
@@ -471,9 +470,9 @@ func (assoc *GekkaAssociation) handleSystemMessage(meta *ArteryMetadata) error {
 func (assoc *GekkaAssociation) handleUserMessage(meta *ArteryMetadata) error {
 	// Count every incoming user message (cluster-internal messages never
 	// reach this handler — they go to handleControlMessage/cluster.ClusterManager).
-	if assoc.nodeMgr.metrics != nil {
-		assoc.nodeMgr.metrics.MessagesReceived.Add(1)
-		assoc.nodeMgr.metrics.BytesReceived.Add(int64(len(meta.Payload)))
+	if assoc.nodeMgr.NodeMetrics != nil {
+		assoc.nodeMgr.NodeMetrics.MessagesReceived.Add(1)
+		assoc.nodeMgr.NodeMetrics.BytesReceived.Add(int64(len(meta.Payload)))
 	}
 
 	// Route to a pending Ask call if the recipient path is registered.
@@ -562,10 +561,10 @@ func (assoc *GekkaAssociation) Send(recipient string, payload []byte, serializer
 	}
 
 	sender := fmt.Sprintf("%s://%s@%s:%d/user/echo",
-		assoc.nodeMgr.localAddress.GetProtocol(),
-		assoc.nodeMgr.localAddress.GetSystem(),
-		assoc.nodeMgr.localAddress.GetHostname(),
-		assoc.nodeMgr.localAddress.GetPort())
+		assoc.nodeMgr.LocalAddr.GetProtocol(),
+		assoc.nodeMgr.LocalAddr.GetSystem(),
+		assoc.nodeMgr.LocalAddr.GetHostname(),
+		assoc.nodeMgr.LocalAddr.GetPort())
 
 	frame, err := BuildArteryFrame(int64(assoc.localUid), serializerId, sender, recipient, manifest, payload, false)
 	if err != nil {
@@ -647,7 +646,7 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 			isActorRef := manifest == "ActorRefCompressionAdvertisement"
 			// Get local address from NodeManager to use in the Ack
 			localUA := &gproto_remote.UniqueAddress{
-				Address: assoc.nodeMgr.localAddress,
+				Address: assoc.nodeMgr.LocalAddr,
 				Uid:     proto.Uint64(assoc.nodeMgr.localUid),
 			}
 			return assoc.nodeMgr.compressionMgr.HandleAdvertisement(ctx, adv, isActorRef, localUA)
@@ -699,7 +698,7 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 
 					log.Printf("Association: Received Advertisement with ID 6 and empty manifest. Guessing isActorRef=%v", isActorRef)
 					localUA := &gproto_remote.UniqueAddress{
-						Address: assoc.nodeMgr.localAddress,
+						Address: assoc.nodeMgr.LocalAddr,
 						Uid:     proto.Uint64(assoc.nodeMgr.localUid),
 					}
 					return assoc.nodeMgr.compressionMgr.HandleAdvertisement(ctx, adv, isActorRef, localUA)
@@ -716,8 +715,8 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 
 	// Validate that the 'To' address matches our local node (Pekko protocol requirement).
 	if toSys := req.GetTo().GetSystem(); toSys != "" {
-		if localSys := assoc.nodeMgr.localAddress.GetSystem(); toSys != localSys {
-			return fmt.Errorf("handshake rejected: To system %q != local system %q", toSys, localSys)
+		if localSys := assoc.nodeMgr.LocalAddr.GetSystem(); toSys != localSys {
+			return fmt.Errorf("Handshake rejected: To system %q != local system %q", toSys, localSys)
 		}
 	}
 
@@ -728,7 +727,7 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 
 	assoc.nodeMgr.RegisterAssociation(req.From, assoc)
 
-	// Symmetric handshake: check if there's an outbound association waiting for a handshake from this same remote node.
+	// Symmetric Handshake: check if there's an outbound association waiting for a Handshake from this same remote node.
 	if assoc.role == INBOUND {
 		addr := req.From.GetAddress()
 		nm := assoc.nodeMgr
@@ -771,7 +770,7 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 		// transition to ASSOCIATED.  This is correct Artery protocol for both
 		// Pekko and Go peers: the outbound side reads HandshakeRsp after sending
 		// HandshakeReq.
-		localUA := &gproto_remote.UniqueAddress{Address: assoc.nodeMgr.localAddress, Uid: proto.Uint64(assoc.localUid)}
+		localUA := &gproto_remote.UniqueAddress{Address: assoc.nodeMgr.LocalAddr, Uid: proto.Uint64(assoc.localUid)}
 		rspProto := &gproto_remote.MessageWithAddress{Address: localUA}
 		if rspPayload, err2 := proto.Marshal(rspProto); err2 == nil {
 			if frame, err2 := BuildArteryFrame(int64(assoc.localUid), actor.ArteryInternalSerializerID, "", "", "e", rspPayload, true); err2 == nil {
@@ -789,9 +788,9 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 			matched.remote = req.From
 			matched.state = ASSOCIATED
 			select {
-			case <-matched.handshake:
+			case <-matched.Handshake:
 			default:
-				close(matched.handshake)
+				close(matched.Handshake)
 			}
 			for _, msg := range matched.pending {
 				matched.outbox <- msg
@@ -812,7 +811,7 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 	assoc.pending = nil
 	assoc.mu.Unlock()
 
-	localUA := &gproto_remote.UniqueAddress{Address: assoc.nodeMgr.localAddress, Uid: proto.Uint64(assoc.localUid)}
+	localUA := &gproto_remote.UniqueAddress{Address: assoc.nodeMgr.LocalAddr, Uid: proto.Uint64(assoc.localUid)}
 	rsp := &gproto_remote.MessageWithAddress{Address: localUA}
 
 	// Write HandshakeRsp to outbox
@@ -880,10 +879,10 @@ func (assoc *GekkaAssociation) handleHandshakeRsp(mwa *gproto_remote.MessageWith
 
 		// Unblock anybody waiting on this
 		select {
-		case <-matched.handshake:
+		case <-matched.Handshake:
 			// already closed
 		default:
-			close(matched.handshake)
+			close(matched.Handshake)
 		}
 
 		// Flush pending messages

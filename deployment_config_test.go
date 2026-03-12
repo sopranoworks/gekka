@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/internal/core"
 
 	hocon "github.com/sopranoworks/gekka-config"
 )
@@ -39,7 +40,7 @@ pekko.actor.deployment {
   }
 }
 `)
-	d, ok := LookupDeployment(cfg, "/user/myRouter")
+	d, ok := core.LookupDeployment(cfg, "/user/myRouter")
 	if !ok {
 		t.Fatal("LookupDeployment returned false, want true")
 	}
@@ -63,7 +64,7 @@ pekko.actor.deployment {
 }
 `)
 	// Query with short form directly.
-	d, ok := LookupDeployment(cfg, "/myRouter")
+	d, ok := core.LookupDeployment(cfg, "/myRouter")
 	if !ok {
 		t.Fatal("LookupDeployment returned false for short-form key, want true")
 	}
@@ -83,7 +84,7 @@ pekko.actor.deployment {
   }
 }
 `)
-	d, ok := LookupDeployment(cfg, "/user/myRouter")
+	d, ok := core.LookupDeployment(cfg, "/user/myRouter")
 	if !ok {
 		t.Fatal("LookupDeployment returned false, want true (full path should find short key)")
 	}
@@ -103,7 +104,7 @@ pekko.actor.deployment {
   }
 }
 `)
-	d, ok := LookupDeployment(cfg, "/myRouter")
+	d, ok := core.LookupDeployment(cfg, "/myRouter")
 	if !ok {
 		t.Fatal("LookupDeployment returned false, want true (short path should find full key)")
 	}
@@ -122,7 +123,7 @@ akka.actor.deployment {
   }
 }
 `)
-	d, ok := LookupDeployment(cfg, "/user/myWorker")
+	d, ok := core.LookupDeployment(cfg, "/user/myWorker")
 	if !ok {
 		t.Fatal("LookupDeployment returned false for akka prefix, want true")
 	}
@@ -145,7 +146,7 @@ pekko.actor.deployment {
   }
 }
 `)
-	_, ok := LookupDeployment(cfg, "/user/myRouter")
+	_, ok := core.LookupDeployment(cfg, "/user/myRouter")
 	if ok {
 		t.Error("LookupDeployment returned true for absent actor, want false")
 	}
@@ -162,7 +163,7 @@ pekko {
   }
 }
 `)
-	_, ok := LookupDeployment(cfg, "/user/myRouter")
+	_, ok := core.LookupDeployment(cfg, "/user/myRouter")
 	if ok {
 		t.Error("LookupDeployment returned true with no deployment section, want false")
 	}
@@ -183,7 +184,7 @@ pekko.actor.deployment {
   }
 }
 `)
-	d, ok := LookupDeployment(cfg, "/user/workerPool")
+	d, ok := core.LookupDeployment(cfg, "/user/workerPool")
 	if !ok {
 		t.Fatal("LookupDeployment returned false")
 	}
@@ -191,7 +192,7 @@ pekko.actor.deployment {
 		t.Errorf("NrOfInstances = %d, want 8", d.NrOfInstances)
 	}
 
-	d2, ok := LookupDeployment(cfg, "/user/otherPool")
+	d2, ok := core.LookupDeployment(cfg, "/user/otherPool")
 	if !ok {
 		t.Fatal("LookupDeployment returned false for otherPool")
 	}
@@ -203,7 +204,7 @@ pekko.actor.deployment {
 // ── DeploymentToPoolRouter ────────────────────────────────────────────────────
 
 func TestDeploymentToPoolRouter_RoundRobin(t *testing.T) {
-	d := DeploymentConfig{
+	d := core.DeploymentConfig{
 		Router:        "round-robin-pool",
 		NrOfInstances: 3,
 	}
@@ -211,7 +212,7 @@ func TestDeploymentToPoolRouter_RoundRobin(t *testing.T) {
 		return &deployTestActor{BaseActor: actor.NewBaseActor()}
 	}}
 
-	pool, err := DeploymentToPoolRouter(nil, d, props)
+	pool, err := core.DeploymentToPoolRouter(nil, d, props)
 	if err != nil {
 		t.Fatalf("DeploymentToPoolRouter: %v", err)
 	}
@@ -224,11 +225,11 @@ func TestDeploymentToPoolRouter_RoundRobin(t *testing.T) {
 }
 
 func TestDeploymentToPoolRouter_UnknownRouter(t *testing.T) {
-	d := DeploymentConfig{
+	d := core.DeploymentConfig{
 		Router:        "bogus-pool",
 		NrOfInstances: 3,
 	}
-	_, err := DeploymentToPoolRouter(nil, d, actor.Props{New: func() actor.Actor {
+	_, err := core.DeploymentToPoolRouter(nil, d, actor.Props{New: func() actor.Actor {
 		return &deployTestActor{BaseActor: actor.NewBaseActor()}
 	}})
 	if err == nil {
@@ -237,11 +238,11 @@ func TestDeploymentToPoolRouter_UnknownRouter(t *testing.T) {
 }
 
 func TestDeploymentToPoolRouter_ZeroInstances(t *testing.T) {
-	d := DeploymentConfig{
+	d := core.DeploymentConfig{
 		Router:        "round-robin-pool",
 		NrOfInstances: 0,
 	}
-	_, err := DeploymentToPoolRouter(nil, d, actor.Props{New: func() actor.Actor {
+	_, err := core.DeploymentToPoolRouter(nil, d, actor.Props{New: func() actor.Actor {
 		return &deployTestActor{BaseActor: actor.NewBaseActor()}
 	}})
 	if err == nil {
@@ -264,7 +265,7 @@ pekko.actor.deployment {
 `
 	cfg := mustParseHOCON(t, hoconText)
 
-	d, ok := LookupDeployment(cfg, "/user/myRouter")
+	d, ok := core.LookupDeployment(cfg, "/user/myRouter")
 	if !ok {
 		t.Fatal("deployment block not found")
 	}
@@ -272,7 +273,7 @@ pekko.actor.deployment {
 	props := actor.Props{New: func() actor.Actor {
 		return &deployTestActor{BaseActor: actor.NewBaseActor()}
 	}}
-	pool, err := DeploymentToPoolRouter(nil, d, props)
+	pool, err := core.DeploymentToPoolRouter(nil, d, props)
 	if err != nil {
 		t.Fatalf("DeploymentToPoolRouter: %v", err)
 	}

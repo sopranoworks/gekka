@@ -13,16 +13,17 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/internal/core"
 )
 
 // ── DeploymentToGroupRouter ───────────────────────────────────────────────────
 
 func TestDeploymentToGroupRouter_RoundRobin(t *testing.T) {
-	d := DeploymentConfig{
+	d := core.DeploymentConfig{
 		Router:       "round-robin-group",
 		RouteesPaths: []string{"/user/w1", "/user/w2"},
 	}
-	g, err := DeploymentToGroupRouter(nil, d)
+	g, err := core.DeploymentToGroupRouter(nil, d)
 	if err != nil {
 		t.Fatalf("DeploymentToGroupRouter: %v", err)
 	}
@@ -35,11 +36,11 @@ func TestDeploymentToGroupRouter_RoundRobin(t *testing.T) {
 }
 
 func TestDeploymentToGroupRouter_Random(t *testing.T) {
-	d := DeploymentConfig{
+	d := core.DeploymentConfig{
 		Router:       "random-group",
 		RouteesPaths: []string{"/user/a", "/user/b", "/user/c"},
 	}
-	g, err := DeploymentToGroupRouter(nil, d)
+	g, err := core.DeploymentToGroupRouter(nil, d)
 	if err != nil {
 		t.Fatalf("DeploymentToGroupRouter: %v", err)
 	}
@@ -49,16 +50,16 @@ func TestDeploymentToGroupRouter_Random(t *testing.T) {
 }
 
 func TestDeploymentToGroupRouter_EmptyPaths_Error(t *testing.T) {
-	d := DeploymentConfig{Router: "round-robin-group", RouteesPaths: nil}
-	_, err := DeploymentToGroupRouter(nil, d)
+	d := core.DeploymentConfig{Router: "round-robin-group", RouteesPaths: nil}
+	_, err := core.DeploymentToGroupRouter(nil, d)
 	if err == nil {
 		t.Error("expected error for empty RouteesPaths, got nil")
 	}
 }
 
 func TestDeploymentToGroupRouter_UnknownRouter_Error(t *testing.T) {
-	d := DeploymentConfig{Router: "bogus-group", RouteesPaths: []string{"/user/a"}}
-	_, err := DeploymentToGroupRouter(nil, d)
+	d := core.DeploymentConfig{Router: "bogus-group", RouteesPaths: []string{"/user/a"}}
+	_, err := core.DeploymentToGroupRouter(nil, d)
 	if err == nil {
 		t.Error("expected error for unknown router type, got nil")
 	}
@@ -85,7 +86,7 @@ func TestIsGroupRouter(t *testing.T) {
 	}{"my-group", true}
 
 	for _, tc := range cases {
-		got := isGroupRouter(tc.routerType)
+		got := core.IsGroupRouter(tc.routerType)
 		if got != tc.want {
 			t.Errorf("isGroupRouter(%q) = %v, want %v", tc.routerType, got, tc.want)
 		}
@@ -192,7 +193,7 @@ func TestActorOf_GroupRouter_DirectRef(t *testing.T) {
 // succeeds for a group router deployment and returns a non-empty ref.
 func TestActorOf_GroupRouter_NilProps(t *testing.T) {
 	node := spawnTestNode(t, NodeConfig{
-		Deployments: map[string]DeploymentConfig{
+		Deployments: map[string]core.DeploymentConfig{
 			"/user/nilGroup": {
 				Router:       "round-robin-group",
 				RouteesPaths: []string{"/user/x"},
@@ -212,7 +213,7 @@ func TestActorOf_GroupRouter_NilProps(t *testing.T) {
 // TestActorOf_GroupRouter_Broadcast verifies Broadcast delivers to all routees.
 func TestActorOf_GroupRouter_Broadcast(t *testing.T) {
 	node := spawnTestNode(t, NodeConfig{
-		Deployments: map[string]DeploymentConfig{
+		Deployments: map[string]core.DeploymentConfig{
 			"/user/bcastGroup": {
 				Router:       "round-robin-group",
 				RouteesPaths: []string{"/user/bc1", "/user/bc2", "/user/bc3"},
@@ -240,7 +241,7 @@ func TestActorOf_GroupRouter_Broadcast(t *testing.T) {
 // TestActorOf_GroupRouter_RandomRouting verifies random-group type resolves.
 func TestActorOf_GroupRouter_RandomRouting(t *testing.T) {
 	node := spawnTestNode(t, NodeConfig{
-		Deployments: map[string]DeploymentConfig{
+		Deployments: map[string]core.DeploymentConfig{
 			"/user/randGroup": {
 				Router:       "random-group",
 				RouteesPaths: []string{"/user/rw1", "/user/rw2"},

@@ -116,7 +116,7 @@ pekko {
 	}
 	nodeCfg.Port = 0
 
-	node, err := Spawn(nodeCfg)
+	node, err := NewCluster(nodeCfg)
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}

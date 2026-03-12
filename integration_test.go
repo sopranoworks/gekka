@@ -73,7 +73,7 @@ func TestIntegration_PekkoServer(t *testing.T) {
 	}
 
 	// 2. Spawn Go node (port 0 = OS-assigned)
-	node, err := Spawn(ClusterConfig{SystemName: "GoClient", Host: "127.0.0.1", Port: 0})
+	node, err := NewCluster(ClusterConfig{SystemName: "GoClient", Host: "127.0.0.1", Port: 0})
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestClusterSingletonProxy(t *testing.T) {
 
 	// 2. Spawn Go node using typed Address
 	selfAddr := actor.Address{Protocol: "pekko", System: "ClusterSystem", Host: "127.0.0.1", Port: 2553}
-	node, err := Spawn(ClusterConfig{Address: selfAddr})
+	node, err := NewCluster(ClusterConfig{Address: selfAddr})
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestClusterSingletonProxy(t *testing.T) {
 	proxy := node.SingletonProxy("/user/singletonManager", "")
 	path, err := proxy.CurrentOldestPath()
 	if err != nil {
-		t.Fatalf("proxy could not resolve oldest node: %v", err)
+		t.Fatalf("proxy could not resolve oldest sys: %v", err)
 	}
 	log.Printf("[PROXY] Resolved singleton path: %s", path)
 
@@ -303,7 +303,7 @@ func TestClusterJoinLeave(t *testing.T) {
 
 	// 2. Spawn Go node using typed Address
 	selfAddr := actor.Address{Protocol: "pekko", System: "ClusterSystem", Host: "127.0.0.1", Port: 2553}
-	node, err := Spawn(ClusterConfig{Address: selfAddr})
+	node, err := NewCluster(ClusterConfig{Address: selfAddr})
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -403,7 +403,7 @@ func TestDistributedData(t *testing.T) {
 
 	// 2. Spawn Go node using typed Address
 	selfAddr := actor.Address{Protocol: "pekko", System: "ClusterSystem", Host: "127.0.0.1", Port: 2553}
-	node, err := Spawn(ClusterConfig{Address: selfAddr})
+	node, err := NewCluster(ClusterConfig{Address: selfAddr})
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -539,7 +539,7 @@ func TestClusterFailureRecovery(t *testing.T) {
 	}
 
 	// 2. Spawn Go Node 1
-	node1, err := Spawn(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 0})
+	node1, err := NewCluster(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 0})
 	if err != nil {
 		t.Fatalf("Spawn Node 1: %v", err)
 	}
@@ -563,7 +563,7 @@ func TestClusterFailureRecovery(t *testing.T) {
 	}
 
 	// 3. Spawn Go Node 2
-	node2, err := Spawn(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 0})
+	node2, err := NewCluster(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 0})
 	if err != nil {
 		t.Fatalf("Spawn Node 2: %v", err)
 	}
@@ -713,7 +713,7 @@ func TestClusterChurn(t *testing.T) {
 
 	// 2. Spawn GoNode-B for continuous traffic. It is not a cluster member; it
 	//    just maintains an Artery connection to the echo actor on port 2552.
-	nodeB, err := Spawn(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 0})
+	nodeB, err := NewCluster(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 0})
 	if err != nil {
 		t.Fatalf("Spawn GoNode-B: %v", err)
 	}
@@ -768,7 +768,7 @@ func TestClusterChurn(t *testing.T) {
 	for i := 0; i < iterations; i++ {
 		log.Printf("[CHURN] Iteration %d/%d — spawning GoNode-A...", i+1, iterations)
 
-		nodeA, err := Spawn(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 0})
+		nodeA, err := NewCluster(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 0})
 		if err != nil {
 			close(stopTraffic)
 			t.Fatalf("[CHURN] Iteration %d: Spawn GoNode-A: %v", i+1, err)
@@ -903,7 +903,7 @@ func TestCluster_GoDominantMixed(t *testing.T) {
 
 	// ── Step 1: Start Go-Seed ──────────────────────────────────────────────
 	log.Printf("[SEED] Spawning Go-Seed on port %d...", goSeedPort)
-	goSeed, err := Spawn(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: goSeedPort})
+	goSeed, err := NewCluster(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: goSeedPort})
 	if err != nil {
 		t.Fatalf("Spawn Go-Seed: %v", err)
 	}
@@ -961,7 +961,7 @@ func TestCluster_GoDominantMixed(t *testing.T) {
 	var goNodes [3]*Cluster
 	names := []string{"Go-2", "Go-3", "Go-4"}
 	for i := range goNodes {
-		n, err := Spawn(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 0})
+		n, err := NewCluster(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 0})
 		if err != nil {
 			t.Fatalf("Spawn %s: %v", names[i], err)
 		}
@@ -1104,7 +1104,7 @@ func TestMultiNodeDynamicJoin(t *testing.T) {
 	}
 
 	// 2. Spawn Go Node 1
-	node1, err := Spawn(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 0})
+	node1, err := NewCluster(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 0})
 	if err != nil {
 		t.Fatalf("Spawn Node 1: %v", err)
 	}
@@ -1129,7 +1129,7 @@ func TestMultiNodeDynamicJoin(t *testing.T) {
 	}
 
 	// 3. Spawn Go Node 2
-	node2, err := Spawn(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 0})
+	node2, err := NewCluster(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 0})
 	if err != nil {
 		t.Fatalf("Spawn Node 2: %v", err)
 	}
@@ -1195,7 +1195,7 @@ func TestCluster_CRDT_Consistency_Under_Failure(t *testing.T) {
 
 	// ── Step 1: Go-Seed (self-join) ────────────────────────────────────────
 	log.Printf("[CRDT] Spawning Go-Seed on port %d...", goSeedPort)
-	goSeed, err := Spawn(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: goSeedPort})
+	goSeed, err := NewCluster(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: goSeedPort})
 	if err != nil {
 		t.Fatalf("Spawn Go-Seed: %v", err)
 	}
@@ -1249,7 +1249,7 @@ func TestCluster_CRDT_Consistency_Under_Failure(t *testing.T) {
 	goNodes := make([]*Cluster, 3)
 	nodeNames := []string{"Go-2", "Go-3", "Go-4"}
 	for i := range goNodes {
-		n, err := Spawn(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 0})
+		n, err := NewCluster(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 0})
 		if err != nil {
 			t.Fatalf("Spawn %s: %v", nodeNames[i], err)
 		}
@@ -1406,7 +1406,7 @@ func TestAsk_PekkoEcho(t *testing.T) {
 	}
 
 	// Spawn Go node with OS-assigned port.
-	node, err := Spawn(ClusterConfig{SystemName: "GoClient", Host: "127.0.0.1", Port: 0})
+	node, err := NewCluster(ClusterConfig{SystemName: "GoClient", Host: "127.0.0.1", Port: 0})
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}

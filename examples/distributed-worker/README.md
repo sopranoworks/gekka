@@ -6,7 +6,7 @@ cluster member changes.
 
 | Step | API | What it does |
 |------|-----|--------------|
-| 1 | `SpawnFromConfig("application.conf")` | Parse HOCON, bind TCP listener (port 0) |
+| 1 | `NewClusterFromConfig("application.conf")` | Parse HOCON, bind TCP listener (port 0) |
 | 2 | `node.System.ActorOf(Props{...}, "ackReceiver")` | Receive JSON acknowledgements from the singleton |
 | 3 | `node.JoinSeeds()` + `WaitForHandshake` | Join 3-node cluster, await Artery handshake |
 | 4 | `node.SingletonProxy("/user/singletonManager", "")` | Create a proxy to the singleton |

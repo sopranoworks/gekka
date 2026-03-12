@@ -78,7 +78,7 @@ func main() {
 	//
 	// SpawnFromConfig reads application.conf, resolves hostname/port, and
 	// starts the Artery TCP listener.  Port 0 lets the OS pick a free port.
-	node, err := gekka.SpawnFromConfig("application.conf")
+	node, err := gekka.NewClusterFromConfig("application.conf")
 	if err != nil {
 		log.Fatalf("SpawnFromConfig: %v", err)
 	}

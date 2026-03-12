@@ -37,7 +37,7 @@ func TestProvider_Default(t *testing.T) {
 }
 
 func TestProvider_SpawnPekko_UsesCorrectProtocol(t *testing.T) {
-	node, err := Spawn(ClusterConfig{
+	node, err := NewCluster(ClusterConfig{
 		SystemName: "TestSystem",
 		Host:       "127.0.0.1",
 		Port:       0,
@@ -57,7 +57,7 @@ func TestProvider_SpawnPekko_UsesCorrectProtocol(t *testing.T) {
 }
 
 func TestProvider_SpawnAkka_UsesCorrectProtocol(t *testing.T) {
-	node, err := Spawn(ClusterConfig{
+	node, err := NewCluster(ClusterConfig{
 		SystemName: "TestSystem",
 		Host:       "127.0.0.1",
 		Port:       0,
@@ -85,7 +85,7 @@ func TestProvider_ClusterCorePath(t *testing.T) {
 		{ProviderAkka, "akka://ClusterSystem@127.0.0.1:2552/system/cluster/core/daemon"},
 	}
 	for _, tt := range tests {
-		node, err := Spawn(ClusterConfig{Provider: tt.provider, Port: 0})
+		node, err := NewCluster(ClusterConfig{Provider: tt.provider, Port: 0})
 		if err != nil {
 			t.Fatalf("Spawn: %v", err)
 		}
@@ -106,7 +106,7 @@ func TestProvider_HeartbeatPath(t *testing.T) {
 		{ProviderAkka, "akka://ClusterSystem@127.0.0.1:2552/system/cluster/heartbeatReceiver"},
 	}
 	for _, tt := range tests {
-		node, err := Spawn(ClusterConfig{Provider: tt.provider, Port: 0})
+		node, err := NewCluster(ClusterConfig{Provider: tt.provider, Port: 0})
 		if err != nil {
 			t.Fatalf("Spawn: %v", err)
 		}
@@ -121,7 +121,7 @@ func TestProvider_HeartbeatPath(t *testing.T) {
 func TestProvider_JoinUsesCorrectScheme(t *testing.T) {
 	// When Join is called, it should log the cluster core path using the configured scheme.
 	// We verify this by checking the seedAddr protocol that Join stores.
-	node, err := Spawn(ClusterConfig{
+	node, err := NewCluster(ClusterConfig{
 		SystemName: "ClusterSystem",
 		Host:       "127.0.0.1",
 		Port:       0,

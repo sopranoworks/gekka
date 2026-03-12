@@ -4,7 +4,7 @@ A minimal, fully-commented example that demonstrates the core Gekka v0.2.0 API:
 
 | Step | API call | What it does |
 |------|----------|--------------|
-| 1 | `SpawnFromConfig("application.conf")` | Parse HOCON, bind TCP listener |
+| 1 | `NewClusterFromConfig("application.conf")` | Parse HOCON, bind TCP listener |
 | 2 | `node.System.ActorOf(Props{...}, "echo")` | Create and register a local ping-pong actor |
 | 3 | `node.ActorSelection("...").Resolve(ctx)` | Resolve a remote actor reference |
 | 4 | `node.JoinSeeds()` + `WaitForHandshake` | Join cluster, await Artery handshake |

@@ -254,7 +254,7 @@ func TestDeploymentToPoolRouter_ZeroInstances(t *testing.T) {
 
 // TestDeploymentEndToEnd_ParseAndSpawn exercises the full pipeline:
 // HOCON text → LookupDeployment → DeploymentToPoolRouter.
-func TestDeploymentEndToEnd_ParseAndSpawn(t *testing.T) {
+func TestDeploymentEndToEnd_ParseAndNewCluster(t *testing.T) {
 	const hoconText = `
 pekko.actor.deployment {
   "/user/myRouter" {

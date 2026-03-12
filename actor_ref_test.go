@@ -40,7 +40,7 @@ func newTestNode(t *testing.T, system, host string, port uint32) *Cluster {
 		ctx:            ctx,
 		cancel:         cancel,
 	}
-	cluster.System = &nodeActorSystem{cluster: cluster}
+	cluster.System = cluster
 	return cluster
 }
 
@@ -56,7 +56,7 @@ func (a *echoActor) Receive(msg any) { a.lastMsg = msg }
 
 func TestActorRef_Path_String(t *testing.T) {
 	node := newTestNode(t, "Sys", "127.0.0.1", 2552)
-	ref := ActorRef{fullPath: "pekko://Sys@127.0.0.1:2552/user/foo", node: node}
+	ref := ActorRef{fullPath: "pekko://Sys@127.0.0.1:2552/user/foo", sys: node}
 	if ref.Path() != ref.fullPath {
 		t.Errorf("Path() = %q, want %q", ref.Path(), ref.fullPath)
 	}
@@ -72,7 +72,7 @@ func TestActorRef_Tell_Local(t *testing.T) {
 
 	ref := ActorRef{
 		fullPath: "pekko://Sys@127.0.0.1:2552/user/echo",
-		node:     node,
+		sys:     node,
 		local:    a,
 	}
 	ref.Tell("hello")
@@ -90,7 +90,7 @@ func TestActorRef_Tell_LocalMailboxFull(t *testing.T) {
 	a := &echoActor{BaseActor: actor.NewBaseActorWithSize(0)}
 	actor.Start(a)
 
-	ref := ActorRef{fullPath: "pekko://Sys@127.0.0.1:2552/user/tiny", node: node, local: a}
+	ref := ActorRef{fullPath: "pekko://Sys@127.0.0.1:2552/user/tiny", sys: node, local: a}
 	done := make(chan struct{})
 	go func() { ref.Tell("drop me"); close(done) }()
 
@@ -302,7 +302,7 @@ func TestActorRef_Tell_NoSender_IsNil(t *testing.T) {
 	target := &senderCapture{BaseActor: actor.NewBaseActor(), done: make(chan struct{}, 1)}
 	node.SpawnActor("/user/target", target, actor.Props{New: func() actor.Actor { return target }})
 
-	ref := ActorRef{fullPath: "pekko://Sys@127.0.0.1:2552/user/target", node: node, local: target}
+	ref := ActorRef{fullPath: "pekko://Sys@127.0.0.1:2552/user/target", sys: node, local: target}
 	ref.Tell("hello") // no sender
 	waitMsg(t, target.done)
 
@@ -316,7 +316,7 @@ func TestActorRef_Tell_NoSender_ExplicitZero(t *testing.T) {
 	target := &senderCapture{BaseActor: actor.NewBaseActor(), done: make(chan struct{}, 1)}
 	node.SpawnActor("/user/target", target, actor.Props{New: func() actor.Actor { return target }})
 
-	ref := ActorRef{fullPath: "pekko://Sys@127.0.0.1:2552/user/target", node: node, local: target}
+	ref := ActorRef{fullPath: "pekko://Sys@127.0.0.1:2552/user/target", sys: node, local: target}
 	ref.Tell("hello", NoSender) // NoSender = zero ActorRef
 	waitMsg(t, target.done)
 

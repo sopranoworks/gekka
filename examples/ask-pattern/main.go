@@ -36,7 +36,7 @@ func main() {
 	defer stop()
 
 	// ── Step 1: Spawn ────────────────────────────────────────────────────────
-	node, err := gekka.SpawnFromConfig("application.conf")
+	node, err := gekka.NewClusterFromConfig("application.conf")
 	if err != nil {
 		log.Fatalf("SpawnFromConfig: %v", err)
 	}

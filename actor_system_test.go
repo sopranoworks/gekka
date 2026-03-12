@@ -145,7 +145,7 @@ func TestActorSystem_Context_CancelledOnShutdown(t *testing.T) {
 
 // ── BaseActor.System ──────────────────────────────────────────────────────────
 
-func TestBaseActor_System_NilBeforeSpawn(t *testing.T) {
+func TestBaseActor_System_NilBeforeNewCluster(t *testing.T) {
 	// An actor that has not been registered yet has nil System().
 	a := &simpleActor{BaseActor: actor.NewBaseActor()}
 	if a.System() != nil {

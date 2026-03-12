@@ -31,9 +31,9 @@ import (
 // An ActorRef is a lightweight value — it is safe to copy and share across
 // goroutines.
 type ActorRef struct {
-	fullPath string // full actor-path URI, e.g. "pekko://System@host:port/user/foo"
-	node     *Cluster
-	local    actor.Actor // non-nil when the target is registered locally on this node
+	fullPath string         // full actor-path URI, e.g. "pekko://System@host:port/user/foo"
+	sys      internalSystem // the underlying system (Cluster or localActorSystem)
+	local    actor.Actor    // non-nil when the target is registered locally on this node
 }
 
 // NoSender is the zero-value ActorRef used when no specific sender is attached
@@ -99,15 +99,15 @@ func (r ActorRef) Tell(msg any, sender ...actor.Ref) {
 		return
 	}
 
-	if r.node == nil {
+	if r.sys == nil {
 		return
 	}
 
 	// Remote: serialise and send via Artery TCP.
 	if s != nil {
-		_ = r.node.router.SendWithSender(context.Background(), r.fullPath, s.Path(), msg)
+		_ = r.sys.SendWithSender(context.Background(), r.fullPath, s.Path(), msg)
 	} else {
-		_ = r.node.Send(context.Background(), r.fullPath, msg)
+		_ = r.sys.Send(context.Background(), r.fullPath, msg)
 	}
 }
 
@@ -124,14 +124,14 @@ func (r ActorRef) Tell(msg any, sender ...actor.Ref) {
 //	defer cancel()
 //	reply, err := ref.Ask(ctx, []byte("ping"))
 func (r ActorRef) Ask(ctx context.Context, msg any) (any, error) {
-	reply, err := r.node.Ask(ctx, r.fullPath, msg)
+	reply, err := r.sys.Ask(ctx, r.fullPath, msg)
 	if err != nil {
 		return nil, err
 	}
 	if reply.DeserializedMessage != nil {
 		return reply.DeserializedMessage, nil
 	}
-	if reg := r.node.nm.SerializerRegistry; reg != nil {
+	if reg := r.sys.SerializationRegistry(); reg != nil {
 		obj, err := reg.DeserializePayload(reply.SerializerId, reply.Manifest, reply.Payload)
 		if err == nil {
 			return obj, nil
@@ -160,8 +160,8 @@ func (r ActorRef) Ask(ctx context.Context, msg any) (any, error) {
 // For remote URIs Resolve always succeeds — the TCP connection is established
 // lazily on the first Tell or Ask.
 type ActorSelection struct {
-	rawPath string // path as given by the caller
-	node    *Cluster
+	rawPath string         // path as given by the caller
+	sys     internalSystem // the underlying system (Cluster or localActorSystem)
 }
 
 // Resolve returns a concrete ActorRef for this selection.
@@ -187,30 +187,26 @@ func (s ActorSelection) Resolve(_ context.Context) (ActorRef, error) {
 		}
 
 		// Check whether this URI addresses a local actor on this node.
-		self := s.node.SelfAddress()
+		self := s.sys.SelfAddress()
 		if ap.Address.System == self.System && ap.Address.Host == self.Host && ap.Address.Port == self.Port {
 			localPath := ap.Path()
-			s.node.actorsMu.RLock()
-			a, found := s.node.actors[localPath]
-			s.node.actorsMu.RUnlock()
+			a, found := s.sys.GetLocalActor(localPath)
 			if found {
-				return ActorRef{fullPath: s.rawPath, node: s.node, local: a}, nil
+				return ActorRef{fullPath: s.rawPath, sys: s.sys, local: a}, nil
 			}
 			// Local URI but actor not registered — fall through to remote ref.
 			// The message will reach the dead-letter queue on delivery.
 		}
-		return ActorRef{fullPath: s.rawPath, node: s.node}, nil
+		return ActorRef{fullPath: s.rawPath, sys: s.sys}, nil
 	}
 
 	// ── Local relative path ───────────────────────────────────────────────
 	if strings.HasPrefix(s.rawPath, "/") {
-		s.node.actorsMu.RLock()
-		a, found := s.node.actors[s.rawPath]
-		s.node.actorsMu.RUnlock()
+		a, found := s.sys.GetLocalActor(s.rawPath)
 
-		fullPath := s.node.selfPathURI(s.rawPath)
+		fullPath := s.sys.SelfPathURI(s.rawPath)
 		if found {
-			return ActorRef{fullPath: fullPath, node: s.node, local: a}, nil
+			return ActorRef{fullPath: fullPath, sys: s.sys, local: a}, nil
 		}
 		return ActorRef{}, fmt.Errorf("actorselection: no actor registered at %q", s.rawPath)
 	}
@@ -226,7 +222,7 @@ func (s ActorSelection) Tell(msg any, sender ...actor.Ref) {
 	if err != nil {
 		if !strings.HasPrefix(s.rawPath, "/") {
 			// Remote path: send even if local lookup failed (actor may be remote).
-			_ = s.node.Send(context.Background(), s.rawPath, msg)
+			_ = s.sys.Send(context.Background(), s.rawPath, msg)
 		}
 		return
 	}
@@ -242,7 +238,7 @@ func (s ActorSelection) Tell(msg any, sender ...actor.Ref) {
 // never replies. A context with timeout is strongly recommended for production.
 func (s ActorSelection) Ask(ctx context.Context, msg any) (any, error) {
 	if ctx == nil {
-		ctx = s.node.ctx
+		ctx = s.sys.Context()
 	}
 	ref, err := s.Resolve(ctx)
 	if err != nil {
@@ -251,17 +247,6 @@ func (s ActorSelection) Ask(ctx context.Context, msg any) (any, error) {
 	return ref.Ask(ctx, msg)
 }
 
-// selfPathURI converts a local path suffix such as "/user/myActor" into the
-// full actor-path URI for this node. If path is already absolute it is
-// returned unchanged.
-func (n *Cluster) selfPathURI(path string) string {
-	if len(path) > 0 && path[0] == '/' {
-		self := n.SelfAddress()
-		return fmt.Sprintf("%s://%s@%s:%d%s",
-			self.Protocol, self.System, self.Host, self.Port, path)
-	}
-	return path
-}
 
 // ActorSelection returns a handle to one or more actors, local or remote,
 // identified by path.
@@ -273,95 +258,6 @@ func (n *Cluster) selfPathURI(path string) string {
 //	ref, err := node.ActorSelection("/user/myActor").Resolve(ctx)
 //	ref.Tell("Hello")
 func (n *Cluster) ActorSelection(path string) ActorSelection {
-	return ActorSelection{rawPath: path, node: n}
+	return ActorSelection{rawPath: path, sys: n}
 }
 
-// SpawnActor starts a and registers it at path, then returns an ActorRef for
-// that actor. It is a convenient alternative to the manual three-step sequence
-// of actor.Start / node.RegisterActor / building an ActorRef:
-//
-//	ref := node.SpawnActor("/user/myActor", &MyActor{BaseActor: actor.NewBaseActor()})
-//	ref.Tell("Hello, local actor!")
-//
-// path must be the full path suffix as used in Artery envelopes, e.g.
-// "/user/myActor". Do NOT call actor.Start yourself before SpawnActor — that
-// would launch two receive goroutines.
-func (n *Cluster) SpawnActor(path string, a actor.Actor, props actor.Props) ActorRef {
-	ref := ActorRef{fullPath: n.selfPathURI(path), node: n, local: a}
-
-	// Inject the actor's own reference so it can use Self() inside Receive.
-	type selfSetter interface{ SetSelf(actor.Ref) }
-	if ss, ok := a.(selfSetter); ok {
-		ss.SetSelf(ref)
-	}
-
-	// Resolve the parent path (e.g., "/user/parent/child" -> "/user/parent")
-	parentPath := "/user"
-	lastSlash := strings.LastIndex(path, "/")
-	if lastSlash > 0 {
-		parentPath = path[:lastSlash]
-	}
-
-	// Inject the ActorContext so actors can spawn peers and access the
-	// node lifecycle context via a.System(). Uses actor.InjectSystem so that
-	// the package-local type assertion reaches the unexported setSystem method.
-	if nas, ok := n.System.(*nodeActorSystem); ok {
-		actor.InjectSystem(a, nas.asActorContext(path))
-	}
-
-	// Inject SupervisorStrategy from Props
-	actor.InjectSupervisorStrategy(a, props.SupervisorStrategy)
-
-	// Inject parent reference if this is a child actor.
-	if parentPath != "/user" {
-		if parentActor, found := n.actors[parentPath]; found {
-			if parentRef, err := n.ActorSelection(n.selfPathURI(parentPath)).Resolve(context.TODO()); err == nil {
-				actor.InjectParent(a, parentRef)
-				// Also register this child with the parent
-				type childAdder interface {
-					AddChild(string, actor.Ref, actor.Props)
-				}
-				if ca, ok := parentActor.(childAdder); ok {
-					ca.AddChild(path[lastSlash+1:], ref, props)
-				}
-			}
-		}
-	}
-
-	// Initialise the actor-aware logger. Uses actor.InjectLog for the same
-	// package-locality reason.
-	actor.InjectLog(a, n.logHandler, ref)
-
-	a.SetOnStop(func() {
-		// Stop all children recursively
-		type childrenGetter interface{ Children() map[string]actor.Ref }
-		if cg, ok := any(a).(childrenGetter); ok {
-			for _, child := range cg.Children() {
-				if childRef, ok := child.(ActorRef); ok {
-					n.System.Stop(childRef)
-				}
-			}
-		}
-
-		n.UnregisterActor(path)
-		terminatedMsg := Terminated{Actor: ref}
-		for _, w := range a.Watchers() {
-			if watcherRef, ok := w.(ActorRef); ok {
-				watcherRef.Tell(terminatedMsg)
-			}
-		}
-
-		// Remove from parent's children list
-		if parentPath != "/user" {
-			if parentActor, found := n.actors[parentPath]; found {
-				type childRemover interface{ RemoveChild(string) }
-				if cr, ok := parentActor.(childRemover); ok {
-					cr.RemoveChild(path[lastSlash+1:])
-				}
-			}
-		}
-	})
-	actor.Start(a)
-	n.RegisterActor(path, a)
-	return ref
-}

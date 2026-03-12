@@ -34,7 +34,7 @@ func spawnTestNode(t *testing.T, cfg ClusterConfig) *Cluster {
 	if cfg.Port == 0 {
 		cfg.Port = 0 // let OS pick
 	}
-	node, err := Spawn(cfg)
+	node, err := NewCluster(cfg)
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -235,7 +235,7 @@ pekko {
 		t.Errorf("NrOfInstances = %d, want 4", d.NrOfInstances)
 	}
 
-	node, err := Spawn(nodeCfg)
+	node, err := NewCluster(nodeCfg)
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}

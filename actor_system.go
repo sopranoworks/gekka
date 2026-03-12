@@ -11,7 +11,6 @@ package gekka
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync/atomic"
 
 	"github.com/sopranoworks/gekka/actor"
@@ -85,110 +84,62 @@ type ActorSystem interface {
 	// No validation is performed: the reference is created immediately and
 	// messages are delivered lazily via Artery.
 	RemoteActorOf(address actor.Address, path string) ActorRef
+
+	// Ask sends msg to the actor at dst and blocks until a reply is received
+	// or ctx is cancelled.
+	Ask(ctx context.Context, dst interface{}, msg any) (*IncomingMessage, error)
+
+	// Send delivers msg to the actor at dst without waiting for a reply.
+	Send(ctx context.Context, dst interface{}, msg any) error
+}
+
+// internalSystem is an unexported interface used by ActorRef and ActorSelection
+// to perform operations on the underlying node (Cluster or localActorSystem).
+type internalSystem interface {
+	ActorSystem
+	SendWithSender(ctx context.Context, path string, senderPath string, msg any) error
+	SelfAddress() actor.Address
+	SerializationRegistry() *core.SerializationRegistry
+	GetLocalActor(path string) (actor.Actor, bool)
+	SelfPathURI(path string) string
+	LookupDeployment(path string) (core.DeploymentConfig, bool)
+	SpawnActor(path string, a actor.Actor, props actor.Props) ActorRef
 }
 
 // autoNameCounter is a global counter used to generate unique actor names
 // when ActorOf is called with an empty name.
 var autoNameCounter atomic.Uint64
 
-// nodeActorSystem implements ActorSystem on top of Cluster.
-type nodeActorSystem struct {
-	cluster *Cluster
-}
-
-// ActorOf implements ActorSystem.
-//
-// Name validation and path rules:
-//   - name must not contain '/' (use a simple identifier such as "echo" or "worker-1")
-//   - if name is empty a unique name of the form "$<n>" is generated automatically
-//   - the actor is registered at /user/<name>; if an actor is already registered
-//     there an error is returned (duplicate detection)
-func (s *nodeActorSystem) ActorOf(props Props, name string) (ActorRef, error) {
-	return s.ActorOfHierarchical(props, name, "/user")
-}
-
-// ActorOfHierarchical creates a new actor as a child of parentPath.
-func (s *nodeActorSystem) ActorOfHierarchical(props Props, name string, parentPath string) (ActorRef, error) {
-	// Generate a unique name when none is supplied.
-	if name == "" {
-		n := autoNameCounter.Add(1)
-		name = fmt.Sprintf("$%d", n)
-	}
-
-	// Reject names that contain '/' — they would silently create nested paths.
-	if strings.ContainsRune(name, '/') {
-		return ActorRef{}, fmt.Errorf("actorOf: name %q must not contain '/'", name)
-	}
-
-	if parentPath == "" {
-		parentPath = "/user"
-	}
-	path := parentPath + "/" + name
-
-	// Check for duplicates before constructing the actor.
-	s.cluster.actorsMu.RLock()
-	_, exists := s.cluster.actors[path]
-	s.cluster.actorsMu.RUnlock()
-	if exists {
-		return ActorRef{}, fmt.Errorf("actorOf: actor already registered at %q", path)
-	}
-
-	// Deployment interception: auto-provision a router when the path has a
-	// matching deployment entry. GroupRouters do not need props.New (they route
-	// to pre-existing actors); PoolRouters do need it (to create workers).
-	if d, ok := s.cluster.lookupDeployment(path); ok && d.Router != "" {
-		if core.IsGroupRouter(d.Router) {
-			group, err := core.DeploymentToGroupRouter(s.cluster.cm, d)
-			if err != nil {
-				return ActorRef{}, fmt.Errorf("actorOf: deployment config for %q: %w", path, err)
-			}
-			return s.cluster.SpawnActor(path, group, Props{}), nil
-		}
-		// Pool router — worker factory is required.
-		if props.New == nil {
-			return ActorRef{}, fmt.Errorf("actorOf: Props.New must not be nil for pool router deployment at %q", path)
-		}
-		pool, err := core.DeploymentToPoolRouter(s.cluster.cm, d, props)
-		if err != nil {
-			return ActorRef{}, fmt.Errorf("actorOf: deployment config for %q: %w", path, err)
-		}
-		return s.cluster.SpawnActor(path, pool, Props{}), nil
-	}
-
-	// Plain actor — Props.New is required.
-	if props.New == nil {
-		return ActorRef{}, fmt.Errorf("actorOf: Props.New must not be nil")
-	}
-	a := props.New()
-	return s.cluster.SpawnActor(path, a, props), nil
-}
-
-// Context implements ActorSystem.
-func (s *nodeActorSystem) Context() context.Context {
-	return s.cluster.ctx
-}
-
 // asActorContext returns a bridge that satisfies actor.ActorContext, allowing
-// this ActorSystem to be injected into BaseActor without an import cycle.
+// an ActorSystem to be injected into BaseActor without an import cycle.
 // The bridge adapts the richer ActorRef return type down to actor.Ref.
-func (s *nodeActorSystem) asActorContext(parentPath string) actor.ActorContext {
-	return &actorContextBridge{sys: s, parentPath: parentPath}
+func asActorContext(sys ActorSystem, parentPath string) actor.ActorContext {
+	return &actorContextBridge{sys: sys, parentPath: parentPath}
 }
 
-// actorContextBridge adapts nodeActorSystem to the actor.ActorContext interface.
+// actorContextBridge adapts ActorSystem to the actor.ActorContext interface.
 // It is injected into every BaseActor by SpawnActor so actors can call
 // a.System().ActorOf(...) and a.System().Context() without importing gekka.
 type actorContextBridge struct {
-	sys        *nodeActorSystem
+	sys        ActorSystem
 	parentPath string // full path of the parent actor, e.g. "/user/parent"
 }
 
 func (b *actorContextBridge) ActorOf(props actor.Props, name string) (actor.Ref, error) {
-	return b.sys.ActorOfHierarchical(props, name, b.parentPath)
+	// Need a way to call ActorOfHierarchical if it's not in the interface.
+	// Or we can just cast to a private interface if needed, but for now
+	// we'll assume ActorOf is enough or we'll add it to the internal interface.
+	type hierarchicalActorOf interface {
+		ActorOfHierarchical(props Props, name string, parentPath string) (ActorRef, error)
+	}
+	if h, ok := b.sys.(hierarchicalActorOf); ok {
+		return h.ActorOfHierarchical(props, name, b.parentPath)
+	}
+	return b.sys.ActorOf(props, name)
 }
 
 func (b *actorContextBridge) Context() context.Context {
-	return b.sys.cluster.ctx
+	return b.sys.Context()
 }
 
 // Watch implements actor.ActorContext. It registers watcher to receive a
@@ -212,46 +163,16 @@ func (b *actorContextBridge) Watch(watcher actor.Ref, target actor.Ref) {
 // returns its Ref, allowing GroupRouter.PreStart to resolve routee paths
 // without importing the gekka package.
 func (b *actorContextBridge) Resolve(path string) (actor.Ref, error) {
-	ref, err := b.sys.cluster.ActorSelection(path).Resolve(context.Background())
-	if err != nil {
-		return nil, err
+	type resolver interface {
+		ActorSelection(path string) ActorSelection
 	}
-	return ref, nil
+	if r, ok := b.sys.(resolver); ok {
+		ref, err := r.ActorSelection(path).Resolve(context.Background())
+		if err != nil {
+			return nil, err
+		}
+		return ref, nil
+	}
+	return nil, fmt.Errorf("system does not support ActorSelection")
 }
 
-// Watch implements ActorSystem.
-func (s *nodeActorSystem) Watch(watcher ActorRef, target ActorRef) {
-	if target.local != nil {
-		target.local.AddWatcher(watcher)
-	} else {
-		// Target is remote
-		s.cluster.watchRemote(watcher, target)
-	}
-}
-
-// Unwatch implements ActorSystem.
-func (s *nodeActorSystem) Unwatch(watcher ActorRef, target ActorRef) {
-	if target.local != nil {
-		target.local.RemoveWatcher(watcher)
-	} else {
-		// Target is remote
-		s.cluster.unwatchRemote(watcher, target)
-	}
-}
-
-// Stop implements ActorSystem.
-func (s *nodeActorSystem) Stop(target ActorRef) {
-	if target.local != nil {
-		close(target.local.Mailbox())
-	}
-}
-
-// RemoteActorOf implements ActorSystem.
-func (s *nodeActorSystem) RemoteActorOf(address actor.Address, path string) ActorRef {
-	fullPath := address.String()
-	if !strings.HasPrefix(path, "/") {
-		fullPath += "/"
-	}
-	fullPath += path
-	return ActorRef{fullPath: fullPath, node: s.cluster}
-}

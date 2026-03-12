@@ -15,6 +15,7 @@ Powered by its own high-performance HOCON engine, [`gekka-config`](https://githu
 - **Self-Healing Supervision** — Automatic fault tolerance with `OneForOneStrategy` (Restart, Resume, Stop, Escalate).
 - **Pekko/Akka Remote & Cluster Compatibility** — Interop with Scala/Java actors via Artery TCP.
 - **Type-safe Actors using Go Generics (Experimental)** — Compile-time safety for message passing.
+- **Actor Persistence & Event Sourcing** — State recovery via event journaling and snapshotting.
 - **Location Transparency** — Identical `Tell` and `Ask` semantics for local and remote actors.
 - **Location Transparent Senders** — Reply to originators without manual address tracking.
 - **Extensible Serialization** — Built-in support for Protobuf (ID 2), Raw Bytes (ID 4), and JSON (ID 9).
@@ -169,15 +170,61 @@ func main() {
 }
 ```
 
+## Quick Start 5: Persistent Actors (Event Sourcing)
+
+Gekka provides Event Sourcing support via `EventSourcedBehavior`. Persistent actors automatically recover their state by replaying events from a journal and loading snapshots upon restart.
+
+```go
+package main
+
+import (
+	"github.com/sopranoworks/gekka"
+	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/persistence"
+)
+
+// Define Command, Event and State
+type Command interface{}
+type Increment struct{}
+type Event struct{ Delta int }
+type State struct{ Value int }
+
+func Counter(id string, journal persistence.Journal) *gekka.EventSourcedBehavior[Command, Event, State] {
+	return &gekka.EventSourcedBehavior[Command, Event, State]{
+		PersistenceID: id,
+		Journal:       journal,
+		InitialState:  State{Value: 0},
+		CommandHandler: func(ctx actor.TypedContext[Command], state State, cmd Command) actor.Effect[Event, State] {
+			return actor.Persist[Event, State](Event{Delta: 1})
+		},
+		EventHandler: func(state State, event Event) State {
+			state.Value += event.Delta
+			return state
+		},
+	}
+}
+
+func main() {
+	system, _ := gekka.NewActorSystem("PersistenceSystem")
+	journal := persistence.NewInMemoryJournal()
+	
+	// Spawn a persistent actor (automatically recovers state from journal)
+	ref, _ := gekka.SpawnPersistent(system, Counter("my-id", journal), "counter")
+	ref.Tell(Increment{})
+}
+```
+
+See the [persistence example](examples/persistence/main.go) for a full implementation including snapshots and recovery demonstration.
+
 ### How it works
 
 - **Location Transparency**: Messaging works the same way whether the actor is local or remote. The `ActorRef` abstracts away the network layer.
 - **HOCON-ready**: Configuration can be passed programmatically via `ClusterConfig` or loaded directly from standard `application.conf` files.
 
 
-## New in v0.5.0-dev: Typed Actors (Experimental)
+## New in v0.5.0-dev: Typed Actors & Persistence (Experimental)
 
-v0.5.0-dev introduces **Typed Actors**, providing a type-safe way to define and interact with actors. This feature is currently experimental.
+v0.5.0-dev introduces **Typed Actors** and **Actor Persistence**, providing a type-safe way to define and interact with actors, and a way to persist state using Event Sourcing.
 
 v0.5.0-dev also includes **Pool** and **Group Routers** that can be configured directly in HOCON:
 

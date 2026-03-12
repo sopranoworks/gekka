@@ -77,19 +77,19 @@ func LoadConfig(path string, fallbacks ...string) (ClusterConfig, error) {
 	return hoconToClusterConfig(cfg)
 }
 
-// SpawnFromConfig is a convenience wrapper that calls LoadConfig then Spawn.
-// After SpawnFromConfig, call node.JoinSeeds() to connect to the cluster.
+// NewClusterFromConfig is a convenience wrapper that calls LoadConfig then NewCluster.
+// After NewClusterFromConfig, call node.JoinSeeds() to connect to the cluster.
 //
-//	node, err := gekka.SpawnFromConfig("application.conf")
+//	node, err := gekka.NewClusterFromConfig("application.conf")
 //	if err != nil { log.Fatal(err) }
 //	defer node.Shutdown()
 //	node.Join(...) // or node.JoinSeeds()
-func SpawnFromConfig(path string, fallbacks ...string) (*Cluster, error) {
+func NewClusterFromConfig(path string, fallbacks ...string) (*Cluster, error) {
 	cfg, err := LoadConfig(path, fallbacks...)
 	if err != nil {
 		return nil, err
 	}
-	return Spawn(cfg)
+	return NewCluster(cfg)
 }
 
 // ParseHOCONString parses an in-memory HOCON string and returns a ClusterConfig.

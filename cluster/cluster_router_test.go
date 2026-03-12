@@ -113,7 +113,7 @@ func TestClusterRouter_HealthFiltering(t *testing.T) {
 
 	uaSelected, err := router.SelectRoutee(settings)
 	if err != nil {
-		t.Fatalf("failed to select now-healthy node: %v", err)
+		t.Fatalf("failed to select now-healthy sys: %v", err)
 	}
 	if uaSelected.GetAddress().GetPort() != 2601 {
 		t.Errorf("expected port 2601, got %d", uaSelected.GetAddress().GetPort())
@@ -152,7 +152,7 @@ func TestClusterRouter_LocalAffinity(t *testing.T) {
 	}
 	ua, err := router.SelectRoutee(settingsWithLocal)
 	if err != nil {
-		t.Fatalf("expected to select local node: %v", err)
+		t.Fatalf("expected to select local sys: %v", err)
 	}
 	if ua.GetAddress().GetPort() != 2610 {
 		t.Errorf("expected local port 2610, got %d", ua.GetAddress().GetPort())
@@ -199,7 +199,7 @@ func TestClusterRouter_RoleFiltering(t *testing.T) {
 	}
 	ua, err := router.SelectRoutee(settingsStorage)
 	if err != nil {
-		t.Fatalf("failed to select storage node: %v", err)
+		t.Fatalf("failed to select storage sys: %v", err)
 	}
 	if ua.GetAddress().GetPort() != 2622 {
 		t.Errorf("expected port 2622, got %d", ua.GetAddress().GetPort())
@@ -212,7 +212,7 @@ func TestClusterRouter_RoleFiltering(t *testing.T) {
 	}
 	ua, err = router.SelectRoutee(settingsCompute)
 	if err != nil {
-		t.Fatalf("failed to select compute node: %v", err)
+		t.Fatalf("failed to select compute sys: %v", err)
 	}
 	if ua.GetAddress().GetPort() != 2621 {
 		t.Errorf("expected port 2621, got %d", ua.GetAddress().GetPort())

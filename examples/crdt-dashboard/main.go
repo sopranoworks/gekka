@@ -54,7 +54,7 @@ func main() {
 	//
 	// SpawnFromConfig reads application.conf.  Port 0 lets the OS assign a
 	// free port, so you can run multiple instances simultaneously.
-	node, err := gekka.SpawnFromConfig("application.conf")
+	node, err := gekka.NewClusterFromConfig("application.conf")
 	if err != nil {
 		log.Fatalf("SpawnFromConfig: %v", err)
 	}

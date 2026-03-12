@@ -22,7 +22,41 @@ Powered by its own high-performance HOCON engine, [`gekka-config`](https://githu
 - **Observability** — Built-in monitoring with `/healthz` and `/metrics` (JSON/Prometheus).
 - **Cluster Singletons & CRDTs** — Support for Cluster Singletons and Distributed Data (G-Counter, OR-Set).
 
-## Quick Start 1: Joining a Cluster
+## Quick Start 1: Local Actor System
+
+For applications that don't need networking, `gekka` provides a lightweight `LocalActorSystem`. This is ideal for in-process concurrency with actor semantics.
+
+```go
+package main
+
+import (
+	"log"
+
+	"github.com/sopranoworks/gekka"
+	"github.com/sopranoworks/gekka/actor"
+)
+
+func main() {
+	// 1. Initialize a local-only actor system (no networking)
+	system, err := gekka.NewActorSystem("LocalSystem")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// 2. Create an actor
+	ref, _ := system.ActorOf(gekka.Props{
+		New: func() actor.Actor { return &MyActor{BaseActor: actor.NewBaseActor()} },
+	}, "worker")
+
+	// 3. Send a message
+	ref.Tell("Hello Local!")
+}
+
+type MyActor struct { actor.BaseActor }
+func (a *MyActor) Receive(msg any) { log.Printf("Got: %v", msg) }
+```
+
+## Quick Start 2: Joining a Cluster
 
 Initialize your node to join an existing Pekko/Akka cluster. `gekka` handles Artery handshakes and membership synchronization automatically.
 
@@ -38,7 +72,7 @@ import (
 
 func main() {
 	// 1. Initialize the cluster and join as a member
-	cluster, err := gekka.Spawn(gekka.ClusterConfig{
+	cluster, err := gekka.NewCluster(gekka.ClusterConfig{
 		SystemName: "MyCluster",
 		Port:       2553,
 		// Provide seed nodes to join an existing cluster
@@ -55,7 +89,7 @@ func main() {
 }
 ```
 
-## Quick Start 2: Defining and Using Actors
+## Quick Start 3: Defining and Using Actors
 
 Once joined, you can define actors to handle business logic. This example shows the request-response (**Ask**) pattern.
 
@@ -84,7 +118,7 @@ func (a *EchoActor) Receive(msg any) {
 }
 
 func main() {
-	cluster, _ := gekka.Spawn(gekka.ClusterConfig{SystemName: "ExampleSystem"})
+	cluster, _ := gekka.NewCluster(gekka.ClusterConfig{SystemName: "ExampleSystem"})
 	defer cluster.Shutdown()
 
 	// 2. Create a named actor instance

@@ -59,7 +59,7 @@ func runNodeA(ctx context.Context) {
 		Port:       2552,
 	}
 
-	node, err := gekka.Spawn(cfg)
+	node, err := gekka.NewCluster(cfg)
 	if err != nil {
 		log.Fatalf("Node A Spawn: %v", err)
 	}
@@ -86,7 +86,7 @@ func runNodeB(ctx context.Context) {
 		Port:       0,
 	}
 
-	node, err := gekka.Spawn(cfg)
+	node, err := gekka.NewCluster(cfg)
 	if err != nil {
 		log.Fatalf("Node B Spawn: %v", err)
 	}

@@ -73,7 +73,7 @@ func (c *Cluster) triggerRemoteNodeDeath(addr cluster.MemberAddress) {
 	}
 
 	for targetPath, watchers := range targets {
-		targetRef := ActorRef{fullPath: targetPath, node: c}
+		targetRef := ActorRef{fullPath: targetPath, sys: c}
 		terminatedMsg := Terminated{Actor: targetRef}
 		for _, w := range watchers {
 			w.Tell(terminatedMsg)

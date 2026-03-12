@@ -6,8 +6,8 @@ This document provides a comprehensive reference for the Gekka API.
 
 | Function | Description |
 |----------|-------------|
-| `Spawn(cfg ClusterConfig) (*Cluster, error)` | Create and start a node from a `ClusterConfig` |
-| `SpawnFromConfig(path string, fallbacks ...string) (*Cluster, error)` | Load HOCON file and start a node |
+| `NewCluster(cfg ClusterConfig) (*Cluster, error)` | Create and start a node from a `ClusterConfig` |
+| `NewClusterFromConfig(path string, fallbacks ...string) (*Cluster, error)` | Load HOCON file and start a node |
 | `LoadConfig(path string, fallbacks ...string) (ClusterConfig, error)` | Parse HOCON into `ClusterConfig` without spawning |
 | `ParseHOCONString(text string) (ClusterConfig, error)` | Parse an in-memory HOCON string |
 

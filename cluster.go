@@ -53,12 +53,12 @@ func (p Provider) protoString() string {
 //
 // The simplest form uses flat fields:
 //
-//	gekka.Spawn(gekka.ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 2553})
+//	gekka.NewCluster(gekka.ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 2553})
 //
 // You can also supply a typed Address directly:
 //
 //	addr := actor.Address{Protocol: "pekko", System: "ClusterSystem", Host: "127.0.0.1", Port: 2553}
-//	gekka.Spawn(gekka.ClusterConfig{Address: addr})
+//	gekka.NewCluster(gekka.ClusterConfig{Address: addr})
 //
 // When Address is set it takes precedence over SystemName/Host/Port/Provider.
 //
@@ -111,7 +111,7 @@ type ClusterConfig struct {
 	// Example — JSON logging at DEBUG level:
 	//
 	//	h := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})
-	//	node, _ := gekka.Spawn(gekka.ClusterConfig{
+	//	node, _ := gekka.NewCluster(gekka.ClusterConfig{
 	//	    SystemName: "MySystem", Host: "127.0.0.1", Port: 2552,
 	//	    LogHandler: h,
 	//	})
@@ -126,7 +126,7 @@ type ClusterConfig struct {
 	// HOCON akka.actor.deployment (or pekko.actor.deployment) block.
 	// Can also be set directly for programmatic configuration:
 	//
-	//	gekka.Spawn(gekka.ClusterConfig{
+	//	gekka.NewCluster(gekka.ClusterConfig{
 	//	    Deployments: map[string]gekka.core.DeploymentConfig{
 	//	        "/user/myRouter": {Router: "round-robin-pool", NrOfInstances: 5},
 	//	    },
@@ -213,9 +213,9 @@ type Cluster struct {
 	deployments       map[string]core.DeploymentConfig // keyed by actor path; nil = no deployments
 }
 
-// Spawn creates, wires, and starts a Cluster. The TCP listener is bound
+// NewCluster creates, wires, and starts a Cluster. The TCP listener is bound
 // immediately; call node.Addr() to discover the assigned port when ClusterConfig.Port == 0.
-func Spawn(cfg ClusterConfig) (*Cluster, error) {
+func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	scheme, system, host, port := cfg.resolve()
 
 	localAddr := &gproto_remote.Address{
@@ -305,9 +305,8 @@ func Spawn(cfg ClusterConfig) (*Cluster, error) {
 		logHandler:     cfg.LogHandler,
 		deployments:    cfg.Deployments,
 	}
-	sys := &nodeActorSystem{cluster: cluster}
-	cluster.System = sys
-	cluster.cm.Sys = sys.asActorContext("")
+	cluster.System = cluster
+	cluster.cm.Sys = asActorContext(cluster, "")
 
 	// Set default Artery message dispatcher to handle registered actors.
 	nm.UserMessageCallback = cluster.handleArteryMessage
@@ -425,7 +424,7 @@ func (c *Cluster) handleArteryMessage(ctx context.Context, meta *core.ArteryMeta
 	// This allows the receiving actor to reply via a.Sender().Tell(…, a.Self()).
 	var senderRef ActorRef
 	if meta.Sender != nil && meta.Sender.GetPath() != "" {
-		senderRef = ActorRef{fullPath: meta.Sender.GetPath(), node: c}
+		senderRef = ActorRef{fullPath: meta.Sender.GetPath(), sys: c}
 	}
 
 	incoming := &IncomingMessage{
@@ -857,4 +856,231 @@ func (c *Cluster) Shutdown() error {
 	}
 	return nil
 }
+
+// ActorOf implements ActorSystem.
+func (c *Cluster) ActorOf(props Props, name string) (ActorRef, error) {
+	return c.ActorOfHierarchical(props, name, "/user")
+}
+
+// ActorOfHierarchical creates a new actor as a child of parentPath.
+func (c *Cluster) ActorOfHierarchical(props Props, name string, parentPath string) (ActorRef, error) {
+	// Generate a unique name when none is supplied.
+	if name == "" {
+		n := autoNameCounter.Add(1)
+		name = fmt.Sprintf("$%d", n)
+	}
+
+	// Reject names that contain '/' — they would silently create nested paths.
+	if strings.ContainsRune(name, '/') {
+		return ActorRef{}, fmt.Errorf("actorOf: name %q must not contain '/'", name)
+	}
+
+	if parentPath == "" {
+		parentPath = "/user"
+	}
+	path := parentPath + "/" + name
+
+	// Check for duplicates before constructing the actor.
+	c.actorsMu.RLock()
+	_, exists := c.actors[path]
+	c.actorsMu.RUnlock()
+	if exists {
+		return ActorRef{}, fmt.Errorf("actorOf: actor already registered at %q", path)
+	}
+
+	// Deployment interception: auto-provision a router when the path has a
+	// matching deployment entry. GroupRouters do not need props.New (they route
+	// to pre-existing actors); PoolRouters do need it (to create workers).
+	if d, ok := c.lookupDeployment(path); ok && d.Router != "" {
+		if core.IsGroupRouter(d.Router) {
+			group, err := core.DeploymentToGroupRouter(c.cm, d)
+			if err != nil {
+				return ActorRef{}, fmt.Errorf("actorOf: deployment config for %q: %w", path, err)
+			}
+			return c.SpawnActor(path, group, Props{}), nil
+		}
+		// Pool router — worker factory is required.
+		if props.New == nil {
+			return ActorRef{}, fmt.Errorf("actorOf: Props.New must not be nil for pool router deployment at %q", path)
+		}
+		pool, err := core.DeploymentToPoolRouter(c.cm, d, props)
+		if err != nil {
+			return ActorRef{}, fmt.Errorf("actorOf: deployment config for %q: %w", path, err)
+		}
+		return c.SpawnActor(path, pool, Props{}), nil
+	}
+
+	// Plain actor — Props.New is required.
+	if props.New == nil {
+		return ActorRef{}, fmt.Errorf("actorOf: Props.New must not be nil")
+	}
+	a := props.New()
+	return c.SpawnActor(path, a, props), nil
+}
+
+// Watch implements ActorSystem.
+func (c *Cluster) Watch(watcher ActorRef, target ActorRef) {
+	if target.local != nil {
+		target.local.AddWatcher(watcher)
+	} else {
+		// Target is remote
+		c.watchRemote(watcher, target)
+	}
+}
+
+// Unwatch implements ActorSystem.
+func (c *Cluster) Unwatch(watcher ActorRef, target ActorRef) {
+	if target.local != nil {
+		target.local.RemoveWatcher(watcher)
+	} else {
+		// Target is remote
+		c.unwatchRemote(watcher, target)
+	}
+}
+
+// Stop implements ActorSystem.
+func (c *Cluster) Stop(target ActorRef) {
+	if target.local != nil {
+		close(target.local.Mailbox())
+	}
+}
+
+// RemoteActorOf implements ActorSystem.
+func (c *Cluster) RemoteActorOf(address actor.Address, path string) ActorRef {
+	fullPath := address.String()
+	if !strings.HasPrefix(path, "/") {
+		fullPath += "/"
+	}
+	fullPath += path
+	return ActorRef{fullPath: fullPath, sys: c}
+}
+
+// SendWithSender implements internalSystem.
+func (c *Cluster) SendWithSender(ctx context.Context, path string, senderPath string, msg any) error {
+	return c.router.SendWithSender(ctx, path, senderPath, msg)
+}
+
+// SerializationRegistry implements internalSystem.
+func (c *Cluster) SerializationRegistry() *core.SerializationRegistry {
+	return c.nm.SerializerRegistry
+}
+
+// GetLocalActor implements internalSystem.
+func (c *Cluster) GetLocalActor(path string) (actor.Actor, bool) {
+	c.actorsMu.RLock()
+	defer c.actorsMu.RUnlock()
+	a, ok := c.actors[path]
+	return a, ok
+}
+
+// SelfPathURI implements internalSystem.
+func (c *Cluster) SelfPathURI(path string) string {
+	return c.selfPathURI(path)
+}
+
+// LookupDeployment implements internalSystem.
+func (c *Cluster) LookupDeployment(path string) (core.DeploymentConfig, bool) {
+	return c.lookupDeployment(path)
+}
+
+// SpawnActor starts a and registers it at path, then returns an ActorRef for
+// that actor. It is a convenient alternative to the manual three-step sequence
+// of actor.Start / node.RegisterActor / building an ActorRef:
+//
+//	ref := node.SpawnActor("/user/myActor", &MyActor{BaseActor: actor.NewBaseActor()})
+//	ref.Tell("Hello, local actor!")
+//
+// path must be the full path suffix as used in Artery envelopes, e.g.
+// "/user/myActor". Do NOT call actor.Start yourself before SpawnActor — that
+// would launch two receive goroutines.
+func (n *Cluster) SpawnActor(path string, a actor.Actor, props actor.Props) ActorRef {
+	ref := ActorRef{fullPath: n.selfPathURI(path), sys: n, local: a}
+
+	// Inject the actor's own reference so it can use Self() inside Receive.
+	type selfSetter interface{ SetSelf(actor.Ref) }
+	if ss, ok := a.(selfSetter); ok {
+		ss.SetSelf(ref)
+	}
+
+	// Resolve the parent path (e.g., "/user/parent/child" -> "/user/parent")
+	parentPath := "/user"
+	lastSlash := strings.LastIndex(path, "/")
+	if lastSlash > 0 {
+		parentPath = path[:lastSlash]
+	}
+
+	// Inject the ActorContext so actors can spawn peers and access the
+	// node lifecycle context via a.System(). Uses actor.InjectSystem so that
+	// the package-local type assertion reaches the unexported setSystem method.
+	actor.InjectSystem(a, asActorContext(n, path))
+
+	// Inject SupervisorStrategy from Props
+	actor.InjectSupervisorStrategy(a, props.SupervisorStrategy)
+
+	// Inject parent reference if this is a child actor.
+	if parentPath != "/user" {
+		if parentActor, found := n.actors[parentPath]; found {
+			if parentRef, err := n.ActorSelection(n.selfPathURI(parentPath)).Resolve(context.TODO()); err == nil {
+				actor.InjectParent(a, parentRef)
+				// Also register this child with the parent
+				type childAdder interface {
+					AddChild(string, actor.Ref, actor.Props)
+				}
+				if ca, ok := parentActor.(childAdder); ok {
+					ca.AddChild(path[lastSlash+1:], ref, props)
+				}
+			}
+		}
+	}
+
+	// Initialise the actor-aware logger. Uses actor.InjectLog for the same
+	// package-locality reason.
+	actor.InjectLog(a, n.logHandler, ref)
+
+	a.SetOnStop(func() {
+		// Stop all children recursively
+		type childrenGetter interface{ Children() map[string]actor.Ref }
+		if cg, ok := any(a).(childrenGetter); ok {
+			for _, child := range cg.Children() {
+				if childRef, ok := child.(ActorRef); ok {
+					n.System.Stop(childRef)
+				}
+			}
+		}
+
+		n.UnregisterActor(path)
+		terminatedMsg := Terminated{Actor: ref}
+		for _, w := range a.Watchers() {
+			if watcherRef, ok := w.(ActorRef); ok {
+				watcherRef.Tell(terminatedMsg)
+			}
+		}
+
+		// Remove from parent's children list
+		if parentPath != "/user" {
+			if parentActor, found := n.actors[parentPath]; found {
+				type childRemover interface{ RemoveChild(string) }
+				if cr, ok := parentActor.(childRemover); ok {
+					cr.RemoveChild(path[lastSlash+1:])
+				}
+			}
+		}
+	})
+	actor.Start(a)
+	n.RegisterActor(path, a)
+	return ref
+}
+
+// selfPathURI converts a local path suffix such as "/user/myActor" into the
+// full actor-path URI for this node. If path is already absolute it is
+// returned unchanged.
+func (n *Cluster) selfPathURI(path string) string {
+	if len(path) > 0 && path[0] == '/' {
+		self := n.SelfAddress()
+		return fmt.Sprintf("%s://%s@%s:%d%s",
+			self.Protocol, self.System, self.Host, self.Port, path)
+	}
+	return path
+}
+
 

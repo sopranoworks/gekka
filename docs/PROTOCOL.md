@@ -51,5 +51,5 @@ Gekka supports state propagation via CRDTs (Conflict-free Replicated Data Types)
 
 | Level | Behaviour |
 |-------|-----------|
-| `WriteLocal` | Update local state only; gossip propagates on the next tick |
-| `WriteAll` | Immediately push to all registered peers |
+| `crdt.WriteLocal` | Update local state only; gossip propagates on the next tick |
+| `crdt.WriteAll` | Immediately push to all registered peers |

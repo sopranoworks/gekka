@@ -95,7 +95,7 @@ ref, err := node.ActorSelection("pekko://Sys@10.0.0.1:2552/user/greeter").Resolv
 | `Unsubscribe(ref)` | Stop receiving events on the given actor |
 | `WaitForHandshake(ctx, host, port)` | Block until Artery handshake completes |
 | `SingletonProxy(path, role)` | Return a ClusterSingletonProxy |
-| `Replicator() *Replicator` | Return the CRDT replicator |
+| `Replicator() *crdt.Replicator` | Return the CRDT replicator |
 | `Serialization()` | Return the SerializationRegistry |
 | `Metrics() MetricsSnapshot` | Point-in-time snapshot of internal counters |
 | `MonitoringAddr() net.Addr` | Address of the built-in HTTP monitoring server (nil if disabled) |

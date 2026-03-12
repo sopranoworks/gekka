@@ -152,7 +152,7 @@ Or keep it at 2 s to make the eventual-consistency delay clearly observable.
 
 When you press Ctrl-C, the dashboard:
 
-1. Calls `repl.RemoveFromSet("active_nodes", myAddr, WriteAll)` — pushes the
+1. Calls `repl.RemoveFromSet("active_nodes", myAddr, crdt.WriteAll)` — pushes the
    remove to the Scala hub immediately so other nodes stop advertising this
    address within the next gossip cycle.
 2. Calls `node.Leave()` — broadcasts a Leave message through the cluster so
@@ -164,7 +164,7 @@ When you press Ctrl-C, the dashboard:
 
 - **Distributed worker** — route jobs to a cluster singleton with automatic
   failover; see `examples/distributed-worker/`
-- **WriteAll consistency** — change `WriteLocal` to `WriteAll` in
+- **crdt.WriteAll consistency** — change `crdt.WriteLocal` to `crdt.WriteAll` in
   `IncrementCounter` / `AddToSet` calls to push updates immediately rather
   than waiting for the next gossip tick
 - **OR-Set tags** — store feature flags or service capabilities in the ORSet

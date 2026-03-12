@@ -23,6 +23,8 @@ import (
 
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/cluster"
+	"github.com/sopranoworks/gekka/crdt"
+	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 )
 
 // remoteSystem constructs an actor.Address for the Scala test server.
@@ -440,11 +442,11 @@ func TestDistributedData(t *testing.T) {
 
 	// 5. Update CRDTs and start gossip
 	log.Printf("[GO→SCALA] Incrementing GCounter 'hits' by 7")
-	repl.IncrementCounter("hits", 7, WriteLocal)
+	repl.IncrementCounter("hits", 7, crdt.WriteLocal)
 
 	log.Printf("[GO→SCALA] Adding 'golang' and 'pekko' to ORSet 'tags'")
-	repl.AddToSet("tags", "golang", WriteLocal)
-	repl.AddToSet("tags", "pekko", WriteLocal)
+	repl.AddToSet("tags", "golang", crdt.WriteLocal)
+	repl.AddToSet("tags", "pekko", crdt.WriteLocal)
 
 	repl.Start(ctx)
 	defer repl.Stop()
@@ -886,7 +888,7 @@ func waitForUpMembers(node *Cluster, expected int, timeout time.Duration) error 
 func countUpMembers(node *Cluster) int {
 	count := 0
 	for _, m := range node.cm.GetState().GetMembers() {
-		if m.GetStatus() == cluster.MemberStatus_Up {
+		if m.GetStatus() == gproto_cluster.MemberStatus_Up {
 			count++
 		}
 	}
@@ -1016,7 +1018,7 @@ func TestCluster_GoDominantMixed(t *testing.T) {
 	state := goSeed.cm.GetState()
 	upCount := 0
 	for _, m := range state.GetMembers() {
-		if m.GetStatus() == cluster.MemberStatus_Up {
+		if m.GetStatus() == gproto_cluster.MemberStatus_Up {
 			upCount++
 		}
 	}
@@ -1271,7 +1273,7 @@ func TestCluster_CRDT_Consistency_Under_Failure(t *testing.T) {
 
 	// ── Step 5: Wire all-to-all Replicator mesh ─────────────────────────────
 	allNodes := []*Cluster{goSeed, go2, go3, go4}
-	allRepls := make([]*Replicator, 4)
+	allRepls := make([]*crdt.Replicator, 4)
 	for i, n := range allNodes {
 		allRepls[i] = n.Replicator()
 		allRepls[i].GossipInterval = 500 * time.Millisecond
@@ -1299,10 +1301,10 @@ func TestCluster_CRDT_Consistency_Under_Failure(t *testing.T) {
 	}
 
 	// Apply fixed increments: 10+20+30+40 = 100.
-	allRepls[0].IncrementCounter("visits", 10, WriteLocal) // goSeed
-	allRepls[1].IncrementCounter("visits", 20, WriteLocal) // go2
-	allRepls[2].IncrementCounter("visits", 30, WriteLocal) // go3
-	allRepls[3].IncrementCounter("visits", 40, WriteLocal) // go4
+	allRepls[0].IncrementCounter("visits", 10, crdt.WriteLocal) // goSeed
+	allRepls[1].IncrementCounter("visits", 20, crdt.WriteLocal) // go2
+	allRepls[2].IncrementCounter("visits", 30, crdt.WriteLocal) // go3
+	allRepls[3].IncrementCounter("visits", 40, crdt.WriteLocal) // go4
 
 	// Start gossip on all 4 Go nodes.
 	for _, r := range allRepls {

@@ -6,22 +6,22 @@ This document provides a comprehensive reference for the Gekka API.
 
 | Function | Description |
 |----------|-------------|
-| `Spawn(cfg NodeConfig) (*GekkaNode, error)` | Create and start a node from a `NodeConfig` |
-| `SpawnFromConfig(path string, fallbacks ...string) (*GekkaNode, error)` | Load HOCON file and start a node |
-| `LoadConfig(path string, fallbacks ...string) (NodeConfig, error)` | Parse HOCON into `NodeConfig` without spawning |
-| `ParseHOCONString(text string) (NodeConfig, error)` | Parse an in-memory HOCON string |
+| `Spawn(cfg ClusterConfig) (*Cluster, error)` | Create and start a node from a `ClusterConfig` |
+| `SpawnFromConfig(path string, fallbacks ...string) (*Cluster, error)` | Load HOCON file and start a node |
+| `LoadConfig(path string, fallbacks ...string) (ClusterConfig, error)` | Parse HOCON into `ClusterConfig` without spawning |
+| `ParseHOCONString(text string) (ClusterConfig, error)` | Parse an in-memory HOCON string |
 
-## NodeConfig
+## ClusterConfig
 
 ```go
-type NodeConfig struct {
+type ClusterConfig struct {
     // Address sets the node's own address using the typed actor.Address.
     // When non-zero it overrides SystemName, Host, Port, and Provider.
     Address actor.Address
 
     SystemName string         // actor system name (default: "GekkaSystem")
     Host       string         // bind address (default: "127.0.0.1")
-    Port       uint32         // 0 = OS-assigned; read actual port with node.Addr()
+    Port       uint32         // 0 = OS-assigned; read actual port with cluster.Addr()
     Provider   Provider       // ProviderPekko (default) or ProviderAkka
     SeedNodes  []actor.Address // populated by LoadConfig; used by JoinSeeds()
 }
@@ -29,7 +29,7 @@ type NodeConfig struct {
 
 ## ActorSystem and Props
 
-`node.System` is of type `ActorSystem`. Use it to create and register actors:
+`cluster.System` is of type `ActorSystem`. Use it to create and register actors:
 
 ```go
 // Props lives in the actor package so actors can reference it without an
@@ -47,7 +47,7 @@ type ActorSystem interface {
 
 `ActorOf` registers the actor at `/user/<name>`, starts its goroutine, and returns an `ActorRef`.
 
-`Context()` returns the node's root context — cancelled when `node.Shutdown()` is called.
+`Context()` returns the node's root context — cancelled when `cluster.Shutdown()` is called.
 
 ## ActorRef
 
@@ -72,7 +72,7 @@ ref, err := node.ActorSelection("/user/greeter").Resolve(nil)
 ref, err := node.ActorSelection("pekko://Sys@10.0.0.1:2552/user/greeter").Resolve(nil)
 ```
 
-## GekkaNode methods
+## Cluster methods
 
 | Method | Description |
 |--------|-------------|
@@ -81,7 +81,7 @@ ref, err := node.ActorSelection("pekko://Sys@10.0.0.1:2552/user/greeter").Resolv
 | `Port() uint32` | Bound TCP port |
 | `SelfAddress() actor.Address` | Node's own address as a typed value |
 | `Join(host, port)` | Send InitJoin, start heartbeat + gossip loop |
-| `JoinSeeds() error` | Join the first non-self seed from `NodeConfig.SeedNodes` |
+| `JoinSeeds() error` | Join the first non-self seed from `ClusterConfig.SeedNodes` |
 | `Seeds() []actor.Address` | Seed nodes parsed from HOCON config |
 | `Leave() error` | Broadcast Leave to cluster members |
 | `Send(ctx, dst, msg)` | Deliver a message; dst can be `actor.ActorPath`, `string`, or `fmt.Stringer` |

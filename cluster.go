@@ -22,6 +22,7 @@ import (
 
 	"github.com/sopranoworks/gekka/actor"
 	gcluster "github.com/sopranoworks/gekka/cluster"
+	"github.com/sopranoworks/gekka/crdt"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 	"github.com/sopranoworks/gekka/internal/core"
@@ -182,7 +183,7 @@ type Cluster struct {
 	nm         *core.NodeManager
 	cm         *gcluster.ClusterManager
 	router     *actor.Router
-	repl       *Replicator
+	repl       *crdt.Replicator
 	server     *core.TcpServer
 	ctx        context.Context
 	cancel     context.CancelFunc
@@ -284,10 +285,7 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	}
 
 	nodeID := fmt.Sprintf("%s:%d", host, actualPort)
-	repl := NewReplicator(nodeID, router)
-
-	// Replicated state and metrics are already wired.
-	repl = NewReplicator(nodeID, router)
+	repl := crdt.NewReplicator(nodeID, router)
 
 	cluster := &Cluster{
 		nm:             nm,
@@ -762,7 +760,7 @@ func (c *Cluster) WaitForHandshake(ctx context.Context, host string, port uint32
 // Replicator returns the node's CRDT Replicator. Register peers with
 // AddPeer before calling Start, then use IncrementCounter / AddToSet / RemoveFromSet
 // to mutate state that propagates to all peers via periodic gossip.
-func (c *Cluster) Replicator() *Replicator {
+func (c *Cluster) Replicator() *crdt.Replicator {
 	return c.repl
 }
 

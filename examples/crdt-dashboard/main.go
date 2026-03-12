@@ -15,9 +15,9 @@
 //
 // Topology:
 //
-//	Go dashboard-1 ─┐
-//	Go dashboard-2 ─┼──► Scala GoReplicator (/user/goReplicator) ─► merge + reply
-//	Go dashboard-N ─┘
+//      Go dashboard-1 ─┐
+//      Go dashboard-2 ─┼──► Scala GoReplicator (/user/goReplicator) ─► merge + reply
+//      Go dashboard-N ─┘
 //
 // Run alongside a Pekko GoReplicator server — see README.md.
 package main
@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka"
+	"github.com/sopranoworks/gekka/crdt"
 )
 
 const (
@@ -112,7 +113,7 @@ func main() {
 	// Add this node's address to the active_nodes ORSet so all peers know
 	// it is online.  WriteAll pushes the update immediately in addition to
 	// the periodic gossip tick.
-	repl.AddToSet("active_nodes", myAddr, gekka.WriteAll)
+	repl.AddToSet("active_nodes", myAddr, crdt.WriteAll)
 
 	// Seed the GCounter key so it appears in the dashboard immediately.
 	repl.GCounter("total_requests")
@@ -145,7 +146,7 @@ func main() {
 		select {
 		case <-ticker.C:
 			myRequests++
-			repl.IncrementCounter("total_requests", 1, gekka.WriteLocal)
+			repl.IncrementCounter("total_requests", 1, crdt.WriteLocal)
 			printDashboard(repl, myAddr, self.System, myRequests)
 
 		// ── Step 8: Graceful shutdown ─────────────────────────────────
@@ -155,7 +156,7 @@ func main() {
 		// remove to all registered gossip peers synchronously.
 		case <-ctx.Done():
 			fmt.Println("\n[crdt] removing self from active_nodes …")
-			repl.RemoveFromSet("active_nodes", myAddr, gekka.WriteAll)
+			repl.RemoveFromSet("active_nodes", myAddr, crdt.WriteAll)
 			time.Sleep(500 * time.Millisecond) // let WriteAll propagate
 
 			fmt.Println("[crdt] leaving cluster …")
@@ -171,7 +172,7 @@ func main() {
 // ── Dashboard rendering ───────────────────────────────────────────────────────
 
 // printDashboard clears the terminal and draws the current CRDT state.
-func printDashboard(repl *gekka.Replicator, myAddr, system string, myRequests uint64) {
+func printDashboard(repl *crdt.Replicator, myAddr, system string, myRequests uint64) {
 	counter := repl.GCounter("total_requests")
 	nodeSet := repl.ORSet("active_nodes")
 	members := nodeSet.Elements()

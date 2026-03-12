@@ -34,7 +34,7 @@ type ActorLogger struct {
 }
 
 // newActorLogger constructs an ActorLogger from a slog.Handler and actor
-// context.  h is the handler configured on the GekkaNode (or the default
+// context.  h is the handler configured on the Cluster (or the default
 // slog handler when none is set).  ref is the actor's own ActorRef;
 // getRef is a closure that returns the current sender (or nil) at log time.
 func newActorLogger(h slog.Handler, ref Ref, getRef func() Ref) ActorLogger {

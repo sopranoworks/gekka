@@ -71,7 +71,7 @@ func (e *NoSerializerFoundException) Error() string {
 }
 
 // SerializationRegistry manages Serializer implementations and manifest-to-type
-// bindings.  Obtain the shared instance via GekkaNode.Serialization().
+// bindings.  Obtain the shared instance via Cluster.Serialization().
 type SerializationRegistry struct {
 	mu          sync.RWMutex
 	serializers map[int32]Serializer

@@ -73,7 +73,7 @@ func TestIntegration_PekkoServer(t *testing.T) {
 	}
 
 	// 2. Spawn Go node (port 0 = OS-assigned)
-	node, err := Spawn(NodeConfig{SystemName: "GoClient", Host: "127.0.0.1", Port: 0})
+	node, err := Spawn(ClusterConfig{SystemName: "GoClient", Host: "127.0.0.1", Port: 0})
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestClusterSingletonProxy(t *testing.T) {
 
 	// 2. Spawn Go node using typed Address
 	selfAddr := actor.Address{Protocol: "pekko", System: "ClusterSystem", Host: "127.0.0.1", Port: 2553}
-	node, err := Spawn(NodeConfig{Address: selfAddr})
+	node, err := Spawn(ClusterConfig{Address: selfAddr})
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -303,7 +303,7 @@ func TestClusterJoinLeave(t *testing.T) {
 
 	// 2. Spawn Go node using typed Address
 	selfAddr := actor.Address{Protocol: "pekko", System: "ClusterSystem", Host: "127.0.0.1", Port: 2553}
-	node, err := Spawn(NodeConfig{Address: selfAddr})
+	node, err := Spawn(ClusterConfig{Address: selfAddr})
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -403,7 +403,7 @@ func TestDistributedData(t *testing.T) {
 
 	// 2. Spawn Go node using typed Address
 	selfAddr := actor.Address{Protocol: "pekko", System: "ClusterSystem", Host: "127.0.0.1", Port: 2553}
-	node, err := Spawn(NodeConfig{Address: selfAddr})
+	node, err := Spawn(ClusterConfig{Address: selfAddr})
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -539,7 +539,7 @@ func TestClusterFailureRecovery(t *testing.T) {
 	}
 
 	// 2. Spawn Go Node 1
-	node1, err := Spawn(NodeConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 0})
+	node1, err := Spawn(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 0})
 	if err != nil {
 		t.Fatalf("Spawn Node 1: %v", err)
 	}
@@ -563,7 +563,7 @@ func TestClusterFailureRecovery(t *testing.T) {
 	}
 
 	// 3. Spawn Go Node 2
-	node2, err := Spawn(NodeConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 0})
+	node2, err := Spawn(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 0})
 	if err != nil {
 		t.Fatalf("Spawn Node 2: %v", err)
 	}
@@ -713,7 +713,7 @@ func TestClusterChurn(t *testing.T) {
 
 	// 2. Spawn GoNode-B for continuous traffic. It is not a cluster member; it
 	//    just maintains an Artery connection to the echo actor on port 2552.
-	nodeB, err := Spawn(NodeConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 0})
+	nodeB, err := Spawn(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 0})
 	if err != nil {
 		t.Fatalf("Spawn GoNode-B: %v", err)
 	}
@@ -768,7 +768,7 @@ func TestClusterChurn(t *testing.T) {
 	for i := 0; i < iterations; i++ {
 		log.Printf("[CHURN] Iteration %d/%d — spawning GoNode-A...", i+1, iterations)
 
-		nodeA, err := Spawn(NodeConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 0})
+		nodeA, err := Spawn(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 0})
 		if err != nil {
 			close(stopTraffic)
 			t.Fatalf("[CHURN] Iteration %d: Spawn GoNode-A: %v", i+1, err)
@@ -842,7 +842,7 @@ func (a *eventForwarderActor) Receive(msg any) {
 //
 // Uses the ClusterEvent subscription API (push-based) rather than polling, so
 // it reacts immediately to each cluster.MemberUp / cluster.MemberRemoved transition.
-func waitForUpMembers(node *GekkaNode, expected int, timeout time.Duration) error {
+func waitForUpMembers(node *Cluster, expected int, timeout time.Duration) error {
 	// Fast path: already satisfied — no need to subscribe at all.
 	if countUpMembers(node) >= expected {
 		return nil
@@ -883,7 +883,7 @@ func waitForUpMembers(node *GekkaNode, expected int, timeout time.Duration) erro
 
 // countUpMembers returns the number of members in Up status in node's current
 // gossip view. Used by waitForUpMembers.
-func countUpMembers(node *GekkaNode) int {
+func countUpMembers(node *Cluster) int {
 	count := 0
 	for _, m := range node.cm.GetState().GetMembers() {
 		if m.GetStatus() == cluster.MemberStatus_Up {
@@ -903,7 +903,7 @@ func TestCluster_GoDominantMixed(t *testing.T) {
 
 	// ── Step 1: Start Go-Seed ──────────────────────────────────────────────
 	log.Printf("[SEED] Spawning Go-Seed on port %d...", goSeedPort)
-	goSeed, err := Spawn(NodeConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: goSeedPort})
+	goSeed, err := Spawn(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: goSeedPort})
 	if err != nil {
 		t.Fatalf("Spawn Go-Seed: %v", err)
 	}
@@ -958,10 +958,10 @@ func TestCluster_GoDominantMixed(t *testing.T) {
 	}
 
 	// ── Step 3: Spawn Go-2, Go-3, Go-4 ────────────────────────────────────
-	var goNodes [3]*GekkaNode
+	var goNodes [3]*Cluster
 	names := []string{"Go-2", "Go-3", "Go-4"}
 	for i := range goNodes {
-		n, err := Spawn(NodeConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 0})
+		n, err := Spawn(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 0})
 		if err != nil {
 			t.Fatalf("Spawn %s: %v", names[i], err)
 		}
@@ -1104,7 +1104,7 @@ func TestMultiNodeDynamicJoin(t *testing.T) {
 	}
 
 	// 2. Spawn Go Node 1
-	node1, err := Spawn(NodeConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 0})
+	node1, err := Spawn(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 0})
 	if err != nil {
 		t.Fatalf("Spawn Node 1: %v", err)
 	}
@@ -1129,7 +1129,7 @@ func TestMultiNodeDynamicJoin(t *testing.T) {
 	}
 
 	// 3. Spawn Go Node 2
-	node2, err := Spawn(NodeConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 0})
+	node2, err := Spawn(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 0})
 	if err != nil {
 		t.Fatalf("Spawn Node 2: %v", err)
 	}
@@ -1195,7 +1195,7 @@ func TestCluster_CRDT_Consistency_Under_Failure(t *testing.T) {
 
 	// ── Step 1: Go-Seed (self-join) ────────────────────────────────────────
 	log.Printf("[CRDT] Spawning Go-Seed on port %d...", goSeedPort)
-	goSeed, err := Spawn(NodeConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: goSeedPort})
+	goSeed, err := Spawn(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: goSeedPort})
 	if err != nil {
 		t.Fatalf("Spawn Go-Seed: %v", err)
 	}
@@ -1246,10 +1246,10 @@ func TestCluster_CRDT_Consistency_Under_Failure(t *testing.T) {
 	}
 
 	// ── Step 3: Spawn go2, go3, go4 and join Go-Seed ───────────────────────
-	goNodes := make([]*GekkaNode, 3)
+	goNodes := make([]*Cluster, 3)
 	nodeNames := []string{"Go-2", "Go-3", "Go-4"}
 	for i := range goNodes {
-		n, err := Spawn(NodeConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 0})
+		n, err := Spawn(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 0})
 		if err != nil {
 			t.Fatalf("Spawn %s: %v", nodeNames[i], err)
 		}
@@ -1270,7 +1270,7 @@ func TestCluster_CRDT_Consistency_Under_Failure(t *testing.T) {
 	log.Printf("[CRDT] 5-node mixed cluster (Go×4 + Scala×1) is Up.")
 
 	// ── Step 5: Wire all-to-all Replicator mesh ─────────────────────────────
-	allNodes := []*GekkaNode{goSeed, go2, go3, go4}
+	allNodes := []*Cluster{goSeed, go2, go3, go4}
 	allRepls := make([]*Replicator, 4)
 	for i, n := range allNodes {
 		allRepls[i] = n.Replicator()
@@ -1345,7 +1345,7 @@ func TestCluster_CRDT_Consistency_Under_Failure(t *testing.T) {
 	time.Sleep(3 * time.Second)
 
 	// ── Verify CRDT consistency on all surviving Go nodes ───────────────────
-	survivedNodes := []*GekkaNode{goSeed, go2, go3}
+	survivedNodes := []*Cluster{goSeed, go2, go3}
 	survivedRepls := allRepls[:3]
 	survivedNames := []string{"Go-Seed", "Go-2", "Go-3"}
 	allOK := true
@@ -1406,7 +1406,7 @@ func TestAsk_PekkoEcho(t *testing.T) {
 	}
 
 	// Spawn Go node with OS-assigned port.
-	node, err := Spawn(NodeConfig{SystemName: "GoClient", Host: "127.0.0.1", Port: 0})
+	node, err := Spawn(ClusterConfig{SystemName: "GoClient", Host: "127.0.0.1", Port: 0})
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}

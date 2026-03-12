@@ -147,7 +147,7 @@ func (b *BaseActor) Log() ActorLogger {
 }
 
 // initLog is called by SpawnActor / ActorOf once the actor has a known path.
-// h is the slog.Handler configured on the GekkaNode (may be nil → use default).
+// h is the slog.Handler configured on the Cluster (may be nil → use default).
 func (b *BaseActor) initLog(h slog.Handler, self Ref) {
 	if h == nil {
 		h = slog.Default().Handler()
@@ -288,7 +288,7 @@ func (b *BaseActor) HandleFailure(child Ref, childActor Actor, err error) {
 	case Restart:
 		child.Tell(restartSignal{reason: err})
 	case Stop:
-		// We need to stop the child. GekkaNode.Stop takes ActorRef.
+		// We need to stop the child. Cluster.Stop takes ActorRef.
 		// Since we are in the actor package, we might need a bridge.
 		// For now, let's just close the mailbox if we can.
 		type stopper interface{ Stop(Ref) }
@@ -356,7 +356,7 @@ func InjectParent(a Actor, parent Ref) {
 // a.Receive for each message.  The goroutine exits when the channel is closed.
 //
 // Call Start once after constructing the actor, before registering it with
-// GekkaNode.RegisterActor:
+// Cluster.RegisterActor:
 //
 //	a := &MyActor{BaseActor: actor.NewBaseActor()}
 //	actor.Start(a)

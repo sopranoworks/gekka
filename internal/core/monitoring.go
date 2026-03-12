@@ -19,8 +19,8 @@ import (
 	"github.com/sopranoworks/gekka/cluster"
 )
 
-// NodeProvider defines the subset of GekkaNode functionality needed by MonitoringServer.
-type NodeProvider interface {
+// ClusterProvider defines the subset of Cluster functionality needed by MonitoringServer.
+type ClusterProvider interface {
 	NodeManager() *NodeManager
 	ClusterManager() *cluster.ClusterManager
 	Metrics() *NodeMetrics
@@ -28,13 +28,13 @@ type NodeProvider interface {
 
 // MonitoringServer hosts the optional HTTP monitoring endpoints.
 type MonitoringServer struct {
-	provider NodeProvider
+	provider ClusterProvider
 	srv      *http.Server
 	listener net.Listener
 }
 
 // NewMonitoringServer creates a new monitoring server.
-func NewMonitoringServer(provider NodeProvider, port int) (*MonitoringServer, error) {
+func NewMonitoringServer(provider ClusterProvider, port int) (*MonitoringServer, error) {
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
 		return nil, fmt.Errorf("monitoring: listen on :%d: %w", port, err)

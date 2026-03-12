@@ -67,7 +67,7 @@ func main() {
 	// MonitoringPort is the TCP port for the built-in HTTP server.
 	// Setting it to a non-zero value implies EnableMonitoring = true.
 	// Use 0 to let the OS pick a free port (see node.MonitoringAddr() below).
-	node, err := gekka.Spawn(gekka.NodeConfig{
+	node, err := gekka.Spawn(gekka.ClusterConfig{
 		SystemName:     "ClusterSystem",
 		Host:           "127.0.0.1",
 		Port:           0, // OS-assigned Artery port

@@ -22,7 +22,7 @@ import (
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-func newTestNode(t *testing.T, system, host string, port uint32) *GekkaNode {
+func newTestNode(t *testing.T, system, host string, port uint32) *Cluster {
 	t.Helper()
 	addr := &gproto_remote.Address{
 		Protocol: proto.String("pekko"),
@@ -32,7 +32,7 @@ func newTestNode(t *testing.T, system, host string, port uint32) *GekkaNode {
 	}
 	nm := core.NewNodeManager(addr, 0)
 	ctx, cancel := context.WithCancel(context.Background())
-	node := &GekkaNode{
+	cluster := &Cluster{
 		nm:             nm,
 		localAddr:      addr,
 		actors:         make(map[string]actor.Actor),
@@ -40,8 +40,8 @@ func newTestNode(t *testing.T, system, host string, port uint32) *GekkaNode {
 		ctx:            ctx,
 		cancel:         cancel,
 	}
-	node.System = &nodeActorSystem{node: node}
-	return node
+	cluster.System = &nodeActorSystem{cluster: cluster}
+	return cluster
 }
 
 // echoActor records the last received message.

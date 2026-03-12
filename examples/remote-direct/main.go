@@ -53,7 +53,7 @@ func main() {
 
 func runNodeA(ctx context.Context) {
 	// Node A: Starts on port 2552, no seed-nodes.
-	cfg := gekka.NodeConfig{
+	cfg := gekka.ClusterConfig{
 		SystemName: "RemoteSys",
 		Host:       "127.0.0.1",
 		Port:       2552,
@@ -80,7 +80,7 @@ func runNodeA(ctx context.Context) {
 
 func runNodeB(ctx context.Context) {
 	// Node B: Starts on a random port.
-	cfg := gekka.NodeConfig{
+	cfg := gekka.ClusterConfig{
 		SystemName: "SenderSys",
 		Host:       "127.0.0.1",
 		Port:       0,

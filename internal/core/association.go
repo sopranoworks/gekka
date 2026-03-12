@@ -78,7 +78,7 @@ type NodeManager struct {
 	pendingRepliesMu sync.RWMutex
 	pendingReplies   map[string]chan *ArteryMetadata // keyed by temp actor path
 
-	// NodeMetrics is the shared NodeMetrics instance (set by GekkaNode.Spawn).
+	// NodeMetrics is the shared NodeMetrics instance (set by Cluster.Spawn).
 	// Nil-safe: all callers check before touching.
 	NodeMetrics *NodeMetrics
 }

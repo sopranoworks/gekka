@@ -158,7 +158,7 @@ func TestSpawnFromConfig_Pekko(t *testing.T) {
 }
 
 func TestJoinSeeds_NoSeeds(t *testing.T) {
-	node, err := Spawn(NodeConfig{Host: "127.0.0.1", Port: 0})
+	node, err := Spawn(ClusterConfig{Host: "127.0.0.1", Port: 0})
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}

@@ -20,7 +20,7 @@ import (
 // ── Minimal ActorContext for pool tests ───────────────────────────────────────
 
 // testActorContext is a lightweight ActorContext that supports ActorOf and
-// Watch without a full GekkaNode. It records Watch calls for assertions.
+// Watch without a full Cluster. It records Watch calls for assertions.
 type testActorContext struct {
 	mu      sync.Mutex
 	spawned map[string]Actor // path → actor instance
@@ -377,7 +377,7 @@ func TestPoolRouter_Receive_Broadcast_SendsToAll(t *testing.T) {
 // ── End-to-end: PoolRouter started by Start ───────────────────────────────────
 
 func TestPoolRouter_StartedByStart_DeliversMessages(t *testing.T) {
-	// Wire up the pool without a full GekkaNode using collectActor Routees.
+	// Wire up the pool without a full Cluster using collectActor Routees.
 	received := make([]chan any, 3)
 	Routees := make([]Ref, 3)
 	for i := range received {

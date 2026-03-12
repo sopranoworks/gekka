@@ -19,7 +19,7 @@ import (
 // ── Event types ───────────────────────────────────────────────────────────────
 
 // ClusterDomainEvent is the marker interface for all cluster lifecycle events.
-// Subscribe to events with GekkaNode.Subscribe; receive them on a buffered
+// Subscribe to events with Cluster.Subscribe; receive them on a buffered
 // channel and type-switch to handle specific transitions.
 //
 //	ch := make(chan gekka.ClusterDomainEvent, 16)
@@ -83,7 +83,7 @@ func (MemberRemoved) clusterDomainEvent()     {}
 func (UnreachableMember) clusterDomainEvent() {}
 func (ReachableMember) clusterDomainEvent()   {}
 
-// Convenience reflect.Type values for use with GekkaNode.Subscribe.
+// Convenience reflect.Type values for use with Cluster.Subscribe.
 // Pass one or more of these to filter specific event types.
 //
 //	node.Subscribe(ch, gekka.EventMemberUp, gekka.EventMemberRemoved)

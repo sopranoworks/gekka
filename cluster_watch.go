@@ -1,5 +1,5 @@
 /*
- * gekka_node_watch.go
+ * cluster_watch.go
  * This file is part of the gekka project.
  *
  * Copyright (c) 2026 Sopranoworks, Osamu Takahashi

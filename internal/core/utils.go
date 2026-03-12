@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-package gekka
+package core
 
 import (
 	"bytes"
@@ -41,7 +41,8 @@ func gzipDecompress(data []byte) ([]byte, error) {
 	return io.ReadAll(r)
 }
 
-func toClusterAddress(a *gproto_remote.Address) *gproto_cluster.Address {
+// ToClusterAddress converts a remote address to a cluster address.
+func ToClusterAddress(a *gproto_remote.Address) *gproto_cluster.Address {
 	if a == nil {
 		return nil
 	}
@@ -53,13 +54,14 @@ func toClusterAddress(a *gproto_remote.Address) *gproto_cluster.Address {
 	}
 }
 
-func toClusterUniqueAddress(ua *gproto_remote.UniqueAddress) *gproto_cluster.UniqueAddress {
+// ToClusterUniqueAddress converts a remote unique address to a cluster unique address.
+func ToClusterUniqueAddress(ua *gproto_remote.UniqueAddress) *gproto_cluster.UniqueAddress {
 	if ua == nil {
 		return nil
 	}
 	uid64 := *ua.Uid
 	return &gproto_cluster.UniqueAddress{
-		Address: toClusterAddress(ua.Address),
+		Address: ToClusterAddress(ua.Address),
 		Uid:     proto.Uint32(uint32(uid64 & 0xFFFFFFFF)),
 		Uid2:    proto.Uint32(uint32(uid64 >> 32)),
 	}

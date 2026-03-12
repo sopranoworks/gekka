@@ -36,9 +36,9 @@
 //
 // # In-process metrics access
 //
-// Call node.Metrics() from any goroutine to obtain a MetricsSnapshot:
+// Call node.MetricsSnapshot() from any goroutine to obtain a MetricsSnapshot:
 //
-//	snap := node.Metrics()
+//	snap := node.MetricsSnapshot()
 //	fmt.Printf("sent=%d recv=%d gossips=%d\n",
 //	    snap.MessagesSent, snap.MessagesReceived, snap.GossipsReceived)
 package main
@@ -116,7 +116,7 @@ func main() {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				snap := node.Metrics()
+				snap := node.MetricsSnapshot()
 				b, _ := json.MarshalIndent(snap, "  ", "  ")
 				log.Printf("[metrics]\n  %s", b)
 			}
@@ -128,10 +128,10 @@ func main() {
 	// GET /status  — prints a human-readable summary.
 	//
 	// This is separate from the built-in monitoring server and shows how to
-	// combine node.Metrics() with application-level endpoints.
+	// combine node.MetricsSnapshot() with application-level endpoints.
 	mux := http.NewServeMux()
 	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
-		snap := node.Metrics()
+		snap := node.MetricsSnapshot()
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		fmt.Fprintf(w, "Artery node: %s\n", node.Addr())
 		fmt.Fprintf(w, "Monitoring:  http://%s\n\n", node.MonitoringAddr())

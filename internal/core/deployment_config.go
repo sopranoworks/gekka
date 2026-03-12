@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-package gekka
+package core
 
 import (
 	"fmt"
@@ -101,7 +101,7 @@ func lookupDeploymentUnder(cfg *hocon.Config, prefix, actorPath string) (Deploym
 		return DeploymentConfig{}, false
 	}
 
-	for _, key := range deploymentKeyCandidates(actorPath) {
+	for _, key := range DeploymentKeyCandidates(actorPath) {
 		actorCfg, err := depCfg.GetConfig(key)
 		if err == nil {
 			return parseDeploymentObject(actorCfg), true
@@ -110,9 +110,9 @@ func lookupDeploymentUnder(cfg *hocon.Config, prefix, actorPath string) (Deploym
 	return DeploymentConfig{}, false
 }
 
-// deploymentKeyCandidates returns the HOCON field names to try for actorPath,
+// DeploymentKeyCandidates returns the HOCON field names to try for actorPath,
 // supporting both the full path and the /user-relative short form.
-func deploymentKeyCandidates(actorPath string) []string {
+func DeploymentKeyCandidates(actorPath string) []string {
 	candidates := []string{actorPath}
 	switch {
 	case strings.HasPrefix(actorPath, "/user/"):
@@ -168,10 +168,10 @@ func parseDeploymentObject(cfg hocon.Config) DeploymentConfig {
 
 // ── Pool router factory ───────────────────────────────────────────────────────
 
-// isGroupRouter reports whether routerType identifies a group router
+// IsGroupRouter reports whether routerType identifies a group router
 // (routes to pre-existing actors) rather than a pool router (owns routees).
 // By convention, group router types end in "-group".
-func isGroupRouter(routerType string) bool {
+func IsGroupRouter(routerType string) bool {
 	return strings.HasSuffix(routerType, "-group")
 }
 
@@ -248,12 +248,12 @@ func DeploymentToGroupRouter(cm *cluster.ClusterManager, d DeploymentConfig) (ac
 
 // ── Bulk extraction ───────────────────────────────────────────────────────────
 
-// extractDeployments reads every entry under <prefix>.actor.deployment in cfg
+// ExtractDeployments reads every entry under <prefix>.actor.deployment in cfg
 // (trying both "pekko" and "akka" prefixes) and returns a map from actor path
 // to DeploymentConfig. Only entries that have a non-empty Router field are
 // included. Each entry is stored under both the key as written in the HOCON
 // and its canonical counterpart (full path ↔ short form without /user).
-func extractDeployments(cfg *hocon.Config) map[string]DeploymentConfig {
+func ExtractDeployments(cfg *hocon.Config) map[string]DeploymentConfig {
 	result := make(map[string]DeploymentConfig)
 	for _, prefix := range []string{"pekko", "akka"} {
 		depCfg, err := cfg.GetConfig(prefix + ".actor.deployment")
@@ -265,7 +265,7 @@ func extractDeployments(cfg *hocon.Config) map[string]DeploymentConfig {
 			for k, v := range m {
 				result[k] = v
 				// Also store under the alternate form (full ↔ short)
-				for _, alt := range deploymentKeyCandidates(k)[1:] {
+				for _, alt := range DeploymentKeyCandidates(k)[1:] {
 					if _, exists := result[alt]; !exists {
 						result[alt] = v
 					}

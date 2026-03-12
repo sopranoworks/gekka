@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/internal/core"
 
 	hocon "github.com/sopranoworks/gekka-config"
 )
@@ -188,7 +189,7 @@ func hoconToNodeConfig(cfg *hocon.Config) (NodeConfig, error) {
 	}
 
 	// Extract deployment configs from the HOCON deployment block.
-	if deps := extractDeployments(cfg); len(deps) > 0 {
+	if deps := core.ExtractDeployments(cfg); len(deps) > 0 {
 		nodeCfg.Deployments = deps
 	}
 

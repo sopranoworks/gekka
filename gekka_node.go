@@ -24,6 +24,7 @@ import (
 	"github.com/sopranoworks/gekka/cluster"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
+	"github.com/sopranoworks/gekka/internal/core"
 
 	"google.golang.org/protobuf/proto"
 )
@@ -126,11 +127,11 @@ type NodeConfig struct {
 	// Can also be set directly for programmatic configuration:
 	//
 	//	gekka.Spawn(gekka.NodeConfig{
-	//	    Deployments: map[string]gekka.DeploymentConfig{
+	//	    Deployments: map[string]gekka.core.DeploymentConfig{
 	//	        "/user/myRouter": {Router: "round-robin-pool", NrOfInstances: 5},
 	//	    },
 	//	})
-	Deployments map[string]DeploymentConfig
+	Deployments map[string]core.DeploymentConfig
 }
 
 // resolve returns the effective (scheme, system, host, port) for this config.
@@ -156,7 +157,7 @@ type IncomingMessage struct {
 	// Payload is the raw serialized bytes.
 	Payload []byte
 	// SerializerId identifies the serializer used by the sender.
-	// Common values: 4 = raw bytes, 2 = Protobuf, 5 = ClusterMessageSerializer.
+	// Common values: 4 = raw bytes, 2 = Protobuf, 5 = ClusterMessage.
 	SerializerId int32
 	// Manifest is the type tag embedded in the Artery envelope.
 	Manifest string
@@ -178,18 +179,18 @@ type IncomingMessage struct {
 // Create one with Spawn (or SpawnFromConfig), then call Join (or JoinSeeds)
 // to connect to a Pekko cluster.
 type GekkaNode struct {
-	nm         *NodeManager
+	nm         *core.NodeManager
 	cm         *cluster.ClusterManager
 	router     *actor.Router
 	repl       *Replicator
-	server     *TcpServer
+	server     *core.TcpServer
 	ctx        context.Context
 	cancel     context.CancelFunc
 	localAddr  *gproto_remote.Address
 	seedAddr   *gproto_remote.Address // set by the first Join call
 	seeds      []actor.Address // from NodeConfig.SeedNodes (populated by LoadConfig)
-	metrics    *NodeMetrics
-	monitoring *monitoringServer // nil when monitoring is disabled
+	metrics    *core.NodeMetrics
+	monitoring *core.MonitoringServer // nil when monitoring is disabled
 
 	actorsMu sync.RWMutex
 	actors   map[string]actor.Actor // actor path suffix → Actor
@@ -209,7 +210,7 @@ type GekkaNode struct {
 	clusterWatcherRef ActorRef
 	logHandler        slog.Handler // nil = use slog.Default().Handler()
 	onMessage         func(ctx context.Context, msg *IncomingMessage) error
-	deployments       map[string]DeploymentConfig // keyed by actor path; nil = no deployments
+	deployments       map[string]core.DeploymentConfig // keyed by actor path; nil = no deployments
 }
 
 // Spawn creates, wires, and starts a GekkaNode. The TCP listener is bound
@@ -229,11 +230,11 @@ func Spawn(cfg NodeConfig) (*GekkaNode, error) {
 		Uid:     proto.Uint64(uid),
 	}
 
-	metrics := &NodeMetrics{}
-	nm := NewNodeManager(localAddr, uid)
-	nm.metrics = metrics
+	metrics := &core.NodeMetrics{}
+	nm := core.NewNodeManager(localAddr, uid)
+	nm.NodeMetrics = metrics
 	router := actor.NewRouter(nm)
-	cm := cluster.NewClusterManager(toClusterUniqueAddress(localUA), func(ctx context.Context, path string, msg any) error {
+	cm := cluster.NewClusterManager(core.ToClusterUniqueAddress(localUA), func(ctx context.Context, path string, msg any) error {
 		return router.Send(ctx, path, msg)
 	})
 	cm.Protocol = scheme
@@ -245,10 +246,10 @@ func Spawn(cfg NodeConfig) (*GekkaNode, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	server, err := NewTcpServer(TcpServerConfig{
+	server, err := core.NewTcpServer(core.TcpServerConfig{
 		Addr: fmt.Sprintf("%s:%d", host, port),
 		Handler: func(c context.Context, conn net.Conn) error {
-			return nm.ProcessConnection(c, conn, INBOUND, nil, 0)
+			return nm.ProcessConnection(c, conn, core.INBOUND, nil, 0)
 		},
 	})
 	if err != nil {
@@ -268,8 +269,8 @@ func Spawn(cfg NodeConfig) (*GekkaNode, error) {
 			localAddr.Port = proto.Uint32(actualPort)
 			// Patch the gossip state that was snapshotted in Newcluster.ClusterManager.
 			// This is needed because the port might have been 0 and assigned by the OS.
-			nm.localAddress = localAddr
-			clUA := toClusterUniqueAddress(localUA)
+			nm.LocalAddr = localAddr
+			clUA := core.ToClusterUniqueAddress(localUA)
 			cm.LocalAddress = clUA
 			cm.State.AllAddresses = []*gproto_cluster.UniqueAddress{clUA}
 			cm.State.Members = []*gproto_cluster.Member{
@@ -331,13 +332,13 @@ func Spawn(cfg NodeConfig) (*GekkaNode, error) {
 		node.cm.Metrics = node.metrics
 	}
 	if (cfg.EnableMonitoring || monPort > 0) && monPort >= 0 {
-		ms, err := newMonitoringServer(node, monPort)
+		ms, err := core.NewMonitoringServer(node, monPort)
 		if err != nil {
 			cancel()
 			_ = server.Shutdown()
 			return nil, fmt.Errorf("gekka: monitoring server: %w", err)
 		}
-		ms.start(ctx)
+		ms.Start(ctx)
 		node.monitoring = ms
 	}
 
@@ -407,7 +408,7 @@ func (n *GekkaNode) OnMessage(fn func(ctx context.Context, msg *IncomingMessage)
 	n.onMessage = fn
 }
 
-func (n *GekkaNode) handleArteryMessage(ctx context.Context, meta *ArteryMetadata) error {
+func (n *GekkaNode) handleArteryMessage(ctx context.Context, meta *core.ArteryMetadata) error {
 	var recipientPath string
 	if meta.Recipient != nil {
 		recipientPath = meta.Recipient.GetPath()
@@ -456,19 +457,19 @@ func (n *GekkaNode) handleArteryMessage(ctx context.Context, meta *ArteryMetadat
 	return n.onMessage(ctx, incoming)
 }
 
-// lookupDeployment returns the DeploymentConfig for the given actor path, if any.
+// lookupDeployment returns the core.DeploymentConfig for the given actor path, if any.
 // It tries both the exact path and the alternate short/full form so that
 // "/user/myRouter" and "/myRouter" both resolve to the same deployment entry.
-func (n *GekkaNode) lookupDeployment(path string) (DeploymentConfig, bool) {
+func (n *GekkaNode) lookupDeployment(path string) (core.DeploymentConfig, bool) {
 	if len(n.deployments) == 0 {
-		return DeploymentConfig{}, false
+		return core.DeploymentConfig{}, false
 	}
-	for _, candidate := range deploymentKeyCandidates(path) {
+	for _, candidate := range core.DeploymentKeyCandidates(path) {
 		if d, ok := n.deployments[candidate]; ok {
 			return d, true
 		}
 	}
-	return DeploymentConfig{}, false
+	return core.DeploymentConfig{}, false
 }
 
 // RegisterActor wires an Actor to a local actor path so that incoming Artery
@@ -525,7 +526,7 @@ func (n *GekkaNode) SelfAddress() actor.Address {
 //   - fmt.Stringer     — any type whose String() returns a valid actor path URI
 //
 // Supported message types:
-//   - []byte           → raw bytes (Pekko ByteArraySerializer, ID 4)
+//   - []byte           → raw bytes (Pekko ByteArraycore.Serializer, ID 4)
 //   - proto.Message    → Protobuf (ID 2)
 //   - cluster messages → handled automatically by Router
 func (n *GekkaNode) Send(ctx context.Context, dst interface{}, msg interface{}) error {
@@ -600,9 +601,9 @@ func (n *GekkaNode) Ask(ctx context.Context, dst interface{}, msg interface{}) (
 		self.Protocol, self.System, self.Host, self.Port, id)
 
 	// Register a reply channel keyed by the temp path.
-	replyCh := make(chan *ArteryMetadata, 1)
-	n.nm.registerPendingReply(tempPath, replyCh)
-	defer n.nm.unregisterPendingReply(tempPath)
+	replyCh := make(chan *core.ArteryMetadata, 1)
+	n.nm.RegisterPendingReply(tempPath, replyCh)
+	defer n.nm.UnregisterPendingReply(tempPath)
 
 	if err := n.router.SendWithSender(ctx, pathStr, tempPath, msg); err != nil {
 		return nil, fmt.Errorf("gekka: Ask: send: %w", err)
@@ -657,6 +658,18 @@ func (l *localReplyActor) Tell(msg any, sender ...actor.Ref) {
 // Join sends an InitJoin to the seed node, starts heartbeats, and starts the
 // background gossip loop. It is non-blocking: cluster convergence happens
 // asynchronously. Use WaitForHandshake to confirm the TCP association is up.
+func (n *GekkaNode) ClusterManager() *cluster.ClusterManager {
+	return n.cm
+}
+
+func (n *GekkaNode) NodeManager() *core.NodeManager {
+	return n.nm
+}
+
+func (n *GekkaNode) Metrics() *core.NodeMetrics {
+	return n.metrics
+}
+
 func (n *GekkaNode) Join(seedHost string, seedPort uint32) error {
 	scheme := n.localAddr.GetProtocol() // "pekko" or "akka"
 	n.seedAddr = &gproto_remote.Address{
@@ -668,7 +681,7 @@ func (n *GekkaNode) Join(seedHost string, seedPort uint32) error {
 	if err := n.cm.JoinCluster(n.ctx, seedHost, seedPort); err != nil {
 		return err
 	}
-	n.cm.StartHeartbeat(toClusterAddress(n.seedAddr))
+	n.cm.StartHeartbeat(core.ToClusterAddress(n.seedAddr))
 	go n.cm.StartGossipLoop(n.ctx)
 	return nil
 }
@@ -676,7 +689,7 @@ func (n *GekkaNode) Join(seedHost string, seedPort uint32) error {
 // JoinSeeds connects to the seed nodes supplied via LoadConfig
 // (NodeConfig.SeedNodes). It skips self and joins the first remote seed;
 // if all configured seeds are self (i.e. this node is the bootstrap seed),
-// it joins its own address so Pekko's leader-election handshake completes.
+// it joins its own address so Pekko's leader-election Handshake completes.
 //
 // Returns an error when no seeds are configured or Join fails.
 func (n *GekkaNode) JoinSeeds() error {
@@ -710,33 +723,33 @@ func (n *GekkaNode) Leave() error {
 // failure from Pekko's perspective. Used in tests and for graceful pre-leave.
 func (n *GekkaNode) StopHeartbeat() {
 	if n.seedAddr != nil {
-		n.cm.StopHeartbeat(toClusterAddress(n.seedAddr))
+		n.cm.StopHeartbeat(core.ToClusterAddress(n.seedAddr))
 		// Immediately restart — this counts as a reset.
-		n.cm.StartHeartbeat(toClusterAddress(n.seedAddr))
+		n.cm.StartHeartbeat(core.ToClusterAddress(n.seedAddr))
 	}
 }
 
 // StartHeartbeat resumes heartbeats to the seed node after StopHeartbeat.
 func (n *GekkaNode) StartHeartbeat() {
 	if n.seedAddr != nil {
-		n.cm.StartHeartbeat(toClusterAddress(n.seedAddr))
+		n.cm.StartHeartbeat(core.ToClusterAddress(n.seedAddr))
 	}
 }
 
-// WaitForHandshake blocks until the Artery handshake with the given host:port
+// WaitForHandshake blocks until the Artery Handshake with the given host:port
 // completes (i.e. the association reaches ASSOCIATED state). Returns an error
 // if the context is cancelled or the 30-second built-in timeout expires.
 func (n *GekkaNode) WaitForHandshake(ctx context.Context, host string, port uint32) error {
 	for {
 		if assoc, ok := n.nm.GetAssociationByHost(host, port); ok {
-			gassoc := assoc.(*GekkaAssociation)
+			gassoc := assoc.(*core.GekkaAssociation)
 			select {
-			case <-gassoc.handshake:
+			case <-gassoc.Handshake:
 				return nil
 			case <-ctx.Done():
 				return ctx.Err()
 			case <-time.After(30 * time.Second):
-				return fmt.Errorf("gekka: handshake timeout for %s:%d", host, port)
+				return fmt.Errorf("gekka: Handshake timeout for %s:%d", host, port)
 			}
 		}
 		select {
@@ -792,7 +805,7 @@ func (n *GekkaNode) Unsubscribe(ref ActorRef) {
 //
 //	snap := node.Metrics()
 //	log.Printf("sent=%d received=%d gossips=%d", snap.MessagesSent, snap.MessagesReceived, snap.GossipsReceived)
-func (n *GekkaNode) Metrics() MetricsSnapshot {
+func (n *GekkaNode) MetricsSnapshot() core.MetricsSnapshot {
 	return n.metrics.Snapshot(n.nm.CountAssociations())
 }
 
@@ -805,23 +818,23 @@ func (n *GekkaNode) MonitoringAddr() net.Addr {
 	return n.monitoring.Addr()
 }
 
-// Serialization returns the SerializationRegistry for registering custom
+// Serialization returns the core.SerializationRegistry for registering custom
 // Protobuf or JSON message types and their manifests.
-func (n *GekkaNode) Serialization() *SerializationRegistry {
+func (n *GekkaNode) Serialization() *core.SerializationRegistry {
 	return n.nm.SerializerRegistry
 }
 
-// RegisterSerializer registers a custom Serializer with this node's
-// SerializationRegistry, keyed by s.Identifier(). Overwrites any existing
+// RegisterSerializer registers a custom core.Serializer with this node's
+// core.SerializationRegistry, keyed by s.Identifier(). Overwrites any existing
 // entry for the same ID.
 //
 //	node.RegisterSerializer(&MyJSONSerializer{})
-func (n *GekkaNode) RegisterSerializer(s Serializer) {
+func (n *GekkaNode) RegisterSerializer(s core.Serializer) {
 	n.nm.SerializerRegistry.RegisterSerializer(s.Identifier(), s)
 }
 
 // RegisterType binds a manifest string to a Go reflect.Type so that
-// ProtobufSerializer and JSONSerializer can instantiate the correct struct
+// Protobufcore.Serializer and JSONcore.Serializer can instantiate the correct struct
 // when deserializing an incoming message.
 //
 // manifest is typically the fully-qualified Scala/Java class name used by the

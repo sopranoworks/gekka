@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/internal/core"
 )
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -71,7 +72,7 @@ func TestActorOf_DeploymentAutoProvisioning_RoundRobin(t *testing.T) {
 	received := make(chan any, nMessages*2)
 
 	node := spawnTestNode(t, NodeConfig{
-		Deployments: map[string]DeploymentConfig{
+		Deployments: map[string]core.DeploymentConfig{
 			"/user/myRouter": {Router: "round-robin-pool", NrOfInstances: nInstances},
 		},
 	})
@@ -107,7 +108,7 @@ func TestActorOf_DeploymentAutoProvisioning_ShortPath(t *testing.T) {
 	received := make(chan any, 20)
 
 	node := spawnTestNode(t, NodeConfig{
-		Deployments: map[string]DeploymentConfig{
+		Deployments: map[string]core.DeploymentConfig{
 			"/myRouter": {Router: "round-robin-pool", NrOfInstances: 2},
 		},
 	})
@@ -151,7 +152,7 @@ func TestActorOf_ManualRouterAlongsideDeployment(t *testing.T) {
 	received := make(chan any, 10)
 
 	node := spawnTestNode(t, NodeConfig{
-		Deployments: map[string]DeploymentConfig{
+		Deployments: map[string]core.DeploymentConfig{
 			"/user/autoPool": {Router: "round-robin-pool", NrOfInstances: 2},
 		},
 	})
@@ -261,7 +262,7 @@ pekko {
 // in the deployment config returns an error from ActorOf.
 func TestActorOf_DeploymentBadRouter(t *testing.T) {
 	node := spawnTestNode(t, NodeConfig{
-		Deployments: map[string]DeploymentConfig{
+		Deployments: map[string]core.DeploymentConfig{
 			"/user/bad": {Router: "bogus-pool", NrOfInstances: 3},
 		},
 	})
@@ -278,7 +279,7 @@ func TestActorOf_DeploymentBadRouter(t *testing.T) {
 // nr-of-instances = 0 returns an error from ActorOf.
 func TestActorOf_DeploymentZeroInstances(t *testing.T) {
 	node := spawnTestNode(t, NodeConfig{
-		Deployments: map[string]DeploymentConfig{
+		Deployments: map[string]core.DeploymentConfig{
 			"/user/zero": {Router: "round-robin-pool", NrOfInstances: 0},
 		},
 	})

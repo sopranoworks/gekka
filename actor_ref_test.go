@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/internal/core"
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 
 	"google.golang.org/protobuf/proto"
@@ -29,7 +30,7 @@ func newTestNode(t *testing.T, system, host string, port uint32) *GekkaNode {
 		Hostname: proto.String(host),
 		Port:     proto.Uint32(port),
 	}
-	nm := NewNodeManager(addr, 0)
+	nm := core.NewNodeManager(addr, 0)
 	ctx, cancel := context.WithCancel(context.Background())
 	node := &GekkaNode{
 		nm:             nm,

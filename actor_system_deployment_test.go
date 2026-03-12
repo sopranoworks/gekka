@@ -27,9 +27,9 @@ type collectActor struct {
 
 func (a *collectActor) Receive(msg any) { a.ch <- msg }
 
-// spawnTestNode creates a GekkaNode on an ephemeral port, returning it and a
+// spawnTestNode creates a Cluster on an ephemeral port, returning it and a
 // teardown func. It does NOT join any cluster.
-func spawnTestNode(t *testing.T, cfg NodeConfig) *GekkaNode {
+func spawnTestNode(t *testing.T, cfg ClusterConfig) *Cluster {
 	t.Helper()
 	if cfg.Port == 0 {
 		cfg.Port = 0 // let OS pick
@@ -64,14 +64,14 @@ func drainN(t *testing.T, ch <-chan any, n int, timeout time.Duration) []any {
 
 // TestActorOf_DeploymentAutoProvisioning_RoundRobin verifies that ActorOf
 // automatically wraps the user's Props in a PoolRouter when a matching
-// deployment entry is present in NodeConfig.Deployments.
+// deployment entry is present in ClusterConfig.Deployments.
 func TestActorOf_DeploymentAutoProvisioning_RoundRobin(t *testing.T) {
 	const nInstances = 3
 	const nMessages = 9 // divisible by nInstances for even distribution check
 
 	received := make(chan any, nMessages*2)
 
-	node := spawnTestNode(t, NodeConfig{
+	node := spawnTestNode(t, ClusterConfig{
 		Deployments: map[string]core.DeploymentConfig{
 			"/user/myRouter": {Router: "round-robin-pool", NrOfInstances: nInstances},
 		},
@@ -107,7 +107,7 @@ func TestActorOf_DeploymentAutoProvisioning_RoundRobin(t *testing.T) {
 func TestActorOf_DeploymentAutoProvisioning_ShortPath(t *testing.T) {
 	received := make(chan any, 20)
 
-	node := spawnTestNode(t, NodeConfig{
+	node := spawnTestNode(t, ClusterConfig{
 		Deployments: map[string]core.DeploymentConfig{
 			"/myRouter": {Router: "round-robin-pool", NrOfInstances: 2},
 		},
@@ -133,7 +133,7 @@ func TestActorOf_DeploymentAutoProvisioning_ShortPath(t *testing.T) {
 func TestActorOf_NoDeployment_SpawnsPlainActor(t *testing.T) {
 	received := make(chan any, 4)
 
-	node := spawnTestNode(t, NodeConfig{}) // no deployments
+	node := spawnTestNode(t, ClusterConfig{}) // no deployments
 
 	ref, err := node.System.ActorOf(Props{New: func() actor.Actor {
 		return &collectActor{BaseActor: actor.NewBaseActor(), ch: received}
@@ -151,7 +151,7 @@ func TestActorOf_NoDeployment_SpawnsPlainActor(t *testing.T) {
 func TestActorOf_ManualRouterAlongsideDeployment(t *testing.T) {
 	received := make(chan any, 10)
 
-	node := spawnTestNode(t, NodeConfig{
+	node := spawnTestNode(t, ClusterConfig{
 		Deployments: map[string]core.DeploymentConfig{
 			"/user/autoPool": {Router: "round-robin-pool", NrOfInstances: 2},
 		},
@@ -261,7 +261,7 @@ pekko {
 // TestActorOf_DeploymentBadRouter verifies that an unrecognised router type
 // in the deployment config returns an error from ActorOf.
 func TestActorOf_DeploymentBadRouter(t *testing.T) {
-	node := spawnTestNode(t, NodeConfig{
+	node := spawnTestNode(t, ClusterConfig{
 		Deployments: map[string]core.DeploymentConfig{
 			"/user/bad": {Router: "bogus-pool", NrOfInstances: 3},
 		},
@@ -278,7 +278,7 @@ func TestActorOf_DeploymentBadRouter(t *testing.T) {
 // TestActorOf_DeploymentZeroInstances verifies that a deployment config with
 // nr-of-instances = 0 returns an error from ActorOf.
 func TestActorOf_DeploymentZeroInstances(t *testing.T) {
-	node := spawnTestNode(t, NodeConfig{
+	node := spawnTestNode(t, ClusterConfig{
 		Deployments: map[string]core.DeploymentConfig{
 			"/user/zero": {Router: "round-robin-pool", NrOfInstances: 0},
 		},

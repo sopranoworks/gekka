@@ -17,35 +17,35 @@ import (
 
 // ── Remote Death Watch ────────────────────────────────────────────────────────
 
-func (n *GekkaNode) watchRemote(watcher ActorRef, target ActorRef) {
+func (c *Cluster) watchRemote(watcher ActorRef, target ActorRef) {
 	ap, err := actor.ParseActorPath(target.Path())
 	if err != nil {
 		return
 	}
 	nodeAddr := fmt.Sprintf("%s:%d", ap.Address.Host, ap.Address.Port)
 
-	n.remoteWatchersMu.Lock()
-	defer n.remoteWatchersMu.Unlock()
+	c.remoteWatchersMu.Lock()
+	defer c.remoteWatchersMu.Unlock()
 
-	targets, ok := n.remoteWatchers[nodeAddr]
+	targets, ok := c.remoteWatchers[nodeAddr]
 	if !ok {
 		targets = make(map[string][]ActorRef)
-		n.remoteWatchers[nodeAddr] = targets
+		c.remoteWatchers[nodeAddr] = targets
 	}
 	targets[target.Path()] = append(targets[target.Path()], watcher)
 }
 
-func (n *GekkaNode) unwatchRemote(watcher ActorRef, target ActorRef) {
+func (c *Cluster) unwatchRemote(watcher ActorRef, target ActorRef) {
 	ap, err := actor.ParseActorPath(target.Path())
 	if err != nil {
 		return
 	}
 	nodeAddr := fmt.Sprintf("%s:%d", ap.Address.Host, ap.Address.Port)
 
-	n.remoteWatchersMu.Lock()
-	defer n.remoteWatchersMu.Unlock()
+	c.remoteWatchersMu.Lock()
+	defer c.remoteWatchersMu.Unlock()
 
-	targets, ok := n.remoteWatchers[nodeAddr]
+	targets, ok := c.remoteWatchers[nodeAddr]
 	if !ok {
 		return
 	}
@@ -58,22 +58,22 @@ func (n *GekkaNode) unwatchRemote(watcher ActorRef, target ActorRef) {
 	}
 }
 
-func (n *GekkaNode) triggerRemoteNodeDeath(addr cluster.MemberAddress) {
+func (c *Cluster) triggerRemoteNodeDeath(addr cluster.MemberAddress) {
 	nodeAddr := fmt.Sprintf("%s:%d", addr.Host, addr.Port)
 
-	n.remoteWatchersMu.Lock()
-	targets, ok := n.remoteWatchers[nodeAddr]
+	c.remoteWatchersMu.Lock()
+	targets, ok := c.remoteWatchers[nodeAddr]
 	if ok {
-		delete(n.remoteWatchers, nodeAddr)
+		delete(c.remoteWatchers, nodeAddr)
 	}
-	n.remoteWatchersMu.Unlock()
+	c.remoteWatchersMu.Unlock()
 
 	if !ok {
 		return
 	}
 
 	for targetPath, watchers := range targets {
-		targetRef := ActorRef{fullPath: targetPath, node: n}
+		targetRef := ActorRef{fullPath: targetPath, node: c}
 		terminatedMsg := Terminated{Actor: targetRef}
 		for _, w := range watchers {
 			w.Tell(terminatedMsg)
@@ -83,14 +83,14 @@ func (n *GekkaNode) triggerRemoteNodeDeath(addr cluster.MemberAddress) {
 
 type remoteDeathWatcherActor struct {
 	actor.BaseActor
-	node *GekkaNode
+	cluster *Cluster
 }
 
 func (a *remoteDeathWatcherActor) Receive(msg any) {
 	switch e := msg.(type) {
 	case cluster.UnreachableMember:
-		a.node.triggerRemoteNodeDeath(e.Member)
+		a.cluster.triggerRemoteNodeDeath(e.Member)
 	case cluster.MemberRemoved:
-		a.node.triggerRemoteNodeDeath(e.Member)
+		a.cluster.triggerRemoteNodeDeath(e.Member)
 	}
 }

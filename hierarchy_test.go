@@ -56,7 +56,7 @@ func (c *childActor) Receive(msg any) {
 }
 
 func TestHierarchy(t *testing.T) {
-	node, _ := Spawn(NodeConfig{SystemName: "TestSystem"})
+	node, _ := Spawn(ClusterConfig{SystemName: "TestSystem"})
 	defer func() { _ = node.Shutdown() }()
 
 	parentRef, _ := node.System.ActorOf(actor.Props{New: func() actor.Actor {
@@ -86,7 +86,7 @@ func TestHierarchy(t *testing.T) {
 }
 
 func TestSupervisionNotice(t *testing.T) {
-	node, _ := Spawn(NodeConfig{SystemName: "TestSystem"})
+	node, _ := Spawn(ClusterConfig{SystemName: "TestSystem"})
 	defer func() { _ = node.Shutdown() }()
 
 	parentRef, _ := node.System.ActorOf(actor.Props{New: func() actor.Actor {

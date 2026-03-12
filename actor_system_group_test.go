@@ -164,7 +164,7 @@ pekko {
 // TestActorOf_GroupRouter_DirectRef exercises group router created with explicit
 // Ref values (no path resolution needed).
 func TestActorOf_GroupRouter_DirectRef(t *testing.T) {
-	node := spawnTestNode(t, NodeConfig{})
+	node := spawnTestNode(t, ClusterConfig{})
 
 	received := make(chan any, 10)
 
@@ -192,7 +192,7 @@ func TestActorOf_GroupRouter_DirectRef(t *testing.T) {
 // TestActorOf_GroupRouter_NilProps verifies that ActorOf with Props{} (no New)
 // succeeds for a group router deployment and returns a non-empty ref.
 func TestActorOf_GroupRouter_NilProps(t *testing.T) {
-	node := spawnTestNode(t, NodeConfig{
+	node := spawnTestNode(t, ClusterConfig{
 		Deployments: map[string]core.DeploymentConfig{
 			"/user/nilGroup": {
 				Router:       "round-robin-group",
@@ -212,7 +212,7 @@ func TestActorOf_GroupRouter_NilProps(t *testing.T) {
 
 // TestActorOf_GroupRouter_Broadcast verifies Broadcast delivers to all routees.
 func TestActorOf_GroupRouter_Broadcast(t *testing.T) {
-	node := spawnTestNode(t, NodeConfig{
+	node := spawnTestNode(t, ClusterConfig{
 		Deployments: map[string]core.DeploymentConfig{
 			"/user/bcastGroup": {
 				Router:       "round-robin-group",
@@ -240,7 +240,7 @@ func TestActorOf_GroupRouter_Broadcast(t *testing.T) {
 
 // TestActorOf_GroupRouter_RandomRouting verifies random-group type resolves.
 func TestActorOf_GroupRouter_RandomRouting(t *testing.T) {
-	node := spawnTestNode(t, NodeConfig{
+	node := spawnTestNode(t, ClusterConfig{
 		Deployments: map[string]core.DeploymentConfig{
 			"/user/randGroup": {
 				Router:       "random-group",

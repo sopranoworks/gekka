@@ -22,7 +22,7 @@ import (
 
 // freeMonitoringPort returns the monitoring server's actual port, discovered
 // after the OS assigns it (when MonitoringPort == 0).
-func monPort(n *GekkaNode) int {
+func monPort(n *Cluster) int {
 	if n.monitoring == nil {
 		return 0
 	}
@@ -32,7 +32,7 @@ func monPort(n *GekkaNode) int {
 // ── /healthz endpoint ─────────────────────────────────────────────────────────
 
 func TestMonitoring_Healthz_NotReady_BeforeJoin(t *testing.T) {
-	node, err := Spawn(NodeConfig{
+	node, err := Spawn(ClusterConfig{
 		SystemName:       "HealthzTest",
 		Host:             "127.0.0.1",
 		Port:             0,
@@ -68,14 +68,14 @@ func TestMonitoring_Healthz_NotReady_BeforeJoin(t *testing.T) {
 
 func TestMonitoring_Healthz_Ready_AfterJoin(t *testing.T) {
 	// Spawn a seed node (node1) that accepts a Join message.
-	node1, err := Spawn(NodeConfig{SystemName: "MonTest", Host: "127.0.0.1", Port: 0})
+	node1, err := Spawn(ClusterConfig{SystemName: "MonTest", Host: "127.0.0.1", Port: 0})
 	if err != nil {
 		t.Fatalf("Spawn node1: %v", err)
 	}
 	defer func() { _ = node1.Shutdown() }()
 
 	// Spawn the monitored client node (node2).
-	node2, err := Spawn(NodeConfig{
+	node2, err := Spawn(ClusterConfig{
 		SystemName:       "MonTest",
 		Host:             "127.0.0.1",
 		Port:             0,
@@ -141,7 +141,7 @@ func checkHealth(t *testing.T, port, wantCode int, context string) {
 // ── /metrics endpoint ─────────────────────────────────────────────────────────
 
 func TestMonitoring_Metrics_JSONShape(t *testing.T) {
-	node, err := Spawn(NodeConfig{
+	node, err := Spawn(ClusterConfig{
 		SystemName:       "MetricsTest",
 		Host:             "127.0.0.1",
 		Port:             0,
@@ -185,7 +185,7 @@ func TestMonitoring_Metrics_JSONShape(t *testing.T) {
 }
 
 func TestMonitoring_Metrics_PrometheusFormat(t *testing.T) {
-	node, err := Spawn(NodeConfig{
+	node, err := Spawn(ClusterConfig{
 		SystemName:       "PromTest",
 		Host:             "127.0.0.1",
 		Port:             0,
@@ -234,13 +234,13 @@ func TestMonitoring_Metrics_MessageCounters(t *testing.T) {
 	//
 	// This test uses raw Artery user messages (no cluster join protocol) so that
 	// it works with two standalone Go nodes.
-	nodeA, err := Spawn(NodeConfig{SystemName: "CtrTest", Host: "127.0.0.1", Port: 0})
+	nodeA, err := Spawn(ClusterConfig{SystemName: "CtrTest", Host: "127.0.0.1", Port: 0})
 	if err != nil {
 		t.Fatalf("Spawn nodeA: %v", err)
 	}
 	defer func() { _ = nodeA.Shutdown() }()
 
-	nodeB, err := Spawn(NodeConfig{
+	nodeB, err := Spawn(ClusterConfig{
 		SystemName:       "CtrTest",
 		Host:             "127.0.0.1",
 		Port:             0,
@@ -422,7 +422,7 @@ func TestNodeMetrics_PrometheusText(t *testing.T) {
 
 func TestMonitoring_MonitoringPort_ImpliesEnabled(t *testing.T) {
 	// Setting MonitoringPort alone (without EnableMonitoring) should start the server.
-	node, err := Spawn(NodeConfig{
+	node, err := Spawn(ClusterConfig{
 		SystemName:     "PortTest",
 		Host:           "127.0.0.1",
 		Port:           0,
@@ -440,7 +440,7 @@ func TestMonitoring_MonitoringPort_ImpliesEnabled(t *testing.T) {
 }
 
 func TestMonitoring_MonitoringAddr_NilWhenDisabled(t *testing.T) {
-	node, err := Spawn(NodeConfig{SystemName: "NilMon", Host: "127.0.0.1", Port: 0})
+	node, err := Spawn(ClusterConfig{SystemName: "NilMon", Host: "127.0.0.1", Port: 0})
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -455,13 +455,13 @@ func TestMonitoring_MonitoringAddr_NilWhenDisabled(t *testing.T) {
 func TestMonitoring_GossipCounter_Incremented(t *testing.T) {
 	// Two Go nodes: when node1 sends a GossipEnvelope to node2, the
 	// GossipsReceived counter on node2 must increment.
-	node1, err := Spawn(NodeConfig{SystemName: "GossipCtr", Host: "127.0.0.1", Port: 0})
+	node1, err := Spawn(ClusterConfig{SystemName: "GossipCtr", Host: "127.0.0.1", Port: 0})
 	if err != nil {
 		t.Fatalf("Spawn node1: %v", err)
 	}
 	defer func() { _ = node1.Shutdown() }()
 
-	node2, err := Spawn(NodeConfig{SystemName: "GossipCtr", Host: "127.0.0.1", Port: 0})
+	node2, err := Spawn(ClusterConfig{SystemName: "GossipCtr", Host: "127.0.0.1", Port: 0})
 	if err != nil {
 		t.Fatalf("Spawn node2: %v", err)
 	}
@@ -495,7 +495,7 @@ func TestMonitoring_GossipCounter_Incremented(t *testing.T) {
 // ── CountAssociations ─────────────────────────────────────────────────────────
 
 func TestMonitoring_CountAssociations(t *testing.T) {
-	node1, err := Spawn(NodeConfig{SystemName: "AssocCtr", Host: "127.0.0.1", Port: 0})
+	node1, err := Spawn(ClusterConfig{SystemName: "AssocCtr", Host: "127.0.0.1", Port: 0})
 	if err != nil {
 		t.Fatalf("Spawn node1: %v", err)
 	}
@@ -505,7 +505,7 @@ func TestMonitoring_CountAssociations(t *testing.T) {
 		t.Errorf("CountAssociations before any connection: got %d, want 0", n)
 	}
 
-	node2, err := Spawn(NodeConfig{SystemName: "AssocCtr", Host: "127.0.0.1", Port: 0})
+	node2, err := Spawn(ClusterConfig{SystemName: "AssocCtr", Host: "127.0.0.1", Port: 0})
 	if err != nil {
 		t.Fatalf("Spawn node2: %v", err)
 	}

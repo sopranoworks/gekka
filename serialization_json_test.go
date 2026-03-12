@@ -169,9 +169,9 @@ func TestJSONSerializer_ManifestDispatch_TwoTypes(t *testing.T) {
 	}
 }
 
-// ── GekkaNode convenience methods ─────────────────────────────────────────────
+// ── Cluster convenience methods ─────────────────────────────────────────────
 
-func TestGekkaNode_RegisterType_AndRetrieve(t *testing.T) {
+func TestCluster_RegisterType_AndRetrieve(t *testing.T) {
 	node := newTestNode(t, "Sys", "127.0.0.1", 2552)
 	node.nm.SerializerRegistry = core.NewSerializationRegistry()
 
@@ -186,7 +186,7 @@ func TestGekkaNode_RegisterType_AndRetrieve(t *testing.T) {
 	}
 }
 
-func TestGekkaNode_RegisterSerializer_OverridesExisting(t *testing.T) {
+func TestCluster_RegisterSerializer_OverridesExisting(t *testing.T) {
 	node := newTestNode(t, "Sys", "127.0.0.1", 2552)
 	node.nm.SerializerRegistry = core.NewSerializationRegistry()
 

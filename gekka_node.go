@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
-	"github.com/sopranoworks/gekka/cluster"
+	gcluster "github.com/sopranoworks/gekka/cluster"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 	"github.com/sopranoworks/gekka/internal/core"
@@ -49,21 +49,21 @@ func (p Provider) protoString() string {
 	return "pekko"
 }
 
-// NodeConfig specifies how to initialize a GekkaNode.
+// ClusterConfig specifies how to initialize a Cluster.
 //
 // The simplest form uses flat fields:
 //
-//	gekka.Spawn(gekka.NodeConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 2553})
+//	gekka.Spawn(gekka.ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: 2553})
 //
 // You can also supply a typed Address directly:
 //
 //	addr := actor.Address{Protocol: "pekko", System: "ClusterSystem", Host: "127.0.0.1", Port: 2553}
-//	gekka.Spawn(gekka.NodeConfig{Address: addr})
+//	gekka.Spawn(gekka.ClusterConfig{Address: addr})
 //
 // When Address is set it takes precedence over SystemName/Host/Port/Provider.
 //
 // LoadConfig populates all fields from a HOCON application.conf automatically.
-type NodeConfig struct {
+type ClusterConfig struct {
 	// Address sets the node's own address using the typed actor.Address.
 	// When non-zero it overrides SystemName, Host, Port, and Provider.
 	Address actor.Address
@@ -85,7 +85,7 @@ type NodeConfig struct {
 	Provider Provider
 
 	// SeedNodes is the list of cluster seed nodes parsed from HOCON
-	// (pekko.cluster.seed-nodes). Populated by LoadConfig; ignored by Spawn.
+	// (pekko.gcluster.seed-nodes). Populated by LoadConfig; ignored by Spawn.
 	// Use JoinSeeds() to connect to the first reachable seed after Spawn.
 	SeedNodes []actor.Address
 
@@ -111,7 +111,7 @@ type NodeConfig struct {
 	// Example — JSON logging at DEBUG level:
 	//
 	//	h := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})
-	//	node, _ := gekka.Spawn(gekka.NodeConfig{
+	//	node, _ := gekka.Spawn(gekka.ClusterConfig{
 	//	    SystemName: "MySystem", Host: "127.0.0.1", Port: 2552,
 	//	    LogHandler: h,
 	//	})
@@ -126,7 +126,7 @@ type NodeConfig struct {
 	// HOCON akka.actor.deployment (or pekko.actor.deployment) block.
 	// Can also be set directly for programmatic configuration:
 	//
-	//	gekka.Spawn(gekka.NodeConfig{
+	//	gekka.Spawn(gekka.ClusterConfig{
 	//	    Deployments: map[string]gekka.core.DeploymentConfig{
 	//	        "/user/myRouter": {Router: "round-robin-pool", NrOfInstances: 5},
 	//	    },
@@ -135,7 +135,7 @@ type NodeConfig struct {
 }
 
 // resolve returns the effective (scheme, system, host, port) for this config.
-func (c NodeConfig) resolve() (scheme, system, host string, port uint32) {
+func (c ClusterConfig) resolve() (scheme, system, host string, port uint32) {
 	if c.Address.System != "" {
 		return c.Address.Protocol, c.Address.System, c.Address.Host, uint32(c.Address.Port)
 	}
@@ -173,14 +173,14 @@ type IncomingMessage struct {
 	DeserializedMessage any
 }
 
-// GekkaNode is the single entry point for the gekka library. It wires together
-// the TCP server, NodeManager, cluster.ClusterManager, Router, and Replicator.
+// Cluster is the single entry point for the gekka library. It wires together
+// the TCP server, NodeManager, gcluster.ClusterManager, Router, and Replicator.
 //
 // Create one with Spawn (or SpawnFromConfig), then call Join (or JoinSeeds)
-// to connect to a Pekko cluster.
-type GekkaNode struct {
+// to connect to a Pekko gcluster.
+type Cluster struct {
 	nm         *core.NodeManager
-	cm         *cluster.ClusterManager
+	cm         *gcluster.ClusterManager
 	router     *actor.Router
 	repl       *Replicator
 	server     *core.TcpServer
@@ -188,7 +188,7 @@ type GekkaNode struct {
 	cancel     context.CancelFunc
 	localAddr  *gproto_remote.Address
 	seedAddr   *gproto_remote.Address // set by the first Join call
-	seeds      []actor.Address // from NodeConfig.SeedNodes (populated by LoadConfig)
+	seeds      []actor.Address // from ClusterConfig.SeedNodes (populated by LoadConfig)
 	metrics    *core.NodeMetrics
 	monitoring *core.MonitoringServer // nil when monitoring is disabled
 
@@ -213,9 +213,9 @@ type GekkaNode struct {
 	deployments       map[string]core.DeploymentConfig // keyed by actor path; nil = no deployments
 }
 
-// Spawn creates, wires, and starts a GekkaNode. The TCP listener is bound
-// immediately; call node.Addr() to discover the assigned port when NodeConfig.Port == 0.
-func Spawn(cfg NodeConfig) (*GekkaNode, error) {
+// Spawn creates, wires, and starts a Cluster. The TCP listener is bound
+// immediately; call node.Addr() to discover the assigned port when ClusterConfig.Port == 0.
+func Spawn(cfg ClusterConfig) (*Cluster, error) {
 	scheme, system, host, port := cfg.resolve()
 
 	localAddr := &gproto_remote.Address{
@@ -234,7 +234,7 @@ func Spawn(cfg NodeConfig) (*GekkaNode, error) {
 	nm := core.NewNodeManager(localAddr, uid)
 	nm.NodeMetrics = metrics
 	router := actor.NewRouter(nm)
-	cm := cluster.NewClusterManager(core.ToClusterUniqueAddress(localUA), func(ctx context.Context, path string, msg any) error {
+	cm := gcluster.NewClusterManager(core.ToClusterUniqueAddress(localUA), func(ctx context.Context, path string, msg any) error {
 		return router.Send(ctx, path, msg)
 	})
 	cm.Protocol = scheme
@@ -267,7 +267,7 @@ func Spawn(cfg NodeConfig) (*GekkaNode, error) {
 		if tcpAddr, ok := server.Addr().(*net.TCPAddr); ok {
 			actualPort = uint32(tcpAddr.Port)
 			localAddr.Port = proto.Uint32(actualPort)
-			// Patch the gossip state that was snapshotted in Newcluster.ClusterManager.
+			// Patch the gossip state that was snapshotted in Newgcluster.ClusterManager.
 			// This is needed because the port might have been 0 and assigned by the OS.
 			nm.LocalAddr = localAddr
 			clUA := core.ToClusterUniqueAddress(localUA)
@@ -289,7 +289,7 @@ func Spawn(cfg NodeConfig) (*GekkaNode, error) {
 	// Replicated state and metrics are already wired.
 	repl = NewReplicator(nodeID, router)
 
-	node := &GekkaNode{
+	cluster := &Cluster{
 		nm:             nm,
 		cm:             cm,
 		router:         router,
@@ -305,41 +305,41 @@ func Spawn(cfg NodeConfig) (*GekkaNode, error) {
 		logHandler:     cfg.LogHandler,
 		deployments:    cfg.Deployments,
 	}
-	sys := &nodeActorSystem{node: node}
-	node.System = sys
-	node.cm.Sys = sys.asActorContext("")
+	sys := &nodeActorSystem{cluster: cluster}
+	cluster.System = sys
+	cluster.cm.Sys = sys.asActorContext("")
 
 	// Set default Artery message dispatcher to handle registered actors.
-	nm.UserMessageCallback = node.handleArteryMessage
+	nm.UserMessageCallback = cluster.handleArteryMessage
 
 	// Internal watcher to track remote node failures and synthesize Terminated messages
 	remoteDeathWatcherProps := Props{
 		New: func() actor.Actor {
 			return &remoteDeathWatcherActor{
 				BaseActor: actor.NewBaseActor(),
-				node:      node,
+				cluster:   cluster,
 			}
 		},
 	}
-	rdwRef, err := node.System.ActorOf(remoteDeathWatcherProps, "remoteDeathWatcher")
+	rdwRef, err := cluster.System.ActorOf(remoteDeathWatcherProps, "remoteDeathWatcher")
 	if err == nil {
-		node.Subscribe(rdwRef, cluster.EventUnreachableMember, cluster.EventMemberRemoved)
+		cluster.Subscribe(rdwRef, gcluster.EventUnreachableMember, gcluster.EventMemberRemoved)
 	}
 
 	// Start the optional monitoring HTTP server.
 	monPort := cfg.MonitoringPort
 	if cfg.EnableMonitoring || monPort > 0 {
-		node.cm.Metrics = node.metrics
+		cluster.cm.Metrics = cluster.metrics
 	}
 	if (cfg.EnableMonitoring || monPort > 0) && monPort >= 0 {
-		ms, err := core.NewMonitoringServer(node, monPort)
+		ms, err := core.NewMonitoringServer(cluster, monPort)
 		if err != nil {
 			cancel()
 			_ = server.Shutdown()
 			return nil, fmt.Errorf("gekka: monitoring server: %w", err)
 		}
 		ms.Start(ctx)
-		node.monitoring = ms
+		cluster.monitoring = ms
 	}
 
 	// Internal watcher to clean up dead cluster event subscribers
@@ -347,39 +347,39 @@ func Spawn(cfg NodeConfig) (*GekkaNode, error) {
 		New: func() actor.Actor {
 			return &clusterWatcherActor{
 				BaseActor: actor.NewBaseActor(),
-				node:      node,
+				cluster:   cluster,
 			}
 		},
 	}
-	watcherRef, err := node.System.ActorOf(watcherProps, "internalClusterWatcher")
+	watcherRef, err := cluster.System.ActorOf(watcherProps, "internalClusterWatcher")
 	if err == nil {
-		node.clusterWatcherRef = watcherRef
+		cluster.clusterWatcherRef = watcherRef
 	}
 
-	return node, nil
+	return cluster, nil
 }
 
 type clusterWatcherActor struct {
 	actor.BaseActor
-	node *GekkaNode
+	cluster *Cluster
 }
 
 func (a *clusterWatcherActor) Receive(msg any) {
 	if term, ok := msg.(Terminated); ok {
-		a.node.Unsubscribe(term.Actor)
+		a.cluster.Unsubscribe(term.Actor)
 	}
 }
 
 // Addr returns the bound TCP address after Spawn. Use this to discover the
-// OS-assigned port when NodeConfig.Port was 0.
-func (n *GekkaNode) Addr() net.Addr {
-	return n.server.Addr()
+// OS-assigned port when ClusterConfig.Port was 0.
+func (c *Cluster) Addr() net.Addr {
+	return c.server.Addr()
 }
 
-// Port returns the TCP port this node is bound to. When NodeConfig.Port was 0
+// Port returns the TCP port this node is bound to. When ClusterConfig.Port was 0
 // this is the OS-assigned port resolved after Spawn.
-func (n *GekkaNode) Port() uint32 {
-	return n.localAddr.GetPort()
+func (c *Cluster) Port() uint32 {
+	return c.localAddr.GetPort()
 }
 
 // Context returns the root context of this node. It is cancelled when
@@ -392,8 +392,8 @@ func (n *GekkaNode) Port() uint32 {
 //	ref, err := node.ActorSelection("/user/myActor").Resolve(nil)
 //	// equivalent to:
 //	ref, err := node.ActorSelection("/user/myActor").Resolve(node.Context())
-func (n *GekkaNode) Context() context.Context {
-	return n.ctx
+func (c *Cluster) Context() context.Context {
+	return c.ctx
 }
 
 // OnMessage registers a callback that is invoked for every user-level Artery
@@ -404,11 +404,11 @@ func (n *GekkaNode) Context() context.Context {
 // Registered actors (see RegisterActor) take priority: messages whose
 // recipient path matches a registered actor are dispatched to that actor's
 // mailbox and do not reach this callback.
-func (n *GekkaNode) OnMessage(fn func(ctx context.Context, msg *IncomingMessage) error) {
-	n.onMessage = fn
+func (c *Cluster) OnMessage(fn func(ctx context.Context, msg *IncomingMessage) error) {
+	c.onMessage = fn
 }
 
-func (n *GekkaNode) handleArteryMessage(ctx context.Context, meta *core.ArteryMetadata) error {
+func (c *Cluster) handleArteryMessage(ctx context.Context, meta *core.ArteryMetadata) error {
 	var recipientPath string
 	if meta.Recipient != nil {
 		recipientPath = meta.Recipient.GetPath()
@@ -425,7 +425,7 @@ func (n *GekkaNode) handleArteryMessage(ctx context.Context, meta *core.ArteryMe
 	// This allows the receiving actor to reply via a.Sender().Tell(…, a.Self()).
 	var senderRef ActorRef
 	if meta.Sender != nil && meta.Sender.GetPath() != "" {
-		senderRef = ActorRef{fullPath: meta.Sender.GetPath(), node: n}
+		senderRef = ActorRef{fullPath: meta.Sender.GetPath(), node: c}
 	}
 
 	incoming := &IncomingMessage{
@@ -438,9 +438,9 @@ func (n *GekkaNode) handleArteryMessage(ctx context.Context, meta *core.ArteryMe
 
 	// Try registered actors first; deliver via actor.Envelope so that
 	// BaseActor.currentSender is set before Receive is called.
-	n.actorsMu.RLock()
-	a, found := n.actors[recipientPath]
-	n.actorsMu.RUnlock()
+	c.actorsMu.RLock()
+	a, found := c.actors[recipientPath]
+	c.actorsMu.RUnlock()
 	if found {
 		env := actor.Envelope{Payload: incoming, Sender: senderRef}
 		select {
@@ -451,21 +451,21 @@ func (n *GekkaNode) handleArteryMessage(ctx context.Context, meta *core.ArteryMe
 		return nil
 	}
 
-	if n.onMessage == nil {
+	if c.onMessage == nil {
 		return nil
 	}
-	return n.onMessage(ctx, incoming)
+	return c.onMessage(ctx, incoming)
 }
 
 // lookupDeployment returns the core.DeploymentConfig for the given actor path, if any.
 // It tries both the exact path and the alternate short/full form so that
 // "/user/myRouter" and "/myRouter" both resolve to the same deployment entry.
-func (n *GekkaNode) lookupDeployment(path string) (core.DeploymentConfig, bool) {
-	if len(n.deployments) == 0 {
+func (c *Cluster) lookupDeployment(path string) (core.DeploymentConfig, bool) {
+	if len(c.deployments) == 0 {
 		return core.DeploymentConfig{}, false
 	}
 	for _, candidate := range core.DeploymentKeyCandidates(path) {
-		if d, ok := n.deployments[candidate]; ok {
+		if d, ok := c.deployments[candidate]; ok {
 			return d, true
 		}
 	}
@@ -484,22 +484,22 @@ func (n *GekkaNode) lookupDeployment(path string) (core.DeploymentConfig, bool) 
 //	node.RegisterActor("/user/myActor", a)
 //
 // Calling RegisterActor replaces any previously registered actor for the same path.
-func (n *GekkaNode) RegisterActor(path string, a actor.Actor) {
-	n.actorsMu.Lock()
-	if n.actors == nil {
-		n.actors = make(map[string]actor.Actor)
+func (c *Cluster) RegisterActor(path string, a actor.Actor) {
+	c.actorsMu.Lock()
+	if c.actors == nil {
+		c.actors = make(map[string]actor.Actor)
 	}
-	n.actors[path] = a
-	n.actorsMu.Unlock()
+	c.actors[path] = a
+	c.actorsMu.Unlock()
 }
 
 // UnregisterActor removes the actor registered at path, if any.
 // After this call, messages addressed to path fall through to the OnMessage
 // callback (if set).
-func (n *GekkaNode) UnregisterActor(path string) {
-	n.actorsMu.Lock()
-	delete(n.actors, path)
-	n.actorsMu.Unlock()
+func (c *Cluster) UnregisterActor(path string) {
+	c.actorsMu.Lock()
+	delete(c.actors, path)
+	c.actorsMu.Unlock()
 }
 
 // SelfAddress returns the node's own address as a typed actor.Address.
@@ -508,12 +508,12 @@ func (n *GekkaNode) UnregisterActor(path string) {
 //	self := node.SelfAddress()
 //	path := self.WithRoot("user").Child("myActor")
 //	remoteAddr := actor.Address{Protocol: self.Protocol, System: self.System, Host: "10.0.0.2", Port: 2552}
-func (n *GekkaNode) SelfAddress() actor.Address {
+func (c *Cluster) SelfAddress() actor.Address {
 	return actor.Address{
-		Protocol: n.localAddr.GetProtocol(),
-		System:   n.localAddr.GetSystem(),
-		Host:     n.localAddr.GetHostname(),
-		Port:     int(n.localAddr.GetPort()),
+		Protocol: c.localAddr.GetProtocol(),
+		System:   c.localAddr.GetSystem(),
+		Host:     c.localAddr.GetHostname(),
+		Port:     int(c.localAddr.GetPort()),
 	}
 }
 
@@ -529,7 +529,7 @@ func (n *GekkaNode) SelfAddress() actor.Address {
 //   - []byte           → raw bytes (Pekko ByteArraycore.Serializer, ID 4)
 //   - proto.Message    → Protobuf (ID 2)
 //   - cluster messages → handled automatically by Router
-func (n *GekkaNode) Send(ctx context.Context, dst interface{}, msg interface{}) error {
+func (c *Cluster) Send(ctx context.Context, dst interface{}, msg interface{}) error {
 	var pathStr string
 	switch d := dst.(type) {
 	case string:
@@ -539,7 +539,7 @@ func (n *GekkaNode) Send(ctx context.Context, dst interface{}, msg interface{}) 
 	default:
 		return fmt.Errorf("gekka: Send: unsupported destination type %T (want string, actor.ActorPath, or fmt.Stringer)", dst)
 	}
-	return n.router.Send(ctx, pathStr, msg)
+	return c.router.Send(ctx, pathStr, msg)
 }
 
 // Ask sends msg to dst and blocks until the remote actor replies or the context
@@ -556,7 +556,7 @@ func (n *GekkaNode) Send(ctx context.Context, dst interface{}, msg interface{}) 
 //	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 //	defer cancel()
 //	reply, err := node.Ask(ctx, echoPath, []byte("ping"))
-func (n *GekkaNode) Ask(ctx context.Context, dst interface{}, msg interface{}) (*IncomingMessage, error) {
+func (c *Cluster) Ask(ctx context.Context, dst interface{}, msg interface{}) (*IncomingMessage, error) {
 	// Resolve destination path string.
 	var pathStr string
 	switch d := dst.(type) {
@@ -576,14 +576,14 @@ func (n *GekkaNode) Ask(ctx context.Context, dst interface{}, msg interface{}) (
 		return nil, fmt.Errorf("gekka: Ask: parse: %w", err)
 	}
 
-	localAddress := n.localAddr
+	localAddress := c.localAddr
 	isLocal := ap.Address.System == localAddress.GetSystem() && ap.Address.Host == localAddress.GetHostname() && uint32(ap.Address.Port) == localAddress.GetPort()
 
 	if isLocal {
 		localPath := ap.Path()
-		n.actorsMu.RLock()
-		actor, found := n.actors[localPath]
-		n.actorsMu.RUnlock()
+		c.actorsMu.RLock()
+		actor, found := c.actors[localPath]
+		c.actorsMu.RUnlock()
 		if found {
 			// Ask local actor
 			return AskLocal(ctx, actor, msg)
@@ -596,16 +596,16 @@ func (n *GekkaNode) Ask(ctx context.Context, dst interface{}, msg interface{}) (
 		return nil, fmt.Errorf("gekka: Ask: generate id: %w", err)
 	}
 	id := hex.EncodeToString(buf[:])
-	self := n.SelfAddress()
+	self := c.SelfAddress()
 	tempPath := fmt.Sprintf("%s://%s@%s:%d/temp/ask-%s",
 		self.Protocol, self.System, self.Host, self.Port, id)
 
 	// Register a reply channel keyed by the temp path.
 	replyCh := make(chan *core.ArteryMetadata, 1)
-	n.nm.RegisterPendingReply(tempPath, replyCh)
-	defer n.nm.UnregisterPendingReply(tempPath)
+	c.nm.RegisterPendingReply(tempPath, replyCh)
+	defer c.nm.UnregisterPendingReply(tempPath)
 
-	if err := n.router.SendWithSender(ctx, pathStr, tempPath, msg); err != nil {
+	if err := c.router.SendWithSender(ctx, pathStr, tempPath, msg); err != nil {
 		return nil, fmt.Errorf("gekka: Ask: send: %w", err)
 	}
 
@@ -658,90 +658,90 @@ func (l *localReplyActor) Tell(msg any, sender ...actor.Ref) {
 // Join sends an InitJoin to the seed node, starts heartbeats, and starts the
 // background gossip loop. It is non-blocking: cluster convergence happens
 // asynchronously. Use WaitForHandshake to confirm the TCP association is up.
-func (n *GekkaNode) ClusterManager() *cluster.ClusterManager {
-	return n.cm
+func (c *Cluster) ClusterManager() *gcluster.ClusterManager {
+	return c.cm
 }
 
-func (n *GekkaNode) NodeManager() *core.NodeManager {
-	return n.nm
+func (c *Cluster) NodeManager() *core.NodeManager {
+	return c.nm
 }
 
-func (n *GekkaNode) Metrics() *core.NodeMetrics {
-	return n.metrics
+func (c *Cluster) Metrics() *core.NodeMetrics {
+	return c.metrics
 }
 
-func (n *GekkaNode) Join(seedHost string, seedPort uint32) error {
-	scheme := n.localAddr.GetProtocol() // "pekko" or "akka"
-	n.seedAddr = &gproto_remote.Address{
+func (c *Cluster) Join(seedHost string, seedPort uint32) error {
+	scheme := c.localAddr.GetProtocol() // "pekko" or "akka"
+	c.seedAddr = &gproto_remote.Address{
 		Protocol: &scheme,
-		System:   proto.String(n.localAddr.GetSystem()),
+		System:   proto.String(c.localAddr.GetSystem()),
 		Hostname: proto.String(seedHost),
 		Port:     proto.Uint32(seedPort),
 	}
-	if err := n.cm.JoinCluster(n.ctx, seedHost, seedPort); err != nil {
+	if err := c.cm.JoinCluster(c.ctx, seedHost, seedPort); err != nil {
 		return err
 	}
-	n.cm.StartHeartbeat(core.ToClusterAddress(n.seedAddr))
-	go n.cm.StartGossipLoop(n.ctx)
+	c.cm.StartHeartbeat(core.ToClusterAddress(c.seedAddr))
+	go c.cm.StartGossipLoop(c.ctx)
 	return nil
 }
 
 // JoinSeeds connects to the seed nodes supplied via LoadConfig
-// (NodeConfig.SeedNodes). It skips self and joins the first remote seed;
+// (ClusterConfig.SeedNodes). It skips self and joins the first remote seed;
 // if all configured seeds are self (i.e. this node is the bootstrap seed),
 // it joins its own address so Pekko's leader-election Handshake completes.
 //
 // Returns an error when no seeds are configured or Join fails.
-func (n *GekkaNode) JoinSeeds() error {
-	if len(n.seeds) == 0 {
-		return fmt.Errorf("gekka: JoinSeeds: no seed nodes configured (use LoadConfig or set NodeConfig.SeedNodes)")
+func (c *Cluster) JoinSeeds() error {
+	if len(c.seeds) == 0 {
+		return fmt.Errorf("gekka: JoinSeeds: no seed nodes configured (use LoadConfig or set ClusterConfig.SeedNodes)")
 	}
-	self := n.SelfAddress()
-	for _, s := range n.seeds {
+	self := c.SelfAddress()
+	for _, s := range c.seeds {
 		if s.Host != self.Host || s.Port != self.Port {
-			return n.Join(s.Host, uint32(s.Port))
+			return c.Join(s.Host, uint32(s.Port))
 		}
 	}
 	// All seeds are self — this node is the sole seed; join self.
-	s := n.seeds[0]
-	return n.Join(s.Host, uint32(s.Port))
+	s := c.seeds[0]
+	return c.Join(s.Host, uint32(s.Port))
 }
 
 // Seeds returns the seed-node addresses parsed from HOCON configuration.
 // Returns nil when the node was created without LoadConfig.
-func (n *GekkaNode) Seeds() []actor.Address {
-	return n.seeds
+func (c *Cluster) Seeds() []actor.Address {
+	return c.seeds
 }
 
 // Leave gracefully departs the cluster by broadcasting a Leave message to all
 // known Up/WeaklyUp members. The Pekko SBR will remove this node shortly after.
-func (n *GekkaNode) Leave() error {
-	return n.cm.LeaveCluster()
+func (c *Cluster) Leave() error {
+	return c.cm.LeaveCluster()
 }
 
 // StopHeartbeat suspends heartbeats to the seed node, simulating a node
 // failure from Pekko's perspective. Used in tests and for graceful pre-leave.
-func (n *GekkaNode) StopHeartbeat() {
-	if n.seedAddr != nil {
-		n.cm.StopHeartbeat(core.ToClusterAddress(n.seedAddr))
+func (c *Cluster) StopHeartbeat() {
+	if c.seedAddr != nil {
+		c.cm.StopHeartbeat(core.ToClusterAddress(c.seedAddr))
 		// Immediately restart — this counts as a reset.
-		n.cm.StartHeartbeat(core.ToClusterAddress(n.seedAddr))
+		c.cm.StartHeartbeat(core.ToClusterAddress(c.seedAddr))
 	}
 }
 
 // StartHeartbeat resumes heartbeats to the seed node after StopHeartbeat.
-func (n *GekkaNode) StartHeartbeat() {
-	if n.seedAddr != nil {
-		n.cm.StartHeartbeat(core.ToClusterAddress(n.seedAddr))
+func (c *Cluster) StartHeartbeat() {
+	if c.seedAddr != nil {
+		c.cm.StartHeartbeat(core.ToClusterAddress(c.seedAddr))
 	}
 }
 
 // WaitForHandshake blocks until the Artery Handshake with the given host:port
 // completes (i.e. the association reaches ASSOCIATED state). Returns an error
 // if the context is cancelled or the 30-second built-in timeout expires.
-func (n *GekkaNode) WaitForHandshake(ctx context.Context, host string, port uint32) error {
+func (c *Cluster) WaitForHandshake(ctx context.Context, host string, port uint32) error {
 	for {
-		if assoc, ok := n.nm.GetAssociationByHost(host, port); ok {
+		if assoc, ok := c.nm.GetAssociationByHost(host, port); ok {
 			gassoc := assoc.(*core.GekkaAssociation)
 			select {
 			case <-gassoc.Handshake:
@@ -763,8 +763,8 @@ func (n *GekkaNode) WaitForHandshake(ctx context.Context, host string, port uint
 // Replicator returns the node's CRDT Replicator. Register peers with
 // AddPeer before calling Start, then use IncrementCounter / AddToSet / RemoveFromSet
 // to mutate state that propagates to all peers via periodic gossip.
-func (n *GekkaNode) Replicator() *Replicator {
-	return n.repl
+func (c *Cluster) Replicator() *Replicator {
+	return c.repl
 }
 
 // SingletonProxy returns a ClusterSingletonProxy that routes messages to
@@ -772,65 +772,65 @@ func (n *GekkaNode) Replicator() *Replicator {
 //
 //	proxy := node.SingletonProxy("/user/singletonManager", "")
 //	proxy.Send(ctx, []byte("ping"))
-func (n *GekkaNode) SingletonProxy(managerPath, role string) *cluster.ClusterSingletonProxy {
-	return cluster.NewClusterSingletonProxy(n.cm, n.router, managerPath, role)
+func (c *Cluster) SingletonProxy(managerPath, role string) *gcluster.ClusterSingletonProxy {
+	return gcluster.NewClusterSingletonProxy(c.cm, c.router, managerPath, role)
 }
 
 // Subscribe registers an ActorRef to receive cluster domain events.
 //
 // Pass Event* variables to filter specific types; omit to receive all events:
 //
-//	node.Subscribe(myActorRef, gekka.cluster.EventMemberUp, gekka.cluster.EventMemberRemoved)
+//	node.Subscribe(myActorRef, gekka.gcluster.EventMemberUp, gekka.gcluster.EventMemberRemoved)
 //
 // When the subscriber actor is stopped, it is automatically unsubscribed to
 // prevent memory leaks.
-func (n *GekkaNode) Subscribe(ref ActorRef, types ...reflect.Type) {
-	n.cm.Subscribe(ref, types...)
-	if n.clusterWatcherRef.fullPath != "" {
-		n.System.Watch(n.clusterWatcherRef, ref)
+func (c *Cluster) Subscribe(ref ActorRef, types ...reflect.Type) {
+	c.cm.Subscribe(ref, types...)
+	if c.clusterWatcherRef.fullPath != "" {
+		c.System.Watch(c.clusterWatcherRef, ref)
 	}
 }
 
 // Unsubscribe removes the actor from the cluster event subscriber list.
 // Safe to call even if the actor was never subscribed or has already been removed.
-func (n *GekkaNode) Unsubscribe(ref ActorRef) {
-	n.cm.Unsubscribe(ref)
-	if n.clusterWatcherRef.fullPath != "" {
-		n.System.Unwatch(n.clusterWatcherRef, ref)
+func (c *Cluster) Unsubscribe(ref ActorRef) {
+	c.cm.Unsubscribe(ref)
+	if c.clusterWatcherRef.fullPath != "" {
+		c.System.Unwatch(c.clusterWatcherRef, ref)
 	}
 }
 
 // Metrics returns a point-in-time snapshot of all internal counters.
-// It is safe to call concurrently with any other GekkaNode method.
+// It is safe to call concurrently with any other Cluster method.
 //
-//	snap := node.Metrics()
+//	snap := cluster.Metrics()
 //	log.Printf("sent=%d received=%d gossips=%d", snap.MessagesSent, snap.MessagesReceived, snap.GossipsReceived)
-func (n *GekkaNode) MetricsSnapshot() core.MetricsSnapshot {
-	return n.metrics.Snapshot(n.nm.CountAssociations())
+func (c *Cluster) MetricsSnapshot() core.MetricsSnapshot {
+	return c.metrics.Snapshot(c.nm.CountAssociations())
 }
 
 // MonitoringAddr returns the TCP address of the built-in HTTP monitoring server,
-// or nil if monitoring was not enabled in NodeConfig.
-func (n *GekkaNode) MonitoringAddr() net.Addr {
-	if n.monitoring == nil {
+// or nil if monitoring was not enabled in ClusterConfig.
+func (c *Cluster) MonitoringAddr() net.Addr {
+	if c.monitoring == nil {
 		return nil
 	}
-	return n.monitoring.Addr()
+	return c.monitoring.Addr()
 }
 
 // Serialization returns the core.SerializationRegistry for registering custom
 // Protobuf or JSON message types and their manifests.
-func (n *GekkaNode) Serialization() *core.SerializationRegistry {
-	return n.nm.SerializerRegistry
+func (c *Cluster) Serialization() *core.SerializationRegistry {
+	return c.nm.SerializerRegistry
 }
 
 // RegisterSerializer registers a custom core.Serializer with this node's
 // core.SerializationRegistry, keyed by s.Identifier(). Overwrites any existing
 // entry for the same ID.
 //
-//	node.RegisterSerializer(&MyJSONSerializer{})
-func (n *GekkaNode) RegisterSerializer(s core.Serializer) {
-	n.nm.SerializerRegistry.RegisterSerializer(s.Identifier(), s)
+//	cluster.RegisterSerializer(&MyJSONSerializer{})
+func (c *Cluster) RegisterSerializer(s core.Serializer) {
+	c.nm.SerializerRegistry.RegisterSerializer(s.Identifier(), s)
 }
 
 // RegisterType binds a manifest string to a Go reflect.Type so that
@@ -840,20 +840,20 @@ func (n *GekkaNode) RegisterSerializer(s core.Serializer) {
 // manifest is typically the fully-qualified Scala/Java class name used by the
 // remote Pekko side, or any agreed-upon string for Go-to-Go communication.
 //
-//	node.RegisterType("com.example.OrderPlaced", reflect.TypeOf(OrderPlaced{}))
-//	node.RegisterType("com.example.UserCreated", reflect.TypeOf((*UserCreated)(nil)))
-func (n *GekkaNode) RegisterType(manifest string, typ reflect.Type) {
-	n.nm.SerializerRegistry.RegisterManifest(manifest, typ)
+//	cluster.RegisterType("com.example.OrderPlaced", reflect.TypeOf(OrderPlaced{}))
+//	cluster.RegisterType("com.example.UserCreated", reflect.TypeOf((*UserCreated)(nil)))
+func (c *Cluster) RegisterType(manifest string, typ reflect.Type) {
+	c.nm.SerializerRegistry.RegisterManifest(manifest, typ)
 }
 
 // Shutdown stops the TCP server and cancels all background goroutines.
 // It is safe to call multiple times.
-func (n *GekkaNode) Shutdown() error {
-	if n.cancel != nil {
-		n.cancel()
+func (c *Cluster) Shutdown() error {
+	if c.cancel != nil {
+		c.cancel()
 	}
-	if n.server != nil {
-		return n.server.Shutdown()
+	if c.server != nil {
+		return c.server.Shutdown()
 	}
 	return nil
 }

@@ -32,7 +32,7 @@ import (
 // goroutines.
 type ActorRef struct {
 	fullPath string // full actor-path URI, e.g. "pekko://System@host:port/user/foo"
-	node     *GekkaNode
+	node     *Cluster
 	local    actor.Actor // non-nil when the target is registered locally on this node
 }
 
@@ -161,7 +161,7 @@ func (r ActorRef) Ask(ctx context.Context, msg any) (any, error) {
 // lazily on the first Tell or Ask.
 type ActorSelection struct {
 	rawPath string // path as given by the caller
-	node    *GekkaNode
+	node    *Cluster
 }
 
 // Resolve returns a concrete ActorRef for this selection.
@@ -254,7 +254,7 @@ func (s ActorSelection) Ask(ctx context.Context, msg any) (any, error) {
 // selfPathURI converts a local path suffix such as "/user/myActor" into the
 // full actor-path URI for this node. If path is already absolute it is
 // returned unchanged.
-func (n *GekkaNode) selfPathURI(path string) string {
+func (n *Cluster) selfPathURI(path string) string {
 	if len(path) > 0 && path[0] == '/' {
 		self := n.SelfAddress()
 		return fmt.Sprintf("%s://%s@%s:%d%s",
@@ -272,7 +272,7 @@ func (n *GekkaNode) selfPathURI(path string) string {
 //
 //	ref, err := node.ActorSelection("/user/myActor").Resolve(ctx)
 //	ref.Tell("Hello")
-func (n *GekkaNode) ActorSelection(path string) ActorSelection {
+func (n *Cluster) ActorSelection(path string) ActorSelection {
 	return ActorSelection{rawPath: path, node: n}
 }
 
@@ -286,7 +286,7 @@ func (n *GekkaNode) ActorSelection(path string) ActorSelection {
 // path must be the full path suffix as used in Artery envelopes, e.g.
 // "/user/myActor". Do NOT call actor.Start yourself before SpawnActor — that
 // would launch two receive goroutines.
-func (n *GekkaNode) SpawnActor(path string, a actor.Actor, props actor.Props) ActorRef {
+func (n *Cluster) SpawnActor(path string, a actor.Actor, props actor.Props) ActorRef {
 	ref := ActorRef{fullPath: n.selfPathURI(path), node: n, local: a}
 
 	// Inject the actor's own reference so it can use Self() inside Receive.

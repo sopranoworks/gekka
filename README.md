@@ -37,8 +37,8 @@ import (
 )
 
 func main() {
-	// 1. Initialize the node and join as a cluster member
-	node, err := gekka.Spawn(gekka.NodeConfig{
+	// 1. Initialize the cluster and join as a member
+	cluster, err := gekka.Spawn(gekka.ClusterConfig{
 		SystemName: "MyCluster",
 		Port:       2553,
 		// Provide seed nodes to join an existing cluster
@@ -49,9 +49,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer node.Shutdown()
+	defer cluster.Shutdown()
 
-	log.Printf("Gekka node started at %s, joining cluster...", node.Addr())
+	log.Printf("Gekka cluster started at %s, joining cluster...", cluster.Addr())
 }
 ```
 
@@ -84,11 +84,11 @@ func (a *EchoActor) Receive(msg any) {
 }
 
 func main() {
-	node, _ := gekka.Spawn(gekka.NodeConfig{SystemName: "ExampleSystem"})
-	defer node.Shutdown()
+	cluster, _ := gekka.Spawn(gekka.ClusterConfig{SystemName: "ExampleSystem"})
+	defer cluster.Shutdown()
 
 	// 2. Create a named actor instance
-	ref, _ := node.System.ActorOf(gekka.Props{
+	ref, _ := cluster.System.ActorOf(gekka.Props{
 		New: func() actor.Actor { return &EchoActor{BaseActor: actor.NewBaseActor()} },
 	}, "echo")
 
@@ -104,7 +104,7 @@ func main() {
 ### How it works
 
 - **Location Transparency**: Messaging works the same way whether the actor is local or remote. The `ActorRef` abstracts away the network layer.
-- **HOCON-ready**: Configuration can be passed programmatically via `NodeConfig` or loaded directly from standard `application.conf` files.
+- **HOCON-ready**: Configuration can be passed programmatically via `ClusterConfig` or loaded directly from standard `application.conf` files.
 
 
 ## New in v0.4.0: Config-Driven Routing

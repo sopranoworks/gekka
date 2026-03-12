@@ -19,7 +19,7 @@ import (
 	hocon "github.com/sopranoworks/gekka-config"
 )
 
-// LoadConfig reads a HOCON configuration file and converts it to a NodeConfig.
+// LoadConfig reads a HOCON configuration file and converts it to a ClusterConfig.
 //
 // The following HOCON paths are recognised (replace "pekko" with "akka" for
 // Lightbend Akka clusters — the protocol is auto-detected):
@@ -36,7 +36,7 @@ import (
 //
 //	cfg, err := gekka.LoadConfig("application.conf", "reference.conf")
 //
-// LoadConfig reads a HOCON configuration file and converts it to a NodeConfig.
+// LoadConfig reads a HOCON configuration file and converts it to a ClusterConfig.
 //
 // The following HOCON paths are recognised (replace "pekko" with "akka" for
 // Lightbend Akka clusters — the protocol is auto-detected):
@@ -52,29 +52,29 @@ import (
 // lets you layer a reference.conf under an application.conf:
 //
 //	cfg, err := gekka.LoadConfig("application.conf", "reference.conf")
-func LoadConfig(path string, fallbacks ...string) (NodeConfig, error) {
+func LoadConfig(path string, fallbacks ...string) (ClusterConfig, error) {
 	primaryData, err := os.ReadFile(path)
 	if err != nil {
-		return NodeConfig{}, fmt.Errorf("gekka: read config %q: %w", path, err)
+		return ClusterConfig{}, fmt.Errorf("gekka: read config %q: %w", path, err)
 	}
 	cfg, err := hocon.ParseString(string(primaryData))
 	if err != nil {
-		return NodeConfig{}, fmt.Errorf("gekka: parse primary config: %w", err)
+		return ClusterConfig{}, fmt.Errorf("gekka: parse primary config: %w", err)
 	}
 
 	for _, fb := range fallbacks {
 		data, err := os.ReadFile(fb)
 		if err != nil {
-			return NodeConfig{}, fmt.Errorf("gekka: read fallback %q: %w", fb, err)
+			return ClusterConfig{}, fmt.Errorf("gekka: read fallback %q: %w", fb, err)
 		}
 		fallbackCfg, err := hocon.ParseString(string(data))
 		if err != nil {
-			return NodeConfig{}, fmt.Errorf("gekka: parse fallback %q: %w", fb, err)
+			return ClusterConfig{}, fmt.Errorf("gekka: parse fallback %q: %w", fb, err)
 		}
 		*cfg = cfg.WithFallback(*fallbackCfg)
 	}
 
-	return hoconToNodeConfig(cfg)
+	return hoconToClusterConfig(cfg)
 }
 
 // SpawnFromConfig is a convenience wrapper that calls LoadConfig then Spawn.
@@ -84,7 +84,7 @@ func LoadConfig(path string, fallbacks ...string) (NodeConfig, error) {
 //	if err != nil { log.Fatal(err) }
 //	defer node.Shutdown()
 //	node.Join(...) // or node.JoinSeeds()
-func SpawnFromConfig(path string, fallbacks ...string) (*GekkaNode, error) {
+func SpawnFromConfig(path string, fallbacks ...string) (*Cluster, error) {
 	cfg, err := LoadConfig(path, fallbacks...)
 	if err != nil {
 		return nil, err
@@ -92,26 +92,26 @@ func SpawnFromConfig(path string, fallbacks ...string) (*GekkaNode, error) {
 	return Spawn(cfg)
 }
 
-// ParseHOCONString parses an in-memory HOCON string and returns a NodeConfig.
+// ParseHOCONString parses an in-memory HOCON string and returns a ClusterConfig.
 // Useful for embedding configuration in tests or when the config comes from
 // a source other than a file (e.g. Kubernetes ConfigMap, etcd).
-func ParseHOCONString(text string) (NodeConfig, error) {
+func ParseHOCONString(text string) (ClusterConfig, error) {
 	return parseHOCONString(text)
 }
 
-func parseHOCONString(text string) (NodeConfig, error) {
+func parseHOCONString(text string) (ClusterConfig, error) {
 	cfg, err := hocon.ParseString(text)
 	if err != nil {
-		return NodeConfig{}, fmt.Errorf("gekka: parse config: %w", err)
+		return ClusterConfig{}, fmt.Errorf("gekka: parse config: %w", err)
 	}
-	return hoconToNodeConfig(cfg)
+	return hoconToClusterConfig(cfg)
 }
 
-// hoconToNodeConfig maps a parsed HOCON Config to a NodeConfig.
-func hoconToNodeConfig(cfg *hocon.Config) (NodeConfig, error) {
-	var nodeCfg NodeConfig
+// hoconToClusterConfig maps a parsed HOCON Config to a ClusterConfig.
+func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
+	var nodeCfg ClusterConfig
 	if err := cfg.Unmarshal(&nodeCfg); err != nil {
-		return NodeConfig{}, fmt.Errorf("gekka: unmarshal config: %w", err)
+		return ClusterConfig{}, fmt.Errorf("gekka: unmarshal config: %w", err)
 	}
 
 	// Auto-detect protocol: prefer "pekko", fall back to "akka".
@@ -161,7 +161,7 @@ func hoconToNodeConfig(cfg *hocon.Config) (NodeConfig, error) {
 		uri = strings.Trim(uri, `"`)
 		addr, err := actor.ParseAddress(uri)
 		if err != nil {
-			return NodeConfig{}, fmt.Errorf("gekka: parse seed-node %q: %w", uri, err)
+			return ClusterConfig{}, fmt.Errorf("gekka: parse seed-node %q: %w", uri, err)
 		}
 		seeds = append(seeds, addr)
 		if systemName == "" {

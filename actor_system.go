@@ -91,9 +91,9 @@ type ActorSystem interface {
 // when ActorOf is called with an empty name.
 var autoNameCounter atomic.Uint64
 
-// nodeActorSystem implements ActorSystem on top of GekkaNode.
+// nodeActorSystem implements ActorSystem on top of Cluster.
 type nodeActorSystem struct {
-	node *GekkaNode
+	cluster *Cluster
 }
 
 // ActorOf implements ActorSystem.
@@ -126,9 +126,9 @@ func (s *nodeActorSystem) ActorOfHierarchical(props Props, name string, parentPa
 	path := parentPath + "/" + name
 
 	// Check for duplicates before constructing the actor.
-	s.node.actorsMu.RLock()
-	_, exists := s.node.actors[path]
-	s.node.actorsMu.RUnlock()
+	s.cluster.actorsMu.RLock()
+	_, exists := s.cluster.actors[path]
+	s.cluster.actorsMu.RUnlock()
 	if exists {
 		return ActorRef{}, fmt.Errorf("actorOf: actor already registered at %q", path)
 	}
@@ -136,23 +136,23 @@ func (s *nodeActorSystem) ActorOfHierarchical(props Props, name string, parentPa
 	// Deployment interception: auto-provision a router when the path has a
 	// matching deployment entry. GroupRouters do not need props.New (they route
 	// to pre-existing actors); PoolRouters do need it (to create workers).
-	if d, ok := s.node.lookupDeployment(path); ok && d.Router != "" {
+	if d, ok := s.cluster.lookupDeployment(path); ok && d.Router != "" {
 		if core.IsGroupRouter(d.Router) {
-			group, err := core.DeploymentToGroupRouter(s.node.cm, d)
+			group, err := core.DeploymentToGroupRouter(s.cluster.cm, d)
 			if err != nil {
 				return ActorRef{}, fmt.Errorf("actorOf: deployment config for %q: %w", path, err)
 			}
-			return s.node.SpawnActor(path, group, Props{}), nil
+			return s.cluster.SpawnActor(path, group, Props{}), nil
 		}
 		// Pool router — worker factory is required.
 		if props.New == nil {
 			return ActorRef{}, fmt.Errorf("actorOf: Props.New must not be nil for pool router deployment at %q", path)
 		}
-		pool, err := core.DeploymentToPoolRouter(s.node.cm, d, props)
+		pool, err := core.DeploymentToPoolRouter(s.cluster.cm, d, props)
 		if err != nil {
 			return ActorRef{}, fmt.Errorf("actorOf: deployment config for %q: %w", path, err)
 		}
-		return s.node.SpawnActor(path, pool, Props{}), nil
+		return s.cluster.SpawnActor(path, pool, Props{}), nil
 	}
 
 	// Plain actor — Props.New is required.
@@ -160,12 +160,12 @@ func (s *nodeActorSystem) ActorOfHierarchical(props Props, name string, parentPa
 		return ActorRef{}, fmt.Errorf("actorOf: Props.New must not be nil")
 	}
 	a := props.New()
-	return s.node.SpawnActor(path, a, props), nil
+	return s.cluster.SpawnActor(path, a, props), nil
 }
 
 // Context implements ActorSystem.
 func (s *nodeActorSystem) Context() context.Context {
-	return s.node.ctx
+	return s.cluster.ctx
 }
 
 // asActorContext returns a bridge that satisfies actor.ActorContext, allowing
@@ -188,7 +188,7 @@ func (b *actorContextBridge) ActorOf(props actor.Props, name string) (actor.Ref,
 }
 
 func (b *actorContextBridge) Context() context.Context {
-	return b.sys.node.ctx
+	return b.sys.cluster.ctx
 }
 
 // Watch implements actor.ActorContext. It registers watcher to receive a
@@ -212,7 +212,7 @@ func (b *actorContextBridge) Watch(watcher actor.Ref, target actor.Ref) {
 // returns its Ref, allowing GroupRouter.PreStart to resolve routee paths
 // without importing the gekka package.
 func (b *actorContextBridge) Resolve(path string) (actor.Ref, error) {
-	ref, err := b.sys.node.ActorSelection(path).Resolve(context.Background())
+	ref, err := b.sys.cluster.ActorSelection(path).Resolve(context.Background())
 	if err != nil {
 		return nil, err
 	}
@@ -225,7 +225,7 @@ func (s *nodeActorSystem) Watch(watcher ActorRef, target ActorRef) {
 		target.local.AddWatcher(watcher)
 	} else {
 		// Target is remote
-		s.node.watchRemote(watcher, target)
+		s.cluster.watchRemote(watcher, target)
 	}
 }
 
@@ -235,7 +235,7 @@ func (s *nodeActorSystem) Unwatch(watcher ActorRef, target ActorRef) {
 		target.local.RemoveWatcher(watcher)
 	} else {
 		// Target is remote
-		s.node.unwatchRemote(watcher, target)
+		s.cluster.unwatchRemote(watcher, target)
 	}
 }
 
@@ -253,5 +253,5 @@ func (s *nodeActorSystem) RemoteActorOf(address actor.Address, path string) Acto
 		fullPath += "/"
 	}
 	fullPath += path
-	return ActorRef{fullPath: fullPath, node: s.node}
+	return ActorRef{fullPath: fullPath, node: s.cluster}
 }

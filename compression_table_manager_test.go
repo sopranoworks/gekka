@@ -13,13 +13,14 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/sopranoworks/gekka/actor"
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 	"google.golang.org/protobuf/proto"
 )
 
 func TestCompressionTableManager_UpdateAndLookup(t *testing.T) {
 	nm := NewNodeManager(&gproto_remote.Address{Hostname: proto.String("local")}, 0)
-	router := NewRouter(nm)
+	router := actor.NewRouter(nm)
 	ctm := NewCompressionTableManager(router)
 
 	originUid := uint64(12345)
@@ -79,7 +80,7 @@ func TestCompressionTableManager_UpdateAndLookup(t *testing.T) {
 
 func TestCompressionTableManager_ConcurrentAccess(t *testing.T) {
 	nm := NewNodeManager(&gproto_remote.Address{Hostname: proto.String("local")}, 0)
-	router := NewRouter(nm)
+	router := actor.NewRouter(nm)
 	ctm := NewCompressionTableManager(router)
 
 	originUid := uint64(777)
@@ -113,7 +114,7 @@ func TestCompressionTableManager_ConcurrentAccess(t *testing.T) {
 
 func TestHandleAdvertisement(t *testing.T) {
 	nm := NewNodeManager(&gproto_remote.Address{Hostname: proto.String("local")}, 0)
-	router := NewRouter(nm)
+	router := actor.NewRouter(nm)
 	ctm := NewCompressionTableManager(router)
 
 	originUid := uint64(555)

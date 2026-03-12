@@ -41,18 +41,18 @@ const (
 
 func TestJSONSerializer_IsRegisteredByDefault(t *testing.T) {
 	reg := NewSerializationRegistry()
-	s, err := reg.GetSerializer(JSONSerializerID)
+	s, err := reg.GetSerializer(actor.JSONSerializerID)
 	if err != nil {
 		t.Fatalf("JSONSerializer not registered by default: %v", err)
 	}
-	if s.Identifier() != JSONSerializerID {
-		t.Errorf("Identifier() = %d, want %d", s.Identifier(), JSONSerializerID)
+	if s.Identifier() != actor.JSONSerializerID {
+		t.Errorf("Identifier() = %d, want %d", s.Identifier(), actor.JSONSerializerID)
 	}
 }
 
 func TestJSONSerializer_ToBinary_ProducesValidJSON(t *testing.T) {
 	reg := NewSerializationRegistry()
-	s, _ := reg.GetSerializer(JSONSerializerID)
+	s, _ := reg.GetSerializer(actor.JSONSerializerID)
 
 	event := shippingEvent{OrderID: "ORD-1", Warehouse: "WH-A", Qty: 3, Weight: 4.5}
 	data, err := s.ToBinary(event)
@@ -73,7 +73,7 @@ func TestJSONSerializer_RoundTrip_ValueType(t *testing.T) {
 	// Register with value type (not pointer).
 	reg.RegisterManifest(manifestShipping, reflect.TypeOf(shippingEvent{}))
 
-	s, _ := reg.GetSerializer(JSONSerializerID)
+	s, _ := reg.GetSerializer(actor.JSONSerializerID)
 
 	original := shippingEvent{OrderID: "ORD-99", Warehouse: "WH-B", Qty: 10, Weight: 9.81}
 	data, err := s.ToBinary(original)
@@ -81,7 +81,7 @@ func TestJSONSerializer_RoundTrip_ValueType(t *testing.T) {
 		t.Fatalf("ToBinary: %v", err)
 	}
 
-	got, err := reg.DeserializePayload(JSONSerializerID, manifestShipping, data)
+	got, err := reg.DeserializePayload(actor.JSONSerializerID, manifestShipping, data)
 	if err != nil {
 		t.Fatalf("DeserializePayload: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestJSONSerializer_RoundTrip_PointerType(t *testing.T) {
 	// Register with pointer type.
 	reg.RegisterManifest(manifestPayment, reflect.TypeOf((*paymentEvent)(nil)))
 
-	s, _ := reg.GetSerializer(JSONSerializerID)
+	s, _ := reg.GetSerializer(actor.JSONSerializerID)
 
 	original := &paymentEvent{TxID: "TX-42", Amount: 199.99}
 	data, err := s.ToBinary(original)
@@ -107,7 +107,7 @@ func TestJSONSerializer_RoundTrip_PointerType(t *testing.T) {
 		t.Fatalf("ToBinary: %v", err)
 	}
 
-	got, err := reg.DeserializePayload(JSONSerializerID, manifestPayment, data)
+	got, err := reg.DeserializePayload(actor.JSONSerializerID, manifestPayment, data)
 	if err != nil {
 		t.Fatalf("DeserializePayload: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestJSONSerializer_RoundTrip_PointerType(t *testing.T) {
 
 func TestJSONSerializer_UnknownManifest_ReturnsError(t *testing.T) {
 	reg := NewSerializationRegistry()
-	_, err := reg.DeserializePayload(JSONSerializerID, "com.example.Unknown", []byte(`{}`))
+	_, err := reg.DeserializePayload(actor.JSONSerializerID, "com.example.Unknown", []byte(`{}`))
 	if err == nil {
 		t.Error("expected error for unknown manifest, got nil")
 	}
@@ -132,7 +132,7 @@ func TestJSONSerializer_InvalidJSON_ReturnsError(t *testing.T) {
 	reg := NewSerializationRegistry()
 	reg.RegisterManifest(manifestShipping, reflect.TypeOf(shippingEvent{}))
 
-	_, err := reg.DeserializePayload(JSONSerializerID, manifestShipping, []byte(`not-json{`))
+	_, err := reg.DeserializePayload(actor.JSONSerializerID, manifestShipping, []byte(`not-json{`))
 	if err == nil {
 		t.Error("expected error for malformed JSON, got nil")
 	}
@@ -143,7 +143,7 @@ func TestJSONSerializer_ManifestDispatch_TwoTypes(t *testing.T) {
 	reg.RegisterManifest(manifestShipping, reflect.TypeOf(shippingEvent{}))
 	reg.RegisterManifest(manifestPayment, reflect.TypeOf(paymentEvent{}))
 
-	s, _ := reg.GetSerializer(JSONSerializerID)
+	s, _ := reg.GetSerializer(actor.JSONSerializerID)
 
 	ship := shippingEvent{OrderID: "S1", Warehouse: "W", Qty: 1, Weight: 0.5}
 	pay := paymentEvent{TxID: "T1", Amount: 50.0}
@@ -151,7 +151,7 @@ func TestJSONSerializer_ManifestDispatch_TwoTypes(t *testing.T) {
 	shipBytes, _ := s.ToBinary(ship)
 	payBytes, _ := s.ToBinary(pay)
 
-	gotShip, err := reg.DeserializePayload(JSONSerializerID, manifestShipping, shipBytes)
+	gotShip, err := reg.DeserializePayload(actor.JSONSerializerID, manifestShipping, shipBytes)
 	if err != nil {
 		t.Fatalf("shipping dispatch: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestJSONSerializer_ManifestDispatch_TwoTypes(t *testing.T) {
 		t.Errorf("expected shippingEvent, got %T", gotShip)
 	}
 
-	gotPay, err := reg.DeserializePayload(JSONSerializerID, manifestPayment, payBytes)
+	gotPay, err := reg.DeserializePayload(actor.JSONSerializerID, manifestPayment, payBytes)
 	if err != nil {
 		t.Fatalf("payment dispatch: %v", err)
 	}
@@ -274,7 +274,7 @@ func TestJSONSerializer_ActorReceivesGoStruct_ViaSerializer(t *testing.T) {
 
 	// --- Sender side: serialize ---
 	original := shippingEvent{OrderID: "E-002", Warehouse: "W2", Qty: 2, Weight: 1.1}
-	s, err := reg.GetSerializer(JSONSerializerID)
+	s, err := reg.GetSerializer(actor.JSONSerializerID)
 	if err != nil {
 		t.Fatalf("GetSerializer: %v", err)
 	}
@@ -284,7 +284,7 @@ func TestJSONSerializer_ActorReceivesGoStruct_ViaSerializer(t *testing.T) {
 	}
 
 	// --- Receiver side: deserialize (as Artery's handleUserMessage would) ---
-	decoded, err := reg.DeserializePayload(JSONSerializerID, manifestShipping, wireBytes)
+	decoded, err := reg.DeserializePayload(actor.JSONSerializerID, manifestShipping, wireBytes)
 	if err != nil {
 		t.Fatalf("DeserializePayload: %v", err)
 	}

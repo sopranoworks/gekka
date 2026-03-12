@@ -18,31 +18,29 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/cluster"
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 	"google.golang.org/protobuf/proto"
 )
 
 // AssociationState represents the state of a connection to a remote node.
-type AssociationState int
+type AssociationState = actor.AssociationState
 
 const (
-	ASSOCIATED            AssociationState = 1
-	QUARANTINED           AssociationState = 2
-	INITIATED             AssociationState = 3
-	WAITING_FOR_HANDSHAKE AssociationState = 4
+	ASSOCIATED            = actor.ASSOCIATED
+	QUARANTINED           = actor.QUARANTINED
+	INITIATED             = actor.INITIATED
+	WAITING_FOR_HANDSHAKE = actor.WAITING_FOR_HANDSHAKE
 )
 
 // AssociationRole indicates whether the connection was initiated locally or remotely.
-type AssociationRole int
+type AssociationRole = actor.AssociationRole
 
 const (
-	INBOUND AssociationRole = iota
-	OUTBOUND
+	INBOUND  = actor.INBOUND
+	OUTBOUND = actor.OUTBOUND
 )
-
-// ArteryInternalSerializerID is the standard serializer ID for Artery control messages.
-const ArteryInternalSerializerID int32 = 17
 
 // Association is a type alias for GekkaAssociation for backward compatibility.
 type Association = GekkaAssociation
@@ -64,6 +62,8 @@ type GekkaAssociation struct {
 	outbox    chan []byte
 	streamId  int32
 }
+
+var _ actor.RemoteAssociation = (*GekkaAssociation)(nil)
 
 // NodeManager manages all active associations.
 type NodeManager struct {
@@ -141,6 +141,79 @@ func (nm *NodeManager) routePendingReply(path string, meta *ArteryMetadata) bool
 		log.Printf("NodeManager: Ask reply channel full for path %s, dropping", path)
 	}
 	return true
+}
+
+var _ actor.RemoteMessagingProvider = (*NodeManager)(nil)
+
+func (nm *NodeManager) LocalAddress() *gproto_remote.Address {
+	return nm.localAddress
+}
+
+func (nm *NodeManager) GetAssociationByHost(host string, port uint32) (actor.RemoteAssociation, bool) {
+	nm.mu.RLock()
+	defer nm.mu.RUnlock()
+
+	for _, assoc := range nm.associations {
+		assoc.mu.RLock()
+		remote := assoc.remote
+		role := assoc.role
+		state := assoc.state
+		assoc.mu.RUnlock()
+
+		if remote != nil && remote.Address.GetHostname() == host && remote.Address.GetPort() == port {
+			if role == OUTBOUND && (state == ASSOCIATED || state == INITIATED || state == WAITING_FOR_HANDSHAKE) {
+				return assoc, true
+			}
+		}
+	}
+	return nil, false
+}
+
+func (nm *NodeManager) DialRemote(ctx context.Context, target *gproto_remote.Address) (actor.RemoteAssociation, error) {
+	addrStr := fmt.Sprintf("%s:%d", target.GetHostname(), target.GetPort())
+
+	client, err := NewTcpClient(TcpClientConfig{
+		Addr: addrStr,
+		Handler: func(ctx context.Context, conn net.Conn) error {
+			return nm.ProcessConnection(ctx, conn, OUTBOUND, target, 1) // Default to Control stream for outbound
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Start connection in a goroutine
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- client.Connect(ctx)
+	}()
+
+	// Wait for the association to appear or for an error
+	timeout := time.After(5 * time.Second)
+	for {
+		select {
+		case err := <-errChan:
+			return nil, err
+		case <-timeout:
+			return nil, fmt.Errorf("dial timeout")
+		case <-time.After(100 * time.Millisecond):
+			if assoc, ok := nm.GetAssociationByHost(target.GetHostname(), target.GetPort()); ok {
+				return assoc, nil
+			}
+		}
+	}
+}
+
+func (nm *NodeManager) Serializer(id int32) (actor.RemoteSerializer, error) {
+	s, err := nm.SerializerRegistry.GetSerializer(id)
+	if err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+func (nm *NodeManager) Metrics() actor.RemoteMetrics {
+	return nm.metrics
 }
 
 func (nm *NodeManager) SetClusterManager(cm *cluster.ClusterManager) {
@@ -314,7 +387,7 @@ func (assoc *GekkaAssociation) initiateHandshake(to *gproto_remote.Address) erro
 	}
 	// Pekko ArteryMessageSerializer (17) uses "d" for HandshakeReq.
 	// We use 0 (UnknownUid) because we don't know the remote UID yet.
-	return SendArteryMessageWithAck(assoc.conn, int64(uid), ArteryInternalSerializerID, "d", req, req.From, true)
+	return SendArteryMessageWithAck(assoc.conn, int64(uid), actor.ArteryInternalSerializerID, "d", req, req.From, true)
 }
 
 func (assoc *GekkaAssociation) Process(ctx context.Context) error {
@@ -343,14 +416,14 @@ func (assoc *GekkaAssociation) dispatch(ctx context.Context, meta *ArteryMetadat
 	}
 
 	switch meta.SerializerId {
-	case ArteryInternalSerializerID, 6: // 17 or 6
+	case actor.ArteryInternalSerializerID, 6: // 17 or 6
 		manifest := string(meta.MessageManifest)
 		if manifest == "SystemMessage" {
 			return assoc.handleSystemMessage(meta)
 		}
 		return assoc.handleControlMessage(ctx, meta)
 
-	case cluster.ClusterSerializerID:
+	case actor.ClusterSerializerID:
 		if assoc.nodeMgr.clusterMgr != nil {
 			assoc.mu.RLock()
 			remote := assoc.remote
@@ -372,7 +445,7 @@ func (assoc *GekkaAssociation) sendSystemAck(seq uint64, to *gproto_remote.Uniqu
 			Uid:     proto.Uint64(assoc.localUid),
 		},
 	}
-	return SendArteryMessageWithAck(assoc.conn, int64(assoc.localUid), ArteryInternalSerializerID, "SystemMessageDeliveryAck", ack, to, true)
+	return SendArteryMessageWithAck(assoc.conn, int64(assoc.localUid), actor.ArteryInternalSerializerID, "SystemMessageDeliveryAck", ack, to, true)
 }
 
 func (assoc *GekkaAssociation) handleSystemMessage(meta *ArteryMetadata) error {
@@ -546,7 +619,7 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 		if err != nil {
 			return fmt.Errorf("failed to marshal ArteryHeartbeatRsp: %w", err)
 		}
-		frame, err := BuildArteryFrame(int64(assoc.localUid), ArteryInternalSerializerID, "", "", "n", payload, true)
+		frame, err := BuildArteryFrame(int64(assoc.localUid), actor.ArteryInternalSerializerID, "", "", "n", payload, true)
 		if err != nil {
 			return fmt.Errorf("failed to build ArteryHeartbeatRsp frame: %w", err)
 		}
@@ -701,7 +774,7 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 		localUA := &gproto_remote.UniqueAddress{Address: assoc.nodeMgr.localAddress, Uid: proto.Uint64(assoc.localUid)}
 		rspProto := &gproto_remote.MessageWithAddress{Address: localUA}
 		if rspPayload, err2 := proto.Marshal(rspProto); err2 == nil {
-			if frame, err2 := BuildArteryFrame(int64(assoc.localUid), ArteryInternalSerializerID, "", "", "e", rspPayload, true); err2 == nil {
+			if frame, err2 := BuildArteryFrame(int64(assoc.localUid), actor.ArteryInternalSerializerID, "", "", "e", rspPayload, true); err2 == nil {
 				log.Printf("Association %p (INBOUND): sending HandshakeRsp to remote", assoc)
 				assoc.outbox <- frame
 			}
@@ -747,7 +820,7 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 	if err != nil {
 		return err
 	}
-	frame, err := BuildArteryFrame(int64(assoc.localUid), ArteryInternalSerializerID, "", "", "e", payload, true)
+	frame, err := BuildArteryFrame(int64(assoc.localUid), actor.ArteryInternalSerializerID, "", "", "e", payload, true)
 	if err != nil {
 		return err
 	}

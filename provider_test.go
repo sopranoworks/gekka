@@ -12,6 +12,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/sopranoworks/gekka/actor"
 )
 
 func TestProvider_ProtoString(t *testing.T) {
@@ -152,23 +154,23 @@ func TestProvider_SendPath_PekkoVsAkka(t *testing.T) {
 		"akka://MySystem@127.0.0.1:2552/user/actor",
 	}
 	for _, p := range paths {
-		ap, err := ParseActorPath(p)
+		ap, err := actor.ParseActorPath(p)
 		if err != nil {
-			t.Errorf("ParseActorPath(%q) error: %v", p, err)
+			t.Errorf("actor.ParseActorPath(%q) error: %v", p, err)
 			continue
 		}
-		if ap.System != "MySystem" {
-			t.Errorf("path=%q System=%q, want MySystem", p, ap.System)
+		if ap.Address.System != "MySystem" {
+			t.Errorf("path=%q System=%q, want MySystem", p, ap.Address.System)
 		}
-		if ap.Host != "127.0.0.1" {
-			t.Errorf("path=%q Host=%q, want 127.0.0.1", p, ap.Host)
+		if ap.Address.Host != "127.0.0.1" {
+			t.Errorf("path=%q Host=%q, want 127.0.0.1", p, ap.Address.Host)
 		}
-		if ap.Port != 2552 {
-			t.Errorf("path=%q Port=%d, want 2552", p, ap.Port)
+		if ap.Address.Port != 2552 {
+			t.Errorf("path=%q Port=%d, want 2552", p, ap.Address.Port)
 		}
 		scheme := strings.SplitN(p, "://", 2)[0]
-		if ap.Protocol != scheme {
-			t.Errorf("path=%q Protocol=%q, want %q", p, ap.Protocol, scheme)
+		if ap.Address.Protocol != scheme {
+			t.Errorf("path=%q Protocol=%q, want %q", p, ap.Address.Protocol, scheme)
 		}
 	}
 }

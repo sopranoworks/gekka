@@ -128,6 +128,9 @@ func (r ActorRef) Ask(ctx context.Context, msg any) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if reply.DeserializedMessage != nil {
+		return reply.DeserializedMessage, nil
+	}
 	if reg := r.node.nm.SerializerRegistry; reg != nil {
 		obj, err := reg.DeserializePayload(reply.SerializerId, reply.Manifest, reply.Payload)
 		if err == nil {
@@ -186,7 +189,7 @@ func (s ActorSelection) Resolve(_ context.Context) (ActorRef, error) {
 		// Check whether this URI addresses a local actor on this node.
 		self := s.node.SelfAddress()
 		if ap.Address.System == self.System && ap.Address.Host == self.Host && ap.Address.Port == self.Port {
-			localPath := "/" + strings.Join(ap.Elements(), "/")
+			localPath := ap.Path()
 			s.node.actorsMu.RLock()
 			a, found := s.node.actors[localPath]
 			s.node.actorsMu.RUnlock()

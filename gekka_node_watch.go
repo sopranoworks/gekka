@@ -18,11 +18,11 @@ import (
 // ── Remote Death Watch ────────────────────────────────────────────────────────
 
 func (n *GekkaNode) watchRemote(watcher ActorRef, target ActorRef) {
-	ap, err := ParseActorPath(target.Path())
+	ap, err := actor.ParseActorPath(target.Path())
 	if err != nil {
 		return
 	}
-	nodeAddr := fmt.Sprintf("%s:%d", ap.Host, ap.Port)
+	nodeAddr := fmt.Sprintf("%s:%d", ap.Address.Host, ap.Address.Port)
 
 	n.remoteWatchersMu.Lock()
 	defer n.remoteWatchersMu.Unlock()
@@ -36,11 +36,11 @@ func (n *GekkaNode) watchRemote(watcher ActorRef, target ActorRef) {
 }
 
 func (n *GekkaNode) unwatchRemote(watcher ActorRef, target ActorRef) {
-	ap, err := ParseActorPath(target.Path())
+	ap, err := actor.ParseActorPath(target.Path())
 	if err != nil {
 		return
 	}
-	nodeAddr := fmt.Sprintf("%s:%d", ap.Host, ap.Port)
+	nodeAddr := fmt.Sprintf("%s:%d", ap.Address.Host, ap.Address.Port)
 
 	n.remoteWatchersMu.Lock()
 	defer n.remoteWatchersMu.Unlock()

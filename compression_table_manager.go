@@ -14,6 +14,7 @@ import (
 	"log"
 	"sync"
 
+	"github.com/sopranoworks/gekka/actor"
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 )
 
@@ -23,7 +24,7 @@ type CompressionTableManager struct {
 	mu            sync.RWMutex
 	actorRefTable map[uint64]*CompressionTable
 	manifestTable map[uint64]*CompressionTable
-	router        *Router // needed to send acks back
+	router        *actor.Router // needed to send acks back
 }
 
 // CompressionTable represents a single versioned dictionary of string -> uint32 mapping.
@@ -35,7 +36,7 @@ type CompressionTable struct {
 	StringToId map[string]uint32
 }
 
-func NewCompressionTableManager(router *Router) *CompressionTableManager {
+func NewCompressionTableManager(router *actor.Router) *CompressionTableManager {
 	return &CompressionTableManager{
 		actorRefTable: make(map[uint64]*CompressionTable),
 		manifestTable: make(map[uint64]*CompressionTable),

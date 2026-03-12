@@ -9,12 +9,103 @@
 package actor
 
 import (
+	"bytes"
+	"compress/gzip"
+	"context"
 	"fmt"
 	"hash/crc32"
+	"log"
 	"math/rand"
+	"reflect"
 	"sort"
 	"sync"
 	"sync/atomic"
+
+	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
+	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
+
+	"google.golang.org/protobuf/proto"
+)
+
+// RemoteMessagingProvider abstracts the remoting infrastructure (NodeManager)
+// so the actor package can perform remote delivery without importing gekka.
+type RemoteMessagingProvider interface {
+	// LocalAddress returns the address of the node hosting this provider.
+	LocalAddress() *gproto_remote.Address
+
+	// GetAssociationByHost retrieves an existing connection to the given host:port.
+	GetAssociationByHost(host string, port uint32) (RemoteAssociation, bool)
+
+	// DialRemote initiates a new connection to the target address.
+	DialRemote(ctx context.Context, target *gproto_remote.Address) (RemoteAssociation, error)
+
+	// Serializer retrieves the serializer registered for the given ID.
+	Serializer(id int32) (RemoteSerializer, error)
+
+	// Metrics returns the record-keeping interface for the node.
+	Metrics() RemoteMetrics
+}
+
+// RemoteAssociation represents a connection to a remote node.
+type RemoteAssociation interface {
+	// Send delivers a message to the recipient on the remote node.
+	Send(recipient string, payload []byte, serializerId int32, manifest string) error
+
+	// SendWithSender delivers a message to the recipient with an explicit sender path.
+	SendWithSender(recipient, senderPath string, payload []byte, serializerId int32, manifest string) error
+}
+
+// RemoteSerializer defines the contract for serialization used by the Router.
+type RemoteSerializer interface {
+	ToBinary(obj any) ([]byte, error)
+}
+
+// RemoteMetrics records message-delivery statistics.
+type RemoteMetrics interface {
+	IncrementMessagesSent()
+	IncrementBytesSent(n int64)
+}
+
+// Router handles actor path resolution and message delivery for remoting.
+// It is the Go equivalent of Artery's outbound router.
+type Router struct {
+	provider RemoteMessagingProvider
+}
+
+// NewRouter creates a remoting Router backed by the given provider.
+func NewRouter(p RemoteMessagingProvider) *Router {
+	return &Router{provider: p}
+}
+
+// Well-known serializer IDs used in Artery frames.
+const (
+	// JSONSerializerID is the Artery serializer ID for the built-in
+	// JSONSerializer. Pekko occupies IDs 1–31; IDs ≥ 100 are safe for application use.
+	JSONSerializerID int32 = 9
+
+	// ArteryInternalSerializerID is the standard serializer ID for Artery control messages.
+	ArteryInternalSerializerID int32 = 17
+
+	// ClusterSerializerID is the Pekko ClusterMessageSerializer ID.
+	ClusterSerializerID int32 = 5
+)
+
+// AssociationState represents the state of a connection to a remote node.
+type AssociationState int
+
+const (
+	ASSOCIATED            AssociationState = 1
+	QUARANTINED           AssociationState = 2
+	INITIATED             AssociationState = 3
+	WAITING_FOR_HANDSHAKE AssociationState = 4
+)
+
+// AssociationRole indicates whether the connection was initiated locally or remotely.
+type AssociationRole int
+
+const (
+	INBOUND AssociationRole = iota
+	OUTBOUND
 )
 
 // RoutingLogic defines the strategy used to select a target routee for each
@@ -451,4 +542,171 @@ func (r *GroupRouter) PreStart() {
 		}
 		r.Routees = append(r.Routees, ref)
 	}
+}
+
+// ── Remoting logic ───────────────────────────────────────────────────────────
+
+// Send resolves the path and delivers the message.
+// It automatically detects the appropriate serializer and manifest based on the message type.
+func (r *Router) Send(ctx context.Context, path string, msg any) error {
+	ap, err := ParseActorPath(path)
+	if err != nil {
+		return err
+	}
+
+	// 1. Check if local
+	local := r.provider.LocalAddress()
+	if ap.Address.System == local.GetSystem() && ap.Address.Host == local.GetHostname() && uint32(ap.Address.Port) == local.GetPort() {
+		log.Printf("Router: local delivery to %s", ap.Path())
+		// In a real system, this would go to the local actor's mailbox.
+		return nil
+	}
+
+	// 2. Remote delivery
+	targetAddr := ap.Address.ToProto()
+
+	assoc, ok := r.provider.GetAssociationByHost(targetAddr.GetHostname(), targetAddr.GetPort())
+	if !ok {
+		log.Printf("Router: initiating new connection to %s:%d", targetAddr.GetHostname(), targetAddr.GetPort())
+		var err error
+		assoc, err = r.provider.DialRemote(ctx, targetAddr)
+		if err != nil {
+			return fmt.Errorf("failed to dial remote: %w", err)
+		}
+	}
+
+	// 3. Serialize and send
+	payload, serializerId, manifest, err := r.prepareMessage(msg)
+	if err != nil {
+		return err
+	}
+
+	if assoc == nil {
+		return fmt.Errorf("failed to dial remote: association is nil")
+	}
+
+	// Track user message metrics (cluster-internal messages are excluded).
+	if metrics := r.provider.Metrics(); metrics != nil &&
+		serializerId != ClusterSerializerID &&
+		serializerId != ArteryInternalSerializerID {
+		metrics.IncrementMessagesSent()
+		metrics.IncrementBytesSent(int64(len(payload)))
+	}
+
+	return assoc.Send(path, payload, serializerId, manifest)
+}
+
+// SendWithSender resolves the path, serializes msg, and delivers it to the remote
+// actor with senderPath set as the Artery sender (used by the Ask pattern so the
+// remote actor can reply to the temporary sender path).
+func (r *Router) SendWithSender(ctx context.Context, path string, senderPath string, msg any) error {
+	ap, err := ParseActorPath(path)
+	if err != nil {
+		return err
+	}
+
+	targetAddr := ap.Address.ToProto()
+	assoc, ok := r.provider.GetAssociationByHost(targetAddr.GetHostname(), targetAddr.GetPort())
+	if !ok {
+		var err error
+		assoc, err = r.provider.DialRemote(ctx, targetAddr)
+		if err != nil {
+			return fmt.Errorf("failed to dial remote: %w", err)
+		}
+	}
+
+	payload, serializerId, manifest, err := r.prepareMessage(msg)
+	if err != nil {
+		return err
+	}
+
+	if assoc == nil {
+		return fmt.Errorf("failed to dial remote: association is nil")
+	}
+
+	// SendWithSender is only used by the Ask pattern — always a user message.
+	if metrics := r.provider.Metrics(); metrics != nil {
+		metrics.IncrementMessagesSent()
+		metrics.IncrementBytesSent(int64(len(payload)))
+	}
+
+	return assoc.SendWithSender(path, senderPath, payload, serializerId, manifest)
+}
+
+func (r *Router) prepareMessage(msg any) ([]byte, int32, string, error) {
+	var payload []byte
+	var errSerialize error
+	var sid int32
+	var manifest string
+
+	msgType := reflect.TypeOf(msg)
+	switch msgType {
+	case reflect.TypeOf((*gproto_cluster.InitJoin)(nil)):
+		sid, manifest = ClusterSerializerID, "IJ"
+	case reflect.TypeOf((*gproto_cluster.InitJoinAck)(nil)):
+		sid, manifest = ClusterSerializerID, "IJA"
+	case reflect.TypeOf((*gproto_cluster.Join)(nil)):
+		sid, manifest = ClusterSerializerID, "J"
+	case reflect.TypeOf((*gproto_cluster.Welcome)(nil)):
+		sid, manifest = ClusterSerializerID, "W"
+	case reflect.TypeOf((*gproto_cluster.Heartbeat)(nil)):
+		sid, manifest = ClusterSerializerID, "HB"
+	case reflect.TypeOf((*gproto_cluster.HeartBeatResponse)(nil)):
+		sid, manifest = ClusterSerializerID, "HBR"
+	case reflect.TypeOf((*gproto_cluster.GossipStatus)(nil)):
+		sid, manifest = ClusterSerializerID, "GS"
+	case reflect.TypeOf((*gproto_cluster.GossipEnvelope)(nil)):
+		sid, manifest = ClusterSerializerID, "GE"
+	case reflect.TypeOf((*gproto_cluster.Address)(nil)):
+		sid, manifest = ClusterSerializerID, "L"
+	default:
+		if _, isProto := msg.(proto.Message); isProto {
+			sid = 2
+			manifest = msgType.String()
+		} else if _, isBytes := msg.([]byte); isBytes {
+			sid = 4
+			manifest = ""
+		} else {
+			sid = JSONSerializerID
+			manifest = msgType.String()
+		}
+	}
+
+	if manifest == "W" {
+		if pmsg, ok := msg.(proto.Message); ok {
+			raw, err := proto.Marshal(pmsg)
+			if err != nil {
+				return nil, 0, "", fmt.Errorf("marshal Welcome: %w", err)
+			}
+			payload, errSerialize = gzipCompress(raw)
+		}
+	} else if pmsg, ok := msg.(proto.Message); ok {
+		payload, errSerialize = proto.Marshal(pmsg)
+	} else if b, ok := msg.([]byte); ok {
+		payload = b
+	} else {
+		s, err := r.provider.Serializer(sid)
+		if err == nil {
+			payload, errSerialize = s.ToBinary(msg)
+		} else {
+			errSerialize = err
+		}
+	}
+
+	if errSerialize != nil {
+		return nil, 0, "", fmt.Errorf("serialize error: %w", errSerialize)
+	}
+	return payload, sid, manifest, nil
+}
+
+func gzipCompress(data []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	w := gzip.NewWriter(&buf)
+	if _, err := w.Write(data); err != nil {
+		return nil, err
+	}
+	if err := w.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }

@@ -23,6 +23,9 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
+	"google.golang.org/protobuf/proto"
 )
 
 // Ref is the interface satisfied by all actor references, both local and remote.
@@ -169,6 +172,16 @@ type Address struct {
 	Port     int    // TCP port, e.g. 2552
 }
 
+// ToProto converts the Address into a Protobuf Address.
+func (a Address) ToProto() *gproto_remote.Address {
+	return &gproto_remote.Address{
+		Protocol: proto.String(a.Protocol),
+		System:   proto.String(a.System),
+		Hostname: proto.String(a.Host),
+		Port:     proto.Uint32(uint32(a.Port)),
+	}
+}
+
 // String returns the address in URI form: "protocol://system@host:port".
 func (a Address) String() string {
 	return fmt.Sprintf("%s://%s@%s:%d", a.Protocol, a.System, a.Host, a.Port)
@@ -254,6 +267,19 @@ func (p ActorPath) String() string {
 		return p.Address.String() + "/"
 	}
 	return p.Address.String() + "/" + strings.Join(p.elements, "/")
+}
+
+// ToAddress converts the system address of this path into a Protobuf Address.
+func (p ActorPath) ToAddress() *gproto_remote.Address {
+	return p.Address.ToProto()
+}
+
+// ToUniqueAddress converts the parsed path into a Protobuf UniqueAddress (UID unknown).
+func (p ActorPath) ToUniqueAddress(uid uint64) *gproto_remote.UniqueAddress {
+	return &gproto_remote.UniqueAddress{
+		Address: p.ToAddress(),
+		Uid:     proto.Uint64(uid),
+	}
 }
 
 // Path returns the path part of the actor path, e.g. "/user/myActor".

@@ -167,6 +167,9 @@ type IncomingMessage struct {
 	// Prefer using BaseActor.Sender() inside Receive; this field is exposed
 	// for callbacks that receive IncomingMessage directly (e.g. OnMessage).
 	Sender ActorRef
+
+	// DeserializedMessage is the decoded object. If nil, only Payload is available.
+	DeserializedMessage any
 }
 
 // GekkaNode is the single entry point for the gekka library. It wires together
@@ -177,7 +180,7 @@ type IncomingMessage struct {
 type GekkaNode struct {
 	nm         *NodeManager
 	cm         *cluster.ClusterManager
-	router     *Router
+	router     *actor.Router
 	repl       *Replicator
 	server     *TcpServer
 	ctx        context.Context
@@ -229,7 +232,7 @@ func Spawn(cfg NodeConfig) (*GekkaNode, error) {
 	metrics := &NodeMetrics{}
 	nm := NewNodeManager(localAddr, uid)
 	nm.metrics = metrics
-	router := NewRouter(nm)
+	router := actor.NewRouter(nm)
 	cm := cluster.NewClusterManager(toClusterUniqueAddress(localUA), func(ctx context.Context, path string, msg any) error {
 		return router.Send(ctx, path, msg)
 	})
@@ -412,8 +415,8 @@ func (n *GekkaNode) handleArteryMessage(ctx context.Context, meta *ArteryMetadat
 
 	// If the recipient is a full URI, extract the path segment for local actor lookup.
 	if strings.HasPrefix(recipientPath, "pekko://") || strings.HasPrefix(recipientPath, "akka://") {
-		if ap, err := ParseActorPath(recipientPath); err == nil {
-			recipientPath = ap.Path
+		if ap, err := actor.ParseActorPath(recipientPath); err == nil {
+			recipientPath = ap.Path()
 		}
 	}
 
@@ -553,6 +556,39 @@ func (n *GekkaNode) Send(ctx context.Context, dst interface{}, msg interface{}) 
 //	defer cancel()
 //	reply, err := node.Ask(ctx, echoPath, []byte("ping"))
 func (n *GekkaNode) Ask(ctx context.Context, dst interface{}, msg interface{}) (*IncomingMessage, error) {
+	// Resolve destination path string.
+	var pathStr string
+	switch d := dst.(type) {
+	case string:
+		pathStr = d
+	case actor.ActorPath:
+		pathStr = d.String()
+	case fmt.Stringer:
+		pathStr = d.String()
+	default:
+		return nil, fmt.Errorf("gekka: Ask: unsupported destination type %T (want string, actor.ActorPath, or fmt.Stringer)", dst)
+	}
+
+	// Resolve target address to determine if local or remote
+	ap, err := actor.ParseActorPath(pathStr)
+	if err != nil {
+		return nil, fmt.Errorf("gekka: Ask: parse: %w", err)
+	}
+
+	localAddress := n.localAddr
+	isLocal := ap.Address.System == localAddress.GetSystem() && ap.Address.Host == localAddress.GetHostname() && uint32(ap.Address.Port) == localAddress.GetPort()
+
+	if isLocal {
+		localPath := ap.Path()
+		n.actorsMu.RLock()
+		actor, found := n.actors[localPath]
+		n.actorsMu.RUnlock()
+		if found {
+			// Ask local actor
+			return AskLocal(ctx, actor, msg)
+		}
+	}
+
 	// Build a unique temporary sender path.
 	var buf [8]byte
 	if _, err := rand.Read(buf[:]); err != nil {
@@ -568,17 +604,6 @@ func (n *GekkaNode) Ask(ctx context.Context, dst interface{}, msg interface{}) (
 	n.nm.registerPendingReply(tempPath, replyCh)
 	defer n.nm.unregisterPendingReply(tempPath)
 
-	// Resolve destination path string.
-	var pathStr string
-	switch d := dst.(type) {
-	case string:
-		pathStr = d
-	case fmt.Stringer:
-		pathStr = d.String()
-	default:
-		return nil, fmt.Errorf("gekka: Ask: unsupported destination type %T (want string, actor.ActorPath, or fmt.Stringer)", dst)
-	}
-
 	if err := n.router.SendWithSender(ctx, pathStr, tempPath, msg); err != nil {
 		return nil, fmt.Errorf("gekka: Ask: send: %w", err)
 	}
@@ -590,10 +615,43 @@ func (n *GekkaNode) Ask(ctx context.Context, dst interface{}, msg interface{}) (
 			Payload:       meta.Payload,
 			SerializerId:  meta.SerializerId,
 			Manifest:      string(meta.MessageManifest),
+			DeserializedMessage: meta.DeserializedMessage,
 		}, nil
 	case <-ctx.Done():
 		return nil, fmt.Errorf("gekka: Ask: %w", ctx.Err())
 	}
+}
+
+func AskLocal(ctx context.Context, a actor.Actor, msg any) (*IncomingMessage, error) {
+	replyCh := make(chan actor.Envelope, 1)
+	sender := &localReplyActor{replyCh: replyCh}
+
+	env := actor.Envelope{Payload: msg, Sender: sender}
+	select {
+	case a.Mailbox() <- env:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+		return nil, fmt.Errorf("local actor mailbox full")
+	}
+
+	select {
+	case replyEnv := <-replyCh:
+		return &IncomingMessage{
+			DeserializedMessage: replyEnv.Payload,
+		}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+type localReplyActor struct {
+	replyCh chan actor.Envelope
+}
+
+func (l *localReplyActor) Path() string { return "/temp/local-ask" }
+func (l *localReplyActor) Tell(msg any, sender ...actor.Ref) {
+	l.replyCh <- actor.Envelope{Payload: msg}
 }
 
 // Join sends an InitJoin to the seed node, starts heartbeats, and starts the
@@ -670,9 +728,10 @@ func (n *GekkaNode) StartHeartbeat() {
 // if the context is cancelled or the 30-second built-in timeout expires.
 func (n *GekkaNode) WaitForHandshake(ctx context.Context, host string, port uint32) error {
 	for {
-		if assoc, ok := n.router.getAssociationByHost(host, port); ok {
+		if assoc, ok := n.nm.GetAssociationByHost(host, port); ok {
+			gassoc := assoc.(*GekkaAssociation)
 			select {
-			case <-assoc.handshake:
+			case <-gassoc.handshake:
 				return nil
 			case <-ctx.Done():
 				return ctx.Err()

@@ -30,7 +30,7 @@ func NewPhiAccrualFailureDetector(threshold float64, windowSize int) *PhiAccrual
 		intervals:     make(map[string][]float64),
 		windowSize:    windowSize,
 		threshold:     threshold,
-		minStdDev:     100.0, // ms, standard min deviation to prevent tiny values
+		minStdDev:     500.0, // ms, standard min deviation to prevent tiny values
 	}
 }
 

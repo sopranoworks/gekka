@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
 	"sync"
 
@@ -183,6 +184,21 @@ func (s *localActorSystem) Send(ctx context.Context, dst interface{}, msg any) e
 		return nil
 	}
 	return fmt.Errorf("gekka: Send: actor not found: %s", pathStr)
+}
+
+// RegisterType implements ActorSystem.
+func (s *localActorSystem) RegisterType(manifest string, typ reflect.Type) {
+	// Local-only system doesn't use serialization for delivery.
+}
+
+// GetTypeByManifest implements ActorSystem.
+func (s *localActorSystem) GetTypeByManifest(manifest string) (reflect.Type, bool) {
+	return nil, false
+}
+
+// ActorSelection implements ActorSystem.
+func (s *localActorSystem) ActorSelection(path string) ActorSelection {
+	return ActorSelection{rawPath: path, sys: s}
 }
 
 // SendWithSender implements internalSystem.

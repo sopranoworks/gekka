@@ -10,6 +10,7 @@ package actor
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 )
 
@@ -18,6 +19,59 @@ import (
 type TypedActorRef[T any] struct {
 	ref Ref
 }
+
+func (r TypedActorRef[T]) MarshalJSON() ([]byte, error) {
+	if r.ref == nil {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(r.ref.Path())
+}
+
+func (r *TypedActorRef[T]) UnmarshalJSON(data []byte) error {
+	var path string
+	if err := json.Unmarshal(data, &path); err != nil {
+		return err
+	}
+	if path == "" {
+		r.ref = nil
+		return nil
+	}
+	// We can't easily resolve the path back to a Ref here without a system.
+	// However, we can use a placeholder Ref that only has a path.
+	// The sharding logic uses System().Resolve(path) anyway.
+	r.ref = &pathOnlyRef{path: path}
+	return nil
+}
+
+var globalMessagingProvider RemoteMessagingProvider
+
+// SetGlobalMessagingProvider sets the provider used by deserialized TypedActorRefs.
+func SetGlobalMessagingProvider(p RemoteMessagingProvider) {
+	globalMessagingProvider = p
+}
+
+type pathOnlyRef struct {
+	path string
+}
+
+func (r *pathOnlyRef) Tell(msg any, sender ...Ref) {
+	if globalMessagingProvider == nil {
+		return
+	}
+	router := NewRouter(globalMessagingProvider)
+	var senderPath string
+	if len(sender) > 0 && sender[0] != nil {
+		senderPath = sender[0].Path()
+	}
+
+	// Tell is fire-and-forget; use background context for remote delivery.
+	if senderPath != "" {
+		_ = router.SendWithSender(context.Background(), r.path, senderPath, msg)
+	} else {
+		_ = router.Send(context.Background(), r.path, msg)
+	}
+}
+func (r *pathOnlyRef) Path() string { return r.path }
 
 // NewTypedActorRef creates a new TypedActorRef wrapping the given untyped Ref.
 func NewTypedActorRef[T any](ref Ref) TypedActorRef[T] {

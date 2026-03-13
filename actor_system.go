@@ -11,6 +11,7 @@ package gekka
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sync/atomic"
 
 	"github.com/sopranoworks/gekka/actor"
@@ -91,6 +92,16 @@ type ActorSystem interface {
 
 	// Send delivers msg to the actor at dst without waiting for a reply.
 	Send(ctx context.Context, dst interface{}, msg any) error
+
+	// RegisterType binds a manifest string to a reflect.Type for serialization.
+	RegisterType(manifest string, typ reflect.Type)
+
+	// GetTypeByManifest returns the reflect.Type registered for manifest.
+	GetTypeByManifest(manifest string) (reflect.Type, bool)
+
+	// ActorSelection returns a handle to one or more actors, local or remote,
+	// identified by path.
+	ActorSelection(path string) ActorSelection
 }
 
 // internalSystem is an unexported interface used by ActorRef and ActorSelection

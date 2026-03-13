@@ -10,6 +10,7 @@ package actor
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -29,6 +30,13 @@ type EventSourcedBehavior[Command any, Event any, State any] struct {
 	SnapshotCriteria persistence.SnapshotSelectionCriteria
 	// SnapshotInterval: if > 0, save a snapshot every N events
 	SnapshotInterval uint64
+}
+
+// WithPersistenceID returns a copy of the behavior with a new persistence ID.
+func (b *EventSourcedBehavior[Command, Event, State]) WithPersistenceID(id string) *EventSourcedBehavior[Command, Event, State] {
+	newB := *b
+	newB.PersistenceID = id
+	return &newB
 }
 
 // Effect represents the result of processing a command.
@@ -128,24 +136,40 @@ func (c *persistentTypedContext[C, E, S]) Stop(target Ref) {
 	}
 }
 
+func (c *persistentTypedContext[C, E, S]) Passivate() {
+	if parent := c.actor.Parent(); parent != nil {
+		parent.Tell(Passivate{Entity: c.actor.Self()}, c.actor.Self())
+	}
+}
+
 func (p *persistentActor[Command, Event, State]) PreStart() {
 	p.recover()
 }
 
 func (p *persistentActor[Command, Event, State]) Receive(msg any) {
+	p.Log().Debug("PersistentActor received message", 
+		"msgType", fmt.Sprintf("%T", msg), 
+		"recovering", p.recovering)
+	
 	if p.recovering {
 		if cmd, ok := msg.(Command); ok {
+			p.Log().Debug("Stashing command during recovery")
 			p.stash = append(p.stash, cmd)
 		}
 		return
 	}
 
-	switch m := msg.(type) {
-	case Command:
-		effect := p.behavior.CommandHandler(p.tctx, p.state, m)
+	// Direct type assertion to Command
+	if cmd, ok := msg.(Command); ok {
+		p.Log().Debug("Handling persistent command")
+		effect := p.behavior.CommandHandler(p.tctx, p.state, cmd)
 		if effect != nil {
 			effect.apply(p)
 		}
+		return
+	}
+
+	switch msg.(type) {
 	case TerminatedMessage:
 		// Handle termination
 	}
@@ -200,6 +224,8 @@ func (p *persistentActor[Command, Event, State]) persist(events []Event, then fu
 	ctx := context.Background()
 	var reprs []persistence.PersistentRepr
 
+	p.Log().Debug("Persisting events", "count", len(events))
+
 	for _, event := range events {
 		p.seqNr++
 		reprs = append(reprs, persistence.PersistentRepr{
@@ -220,6 +246,7 @@ func (p *persistentActor[Command, Event, State]) persist(events []Event, then fu
 
 	// Apply events to state
 	for _, event := range events {
+		p.Log().Debug("Applying event to state", "seqNr", p.seqNr)
 		p.state = p.behavior.EventHandler(p.state, event)
 	}
 

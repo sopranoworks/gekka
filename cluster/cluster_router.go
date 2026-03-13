@@ -24,6 +24,7 @@ import (
 // Router defines the interface for message delivery, decoupled from the root package.
 type Router interface {
 	Send(ctx context.Context, path string, msg any) error
+	SendWithSender(ctx context.Context, path string, senderPath string, msg any) error
 }
 
 // ── Original ClusterRouter (System) ──────────────────────────────────────────

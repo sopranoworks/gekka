@@ -125,11 +125,9 @@ func (a *typedActor[T]) Receive(msg any) {
 				a.behavior = next
 			}
 		}
-	} else if _, ok := msg.(TerminatedMessage); ok {
-		// Lifecycle signals are handled here.
-		// In this phase, we don't pass them to the behavior yet as Behavior[T]
-		// only accepts T.
 	}
+	// TerminatedMessage and other lifecycle signals are silently ignored at this
+	// level — Behavior[T] only accepts T and cannot handle untyped signals.
 }
 
 // isStopped returns true if the behavior is the Stopped sentinel.

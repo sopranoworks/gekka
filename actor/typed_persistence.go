@@ -40,12 +40,9 @@ func (b *EventSourcedBehavior[Command, Event, State]) WithPersistenceID(id strin
 }
 
 // Effect represents the result of processing a command.
+// It is a sealed type — only Persist, PersistThen, and None create values of this type.
 type Effect[Event any, State any] interface {
-	apply(p internalPersistentActor[Event, State])
-}
-
-type internalPersistentActor[Event any, State any] interface {
-	persist(events []Event, then func(State))
+	isEffect()
 }
 
 type persistEffect[Event any, State any] struct {
@@ -53,9 +50,7 @@ type persistEffect[Event any, State any] struct {
 	then   func(State)
 }
 
-func (e *persistEffect[Event, State]) apply(p internalPersistentActor[Event, State]) {
-	p.persist(e.events, e.then)
-}
+func (*persistEffect[Event, State]) isEffect() {}
 
 // Persist creates an effect that persists one or more events.
 func Persist[Event any, State any](events ...Event) Effect[Event, State] {
@@ -69,7 +64,7 @@ func PersistThen[Event any, State any](then func(State), events ...Event) Effect
 
 type noneEffect[Event any, State any] struct{}
 
-func (e *noneEffect[Event, State]) apply(p internalPersistentActor[Event, State]) {}
+func (*noneEffect[Event, State]) isEffect() {}
 
 // None represents an effect that does nothing.
 func None[Event any, State any]() Effect[Event, State] {
@@ -163,9 +158,10 @@ func (p *persistentActor[Command, Event, State]) Receive(msg any) {
 	if cmd, ok := msg.(Command); ok {
 		p.Log().Debug("Handling persistent command")
 		effect := p.behavior.CommandHandler(p.tctx, p.state, cmd)
-		if effect != nil {
-			effect.apply(p)
+		if pe, ok := effect.(*persistEffect[Event, State]); ok {
+			p.persist(pe.events, pe.then)
 		}
+		// *noneEffect and nil are no-ops.
 		return
 	}
 

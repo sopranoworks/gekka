@@ -9,9 +9,11 @@
 package gekka
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"reflect"
+
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/sharding"
 )
@@ -131,7 +133,7 @@ func GetEntityRef[T any](sys ActorSystem, typeName string, entityId string) (sha
 	
 	// Resolve the region reference. 
 	// In a clustered environment, we can use ActorSelection to find it locally.
-	ref, err := sys.ActorSelection(regionPath).Resolve(nil)
+	ref, err := sys.ActorSelection(regionPath).Resolve(context.TODO())
 	if err != nil {
 		return sharding.EntityRef[T]{}, fmt.Errorf("sharding: failed to resolve region %q: %w", regionPath, err)
 	}

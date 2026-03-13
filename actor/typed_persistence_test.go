@@ -78,9 +78,11 @@ func TestPersistentActor(t *testing.T) {
 	// 3. Verify journal
 	ctx := context.Background()
 	count := 0
-	journal.ReplayMessages(ctx, "counter-1", 0, 10, 0, func(repr persistence.PersistentRepr) {
+	if err := journal.ReplayMessages(ctx, "counter-1", 0, 10, 0, func(repr persistence.PersistentRepr) {
 		count++
-	})
+	}); err != nil {
+		t.Fatalf("ReplayMessages: %v", err)
+	}
 	if count != 3 {
 		t.Errorf("expected 3 events in journal, got %d", count)
 	}

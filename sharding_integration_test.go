@@ -25,13 +25,13 @@ func TestClusterSharding_Rebalancing(t *testing.T) {
 
 	// 1. Start Node 1 (Seed)
 	node1, _ := NewCluster(ClusterConfig{SystemName: "ShardingTest", Port: 2551})
-	defer node1.Shutdown()
-	node1.Join("127.0.0.1", 2551)
+	defer func() { _ = node1.Shutdown() }()
+	_ = node1.Join("127.0.0.1", 2551)
 
 	// 2. Start Node 2
 	node2, _ := NewCluster(ClusterConfig{SystemName: "ShardingTest", Port: 0})
-	defer node2.Shutdown()
-	node2.Join("127.0.0.1", 2551)
+	defer func() { _ = node2.Shutdown() }()
+	_ = node2.Join("127.0.0.1", 2551)
 
 	// Wait for cluster to be Up
 	for {
@@ -98,9 +98,9 @@ func TestClusterSharding_Rebalancing(t *testing.T) {
 
 	// 6. Start Node 3 and verify rebalancing (indirectly)
 	node3, _ := NewCluster(ClusterConfig{SystemName: "ShardingTest", Port: 0})
-	defer node3.Shutdown()
+	defer func() { _ = node3.Shutdown() }()
 	node3.RegisterType("string", reflect.TypeOf(""))
-	node3.Join("127.0.0.1", 2551)
+	_ = node3.Join("127.0.0.1", 2551)
 	
 	_, err = StartSharding(node3, "TestEntity", behaviorFactory, extractId, settings)
 	if err != nil {

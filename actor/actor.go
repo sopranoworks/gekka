@@ -117,6 +117,12 @@ type TerminatedMessage interface {
 	TerminatedActor() Ref
 }
 
+// Passivate is a signal sent to the parent actor (e.g. Shard) to request
+// graceful termination of the sender.
+type Passivate struct {
+	Entity Ref
+}
+
 // ActorContext is the subset of the ActorSystem API that is safe to use from
 // within actor code (i.e. from the actor package) without introducing an import
 // cycle.

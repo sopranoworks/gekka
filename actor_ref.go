@@ -59,6 +59,11 @@ func (t Terminated) TerminatedActor() actor.Ref { return t.Actor }
 // Path returns the full actor-path URI for this reference.
 func (r ActorRef) Path() string { return r.fullPath }
 
+// System returns the underlying ActorSystem.
+func (r ActorRef) System() ActorSystem {
+	return r.sys
+}
+
 // String implements fmt.Stringer so an ActorRef can be passed directly to
 // node.Send, node.Ask, or any API that accepts a path string.
 func (r ActorRef) String() string { return r.fullPath }

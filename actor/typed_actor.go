@@ -44,6 +44,9 @@ type TypedContext[T any] interface {
 
 	// Stop gracefully terminates the target actor.
 	Stop(target Ref)
+
+	// Passivate requests the parent actor to stop this actor.
+	Passivate()
 }
 
 // typedContext is the internal implementation of TypedContext[T].
@@ -80,6 +83,12 @@ func (c *typedContext[T]) Stop(target Ref) {
 		Stop(target Ref)
 	}); ok {
 		sys.Stop(target)
+	}
+}
+
+func (c *typedContext[T]) Passivate() {
+	if parent := c.actor.Parent(); parent != nil {
+		parent.Tell(Passivate{Entity: c.actor.Self()}, c.actor.Self())
 	}
 }
 

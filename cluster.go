@@ -234,6 +234,7 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	metrics := &core.NodeMetrics{}
 	nm := core.NewNodeManager(localAddr, uid)
 	nm.NodeMetrics = metrics
+	actor.SetGlobalMessagingProvider(nm)
 	router := actor.NewRouter(nm)
 	cm := gcluster.NewClusterManager(core.ToClusterUniqueAddress(localUA), func(ctx context.Context, path string, msg any) error {
 		return router.Send(ctx, path, msg)
@@ -353,6 +354,11 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 		cluster.clusterWatcherRef = watcherRef
 	}
 
+	// Start the gossip loop immediately. It will be a no-op until
+	// members join, but it ensures leader actions (like transitioning
+	// Joining -> Up) happen as soon as possible.
+	go cluster.cm.StartGossipLoop(cluster.ctx)
+
 	return cluster, nil
 }
 
@@ -371,6 +377,11 @@ func (a *clusterWatcherActor) Receive(msg any) {
 // OS-assigned port when ClusterConfig.Port was 0.
 func (c *Cluster) Addr() net.Addr {
 	return c.server.Addr()
+}
+
+// IsUp returns true if the cluster state contains at least one Up member.
+func (c *Cluster) IsUp() bool {
+	return c.cm.IsUp()
 }
 
 // Port returns the TCP port this node is bound to. When ClusterConfig.Port was 0
@@ -426,11 +437,12 @@ func (c *Cluster) handleArteryMessage(ctx context.Context, meta *core.ArteryMeta
 	}
 
 	incoming := &IncomingMessage{
-		RecipientPath: recipientPath,
-		Payload:       meta.Payload,
-		SerializerId:  meta.SerializerId,
-		Manifest:      string(meta.MessageManifest),
-		Sender:        senderRef,
+		RecipientPath:       recipientPath,
+		Payload:             meta.Payload,
+		SerializerId:        meta.SerializerId,
+		Manifest:            string(meta.MessageManifest),
+		Sender:              senderRef,
+		DeserializedMessage: meta.DeserializedMessage,
 	}
 
 	// Try registered actors first; deliver via actor.Envelope so that
@@ -439,7 +451,11 @@ func (c *Cluster) handleArteryMessage(ctx context.Context, meta *core.ArteryMeta
 	a, found := c.actors[recipientPath]
 	c.actorsMu.RUnlock()
 	if found {
-		env := actor.Envelope{Payload: incoming, Sender: senderRef}
+		payload := any(incoming)
+		if incoming.DeserializedMessage != nil {
+			payload = incoming.DeserializedMessage
+		}
+		env := actor.Envelope{Payload: payload, Sender: senderRef}
 		select {
 		case a.Mailbox() <- env:
 		default:
@@ -679,7 +695,6 @@ func (c *Cluster) Join(seedHost string, seedPort uint32) error {
 		return err
 	}
 	c.cm.StartHeartbeat(core.ToClusterAddress(c.seedAddr))
-	go c.cm.StartGossipLoop(c.ctx)
 	return nil
 }
 
@@ -842,6 +857,12 @@ func (c *Cluster) RegisterSerializer(s core.Serializer) {
 func (c *Cluster) RegisterType(manifest string, typ reflect.Type) {
 	c.nm.SerializerRegistry.RegisterManifest(manifest, typ)
 }
+
+// GetTypeByManifest returns the reflect.Type registered for manifest.
+func (c *Cluster) GetTypeByManifest(manifest string) (reflect.Type, bool) {
+	return c.nm.SerializerRegistry.GetTypeByManifest(manifest)
+}
+
 
 // Shutdown stops the TCP server and cancels all background goroutines.
 // It is safe to call multiple times.

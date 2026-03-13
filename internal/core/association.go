@@ -475,20 +475,33 @@ func (assoc *GekkaAssociation) handleUserMessage(meta *ArteryMetadata) error {
 		assoc.nodeMgr.NodeMetrics.BytesReceived.Add(int64(len(meta.Payload)))
 	}
 
-	// Route to a pending Ask call if the recipient path is registered.
-	if meta.Recipient != nil {
-		recipientPath := meta.Recipient.GetPath()
-		if recipientPath != "" && assoc.nodeMgr.routePendingReply(recipientPath, meta) {
-			return nil
-		}
-	}
-
 	if assoc.nodeMgr.SerializerRegistry != nil {
 		obj, err := assoc.nodeMgr.SerializerRegistry.DeserializePayload(meta.SerializerId, string(meta.MessageManifest), meta.Payload)
 		if err == nil {
 			meta.DeserializedMessage = obj
 		} else {
 			log.Printf("Dispatcher: failed to deserialize payload (id=%d, manifest=%s): %v", meta.SerializerId, meta.MessageManifest, err)
+		}
+	}
+
+	// Route to a pending Ask call if the recipient path is registered.
+	if meta.Recipient != nil {
+		recipientPath := meta.Recipient.GetPath()
+		// If the recipient is a full URI, extract the path segment for pending-reply lookup.
+		if strings.Contains(recipientPath, "://") {
+			if idx := strings.LastIndex(recipientPath, "/"); idx != -1 {
+				if recipientPath[idx:] != "/" { // e.g. "pekko://System@host:port/user/foo" -> "/user/foo"
+					// Find the start of the path part (after the authority)
+					// URI format: scheme://authority/path
+					// authority is System@host:port
+					if firstSlash := strings.Index(recipientPath[strings.Index(recipientPath, "://")+3:], "/"); firstSlash != -1 {
+						recipientPath = recipientPath[strings.Index(recipientPath, "://")+3+firstSlash:]
+					}
+				}
+			}
+		}
+		if recipientPath != "" && assoc.nodeMgr.routePendingReply(recipientPath, meta) {
+			return nil
 		}
 	}
 

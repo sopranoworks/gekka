@@ -65,6 +65,9 @@ func TestCheckConvergence(t *testing.T) {
 	// No-op router
 	router := func(ctx context.Context, path string, msg any) error { return nil }
 	cm := NewClusterManager(local, router)
+	cm.State.Overview = &gproto_cluster.GossipOverview{
+		Seen: []int32{0},
+	}
 
 	// Default state has only self. Convergence should be true.
 	if !cm.CheckConvergence() {

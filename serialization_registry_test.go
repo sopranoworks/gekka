@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
-	"github.com/sopranoworks/gekka/internal/core"
 )
 
 // ── Dummy JSON Serializer (ID 100) ────────────────────────────────────────────
@@ -66,7 +65,7 @@ func (d *dummyJSONSerializer) FromBinary(data []byte, manifest string) (interfac
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 func TestSerializationRegistry_RegisterAndRetrieve(t *testing.T) {
-	reg := core.NewSerializationRegistry()
+	reg := NewSerializationRegistry()
 
 	// Verify default serializers are present.
 	if _, err := reg.GetSerializer(2); err != nil {
@@ -94,7 +93,7 @@ func TestSerializationRegistry_RegisterAndRetrieve(t *testing.T) {
 }
 
 func TestSerializationRegistry_ByteArraySerializer_RoundTrip(t *testing.T) {
-	reg := core.NewSerializationRegistry()
+	reg := NewSerializationRegistry()
 
 	original := []byte("raw artery payload \x00\x01\x02")
 
@@ -123,7 +122,7 @@ func TestSerializationRegistry_ByteArraySerializer_RoundTrip(t *testing.T) {
 }
 
 func TestSerializationRegistry_ByteArraySerializer_NonBytesError(t *testing.T) {
-	reg := core.NewSerializationRegistry()
+	reg := NewSerializationRegistry()
 	s, _ := reg.GetSerializer(4)
 	if _, err := s.ToBinary("not a []byte"); err == nil {
 		t.Error("expected error when ToBinary receives a string, got nil")
@@ -131,7 +130,7 @@ func TestSerializationRegistry_ByteArraySerializer_NonBytesError(t *testing.T) {
 }
 
 func TestSerializationRegistry_CustomJSON_ToBinary(t *testing.T) {
-	reg := core.NewSerializationRegistry()
+	reg := NewSerializationRegistry()
 	reg.RegisterSerializer(100, &dummyJSONSerializer{})
 
 	event := orderPlaced{OrderID: "ORD-1", Product: "widget", Quantity: 3, Price: 9.99}
@@ -156,7 +155,7 @@ func TestSerializationRegistry_CustomJSON_ToBinary(t *testing.T) {
 }
 
 func TestSerializationRegistry_CustomJSON_RoundTrip_OrderPlaced(t *testing.T) {
-	reg := core.NewSerializationRegistry()
+	reg := NewSerializationRegistry()
 	reg.RegisterSerializer(100, &dummyJSONSerializer{})
 
 	original := orderPlaced{OrderID: "ORD-42", Product: "gadget", Quantity: 7, Price: 19.95}
@@ -181,7 +180,7 @@ func TestSerializationRegistry_CustomJSON_RoundTrip_OrderPlaced(t *testing.T) {
 }
 
 func TestSerializationRegistry_CustomJSON_RoundTrip_UserCreated(t *testing.T) {
-	reg := core.NewSerializationRegistry()
+	reg := NewSerializationRegistry()
 	reg.RegisterSerializer(100, &dummyJSONSerializer{})
 
 	original := userCreated{UserID: "u-99", Email: "test@example.com"}
@@ -206,7 +205,7 @@ func TestSerializationRegistry_CustomJSON_RoundTrip_UserCreated(t *testing.T) {
 }
 
 func TestSerializationRegistry_CustomJSON_UnknownManifest(t *testing.T) {
-	reg := core.NewSerializationRegistry()
+	reg := NewSerializationRegistry()
 	reg.RegisterSerializer(100, &dummyJSONSerializer{})
 
 	data := []byte(`{"foo":"bar"}`)
@@ -217,7 +216,7 @@ func TestSerializationRegistry_CustomJSON_UnknownManifest(t *testing.T) {
 
 func TestSerializationRegistry_OverrideBuiltin(t *testing.T) {
 	// RegisterSerializer with an explicit id must allow overriding built-ins.
-	reg := core.NewSerializationRegistry()
+	reg := NewSerializationRegistry()
 
 	// Override ID 4 with a custom implementation.
 	reg.RegisterSerializer(4, &dummyJSONSerializer{})
@@ -234,7 +233,7 @@ func TestSerializationRegistry_OverrideBuiltin(t *testing.T) {
 func TestSerializationRegistry_ManifestDispatch(t *testing.T) {
 	// Verify that the same serializer correctly dispatches two different
 	// manifest strings to two different Go structs.
-	reg := core.NewSerializationRegistry()
+	reg := NewSerializationRegistry()
 	reg.RegisterSerializer(100, &dummyJSONSerializer{})
 
 	s, _ := reg.GetSerializer(100)

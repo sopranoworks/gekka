@@ -12,6 +12,7 @@ libraryDependencies ++= Seq(
   "org.apache.pekko" %% "pekko-cluster" % PekkoVersion,
   "org.apache.pekko" %% "pekko-cluster-tools" % PekkoVersion,
   "org.apache.pekko" %% "pekko-cluster-sharding" % PekkoVersion,
+  "org.apache.pekko" %% "pekko-distributed-data" % PekkoVersion,
   "org.apache.pekko" %% "pekko-protobuf-v3" % PekkoVersion,
   "org.apache.pekko" %% "pekko-serialization-jackson" % PekkoVersion,
   "com.typesafe" % "config" % "1.4.3"

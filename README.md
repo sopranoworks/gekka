@@ -1,4 +1,4 @@
-# gekka &nbsp;[![Version](https://img.shields.io/badge/version-0.5.0--dev-blue)](https://github.com/sopranoworks/gekka) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Go CI](https://github.com/sopranoworks/gekka/actions/workflows/go.yml/badge.svg)](https://github.com/sopranoworks/gekka/actions/workflows/go.yml)
+# gekka &nbsp;[![Version](https://img.shields.io/badge/version-0.5.0-blue)](https://github.com/sopranoworks/gekka) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Go CI](https://github.com/sopranoworks/gekka/actions/workflows/go.yml/badge.svg)](https://github.com/sopranoworks/gekka/actions/workflows/go.yml)
 
 **Pekko/Akka Dual-Compatibility**
 
@@ -6,15 +6,15 @@
 
 Powered by its own high-performance HOCON engine, [`gekka-config`](https://github.com/sopranoworks/gekka-config), `gekka` supports both automatic cluster formation and direct node-to-node communication using the standard `pekko://` and `akka://` URI schemes.
 
-> [!WARNING]
-> **Experimental API**: The Typed Actor support (Go Generics) is currently in development and may undergo breaking changes. Use with caution in production.
+
+
 
 ## Key Features
 
 - **Hierarchical Actor System** — Parent-child relationships with reliable lifecycle management.
 - **Self-Healing Supervision** — Automatic fault tolerance with `OneForOneStrategy` (Restart, Resume, Stop, Escalate).
 - **Pekko/Akka Remote & Cluster Compatibility** — Interop with Scala/Java actors via Artery TCP.
-- **Type-safe Actors using Go Generics (Experimental)** — Compile-time safety for message passing.
+- **Type-safe Actors using Go Generics** — Compile-time safety for message passing.
 - **Actor Persistence & Event Sourcing** — State recovery via event journaling and snapshotting.
 - **Location Transparency** — Identical `Tell` and `Ask` semantics for local and remote actors.
 - **Location Transparent Senders** — Reply to originators without manual address tracking.
@@ -139,7 +139,7 @@ func main() {
 
 ## Quick Start 4: Typed Actors (Go Generics)
 
-Gekka v0.5.0-dev introduces an experimental **Typed Actor API** leveraging Go Generics for compile-time type safety.
+Gekka v0.5.0 introduces the **Typed Actor API** leveraging Go Generics for compile-time type safety.
 
 ```go
 package main
@@ -222,11 +222,11 @@ See the [persistence example](examples/persistence/main.go) for a full implement
 - **HOCON-ready**: Configuration can be passed programmatically via `ClusterConfig` or loaded directly from standard `application.conf` files.
 
 
-## New in v0.5.0-dev: Typed Actors & Persistence (Experimental)
+## New in v0.5.0: Typed Actors, Persistence & Cluster Sharding
 
-v0.5.0-dev introduces **Typed Actors** and **Actor Persistence**, providing a type-safe way to define and interact with actors, and a way to persist state using Event Sourcing.
+v0.5.0 introduces **Typed Actors** and **Actor Persistence**, providing a type-safe way to define and interact with actors, and a way to persist state using Event Sourcing.
 
-v0.5.0-dev also includes **Pool** and **Group Routers** that can be configured directly in HOCON:
+v0.5.0 also includes **Pool** and **Group Routers** that can be configured directly in HOCON:
 
 ```hocon
 gekka.actor.deployment {

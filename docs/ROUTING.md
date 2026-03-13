@@ -1,6 +1,6 @@
-# Gekka Routing Features (v0.4.0)
+# Gekka Routing Features (v0.5.0)
 
-Gekka v0.4.0 introduces robust config-driven routing, allowing you to distribute messages across multiple actors (routees) using various strategies.
+Gekka provides robust config-driven routing, allowing you to distribute messages across multiple actors (routees) using various strategies. Routers were introduced in v0.4.0 and are stable as of v0.5.0.
 
 ## Overview
 

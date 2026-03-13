@@ -29,5 +29,19 @@ const (
 	ProtobufSerializerID = core.ProtobufSerializerID
 	RawSerializerID      = core.RawSerializerID
 	ClusterSerializerID  = core.ClusterSerializerID
-	JSONSerializerID     = core.JSONSerializerID
+
+	// JSONSerializerID is used internally for CRDT gossip between pure-Go nodes.
+	// NOTE: Pekko assigns ID 9 to DistributedPubSubMessageSerializer. When enabling
+	// pub-sub interoperability with Pekko, register a PubSubSerializer at this ID
+	// (see cluster/pubsub.PubSubSerializerID), which supersedes the JSON serializer.
+	JSONSerializerID = core.JSONSerializerID
+
+	// PubSubSerializerID is Pekko's serializer ID for DistributedPubSubMessageSerializer.
+	// Manifests: "A"=Status (GZIP), "B"=Delta (GZIP), "C"=Send, "D"=SendToAll,
+	// "E"=Publish, "F"=SendToOneSubscriber.
+	// Source: cluster-tools/src/main/resources/reference.conf
+	//   serialization-identifiers {
+	//     "org.apache.pekko.cluster.pubsub.protobuf.DistributedPubSubMessageSerializer" = 9
+	//   }
+	PubSubSerializerID = int32(9)
 )

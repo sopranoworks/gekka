@@ -185,15 +185,36 @@ func (cm *ClusterManager) ProceedJoin(ctx context.Context, actorPath string) err
 	return cm.Router(ctx, actorPath, join)
 }
 
-// LeaveCluster sends a Leave message.
+// LeaveCluster sends a Leave message and immediately updates the local gossip
+// state to Leaving so that cluster event subscribers observe MemberLeft even
+// when the remote leader is unreachable (e.g. during an SBR DownSelf decision).
 func (cm *ClusterManager) LeaveCluster() error {
-	cm.Mu.RLock()
+	// Update own gossip entry to Leaving before broadcasting so that local
+	// subscribers see MemberLeft regardless of whether remote nodes are alive.
+	cm.Mu.Lock()
+	localHost := cm.LocalAddress.GetAddress().GetHostname()
+	localPort := cm.LocalAddress.GetAddress().GetPort()
+	for _, m := range cm.State.Members {
+		a := cm.State.AllAddresses[m.GetAddressIndex()].GetAddress()
+		if a.GetHostname() == localHost && a.GetPort() == localPort {
+			if m.GetStatus() != gproto_cluster.MemberStatus_Leaving &&
+				m.GetStatus() != gproto_cluster.MemberStatus_Exiting &&
+				m.GetStatus() != gproto_cluster.MemberStatus_Removed {
+				m.Status = gproto_cluster.MemberStatus_Leaving.Enum()
+				cm.incrementVersionWithLockHeld()
+			}
+			break
+		}
+	}
 	state := cm.State
-	cm.Mu.RUnlock()
+	cm.Mu.Unlock()
+
+	// Publish MemberLeft event for self (the gossip entry is now Leaving).
+	cm.publishEvent(MemberLeft{Member: memberAddressFromUA(cm.LocalAddress)})
 
 	leave := toClusterAddress(cm.LocalAddress.Address)
 
-	// Send to all known members or just the leader/seed. For simplicity, broadcast to all UP members.
+	// Broadcast Leave to all currently Up/WeaklyUp members.
 	var lastErr error
 	for _, m := range state.GetMembers() {
 		if m.GetStatus() == gproto_cluster.MemberStatus_Up || m.GetStatus() == gproto_cluster.MemberStatus_WeaklyUp {

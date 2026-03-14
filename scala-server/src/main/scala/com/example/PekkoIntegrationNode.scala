@@ -190,10 +190,13 @@ object ReliableProducerBehavior {
  * departing member drives through the expected status transitions.
  *
  * Signals printed:
- *   PEKKO_MEMBER_UP:<host>:<port>       — member joined with status Up
- *   PEKKO_MEMBER_LEFT:<host>:<port>     — member is Leaving
- *   PEKKO_MEMBER_EXITED:<host>:<port>   — member transitioned to Exiting
- *   PEKKO_MEMBER_REMOVED:<host>:<port>  — member fully removed
+ *   PEKKO_MEMBER_UP:<host>:<port>           — member joined with status Up
+ *   PEKKO_MEMBER_LEFT:<host>:<port>         — member is Leaving
+ *   PEKKO_MEMBER_EXITED:<host>:<port>       — member transitioned to Exiting
+ *   PEKKO_MEMBER_REMOVED:<host>:<port>      — member fully removed
+ *   PEKKO_MEMBER_UNREACHABLE:<host>:<port>  — member detected as unreachable
+ *   PEKKO_MEMBER_REACHABLE:<host>:<port>    — unreachable member came back
+ *   PEKKO_MEMBER_DOWN:<host>:<port>         — SBR marked member as Down
  */
 class ClusterEventListener extends Actor with ActorLogging {
   val cluster = PekkoCluster(context.system)
@@ -201,7 +204,9 @@ class ClusterEventListener extends Actor with ActorLogging {
   override def preStart(): Unit =
     cluster.subscribe(self, initialStateMode = InitialStateAsEvents,
       classOf[MemberUp], classOf[MemberLeft],
-      classOf[MemberExited], classOf[MemberRemoved])
+      classOf[MemberExited], classOf[MemberRemoved],
+      classOf[UnreachableMember], classOf[ReachableMember],
+      classOf[MemberDowned])
 
   override def postStop(): Unit = cluster.unsubscribe(self)
 
@@ -221,6 +226,18 @@ class ClusterEventListener extends Actor with ActorLogging {
     case MemberRemoved(member, _) =>
       val addr = member.address
       println(s"PEKKO_MEMBER_REMOVED:${addr.host.getOrElse("")}:${addr.port.getOrElse(0)}")
+      Console.flush()
+    case UnreachableMember(member) =>
+      val addr = member.address
+      println(s"PEKKO_MEMBER_UNREACHABLE:${addr.host.getOrElse("")}:${addr.port.getOrElse(0)}")
+      Console.flush()
+    case ReachableMember(member) =>
+      val addr = member.address
+      println(s"PEKKO_MEMBER_REACHABLE:${addr.host.getOrElse("")}:${addr.port.getOrElse(0)}")
+      Console.flush()
+    case MemberDowned(member) =>
+      val addr = member.address
+      println(s"PEKKO_MEMBER_DOWN:${addr.host.getOrElse("")}:${addr.port.getOrElse(0)}")
       Console.flush()
   }
 }

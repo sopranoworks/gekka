@@ -437,6 +437,27 @@ func (c *Cluster) Addr() net.Addr {
 	return c.server.Addr()
 }
 
+// MuteNode silently drops all outbound frames to and all inbound frames from
+// the cluster node at host:port. Use this in tests to simulate a network
+// partition without stopping the process.
+func (c *Cluster) MuteNode(host string, port int) {
+	c.nm.MuteNode(host, uint32(port))
+}
+
+// UnmuteNode reverses a previous MuteNode call. Safe to call even if the node
+// was never muted.
+func (c *Cluster) UnmuteNode(host string, port int) {
+	c.nm.UnmuteNode(host, uint32(port))
+}
+
+// SubscribeChannel creates a buffered channel subscription for cluster domain
+// events. The caller must call Cancel on the returned subscription to avoid
+// resource leaks. When types is non-empty only those event types are delivered;
+// omit types to receive all ClusterDomainEvents.
+func (c *Cluster) SubscribeChannel(types ...reflect.Type) *gcluster.ChanSubscription {
+	return c.cm.SubscribeChannel(types...)
+}
+
 // IsUp returns true if the cluster state contains at least one Up member.
 func (c *Cluster) IsUp() bool {
 	return c.cm.IsUp()

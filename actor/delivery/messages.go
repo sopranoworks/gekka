@@ -87,7 +87,7 @@ type SequencedMessage struct {
 }
 
 func (*SequencedMessage) ArterySerializerID() int32 { return ReliableDeliverySerializerID }
-func (*SequencedMessage) ArteryManifest() string     { return ManifestSequencedMessage }
+func (*SequencedMessage) ArteryManifest() string    { return ManifestSequencedMessage }
 
 // AckMsg is sent from ConsumerController to ProducerController to confirm
 // delivery of a sequence number.  Manifest "b".
@@ -96,7 +96,7 @@ type AckMsg struct {
 }
 
 func (*AckMsg) ArterySerializerID() int32 { return ReliableDeliverySerializerID }
-func (*AckMsg) ArteryManifest() string     { return ManifestAck }
+func (*AckMsg) ArteryManifest() string    { return ManifestAck }
 
 // Request is sent from ConsumerController to ProducerController to request
 // delivery of messages up to requestUpToSeqNr.  Manifest "c".
@@ -108,7 +108,7 @@ type Request struct {
 }
 
 func (*Request) ArterySerializerID() int32 { return ReliableDeliverySerializerID }
-func (*Request) ArteryManifest() string     { return ManifestRequest }
+func (*Request) ArteryManifest() string    { return ManifestRequest }
 
 // Resend is sent from ConsumerController to ProducerController to request
 // re-transmission starting from fromSeqNr.  Manifest "d".
@@ -117,7 +117,7 @@ type Resend struct {
 }
 
 func (*Resend) ArterySerializerID() int32 { return ReliableDeliverySerializerID }
-func (*Resend) ArteryManifest() string     { return ManifestResend }
+func (*Resend) ArteryManifest() string    { return ManifestResend }
 
 // RegisterConsumer is sent from ConsumerController to ProducerController to
 // register the consumer so the producer knows where to send messages.
@@ -127,7 +127,7 @@ type RegisterConsumer struct {
 }
 
 func (*RegisterConsumer) ArterySerializerID() int32 { return ReliableDeliverySerializerID }
-func (*RegisterConsumer) ArteryManifest() string     { return ManifestRegisterConsumer }
+func (*RegisterConsumer) ArteryManifest() string    { return ManifestRegisterConsumer }
 
 // ---------------------------------------------------------------------------
 // Application-level types (not sent over the wire)

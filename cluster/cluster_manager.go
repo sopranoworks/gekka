@@ -445,7 +445,7 @@ func (cm *ClusterManager) handleWelcome(payload []byte, manifest string) error {
 		return err
 	}
 	log.Printf("Cluster: welcomed by %v", welcome.GetFrom())
-	
+
 	err = cm.processIncomingGossip(welcome.Gossip, welcome.From)
 	if err != nil {
 		return err
@@ -972,7 +972,7 @@ func (cm *ClusterManager) performLeaderActions() {
 			cm.publishEvent(evt)
 		}
 	} else {
-		log.Printf("Leader is %s:%d-%d, I am %s:%d-%d", 
+		log.Printf("Leader is %s:%d-%d, I am %s:%d-%d",
 			leader.GetAddress().GetHostname(), leader.GetAddress().GetPort(), leader.GetUid(),
 			cm.LocalAddress.GetAddress().GetHostname(), cm.LocalAddress.GetAddress().GetPort(), cm.LocalAddress.GetUid())
 	}
@@ -1146,7 +1146,7 @@ var (
 
 func (cm *ClusterManager) StartHeartbeat(target *gproto_cluster.Address) {
 	key := fmt.Sprintf("%s:%d", target.GetHostname(), target.GetPort())
-	
+
 	heartbeatTasksMu.Lock()
 	if _, ok := heartbeatTasks[key]; ok {
 		heartbeatTasksMu.Unlock()

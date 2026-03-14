@@ -142,10 +142,10 @@ func (p *persistentActor[Command, Event, State]) PreStart() {
 }
 
 func (p *persistentActor[Command, Event, State]) Receive(msg any) {
-	p.Log().Debug("PersistentActor received message", 
-		"msgType", fmt.Sprintf("%T", msg), 
+	p.Log().Debug("PersistentActor received message",
+		"msgType", fmt.Sprintf("%T", msg),
 		"recovering", p.recovering)
-	
+
 	if p.recovering {
 		if cmd, ok := msg.(Command); ok {
 			p.Log().Debug("Stashing command during recovery")

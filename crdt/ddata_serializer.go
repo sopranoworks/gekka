@@ -18,7 +18,7 @@
 //
 //  1. UniqueAddress is encoded as:
 //     - field 1 (len-delim): Address { hostname(f1 string), port(f2 varint) }
-//       — NOTE: no system or protocol in the DData Address!
+//     — NOTE: no system or protocol in the DData Address!
 //     - field 2 (fixed32 LE): uid low 32 bits
 //     - field 3 (fixed32 LE): uid high 32 bits
 //
@@ -476,7 +476,7 @@ func (s *DDataSerializer) extractDataEnvelope(deltaBytes []byte, de *DDDeltaEntr
 			if nn <= 0 {
 				return fmt.Errorf("delta: bad envelope at %d", i)
 			}
-			i += nn
+			_ = nn
 			return s.decodeDataEnvelope(envBytes, de)
 		default:
 			nn, err := skipProtoFieldDD(deltaBytes, i, wireType)

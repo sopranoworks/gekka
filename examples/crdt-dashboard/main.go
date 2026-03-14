@@ -15,9 +15,9 @@
 //
 // Topology:
 //
-//      Go dashboard-1 ─┐
-//      Go dashboard-2 ─┼──► Scala GoReplicator (/user/goReplicator) ─► merge + reply
-//      Go dashboard-N ─┘
+//	Go dashboard-1 ─┐
+//	Go dashboard-2 ─┼──► Scala GoReplicator (/user/goReplicator) ─► merge + reply
+//	Go dashboard-N ─┘
 //
 // Run alongside a Pekko GoReplicator server — see README.md.
 package main

@@ -72,7 +72,7 @@ func TestActorRef_Tell_Local(t *testing.T) {
 
 	ref := ActorRef{
 		fullPath: "pekko://Sys@127.0.0.1:2552/user/echo",
-		sys:     node,
+		sys:      node,
 		local:    a,
 	}
 	ref.Tell("hello")

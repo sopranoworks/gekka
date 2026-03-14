@@ -26,8 +26,8 @@ const ShardingSerializerID = int32(13)
 // All messages are plain Protobuf (no GZIP) except CoordinatorState ("AA").
 const (
 	// Coordinator internal event manifests
-	CoordinatorStateManifest    = "AA"
-	ShardHomeAllocatedManifest  = "AF"
+	CoordinatorStateManifest     = "AA"
+	ShardHomeAllocatedManifest   = "AF"
 	ShardHomeDeallocatedManifest = "AG"
 
 	// Coordinator protocol message manifests

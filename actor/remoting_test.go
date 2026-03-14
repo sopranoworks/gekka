@@ -99,7 +99,7 @@ func TestRouter_Buffering_Migrated(t *testing.T) {
 	if _, err := io.ReadFull(client, frameBytes); err != nil {
 		t.Fatalf("failed to read frame body: %v", err)
 	}
-	// Note: We'd need ParseArteryFrame here for full verification, 
+	// Note: We'd need ParseArteryFrame here for full verification,
 	// but just checking if the payload is present is enough for this migration check.
 }
 
@@ -117,7 +117,7 @@ type GekkaAssociationMock struct {
 func (a *GekkaAssociationMock) Send(path string, payload []byte, serializerID int32, manifest string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	
+
 	// Simplify: just buffer everything if not associated
 	if a.state != ASSOCIATED {
 		a.pending = append(a.pending, payload)

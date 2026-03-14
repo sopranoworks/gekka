@@ -52,15 +52,15 @@ func StartSharding[Command any, Event any, State any](
 			return sharding.NewShardCoordinator(strategy)
 		},
 	}
-	
+
 	var coordinatorRef actor.Ref
 	cluster, ok := sys.(*Cluster)
 	if ok {
 		// Spawn coordinator if we are the oldest
 		ua := cluster.cm.OldestNode(settings.Role)
 		localUA := cluster.cm.GetLocalAddress()
-		
-		if ua != nil && localUA != nil && ua.GetAddress().GetHostname() == localUA.GetAddress().GetHostname() && 
+
+		if ua != nil && localUA != nil && ua.GetAddress().GetHostname() == localUA.GetAddress().GetHostname() &&
 			ua.GetAddress().GetPort() == localUA.GetAddress().GetPort() &&
 			ua.GetUid() == localUA.GetUid() {
 			_, _ = sys.ActorOf(coordinatorProps, typeName+"Coordinator")
@@ -94,7 +94,7 @@ func StartSharding[Command any, Event any, State any](
 		if !ok {
 			return nil, fmt.Errorf("sharding: no type registered for manifest %q", manifest)
 		}
-		
+
 		var ptr reflect.Value
 		if typ.Kind() == reflect.Ptr {
 			ptr = reflect.New(typ.Elem())
@@ -130,14 +130,14 @@ func StartSharding[Command any, Event any, State any](
 func GetEntityRef[T any](sys ActorSystem, typeName string, entityId string) (sharding.EntityRef[T], error) {
 	// ShardRegion is registered at typeName+"Region"
 	regionPath := "/user/" + typeName + "Region"
-	
-	// Resolve the region reference. 
+
+	// Resolve the region reference.
 	// In a clustered environment, we can use ActorSelection to find it locally.
 	ref, err := sys.ActorSelection(regionPath).Resolve(context.TODO())
 	if err != nil {
 		return sharding.EntityRef[T]{}, fmt.Errorf("sharding: failed to resolve region %q: %w", regionPath, err)
 	}
-	
+
 	return sharding.EntityRef[T]{
 		EntityId: entityId,
 		Region:   ref,

@@ -14,13 +14,13 @@ import (
 
 // LeastShardAllocationStrategy allocates shards to the region with the fewest shards.
 type LeastShardAllocationStrategy struct {
-	rebalanceThreshold int
+	rebalanceThreshold       int
 	maxSimultaneousRebalance int
 }
 
 func NewLeastShardAllocationStrategy(threshold, maxSimultaneous int) *LeastShardAllocationStrategy {
 	return &LeastShardAllocationStrategy{
-		rebalanceThreshold: threshold,
+		rebalanceThreshold:       threshold,
 		maxSimultaneousRebalance: maxSimultaneous,
 	}
 }

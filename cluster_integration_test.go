@@ -192,7 +192,7 @@ func TestCluster_LeaderElection(t *testing.T) {
 				if err != nil {
 					return
 				}
-			go func() { _ = nm.ProcessConnection(context.Background(), conn, actor.INBOUND, nil, 0) }()
+				go func() { _ = nm.ProcessConnection(context.Background(), conn, actor.INBOUND, nil, 0) }()
 			}
 		}()
 		return cm, nm, ln

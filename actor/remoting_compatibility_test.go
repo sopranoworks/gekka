@@ -94,9 +94,9 @@ func TestSystemMessage_Terminated_BinaryRoundTrip(t *testing.T) {
 	original := &gproto_remote.SystemMessage{
 		Type: gproto_remote.SystemMessage_DEATHWATCH_NOTIFICATION.Enum(),
 		DwNotificationData: &gproto_remote.DeathWatchNotificationData{
-			Actor:               actor,
-			ExistenceConfirmed:  proto.Bool(true),
-			AddressTerminated:   proto.Bool(false),
+			Actor:              actor,
+			ExistenceConfirmed: proto.Bool(true),
+			AddressTerminated:  proto.Bool(false),
 		},
 	}
 

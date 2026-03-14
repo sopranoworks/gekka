@@ -37,7 +37,7 @@ type typedMockRef struct {
 	path string
 }
 
-func (r *typedMockRef) Path() string { return r.path }
+func (r *typedMockRef) Path() string                { return r.path }
 func (r *typedMockRef) Tell(msg any, sender ...Ref) {}
 
 func TestSpawnTyped(t *testing.T) {
@@ -180,7 +180,7 @@ func TestAsk(t *testing.T) {
 		msg.replyTo.Tell("pong")
 		return Same[pingMsg]()
 	}
-	
+
 	target := &mockTypedRef[pingMsg]{
 		behavior: behavior,
 	}
@@ -259,7 +259,7 @@ func BenchmarkTypedAsk(b *testing.B) {
 		msg.replyTo.Tell("pong")
 		return Same[pingMsg]()
 	}
-	
+
 	target := &mockTypedRef[pingMsg]{
 		behavior: behavior,
 	}

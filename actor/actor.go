@@ -167,6 +167,11 @@ type ActorContext interface {
 	// Used by GroupRouter.PreStart to convert routee path strings into live
 	// Refs without importing the gekka package.
 	Resolve(path string) (Ref, error)
+
+	// Stop stops the actor identified by ref. The actor's PostStop lifecycle
+	// hook is called after all queued messages have been processed.
+	// It is a no-op when ref does not point to a local actor.
+	Stop(ref Ref)
 }
 
 // Address identifies an actor system on the network.

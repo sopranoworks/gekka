@@ -67,6 +67,10 @@ func (c *testActorContext) Resolve(path string) (Ref, error) {
 	return &testNodeRef{path: path}, nil
 }
 
+func (c *testActorContext) Stop(ref Ref) {
+	// no-op in test context
+}
+
 func (c *testActorContext) watchCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()

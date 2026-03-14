@@ -7,14 +7,20 @@
  */
 package com.example
 
-import scala.concurrent.{Await, Promise}
+import scala.concurrent.{Await, ExecutionContext, Future, Promise}
 import scala.concurrent.duration._
 
 import com.typesafe.config.ConfigFactory
-import org.apache.pekko.actor.{Actor, ActorLogging, ActorSystem, PoisonPill, Props}
+import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, ActorSystem, PoisonPill, Props}
+import org.apache.pekko.actor.typed.delivery.{ConsumerController, ProducerController}
+import org.apache.pekko.actor.typed.scaladsl.Behaviors
+import org.apache.pekko.actor.typed.scaladsl.adapter._
+import org.apache.pekko.actor.typed.{ActorRef => TypedActorRef, Behavior}
 import org.apache.pekko.cluster.pubsub.DistributedPubSub
 import org.apache.pekko.cluster.pubsub.DistributedPubSubMediator.{Subscribe, SubscribeAck}
 import org.apache.pekko.cluster.singleton.{ClusterSingletonManager, ClusterSingletonManagerSettings}
+import org.apache.pekko.pattern.ask
+import org.apache.pekko.util.Timeout
 
 /**
  * IntegrationEchoActor — echoes any received byte-array or string message back to the sender
@@ -105,6 +111,77 @@ class IntegrationSingleton extends Actor with ActorLogging {
   }
 }
 
+// ─── Reliable Delivery ─────────────────────────────────────────────────────
+
+/**
+ * ReliableConsumerBehavior — typed actor wrapping Pekko's ConsumerController.
+ *
+ * Signals printed:
+ *   PEKKO_DELIVERY_CONSUMER_READY       — consumer connected to ConsumerController
+ *   PEKKO_DELIVERY_RECEIVED:<text>      — a message was delivered and confirmed
+ */
+object ReliableConsumerBehavior {
+  sealed trait Command
+  final case class Start(
+      cc: TypedActorRef[ConsumerController.Command[Array[Byte]]]
+  ) extends Command
+  private final case class Wrapped(
+      d: ConsumerController.Delivery[Array[Byte]]
+  ) extends Command
+
+  def apply(): Behavior[Command] = Behaviors.setup { ctx =>
+    val adapter =
+      ctx.messageAdapter[ConsumerController.Delivery[Array[Byte]]](Wrapped(_))
+    Behaviors.receiveMessage {
+      case Start(cc) =>
+        cc ! ConsumerController.Start(adapter)
+        println("PEKKO_DELIVERY_CONSUMER_READY")
+        Console.flush()
+        Behaviors.same
+      case Wrapped(d) =>
+        val text = new String(d.message, "UTF-8")
+        println(s"PEKKO_DELIVERY_RECEIVED:$text")
+        Console.flush()
+        d.confirmTo ! ConsumerController.Confirmed
+        Behaviors.same
+    }
+  }
+}
+
+/**
+ * ReliableProducerBehavior — typed actor wrapping Pekko's ProducerController.
+ * Sends up to totalToSend messages, one per RequestNext signal.
+ *
+ * Signals printed:
+ *   PEKKO_DELIVERY_PRODUCER_NEXT:<n>    — message n handed to ProducerController
+ */
+object ReliableProducerBehavior {
+  sealed trait Command
+  private final case class Wrapped(
+      rn: ProducerController.RequestNext[Array[Byte]]
+  ) extends Command
+
+  def apply(totalToSend: Int): Behavior[Command] =
+    Behaviors.setup { ctx =>
+      val adapter =
+        ctx.messageAdapter[ProducerController.RequestNext[Array[Byte]]](Wrapped(_))
+      // Tell the ProducerController where to send RequestNext signals.
+      // This happens by the ProducerController calling Start(adapter) from the outside.
+      var sent = 0
+      Behaviors.receiveMessage {
+        case Wrapped(rn) =>
+          if (sent < totalToSend) {
+            val msg = s"scala-delivery-$sent".getBytes("UTF-8")
+            rn.sendNextTo ! msg
+            println(s"PEKKO_DELIVERY_PRODUCER_NEXT:$sent")
+            Console.flush()
+            sent += 1
+          }
+          Behaviors.same
+      }
+    }
+}
+
 /**
  * PekkoIntegrationNode — single entry point for the E2E integration test harness.
  *
@@ -179,6 +256,43 @@ object PekkoIntegrationNode extends App {
   )
 
   Await.result(subscriptionReady.future, 30.seconds)
+
+  implicit val ec: ExecutionContext = system.dispatcher
+
+  // ── Reliable Delivery: Scala consumer / Go producer (Go→Scala direction) ─
+  // Scala spawns a ConsumerController at /user/scalaConsumer and registers it
+  // with Go's ProducerController at /user/goProducer on 127.0.0.1:2553.
+  // The ConsumerController sends RegisterConsumer to Go, which then sends
+  // SequencedMessages here.
+  val scalaConsumerBehavior =
+    system.spawn(ReliableConsumerBehavior(), "scalaConsumerBehavior")
+
+  val scalaConsumerController =
+    system.spawn(ConsumerController[Array[Byte]](), "scalaConsumer")
+
+  scalaConsumerBehavior ! ReliableConsumerBehavior.Start(scalaConsumerController)
+
+  // Resolve Go's ProducerController and connect when available.
+  val goProducerPath = "pekko://GekkaSystem@127.0.0.1:2553/user/goProducer"
+  system.actorSelection(goProducerPath).resolveOne(20.seconds).foreach { classicRef =>
+    val typedGoProducer = classicRef.toTyped[ProducerController.Command[Array[Byte]]]
+    scalaConsumerController ! ConsumerController.RegisterToProducerController(
+      typedGoProducer
+    )
+  }
+
+  // ── Reliable Delivery: Scala producer / Go consumer (Scala→Go direction) ─
+  // Scala spawns a ProducerController at /user/scalaProducer.
+  // Go's ConsumerController (at /user/goConsumer) sends RegisterConsumer here,
+  // which triggers Scala to start sending SequencedMessages to Go.
+  val scalaProducerBehavior =
+    system.spawn(ReliableProducerBehavior(10), "scalaProducerBehavior")
+
+  val scalaProducerController = system.spawn(
+    ProducerController[Array[Byte]]("scala-producer", durableQueueBehavior = None),
+    "scalaProducer"
+  )
+  scalaProducerController ! ProducerController.Start(scalaProducerBehavior)
 
   // Everything is initialized — signal the Go test harness.
   println("PEKKO_NODE_READY")

@@ -11,9 +11,11 @@ lazy val root = (project in file("."))
     scalaVersion := "2.13.12",
     libraryDependencies ++= Seq(
       "org.apache.pekko" %% "pekko-actor"                 % PekkoVersion,
+      "org.apache.pekko" %% "pekko-actor-typed"           % PekkoVersion,
       "org.apache.pekko" %% "pekko-remote"                % PekkoVersion,
       "org.apache.pekko" %% "pekko-cluster"               % PekkoVersion,
       "org.apache.pekko" %% "pekko-cluster-tools"         % PekkoVersion,
+      "org.apache.pekko" %% "pekko-cluster-typed"         % PekkoVersion,
       "org.apache.pekko" %% "pekko-cluster-sharding"      % PekkoVersion,
       "org.apache.pekko" %% "pekko-distributed-data"      % PekkoVersion,
       "org.apache.pekko" %% "pekko-protobuf-v3"           % PekkoVersion,

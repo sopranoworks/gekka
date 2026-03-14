@@ -40,6 +40,11 @@ type scalaSignals struct {
 	singletonStarted  chan struct{} // closed when "PEKKO_SINGLETON_STARTED" is seen
 	pubsubReceived    chan string   // carries the payload of every "PEKKO_PUBSUB_RECEIVED:<msg>" line
 	singletonReceived chan string   // carries the payload of every "PEKKO_SINGLETON_RECEIVED:<msg>" line
+
+	// Reliable Delivery signals.
+	deliveryConsumerReady chan struct{} // closed when "PEKKO_DELIVERY_CONSUMER_READY" is seen
+	deliveryReceived      chan string   // carries the payload of every "PEKKO_DELIVERY_RECEIVED:<msg>" line
+	deliveryProducerNext  chan int      // carries the seq index of every "PEKKO_DELIVERY_PRODUCER_NEXT:<n>" line
 }
 
 // startPekkoIntegrationNode launches com.example.PekkoIntegrationNode via sbt,
@@ -69,16 +74,20 @@ func startPekkoIntegrationNode(t *testing.T, ctx context.Context) *scalaSignals 
 	})
 
 	sig := &scalaSignals{
-		ready:             make(chan struct{}),
-		singletonStarted:  make(chan struct{}),
-		pubsubReceived:    make(chan string, 16),
-		singletonReceived: make(chan string, 16),
+		ready:                 make(chan struct{}),
+		singletonStarted:      make(chan struct{}),
+		pubsubReceived:        make(chan string, 16),
+		singletonReceived:     make(chan string, 16),
+		deliveryConsumerReady: make(chan struct{}),
+		deliveryReceived:      make(chan string, 32),
+		deliveryProducerNext:  make(chan int, 32),
 	}
 
 	go func() {
 		scanner := bufio.NewScanner(stdout)
 		readyOnce := false
 		singletonStartedOnce := false
+		deliveryConsumerReadyOnce := false
 		for scanner.Scan() {
 			line := scanner.Text()
 			fmt.Printf("[SCALA] %s\n", line)
@@ -103,6 +112,27 @@ func startPekkoIntegrationNode(t *testing.T, ctx context.Context) *scalaSignals 
 				select {
 				case sig.singletonReceived <- payload:
 				default:
+				}
+			}
+			if !deliveryConsumerReadyOnce && strings.Contains(line, "PEKKO_DELIVERY_CONSUMER_READY") {
+				deliveryConsumerReadyOnce = true
+				close(sig.deliveryConsumerReady)
+			}
+			if strings.HasPrefix(line, "PEKKO_DELIVERY_RECEIVED:") {
+				payload := strings.TrimPrefix(line, "PEKKO_DELIVERY_RECEIVED:")
+				select {
+				case sig.deliveryReceived <- payload:
+				default:
+				}
+			}
+			if strings.HasPrefix(line, "PEKKO_DELIVERY_PRODUCER_NEXT:") {
+				rest := strings.TrimPrefix(line, "PEKKO_DELIVERY_PRODUCER_NEXT:")
+				var n int
+				if _, err := fmt.Sscanf(rest, "%d", &n); err == nil {
+					select {
+					case sig.deliveryProducerNext <- n:
+					default:
+					}
 				}
 			}
 		}

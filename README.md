@@ -28,6 +28,7 @@ Powered by its own high-performance HOCON engine, [`gekka-config`](https://githu
 - **High-Performance Remoting** — Binary-compatible Artery TCP with transport-level heartbeats.
 - **Observability** — Built-in monitoring with `/healthz` and `/metrics` (JSON/Prometheus).
 - **Cluster Singletons** — Full distributed lifecycle management with automatic failover between Go and Pekko/Akka nodes.
+- **Reliable Delivery** — At-least-once delivery between Go and Scala/Pekko actors (Serializer ID 36, manifests "a"–"e").
 
 ## Quick Start 1: Local Actor System
 
@@ -295,6 +296,68 @@ func main() {
 ```
 
 
+## Quick Start 9: Reliable Delivery (At-Least-Once)
+
+`gekka` implements Pekko's **Reliable Delivery** protocol (Serializer ID 36) for guaranteed at-least-once delivery between Go and Scala actors. The `actor/delivery` package provides `ProducerController` and `ConsumerController` typed actors.
+
+```go
+package main
+
+import (
+	"github.com/sopranoworks/gekka"
+	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/actor/delivery"
+)
+
+// App-level consumer actor that receives Delivery messages.
+type MyConsumer struct{ actor.BaseActor }
+
+func (a *MyConsumer) Receive(msg any) {
+	if d, ok := msg.(delivery.Delivery); ok {
+		// Process the message, then confirm.
+		d.ConfirmTo.Tell(delivery.Confirmed{SeqNr: d.SeqNr}, a.Self())
+	}
+}
+
+func main() {
+	node, _ := gekka.NewCluster(gekka.ClusterConfig{...})
+	defer node.Shutdown()
+
+	// Register the Reliable Delivery serializer (must be done before any
+	// delivery messages are sent or received).
+	node.RegisterSerializer(delivery.NewSerializer())
+
+	// ── Go → Scala direction ──────────────────────────────────────────────
+	// Spawn a ProducerController targeting Scala's ConsumerController.
+	scalaConsumerPath := "pekko://MySystem@scala-host:2552/user/scalaConsumer"
+	pc := delivery.NewProducerController("my-producer", scalaConsumerPath, delivery.DefaultWindowSize)
+	producerRef, _ := node.System.ActorOf(gekka.Props{New: func() actor.Actor {
+		return actor.NewTypedActor[any](pc)
+	}}, "goProducer")
+
+	// Enqueue messages — they are delivered reliably, with flow control.
+	producerRef.Tell(delivery.SendMessage{
+		Payload:      []byte("hello from Go"),
+		SerializerID: 4, // ByteArraySerializer
+	})
+
+	// ── Scala → Go direction ──────────────────────────────────────────────
+	// Spawn a ConsumerController and connect it to Scala's ProducerController.
+	appRef, _ := node.System.ActorOf(gekka.Props{New: func() actor.Actor {
+		return &MyConsumer{BaseActor: actor.NewBaseActor()}
+	}}, "goConsumerApp")
+
+	cc := delivery.NewConsumerController(appRef, delivery.DefaultWindowSize)
+	ccRef, _ := node.System.ActorOf(gekka.Props{New: func() actor.Actor {
+		return actor.NewTypedActor[any](cc)
+	}}, "goConsumer")
+
+	// Initiate registration with the remote ProducerController.
+	scalaProducerPath := "pekko://MySystem@scala-host:2552/user/scalaProducer"
+	ccRef.Tell(delivery.ConsumerStart{ProducerPath: scalaProducerPath})
+}
+```
+
 ## Artery TLS
 
 `gekka` supports secure transport via Artery TLS, maintaining binary compatibility with Pekko/Akka's `tls-tcp` transport. While JVM nodes typically use JKS keystores, `gekka` leverages Go's `crypto/tls` to provide a modern, PEM-based alternative for managing certificates and private keys.
@@ -323,9 +386,10 @@ Support for mutual TLS (mTLS) is built-in, ensuring that only authenticated node
 - **HOCON-ready**: Configuration can be passed programmatically via `ClusterConfig` or loaded directly from standard `application.conf` files.
 
 
-## New in v0.6.0: Distributed Pub/Sub & CRDTs
+## New in v0.6.0: Distributed Pub/Sub, CRDTs & Reliable Delivery
 
-v0.6.0 introduces **Distributed Pub/Sub** with GZIP compression support and **Distributed Data** (CRDTs) for decentralized state management. This release also features:
+v0.6.0 introduces **Distributed Pub/Sub** with GZIP compression support, **Distributed Data** (CRDTs) for decentralized state management, and **Reliable Delivery** for at-least-once messaging with Scala/Pekko. This release also features:
+- **Reliable Delivery** — `actor/delivery` package providing `ProducerController` and `ConsumerController` with Pekko-compatible wire format (Serializer ID 36).
 - **Cluster Singleton Manager** — Automatic failover to the oldest node and interoperability with Scala-hosted singletons.
 - **Artery TLS Transport** — Secure, encrypted cluster communication using PEM-based certificates.
 - **Verified Interoperability** — Extensive E2E test suite against Scala Pekko/Akka processes, now including secure transport.

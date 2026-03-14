@@ -60,6 +60,17 @@ type RemoteSerializer interface {
 	ToBinary(obj any) ([]byte, error)
 }
 
+// RemoteSerializable may be implemented by message types that need a specific
+// Artery serializer ID and manifest string for network transport.  Router.Send
+// checks this interface before falling back to the default (JSON) serializer.
+//
+// Custom serializers must be registered with the node before messages of the
+// corresponding types are sent or received.
+type RemoteSerializable interface {
+	ArterySerializerID() int32
+	ArteryManifest() string
+}
+
 // RemoteMetrics records message-delivery statistics.
 type RemoteMetrics interface {
 	IncrementMessagesSent()
@@ -660,7 +671,11 @@ func (r *Router) prepareMessage(msg any) ([]byte, int32, string, error) {
 	case reflect.TypeOf((*gproto_cluster.Address)(nil)):
 		sid, manifest = ClusterSerializerID, "L"
 	default:
-		if _, isProto := msg.(proto.Message); isProto {
+		if rs, ok := msg.(RemoteSerializable); ok {
+			// Custom message type with its own serializer ID and manifest.
+			sid = rs.ArterySerializerID()
+			manifest = rs.ArteryManifest()
+		} else if _, isProto := msg.(proto.Message); isProto {
 			sid = 2
 			manifest = msgType.String()
 		} else if _, isBytes := msg.([]byte); isBytes {

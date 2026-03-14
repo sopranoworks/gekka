@@ -161,6 +161,13 @@ type ClusterConfig struct {
 	//	    remember-entities = on
 	//	}
 	Sharding ShardingConfig
+
+	// DataCenter identifies which data center this node belongs to.
+	// Corresponds to pekko.cluster.multi-data-center.self-data-center.
+	// Defaults to "default" when unset or when parsed from HOCON without the key.
+	//
+	//	pekko.cluster.multi-data-center.self-data-center = "us-east"
+	DataCenter string
 }
 
 // SBRConfig is a re-export of cluster.SBRConfig for use in ClusterConfig.
@@ -299,6 +306,7 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	cm.Router = func(ctx context.Context, path string, msg any) error {
 		return router.Send(ctx, path, msg)
 	}
+	cm.SetLocalDataCenter(cfg.DataCenter)
 	nm.SetClusterManager(cm)
 
 	ctx, cancel := context.WithCancel(context.Background())

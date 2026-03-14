@@ -45,8 +45,13 @@ Enhancing the `cluster/sharding` package:
 - **Entity Passivation**: Automatic offloading of idle entities via `PassivationIdleTimeout` + self-initiated `Passivate`. ✅
 - **Remember Entities**: Persisting `EntityStarted`/`EntityStopped` events so entities are re-spawned after Shard restart. ✅
 
-#### Multi-DC Cluster Support
-Enhanced awareness and routing for multi-datacenter cluster topologies.
+#### Multi-DC Cluster Support ✅
+Enhanced awareness and routing for multi-datacenter cluster topologies:
+- `DataCenter` field in `ClusterConfig` / HOCON `pekko.cluster.multi-data-center.self-data-center`. ✅
+- DC encoded as `"dc-<name>"` role in gossip (Pekko wire-compatible). ✅
+- `OldestNodeInDC`, `MembersInDataCenter`, `IsInDataCenter` on `ClusterManager`. ✅
+- DC-scoped `ClusterSingletonManager.WithDataCenter` and `ClusterSingletonProxy.WithDataCenter`. ✅
+- `DataCenter` / `IsLocalDC` fields in `ShardingSettings` / `ShardSettings` for DC-aware allocation. ✅
 
 ---
 

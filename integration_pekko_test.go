@@ -745,3 +745,127 @@ func TestShardingPassivationInterop(t *testing.T) {
 
 	log.Println("[GO] TestShardingPassivationInterop complete.")
 }
+
+// TestMultiDCInterop verifies that multi-data-center awareness is correctly
+// propagated through the cluster gossip when Go nodes join a Pekko seed.
+//
+// The test:
+//  1. Joins a Go node configured as "dc-go-east" to the Scala seed (port 2552).
+//  2. Joins a second Go node configured as "dc-go-west" to the same seed.
+//  3. After both are Up, verifies:
+//     a. OldestNodeInDC("go-east") returns nodeA's address.
+//     b. OldestNodeInDC("go-west") returns nodeB's address.
+//     c. MembersInDataCenter("go-east") contains exactly nodeA.
+//     d. IsInDataCenter for each node returns expected values.
+func TestMultiDCInterop(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	// ── 1. Start Scala seed ────────────────────────────────────────────────
+	sig := startPekkoIntegrationNode(t, ctx)
+	select {
+	case <-sig.ready:
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for Scala node to be ready")
+	}
+	log.Println("[GO] Scala seed node ready.")
+
+	// ── 2. Start Go nodeA — dc-go-east ────────────────────────────────────
+	nodeA, err := NewCluster(ClusterConfig{
+		SystemName: "GekkaSystem",
+		Host:       "127.0.0.1",
+		Port:       2556,
+		DataCenter: "go-east",
+	})
+	if err != nil {
+		t.Fatalf("NewCluster nodeA: %v", err)
+	}
+	t.Cleanup(func() { _ = nodeA.Shutdown() })
+
+	if err := nodeA.Join("127.0.0.1", 2552); err != nil {
+		t.Fatalf("nodeA.Join: %v", err)
+	}
+	if err := nodeA.WaitForHandshake(ctx, "127.0.0.1", 2552); err != nil {
+		t.Fatalf("nodeA.WaitForHandshake: %v", err)
+	}
+	log.Println("[GO] nodeA (go-east) handshake established.")
+
+	// ── 3. Start Go nodeB — dc-go-west ────────────────────────────────────
+	nodeB, err := NewCluster(ClusterConfig{
+		SystemName: "GekkaSystem",
+		Host:       "127.0.0.1",
+		Port:       0, // ephemeral
+		DataCenter: "go-west",
+	})
+	if err != nil {
+		t.Fatalf("NewCluster nodeB: %v", err)
+	}
+	t.Cleanup(func() { _ = nodeB.Shutdown() })
+
+	if err := nodeB.Join("127.0.0.1", 2552); err != nil {
+		t.Fatalf("nodeB.Join: %v", err)
+	}
+	if err := nodeB.WaitForHandshake(ctx, "127.0.0.1", 2552); err != nil {
+		t.Fatalf("nodeB.WaitForHandshake: %v", err)
+	}
+	log.Println("[GO] nodeB (go-west) handshake established.")
+
+	// ── 4. Wait for both Go nodes to be Up ────────────────────────────────
+	waitUp := func(n *Cluster, label string) {
+		t.Helper()
+		deadline := time.Now().Add(30 * time.Second)
+		for time.Now().Before(deadline) {
+			if n.IsUp() {
+				return
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		t.Fatalf("%s did not reach Up status within 30s", label)
+	}
+	waitUp(nodeA, "nodeA")
+	waitUp(nodeB, "nodeB")
+	log.Println("[GO] Both Go nodes are Up.")
+
+	// ── 5. Verify DC-scoped membership from nodeA's perspective ───────────
+	t.Run("OldestInGoEast", func(t *testing.T) {
+		ua := nodeA.cm.OldestNodeInDC("go-east", "")
+		if ua == nil {
+			t.Fatal("OldestNodeInDC(go-east) returned nil")
+		}
+		if ua.GetAddress().GetHostname() != "127.0.0.1" || ua.GetAddress().GetPort() != 2556 {
+			t.Errorf("OldestNodeInDC(go-east) = %s:%d, want 127.0.0.1:2556",
+				ua.GetAddress().GetHostname(), ua.GetAddress().GetPort())
+		}
+		log.Printf("[GO] OldestNodeInDC(go-east) = %s:%d — PASS",
+			ua.GetAddress().GetHostname(), ua.GetAddress().GetPort())
+	})
+
+	t.Run("MembersInGoEast", func(t *testing.T) {
+		members := nodeA.cm.MembersInDataCenter("go-east")
+		if len(members) == 0 {
+			t.Fatal("MembersInDataCenter(go-east) returned empty slice")
+		}
+		found := false
+		for _, ma := range members {
+			if ma.Host == "127.0.0.1" && ma.Port == 2556 {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("nodeA (127.0.0.1:2556) not found in MembersInDataCenter(go-east): %+v", members)
+		}
+		log.Printf("[GO] MembersInDataCenter(go-east) = %v — PASS", members)
+	})
+
+	t.Run("IsInDataCenter", func(t *testing.T) {
+		if !nodeA.cm.IsInDataCenter("127.0.0.1", 2556, "go-east") {
+			t.Error("IsInDataCenter(127.0.0.1, 2556, go-east) should be true for nodeA")
+		}
+		if nodeA.cm.IsInDataCenter("127.0.0.1", 2556, "go-west") {
+			t.Error("IsInDataCenter(127.0.0.1, 2556, go-west) should be false for nodeA")
+		}
+		log.Println("[GO] IsInDataCenter checks — PASS")
+	})
+
+	log.Println("[GO] TestMultiDCInterop complete.")
+}

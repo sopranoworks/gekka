@@ -293,6 +293,44 @@ pekko.cluster.seed-nodes = []
 	}
 }
 
+func TestHOCON_MultiDCConfig(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery.canonical {
+    hostname = "10.0.0.1"
+    port = 2552
+  }
+  cluster {
+    seed-nodes = ["pekko://ClusterSystem@10.0.0.1:2552"]
+    multi-data-center {
+      self-data-center = "us-east"
+    }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.DataCenter != "us-east" {
+		t.Errorf("DataCenter = %q, want us-east", cfg.DataCenter)
+	}
+}
+
+func TestHOCON_MultiDCConfig_Default(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko.remote.artery.canonical.hostname = "127.0.0.1"
+pekko.remote.artery.canonical.port = 2552
+pekko.cluster.seed-nodes = []
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	// When the key is absent, the default is "default".
+	if cfg.DataCenter != "default" {
+		t.Errorf("DataCenter = %q, want default", cfg.DataCenter)
+	}
+}
+
 func TestJoinSeeds_NoSeeds(t *testing.T) {
 	node, err := NewCluster(ClusterConfig{Host: "127.0.0.1", Port: 0})
 	if err != nil {

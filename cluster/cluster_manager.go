@@ -68,6 +68,11 @@ type ClusterManager struct {
 	// Protocol is the configured actor-path scheme ("pekko" or "akka").
 	Protocol string
 
+	// LocalDataCenter is this node's data-center label.
+	// Pekko encodes it as a role with prefix "dc-" (e.g. "dc-us-east").
+	// Defaults to "default" when empty.
+	LocalDataCenter string
+
 	// Router is a function for sending messages, avoiding a cycle with the root package.
 	Router func(ctx context.Context, path string, msg any) error
 
@@ -175,11 +180,62 @@ func (cm *ClusterManager) JoinCluster(ctx context.Context, seedHost string, seed
 	return cm.Router(ctx, path, initJoin)
 }
 
+// SetLocalDataCenter configures the data-center label for this node.
+// Must be called before JoinCluster. It also upserts the "dc-<dc>" role into
+// the local member's initial gossip state so that OldestNodeInDC works even
+// before a Welcome is received.
+func (cm *ClusterManager) SetLocalDataCenter(dc string) {
+	if dc == "" {
+		dc = "default"
+	}
+	cm.LocalDataCenter = dc
+
+	// Update the initial member entry (index 0 = local) with the DC role.
+	dcRole := "dc-" + dc
+	cm.Mu.Lock()
+	roleIdxs := cm.upsertRolesLocked([]string{dcRole})
+	if len(cm.State.Members) > 0 {
+		cm.State.Members[0].RolesIndexes = roleIdxs
+	}
+	cm.Mu.Unlock()
+}
+
+// localDCRole returns the "dc-<dc>" role string for this node.
+func (cm *ClusterManager) localDCRole() string {
+	dc := cm.LocalDataCenter
+	if dc == "" {
+		dc = "default"
+	}
+	return "dc-" + dc
+}
+
+// upsertRolesLocked ensures all given role strings are present in AllRoles and
+// returns their indexes. Must be called with cm.Mu held (write).
+func (cm *ClusterManager) upsertRolesLocked(roles []string) []int32 {
+	var idxs []int32
+	for _, role := range roles {
+		found := false
+		for i, r := range cm.State.AllRoles {
+			if r == role {
+				idxs = append(idxs, int32(i))
+				found = true
+				break
+			}
+		}
+		if !found {
+			idx := int32(len(cm.State.AllRoles))
+			cm.State.AllRoles = append(cm.State.AllRoles, role)
+			idxs = append(idxs, idx)
+		}
+	}
+	return idxs
+}
+
 // ProceedJoin sends the actual Join message after receiving InitJoinAck
 func (cm *ClusterManager) ProceedJoin(ctx context.Context, actorPath string) error {
 	join := &gproto_cluster.Join{
 		Node:  cm.LocalAddress,
-		Roles: []string{"default"},
+		Roles: []string{cm.localDCRole()},
 	}
 	log.Printf("Cluster: sending Join to %s", actorPath)
 	return cm.Router(ctx, actorPath, join)
@@ -401,7 +457,7 @@ func (cm *ClusterManager) handleJoin(payload []byte, manifest string) error {
 	// the updated state.  The gossip loop's performLeaderActions will transition
 	// Joining → Up on the next tick.
 	cm.Mu.Lock()
-	cm.addMemberToGossipLocked(joiningNode)
+	cm.addMemberToGossipLocked(joiningNode, join.GetRoles())
 	welcomeGossip := proto.Clone(cm.State).(*gproto_cluster.Gossip)
 	cm.connectToNewMembers(cm.State)
 	cm.Mu.Unlock()
@@ -420,8 +476,11 @@ func (cm *ClusterManager) handleJoin(payload []byte, manifest string) error {
 }
 
 // addMemberToGossipLocked adds a joining node to the gossip Members list (as Joining).
+// roles are stored into AllRoles / RolesIndexes so that OldestNodeInDC works.
 // Must be called with cm.Mu held.
-func (cm *ClusterManager) addMemberToGossipLocked(joiningAddr *gproto_cluster.UniqueAddress) {
+func (cm *ClusterManager) addMemberToGossipLocked(joiningAddr *gproto_cluster.UniqueAddress, roles []string) {
+	roleIdxs := cm.upsertRolesLocked(roles)
+
 	// Look for an existing AllAddresses entry by host:port.
 	for i, addr := range cm.State.AllAddresses {
 		if addr.GetAddress().GetHostname() == joiningAddr.GetAddress().GetHostname() &&
@@ -436,6 +495,7 @@ func (cm *ClusterManager) addMemberToGossipLocked(joiningAddr *gproto_cluster.Un
 				AddressIndex: proto.Int32(int32(i)),
 				Status:       gproto_cluster.MemberStatus_Joining.Enum(),
 				UpNumber:     proto.Int32(int32(len(cm.State.Members) + 1)),
+				RolesIndexes: roleIdxs,
 			})
 			cm.incrementVersionWithLockHeld()
 			return
@@ -450,6 +510,7 @@ func (cm *ClusterManager) addMemberToGossipLocked(joiningAddr *gproto_cluster.Un
 		AddressIndex: proto.Int32(addrIdx),
 		Status:       gproto_cluster.MemberStatus_Joining.Enum(),
 		UpNumber:     proto.Int32(int32(len(cm.State.Members) + 1)),
+		RolesIndexes: roleIdxs,
 	})
 	cm.incrementVersionWithLockHeld()
 }
@@ -963,6 +1024,129 @@ func (cm *ClusterManager) OldestNode(role string) *gproto_cluster.UniqueAddress 
 		return nil
 	}
 	return best.ua
+}
+
+// OldestNodeInDC returns the oldest Up/WeaklyUp member in the given data center,
+// optionally filtered by role. Pass dc="" for no DC filter.
+func (cm *ClusterManager) OldestNodeInDC(dc, role string) *gproto_cluster.UniqueAddress {
+	if dc == "" {
+		return cm.OldestNode(role)
+	}
+	dcRole := "dc-" + dc
+
+	cm.Mu.RLock()
+	defer cm.Mu.RUnlock()
+
+	type candidate struct {
+		ua       *gproto_cluster.UniqueAddress
+		upNumber int32
+		addr     *gproto_cluster.Address
+	}
+	var best *candidate
+
+	for _, m := range cm.State.Members {
+		st := m.GetStatus()
+		if st != gproto_cluster.MemberStatus_Up && st != gproto_cluster.MemberStatus_WeaklyUp {
+			continue
+		}
+		// DC filter
+		hasDC := false
+		for _, idx := range m.GetRolesIndexes() {
+			if int(idx) < len(cm.State.AllRoles) && cm.State.AllRoles[idx] == dcRole {
+				hasDC = true
+				break
+			}
+		}
+		if !hasDC {
+			continue
+		}
+		// Optional role filter (non-DC)
+		if role != "" {
+			found := false
+			for _, idx := range m.GetRolesIndexes() {
+				if int(idx) < len(cm.State.AllRoles) && cm.State.AllRoles[idx] == role {
+					found = true
+					break
+				}
+			}
+			if !found {
+				continue
+			}
+		}
+		ua := cm.State.AllAddresses[m.GetAddressIndex()]
+		c := &candidate{ua: ua, upNumber: m.GetUpNumber(), addr: ua.GetAddress()}
+		if best == nil {
+			best = c
+			continue
+		}
+		if c.upNumber < best.upNumber {
+			best = c
+		} else if c.upNumber == best.upNumber {
+			ca, ba := c.addr, best.addr
+			if ca.GetHostname() < ba.GetHostname() ||
+				(ca.GetHostname() == ba.GetHostname() && ca.GetPort() < ba.GetPort()) {
+				best = c
+			}
+		}
+	}
+	if best == nil {
+		return nil
+	}
+	return best.ua
+}
+
+// MembersInDataCenter returns the MemberAddress of all Up/WeaklyUp members
+// in the given data center.
+func (cm *ClusterManager) MembersInDataCenter(dc string) []MemberAddress {
+	dcRole := "dc-" + dc
+	cm.Mu.RLock()
+	defer cm.Mu.RUnlock()
+
+	var result []MemberAddress
+	for _, m := range cm.State.Members {
+		st := m.GetStatus()
+		if st != gproto_cluster.MemberStatus_Up && st != gproto_cluster.MemberStatus_WeaklyUp {
+			continue
+		}
+		hasDC := false
+		for _, idx := range m.GetRolesIndexes() {
+			if int(idx) < len(cm.State.AllRoles) && cm.State.AllRoles[idx] == dcRole {
+				hasDC = true
+				break
+			}
+		}
+		if !hasDC {
+			continue
+		}
+		ua := cm.State.AllAddresses[m.GetAddressIndex()]
+		ma := memberAddressFromUA(ua)
+		ma.DataCenter = dc
+		result = append(result, ma)
+	}
+	return result
+}
+
+// IsInDataCenter reports whether the member with the given host:port is in
+// the named data center according to the current gossip state.
+func (cm *ClusterManager) IsInDataCenter(host string, port uint32, dc string) bool {
+	dcRole := "dc-" + dc
+	cm.Mu.RLock()
+	defer cm.Mu.RUnlock()
+
+	for _, m := range cm.State.Members {
+		ua := cm.State.AllAddresses[m.GetAddressIndex()]
+		a := ua.GetAddress()
+		if a.GetHostname() != host || a.GetPort() != port {
+			continue
+		}
+		for _, idx := range m.GetRolesIndexes() {
+			if int(idx) < len(cm.State.AllRoles) && cm.State.AllRoles[idx] == dcRole {
+				return true
+			}
+		}
+		return false
+	}
+	return false
 }
 
 func (cm *ClusterManager) performLeaderActions() {

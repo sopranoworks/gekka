@@ -224,6 +224,14 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		nodeCfg.TLS.ServerName = v
 	}
 
+	// ── Multi-Data-Center ───────────────────────────────────────────────────
+	if v, err := cfg.GetString(prefix + ".cluster.multi-data-center.self-data-center"); err == nil {
+		nodeCfg.DataCenter = strings.TrimSpace(v)
+	}
+	if nodeCfg.DataCenter == "" {
+		nodeCfg.DataCenter = "default"
+	}
+
 	// ── Cluster Sharding ────────────────────────────────────────────────────
 	shardingPrefix := prefix + ".cluster.sharding"
 	if v, err := cfg.GetString(shardingPrefix + ".passivation.idle-timeout"); err == nil {

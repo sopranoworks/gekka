@@ -47,6 +47,13 @@ type ShardingSettings struct {
 	// Journal is used when RememberEntities is true.  Defaults to an
 	// InMemoryJournal if nil (use a durable backend in production).
 	Journal persistence.Journal
+
+	// DataCenter restricts shard allocation to nodes in this data center.
+	// Leave empty to allow placement on any node.
+	//
+	// HOCON equivalent:
+	//   pekko.cluster.multi-data-center.self-data-center = "us-east"
+	DataCenter string
 }
 
 // StartSharding starts cluster sharding for a given entity type.
@@ -138,6 +145,15 @@ func StartSharding[Command any, Event any, State any](
 		PassivationIdleTimeout: settings.PassivationIdleTimeout,
 		RememberEntities:       settings.RememberEntities,
 		Journal:                settings.Journal,
+		DataCenter:             settings.DataCenter,
+	}
+
+	// Populate IsLocalDC when both the cluster and DataCenter are available.
+	if cluster != nil && settings.DataCenter != "" {
+		dc := settings.DataCenter
+		shardSettings.IsLocalDC = func(host string, port uint32) bool {
+			return cluster.cm.IsInDataCenter(host, port, dc)
+		}
 	}
 
 	region, err := sys.ActorOf(actor.Props{

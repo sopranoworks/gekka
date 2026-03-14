@@ -12,6 +12,7 @@ import (
 	"log"
 
 	"github.com/sopranoworks/gekka/actor"
+	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 )
 
 // ClusterSingletonManager hosts a singleton actor on the oldest cluster node.
@@ -35,6 +36,7 @@ type ClusterSingletonManager struct {
 
 	cm             *ClusterManager
 	role           string      // optional role filter; empty = any node
+	dataCenter     string      // optional DC filter; empty = any DC
 	singletonProps actor.Props // factory for the singleton actor
 	singletonRef   actor.Ref   // non-nil when the singleton is running on this node
 }
@@ -52,6 +54,13 @@ func NewClusterSingletonManager(cm *ClusterManager, singletonProps actor.Props, 
 		role:           role,
 		singletonProps: singletonProps,
 	}
+}
+
+// WithDataCenter restricts this manager to host the singleton only when this
+// node is the oldest member of the given data center.
+func (m *ClusterSingletonManager) WithDataCenter(dc string) *ClusterSingletonManager {
+	m.dataCenter = dc
+	return m
 }
 
 // PreStart subscribes to cluster events and starts the singleton if this node
@@ -93,7 +102,12 @@ func (m *ClusterSingletonManager) Receive(msg any) {
 // isLocalOldest returns true when the local node is the oldest Up/WeaklyUp
 // member eligible to host the singleton.
 func (m *ClusterSingletonManager) isLocalOldest() bool {
-	ua := m.cm.OldestNode(m.role)
+	var ua *gproto_cluster.UniqueAddress
+	if m.dataCenter != "" {
+		ua = m.cm.OldestNodeInDC(m.dataCenter, m.role)
+	} else {
+		ua = m.cm.OldestNode(m.role)
+	}
 	if ua == nil {
 		return false
 	}

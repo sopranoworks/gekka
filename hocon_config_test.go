@@ -10,6 +10,7 @@ package gekka
 
 import (
 	"testing"
+	"time"
 
 	"github.com/sopranoworks/gekka/actor"
 )
@@ -154,6 +155,105 @@ func TestSpawnFromConfig_Pekko(t *testing.T) {
 	}
 	if seeds[0].Port != 2552 {
 		t.Errorf("Seeds[0].Port = %d, want 2552", seeds[0].Port)
+	}
+}
+
+func TestHOCON_SBRConfig(t *testing.T) {
+	const hocon = `
+pekko {
+  remote.artery.canonical {
+    hostname = "127.0.0.1"
+    port = 2553
+  }
+  cluster {
+    seed-nodes = ["pekko://ClusterSystem@127.0.0.1:2552"]
+    split-brain-resolver {
+      active-strategy = keep-majority
+      stable-after    = 10s
+      keep-majority {
+        role = "worker"
+      }
+    }
+  }
+}
+`
+	cfg, err := parseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.SBR.ActiveStrategy != "keep-majority" {
+		t.Errorf("ActiveStrategy = %q, want keep-majority", cfg.SBR.ActiveStrategy)
+	}
+	if cfg.SBR.StableAfter != 10*time.Second {
+		t.Errorf("StableAfter = %v, want 10s", cfg.SBR.StableAfter)
+	}
+	if cfg.SBR.Role != "worker" {
+		t.Errorf("Role = %q, want worker", cfg.SBR.Role)
+	}
+}
+
+func TestHOCON_SBRConfig_KeepOldest(t *testing.T) {
+	const hocon = `
+pekko {
+  remote.artery.canonical {
+    hostname = "127.0.0.1"
+    port = 2553
+  }
+  cluster {
+    seed-nodes = ["pekko://ClusterSystem@127.0.0.1:2552"]
+    split-brain-resolver {
+      active-strategy = keep-oldest
+      stable-after    = "5 seconds"
+      keep-oldest {
+        down-if-alone = on
+      }
+    }
+  }
+}
+`
+	cfg, err := parseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.SBR.ActiveStrategy != "keep-oldest" {
+		t.Errorf("ActiveStrategy = %q, want keep-oldest", cfg.SBR.ActiveStrategy)
+	}
+	if cfg.SBR.StableAfter != 5*time.Second {
+		t.Errorf("StableAfter = %v, want 5s", cfg.SBR.StableAfter)
+	}
+	if !cfg.SBR.DownIfAlone {
+		t.Errorf("DownIfAlone = false, want true")
+	}
+}
+
+func TestHOCON_SBRConfig_StaticQuorum(t *testing.T) {
+	const hocon = `
+pekko {
+  remote.artery.canonical {
+    hostname = "127.0.0.1"
+    port = 2553
+  }
+  cluster {
+    seed-nodes = ["pekko://ClusterSystem@127.0.0.1:2552"]
+    split-brain-resolver {
+      active-strategy = static-quorum
+      stable-after    = 20s
+      static-quorum {
+        quorum-size = 3
+      }
+    }
+  }
+}
+`
+	cfg, err := parseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.SBR.ActiveStrategy != "static-quorum" {
+		t.Errorf("ActiveStrategy = %q, want static-quorum", cfg.SBR.ActiveStrategy)
+	}
+	if cfg.SBR.QuorumSize != 3 {
+		t.Errorf("QuorumSize = %d, want 3", cfg.SBR.QuorumSize)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/internal/core"
@@ -223,7 +224,53 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		nodeCfg.TLS.ServerName = v
 	}
 
+	// ── Split Brain Resolver ────────────────────────────────────────────────
+	sbrPrefix := prefix + ".cluster.split-brain-resolver"
+	if v, err := cfg.GetString(sbrPrefix + ".active-strategy"); err == nil {
+		nodeCfg.SBR.ActiveStrategy = strings.TrimSpace(v)
+	}
+	if v, err := cfg.GetString(sbrPrefix + ".stable-after"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.SBR.StableAfter = d
+		}
+	}
+	if v, err := cfg.GetString(sbrPrefix + ".keep-majority.role"); err == nil {
+		nodeCfg.SBR.Role = strings.TrimSpace(v)
+	}
+	if v, err := cfg.GetString(sbrPrefix + ".keep-oldest.role"); err == nil && nodeCfg.SBR.Role == "" {
+		nodeCfg.SBR.Role = strings.TrimSpace(v)
+	}
+	if v, err := cfg.GetString(sbrPrefix + ".keep-oldest.down-if-alone"); err == nil {
+		nodeCfg.SBR.DownIfAlone = strings.EqualFold(strings.TrimSpace(v), "on") ||
+			strings.EqualFold(strings.TrimSpace(v), "true")
+	}
+	if v, err := cfg.GetString(sbrPrefix + ".keep-referee.referee"); err == nil {
+		nodeCfg.SBR.RefereeAddress = strings.TrimSpace(v)
+	}
+	if v, err := cfg.GetInt(sbrPrefix + ".static-quorum.quorum-size"); err == nil {
+		nodeCfg.SBR.QuorumSize = v
+	}
+
 	return nodeCfg, nil
+}
+
+// parseHOCONDuration parses a Pekko/HOCON duration string such as "20s", "5 seconds",
+// "500ms", "1 minute" into a time.Duration. Returns 0, error on parse failure.
+func parseHOCONDuration(s string) (time.Duration, error) {
+	s = strings.ToLower(strings.TrimSpace(s))
+	// Handle unit aliases: "seconds"→"s", "minutes"→"m", etc.
+	replacer := strings.NewReplacer(
+		" seconds", "s", " second", "s", "seconds", "s", "second", "s",
+		" minutes", "m", " minute", "m", "minutes", "m", "minute", "m",
+		" milliseconds", "ms", " millisecond", "ms", "milliseconds", "ms", "millisecond", "ms",
+		" hours", "h", " hour", "h", "hours", "h", "hour", "h",
+	)
+	normalized := strings.TrimSpace(replacer.Replace(s))
+	d, err := time.ParseDuration(normalized)
+	if err != nil {
+		return 0, fmt.Errorf("parseHOCONDuration: cannot parse %q: %w", s, err)
+	}
+	return d, nil
 }
 
 // detectProtocol returns "pekko" or "akka" by checking which top-level key

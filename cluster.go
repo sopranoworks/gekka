@@ -142,7 +142,21 @@ type ClusterConfig struct {
 	//	    },
 	//	})
 	Deployments map[string]core.DeploymentConfig
+
+	// SBR configures the Split Brain Resolver. Leave zero-valued to disable SBR.
+	//
+	// Example — keep-majority with a 10-second stable-after delay:
+	//
+	//	SBR: gekka.SBRConfig{
+	//	    ActiveStrategy: "keep-majority",
+	//	    StableAfter:    10 * time.Second,
+	//	},
+	SBR SBRConfig
 }
+
+// SBRConfig is a re-export of cluster.SBRConfig for use in ClusterConfig.
+// Import gekka directly — you do not need to import the cluster sub-package.
+type SBRConfig = gcluster.SBRConfig
 
 // resolve returns the effective (scheme, system, host, port) for this config.
 func (c ClusterConfig) resolve() (scheme, system, host string, port uint32) {
@@ -396,6 +410,12 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	// cluster through Leave → Exiting → Removed before closing TCP connections.
 	cluster.cs = actor.NewCoordinatedShutdown()
 	cluster.registerBuiltinShutdownTasks()
+
+	// ── Split Brain Resolver ─────────────────────────────────────────────────
+	// Start the SBR manager goroutine when a strategy is configured.
+	if sbr := gcluster.NewSBRManager(cm, cfg.SBR); sbr != nil {
+		go sbr.Start(ctx)
+	}
 
 	return cluster, nil
 }

@@ -211,6 +211,29 @@ func (cm *ClusterManager) LeaveCluster() error {
 	return lastErr
 }
 
+// DownMember marks the member with the given address as Down in the local
+// gossip state. The leader's performLeaderActions loop will subsequently
+// transition Down members to Removed and gossip the change to the cluster.
+func (cm *ClusterManager) DownMember(addr MemberAddress) {
+	cm.Mu.Lock()
+	defer cm.Mu.Unlock()
+	for _, m := range cm.State.Members {
+		ua := cm.State.AllAddresses[m.GetAddressIndex()]
+		a := ua.GetAddress()
+		if a.GetHostname() == addr.Host && a.GetPort() == addr.Port {
+			if m.GetStatus() == gproto_cluster.MemberStatus_Down ||
+				m.GetStatus() == gproto_cluster.MemberStatus_Removed {
+				return // already down/removed
+			}
+			m.Status = gproto_cluster.MemberStatus_Down.Enum()
+			cm.incrementVersionWithLockHeld()
+			log.Printf("SBR: marked %s:%d as Down", addr.Host, addr.Port)
+			return
+		}
+	}
+	log.Printf("SBR: DownMember: address %s:%d not found in gossip", addr.Host, addr.Port)
+}
+
 // WaitForSelfRemoved polls the gossip state every 200 ms until this node's
 // own membership entry is absent or in Removed status, or the context expires.
 // It is called by the coordinated-shutdown cluster-leave phase to block until
@@ -961,6 +984,14 @@ func (cm *ClusterManager) performLeaderActions() {
 				}
 				changed = true
 				log.Printf("Leader: transitioned member %s:%d Exiting → Removed", ma.Host, ma.Port)
+			case gproto_cluster.MemberStatus_Down:
+				m.Status = gproto_cluster.MemberStatus_Removed.Enum()
+				events = append(events, MemberRemoved{Member: ma})
+				if cm.Metrics != nil {
+					cm.Metrics.IncrementMemberRemoved()
+				}
+				changed = true
+				log.Printf("Leader: transitioned member %s:%d Down → Removed", ma.Host, ma.Port)
 			}
 		}
 		if changed {

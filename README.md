@@ -1,4 +1,4 @@
-# gekka &nbsp;[![Version](https://img.shields.io/badge/version-0.5.0-blue)](https://github.com/sopranoworks/gekka) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Go CI](https://github.com/sopranoworks/gekka/actions/workflows/go.yml/badge.svg)](https://github.com/sopranoworks/gekka/actions/workflows/go.yml)
+# gekka &nbsp;[![Version](https://img.shields.io/badge/version-0.6.0--dev-orange)](https://github.com/sopranoworks/gekka) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Go CI](https://github.com/sopranoworks/gekka/actions/workflows/go.yml/badge.svg)](https://github.com/sopranoworks/gekka/actions/workflows/go.yml)
 
 **Pekko/Akka Dual-Compatibility**
 
@@ -6,23 +6,27 @@
 
 Powered by its own high-performance HOCON engine, [`gekka-config`](https://github.com/sopranoworks/gekka-config), `gekka` supports both automatic cluster formation and direct node-to-node communication using the standard `pekko://` and `akka://` URI schemes.
 
+## Verified Interoperability
 
+`gekka` is verified against live JVM nodes for both **Apache Pekko 1.0.2** and **Lightbend Akka 2.6.21** using E2E integration tests. This ensures byte-level compatibility for cluster membership, remote messaging, and distributed state.
 
 
 ## Key Features
 
 - **Hierarchical Actor System** — Parent-child relationships with reliable lifecycle management.
 - **Self-Healing Supervision** — Automatic fault tolerance with `OneForOneStrategy` (Restart, Resume, Stop, Escalate).
-- **Pekko/Akka Remote & Cluster Compatibility** — Interop with Scala/Java actors via Artery TCP.
+- **Pekko/Akka Remote & Cluster Compatibility** — Verified interop with Scala/Java actors via Artery TCP.
 - **Type-safe Actors using Go Generics** — Compile-time safety for message passing.
 - **Actor Persistence & Event Sourcing** — State recovery via event journaling and snapshotting.
+- **Distributed Pub/Sub (Pekko Compatible)** — Decentralized messaging with GZIP-compressed gossip state (Serializer ID 9).
+- **Distributed Data / CRDTs** — Decentrallized state replication (G-Counter, OR-Set) with Serializer ID 11/12.
 - **Location Transparency** — Identical `Tell` and `Ask` semantics for local and remote actors.
 - **Location Transparent Senders** — Reply to originators without manual address tracking.
 - **Extensible Serialization** — Built-in support for Protobuf (ID 2), Raw Bytes (ID 4), and JSON (ID 9).
 - **Actor-aware Logging** — Structured logging contextualized with actor paths and system info.
 - **High-Performance Remoting** — Binary-compatible Artery TCP with transport-level heartbeats.
 - **Observability** — Built-in monitoring with `/healthz` and `/metrics` (JSON/Prometheus).
-- **Cluster Singletons & CRDTs** — Support for Cluster Singletons and Distributed Data (G-Counter, OR-Set).
+- **Cluster Singletons** — Distributed singleton management with auto-failover.
 
 ## Quick Start 1: Local Actor System
 
@@ -139,7 +143,7 @@ func main() {
 
 ## Quick Start 4: Typed Actors (Go Generics)
 
-Gekka v0.5.0 introduces the **Typed Actor API** leveraging Go Generics for compile-time type safety.
+Gekka provides a **Typed Actor API** leveraging Go Generics for compile-time type safety.
 
 ```go
 package main
@@ -170,9 +174,59 @@ func main() {
 }
 ```
 
-## Quick Start 5: Persistent Actors (Event Sourcing)
+## Quick Start 5: Distributed Pub/Sub
 
-Gekka provides Event Sourcing support via `EventSourcedBehavior`. Persistent actors automatically recover their state by replaying events from a journal and loading snapshots upon restart.
+`gekka` supports distributed publish-subscribe across the cluster, fully compatible with Pekko's `DistributedPubSub`.
+
+```go
+package main
+
+import (
+	"context"
+	"github.com/sopranoworks/gekka"
+	"github.com/sopranoworks/gekka/cluster/pubsub"
+)
+
+func main() {
+	cluster, _ := gekka.NewCluster(...)
+	
+	// 1. Get the mediator (distributed pub-sub interface)
+	mediator := cluster.Mediator()
+	
+	// 2. Subscribe an actor to a topic
+	mediator.Subscribe(context.Background(), "news", "", "/user/my-actor")
+	
+	// 3. Publish a message to all subscribers cluster-wide
+	mediator.Publish(context.Background(), "news", []byte("Hello Cluster!"))
+}
+```
+
+## Quick Start 6: Distributed Data (CRDTs)
+
+Replicate state across nodes using conflict-free replicated data types.
+
+```go
+package main
+
+import (
+	"github.com/sopranoworks/gekka"
+)
+
+func main() {
+	cluster, _ := gekka.NewCluster(...)
+	repl := cluster.Replicator()
+
+	// Increment a distributed counter
+	repl.IncrementCounter("hits", 1, gekka.WriteLocal)
+	
+	// Read the merged value from all nodes
+	val := repl.GCounter("hits").Value() 
+}
+```
+
+## Quick Start 7: Persistent Actors (Event Sourcing)
+
+Persistent actors automatically recover their state by replaying events from a journal upon restart.
 
 ```go
 package main
@@ -183,27 +237,19 @@ import (
 	"github.com/sopranoworks/gekka/persistence"
 )
 
-// Define Command, Event and State
-type Command interface{}
-type Increment struct{}
-type Event struct{ Delta int }
-type State struct{ Value int }
-
-func Counter(id string, journal persistence.Journal) *gekka.EventSourcedBehavior[Command, Event, State] {
-	return &gekka.EventSourcedBehavior[Command, Event, State]{
+func Counter(id string, journal persistence.Journal) *gekka.EventSourcedBehavior[any, int, int] {
+	return &gekka.EventSourcedBehavior[any, int, int]{
 		PersistenceID: id,
 		Journal:       journal,
-		InitialState:  State{Value: 0},
-		CommandHandler: func(ctx actor.TypedContext[Command], state State, cmd Command) actor.Effect[Event, State] {
-			return actor.Persist[Event, State](Event{Delta: 1})
+		InitialState:  0,
+		CommandHandler: func(ctx actor.TypedContext[any], state int, cmd any) actor.Effect[int, int] {
+			return actor.Persist[int, int](1)
 		},
-		EventHandler: func(state State, event Event) State {
-			state.Value += event.Delta
-			return state
+		EventHandler: func(state int, event int) int {
+			return state + event
 		},
 	}
 }
-
 func main() {
 	system, _ := gekka.NewActorSystem("PersistenceSystem")
 	journal := persistence.NewInMemoryJournal()
@@ -222,11 +268,14 @@ See the [persistence example](examples/persistence/main.go) for a full implement
 - **HOCON-ready**: Configuration can be passed programmatically via `ClusterConfig` or loaded directly from standard `application.conf` files.
 
 
-## New in v0.5.0: Typed Actors, Persistence & Cluster Sharding
+## New in v0.6.0: Distributed Pub/Sub & CRDTs
 
-v0.5.0 introduces **Typed Actors** and **Actor Persistence**, providing a type-safe way to define and interact with actors, and a way to persist state using Event Sourcing.
+v0.6.0 introduces **Distributed Pub/Sub** with GZIP compression support and **Distributed Data** (CRDTs) for decentralized state management. This release also features:
+- **Verified Interoperability** — Extensive E2E test suite against Scala Pekko/Akka processes.
+- **Protocol-Aware Configuration** — Automatic switching of configuration keys based on the detected protocol.
+- **GZIP Support** — Optimized bandwidth for pub-sub and CRDT gossip.
 
-v0.5.0 also includes **Pool** and **Group Routers** that can be configured directly in HOCON:
+v0.6.0 also includes **Pool** and **Group Routers** that can be configured directly in HOCON:
 
 ```hocon
 gekka.actor.deployment {
@@ -244,7 +293,7 @@ See [ROUTING.md](docs/ROUTING.md) for more details.
 - [**API Reference**](docs/API.md) — Detailed function and method signatures.
 - [**Protocol Notes**](docs/PROTOCOL.md) — Artery TCP framing, serialization IDs, and CRDTs.
 - [**Routing Features**](docs/ROUTING.md) — Pool/Group routers and HOCON deployment.
-- [**Integration Tests**](integration_test.go) — End-to-end tests against Scala/Pekko.
+- [**Cluster Sharding**](docs/SHARDING.md) — Distributed actor placement and rebalancing.
 
 ## License
 

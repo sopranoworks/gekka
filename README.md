@@ -8,7 +8,7 @@ Powered by its own high-performance HOCON engine, [`gekka-config`](https://githu
 
 ## Verified Interoperability
 
-`gekka` is verified against live JVM nodes for both **Apache Pekko 1.0.2** and **Lightbend Akka 2.6.21** using E2E integration tests. This ensures byte-level compatibility for cluster membership, remote messaging, and distributed state.
+`gekka` is verified against live JVM nodes for both **Apache Pekko 1.0.x** and **Lightbend Akka 2.6.21** using E2E integration tests. This ensures byte-level compatibility for cluster membership, remote messaging (including **Artery TLS** secure transport), and distributed state.
 
 
 ## Key Features
@@ -16,6 +16,7 @@ Powered by its own high-performance HOCON engine, [`gekka-config`](https://githu
 - **Hierarchical Actor System** — Parent-child relationships with reliable lifecycle management.
 - **Self-Healing Supervision** — Automatic fault tolerance with `OneForOneStrategy` (Restart, Resume, Stop, Escalate).
 - **Pekko/Akka Remote & Cluster Compatibility** — Verified interop with Scala/Java actors via Artery TCP.
+- **Secure Communication (TLS)** — Binary-compatible Artery TLS support for encrypted cluster traffic using Go's `crypto/tls`.
 - **Type-safe Actors using Go Generics** — Compile-time safety for message passing.
 - **Actor Persistence & Event Sourcing** — State recovery via event journaling and snapshotting.
 - **Distributed Pub/Sub (Pekko Compatible)** — Decentralized messaging with GZIP-compressed gossip state (Serializer ID 9).
@@ -262,6 +263,29 @@ func main() {
 
 See the [persistence example](examples/persistence/main.go) for a full implementation including snapshots and recovery demonstration.
 
+
+## Artery TLS
+
+`gekka` supports secure transport via Artery TLS, maintaining binary compatibility with Pekko/Akka's `tls-tcp` transport. While JVM nodes typically use JKS keystores, `gekka` leverages Go's `crypto/tls` to provide a modern, PEM-based alternative for managing certificates and private keys.
+
+### HOCON Configuration
+
+Enable TLS by setting the `transport` to `tls-tcp` and providing the paths to your PEM files:
+
+```hocon
+pekko.remote.artery {
+  transport = "tls-tcp"
+  tls {
+    certificate = "/path/to/cert.pem"
+    private-key = "/path/to/key.pem"
+    ca-certificates = "/path/to/ca.pem"
+    # Optional: require-client-auth, server-name, min-version
+  }
+}
+```
+
+Support for mutual TLS (mTLS) is built-in, ensuring that only authenticated nodes can join the cluster.
+
 ### How it works
 
 - **Location Transparency**: Messaging works the same way whether the actor is local or remote. The `ActorRef` abstracts away the network layer.
@@ -271,7 +295,8 @@ See the [persistence example](examples/persistence/main.go) for a full implement
 ## New in v0.6.0: Distributed Pub/Sub & CRDTs
 
 v0.6.0 introduces **Distributed Pub/Sub** with GZIP compression support and **Distributed Data** (CRDTs) for decentralized state management. This release also features:
-- **Verified Interoperability** — Extensive E2E test suite against Scala Pekko/Akka processes.
+- **Artery TLS Transport** — Secure, encrypted cluster communication using PEM-based certificates.
+- **Verified Interoperability** — Extensive E2E test suite against Scala Pekko/Akka processes, now including secure transport.
 - **Protocol-Aware Configuration** — Automatic switching of configuration keys based on the detected protocol.
 - **GZIP Support** — Optimized bandwidth for pub-sub and CRDT gossip.
 
@@ -294,6 +319,7 @@ See [ROUTING.md](docs/ROUTING.md) for more details.
 - [**Protocol Notes**](docs/PROTOCOL.md) — Artery TCP framing, serialization IDs, and CRDTs.
 - [**Routing Features**](docs/ROUTING.md) — Pool/Group routers and HOCON deployment.
 - [**Cluster Sharding**](docs/SHARDING.md) — Distributed actor placement and rebalancing.
+- [**Secure Transport (TLS)**](docs/TLS.md) — Configuring and using Artery TLS with PEM certificates.
 
 ## License
 

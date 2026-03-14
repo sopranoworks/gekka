@@ -167,10 +167,10 @@ func (cm *ClusterManager) JoinCluster(ctx context.Context, seedHost string, seed
 	path := cm.ClusterCorePath(system, seedHost, seedPort)
 	log.Printf("Cluster: initiating join to seed node %s", path)
 
-	// In Pekko Cluster, we usually start with InitJoin.
-	// Send a minimal config so Pekko's JoinConfigCompatCheckCluster.check
-	// can call getString("pekko.cluster.downing-provider-class") without throwing.
-	minConfig := proto.String(`pekko.cluster.downing-provider-class = ""`)
+	// Send a minimal config so the remote's JoinConfigCompatCheckCluster.check
+	// can call getString("<proto>.cluster.downing-provider-class") without throwing.
+	// The config key prefix must match the remote's actor-system protocol ("pekko" or "akka").
+	minConfig := proto.String(fmt.Sprintf(`%s.cluster.downing-provider-class = ""`, cm.Proto()))
 	initJoin := &gproto_cluster.InitJoin{CurrentConfig: minConfig}
 	return cm.Router(ctx, path, initJoin)
 }

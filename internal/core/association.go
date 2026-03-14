@@ -10,6 +10,7 @@ package core
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"log"
@@ -77,6 +78,10 @@ type NodeManager struct {
 
 	pendingRepliesMu sync.RWMutex
 	pendingReplies   map[string]chan *ArteryMetadata // keyed by temp actor path
+
+	// TLSConfig is the *tls.Config to use for outbound connections.
+	// Nil means plain TCP (default).
+	TLSConfig *tls.Config
 
 	// NodeMetrics is the shared NodeMetrics instance (set by Cluster.Spawn).
 	// Nil-safe: all callers check before touching.
@@ -176,6 +181,7 @@ func (nm *NodeManager) DialRemote(ctx context.Context, target *gproto_remote.Add
 		Handler: func(ctx context.Context, conn net.Conn) error {
 			return nm.ProcessConnection(ctx, conn, OUTBOUND, target, 1) // Default to Control stream for outbound
 		},
+		TLSConfig: nm.TLSConfig,
 	})
 	if err != nil {
 		return nil, err

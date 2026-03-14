@@ -193,6 +193,36 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		nodeCfg.Deployments = deps
 	}
 
+	// TLS transport configuration.
+	arteryPrefix := prefix + ".remote.artery"
+	if transport, err := cfg.GetString(arteryPrefix + ".transport"); err == nil {
+		nodeCfg.Transport = transport
+	}
+	tlsPrefix := arteryPrefix + ".tls"
+	if v, err := cfg.GetString(tlsPrefix + ".certificate"); err == nil {
+		nodeCfg.TLS.CertFile = v
+	}
+	if v, err := cfg.GetString(tlsPrefix + ".private-key"); err == nil {
+		nodeCfg.TLS.KeyFile = v
+	}
+	if v, err := cfg.GetString(tlsPrefix + ".ca-certificates"); err == nil {
+		nodeCfg.TLS.CAFile = v
+	}
+	if v, err := cfg.GetString(tlsPrefix + ".min-version"); err == nil {
+		switch strings.ToUpper(strings.TrimSpace(v)) {
+		case "TLS1.3", "TLSV1.3":
+			nodeCfg.TLS.MinVersion = 0x0304 // tls.VersionTLS13
+		default:
+			nodeCfg.TLS.MinVersion = 0x0303 // tls.VersionTLS12
+		}
+	}
+	if v, err := cfg.GetString(tlsPrefix + ".require-client-auth"); err == nil {
+		nodeCfg.TLS.RequireClientAuth = strings.EqualFold(strings.TrimSpace(v), "true")
+	}
+	if v, err := cfg.GetString(tlsPrefix + ".server-name"); err == nil {
+		nodeCfg.TLS.ServerName = v
+	}
+
 	return nodeCfg, nil
 }
 

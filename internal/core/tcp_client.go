@@ -10,6 +10,7 @@ package core
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log"
@@ -25,6 +26,11 @@ type TcpClientConfig struct {
 
 	// Optional.
 	Logger *log.Logger
+
+	// TLSConfig enables TLS when non-nil. When set, the dialed connection is
+	// wrapped with tls.Client and a handshake is performed before calling Handler.
+	// When nil, plain TCP is used (default).
+	TLSConfig *tls.Config
 
 	// Timeouts (0 => disabled).
 	DialTimeout     time.Duration
@@ -85,7 +91,23 @@ func (c *TcpClient) Connect(ctx context.Context) error {
 		_ = conn.Close()
 	}()
 
-	var wrappedConn net.Conn = conn
+	// Upgrade to TLS if configured.
+	var netConn net.Conn = conn
+	if c.cfg.TLSConfig != nil {
+		serverName := c.cfg.TLSConfig.ServerName
+		if serverName == "" {
+			serverName, _, _ = net.SplitHostPort(c.cfg.Addr)
+		}
+		tlsCfg := c.cfg.TLSConfig.Clone()
+		tlsCfg.ServerName = serverName
+		tlsConn := tls.Client(conn, tlsCfg)
+		if err := tlsConn.HandshakeContext(ctx); err != nil {
+			return fmt.Errorf("gekka: TLS handshake: %w", err)
+		}
+		netConn = tlsConn
+	}
+
+	var wrappedConn net.Conn = netConn
 	if c.cfg.ReadTimeout > 0 || c.cfg.WriteTimeout > 0 || c.cfg.IdleTimeout > 0 {
 		wrappedConn = &tcpTimeoutConn{
 			Conn:         conn,

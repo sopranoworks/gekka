@@ -10,6 +10,7 @@ package core
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log"
@@ -33,6 +34,11 @@ type TcpServerConfig struct {
 
 	// Optional.
 	Logger *log.Logger
+
+	// TLSConfig enables TLS when non-nil. The caller is responsible for
+	// building the *tls.Config (typically via BuildTLSConfig).
+	// When nil, plain net.Listen is used (default).
+	TLSConfig *tls.Config
 
 	// Limits / timeouts (0 => disabled).
 	MaxConns        int
@@ -89,7 +95,11 @@ func (s *TcpServer) Start(ctx context.Context) error {
 	ln := s.cfg.Listener
 	if ln == nil {
 		var err error
-		ln, err = net.Listen("tcp", s.cfg.Addr)
+		if s.cfg.TLSConfig != nil {
+			ln, err = tls.Listen("tcp", s.cfg.Addr, s.cfg.TLSConfig)
+		} else {
+			ln, err = net.Listen("tcp", s.cfg.Addr)
+		}
 		if err != nil {
 			return fmt.Errorf("gekka: TcpServer listen: %w", err)
 		}

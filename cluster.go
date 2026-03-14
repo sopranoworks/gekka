@@ -11,6 +11,7 @@ package gekka
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/hex"
 	"fmt"
 	"log/slog"
@@ -117,6 +118,13 @@ type ClusterConfig struct {
 	//	    LogHandler: h,
 	//	})
 	LogHandler slog.Handler
+
+	// Transport selects the Artery transport: "tcp" (default) or "tls-tcp".
+	// When "tls-tcp", the TLS field must be populated with valid PEM paths.
+	Transport string `hocon:"pekko.remote.artery.transport"`
+
+	// TLS holds TLS parameters; only used when Transport == "tls-tcp".
+	TLS core.TLSConfig
 
 	// Deployments maps actor paths to their router deployment configurations.
 	// When ActorOf is called for a path that has a Deployments entry with a
@@ -248,11 +256,24 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
+	// Build TLS config when transport is "tls-tcp".
+	var tlsCfg *tls.Config
+	if strings.EqualFold(cfg.Transport, "tls-tcp") {
+		var tlsErr error
+		tlsCfg, tlsErr = core.BuildTLSConfig(cfg.TLS)
+		if tlsErr != nil {
+			cancel()
+			return nil, fmt.Errorf("gekka: TLS config: %w", tlsErr)
+		}
+	}
+	nm.TLSConfig = tlsCfg
+
 	server, err := core.NewTcpServer(core.TcpServerConfig{
 		Addr: fmt.Sprintf("%s:%d", host, port),
 		Handler: func(c context.Context, conn net.Conn) error {
 			return nm.ProcessConnection(c, conn, core.INBOUND, nil, 0)
 		},
+		TLSConfig: tlsCfg,
 	})
 	if err != nil {
 		cancel()

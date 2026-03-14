@@ -257,6 +257,42 @@ pekko {
 	}
 }
 
+func TestHOCON_ShardingConfig(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko.remote.artery.canonical.hostname = "127.0.0.1"
+pekko.remote.artery.canonical.port = 2552
+pekko.cluster.seed-nodes = []
+pekko.cluster.sharding.passivation.idle-timeout = "2m"
+pekko.cluster.sharding.remember-entities = on
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.Sharding.PassivationIdleTimeout != 2*time.Minute {
+		t.Errorf("PassivationIdleTimeout = %v, want 2m", cfg.Sharding.PassivationIdleTimeout)
+	}
+	if !cfg.Sharding.RememberEntities {
+		t.Error("RememberEntities = false, want true")
+	}
+}
+
+func TestHOCON_ShardingConfig_Defaults(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko.remote.artery.canonical.hostname = "127.0.0.1"
+pekko.remote.artery.canonical.port = 2552
+pekko.cluster.seed-nodes = []
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.Sharding.PassivationIdleTimeout != 0 {
+		t.Errorf("expected zero PassivationIdleTimeout by default, got %v", cfg.Sharding.PassivationIdleTimeout)
+	}
+	if cfg.Sharding.RememberEntities {
+		t.Error("expected RememberEntities=false by default")
+	}
+}
+
 func TestJoinSeeds_NoSeeds(t *testing.T) {
 	node, err := NewCluster(ClusterConfig{Host: "127.0.0.1", Port: 0})
 	if err != nil {

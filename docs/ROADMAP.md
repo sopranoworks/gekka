@@ -40,10 +40,10 @@ Durable backends for Event Sourcing:
 - **SQL-based** generic drivers
 - **Pebble** (LSM) embedded backend
 
-#### Advanced Sharding Features
+#### Advanced Sharding Features ✅
 Enhancing the `cluster/sharding` package:
-- **Entity Passivation**: Automatic offloading of idle entities to save memory.
-- **Remember Entities**: Ensuring entities are restarted automatically after failure or rebalance.
+- **Entity Passivation**: Automatic offloading of idle entities via `PassivationIdleTimeout` + self-initiated `Passivate`. ✅
+- **Remember Entities**: Persisting `EntityStarted`/`EntityStopped` events so entities are re-spawned after Shard restart. ✅
 
 #### Multi-DC Cluster Support
 Enhanced awareness and routing for multi-datacenter cluster topologies.

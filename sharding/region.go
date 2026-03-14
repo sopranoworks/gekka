@@ -22,6 +22,7 @@ type ShardRegion struct {
 	messageUnmarshaler func(manifest string, data json.RawMessage) (any, error)
 	extractEntityId    ExtractEntityId
 	coordinator        actor.Ref
+	shardSettings      ShardSettings
 
 	shards          map[ShardId]actor.Ref // Local shards
 	shardHomePaths  map[ShardId]string    // ShardId -> Region Path (cached)
@@ -34,6 +35,7 @@ func NewShardRegion(
 	unmarshaler func(string, json.RawMessage) (any, error),
 	extract ExtractEntityId,
 	coordinator actor.Ref,
+	shardSettings ShardSettings,
 ) *ShardRegion {
 	return &ShardRegion{
 		BaseActor:          actor.NewBaseActor(),
@@ -42,6 +44,7 @@ func NewShardRegion(
 		messageUnmarshaler: unmarshaler,
 		extractEntityId:    extract,
 		coordinator:        coordinator,
+		shardSettings:      shardSettings,
 		shards:             make(map[ShardId]actor.Ref),
 		shardHomePaths:     make(map[ShardId]string),
 		pendingMessages:    make(map[ShardId][]actor.Envelope),
@@ -128,8 +131,11 @@ func (r *ShardRegion) deliverMessageWithSender(shardId ShardId, envelope Shardin
 			// Spawn shard
 			r.Log().Debug("Spawning local shard", "shardId", shardId)
 			var err error
+			sid := shardId // capture for closure
 			shard, err = r.System().ActorOf(actor.Props{
-				New: func() actor.Actor { return NewShard(r.typeName, r.entityCreator, r.messageUnmarshaler) },
+				New: func() actor.Actor {
+					return NewShard(r.typeName, sid, r.entityCreator, r.messageUnmarshaler, r.shardSettings)
+				},
 			}, shardId)
 			if err != nil {
 				r.Log().Error("Failed to spawn shard", "shardId", shardId, "error", err)

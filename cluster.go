@@ -152,11 +152,33 @@ type ClusterConfig struct {
 	//	    StableAfter:    10 * time.Second,
 	//	},
 	SBR SBRConfig
+
+	// Sharding holds parsed sharding configuration from HOCON.
+	// It is used to populate ShardingSettings when StartSharding is called.
+	//
+	//	pekko.cluster.sharding {
+	//	    passivation.idle-timeout = 2m
+	//	    remember-entities = on
+	//	}
+	Sharding ShardingConfig
 }
 
 // SBRConfig is a re-export of cluster.SBRConfig for use in ClusterConfig.
 // Import gekka directly — you do not need to import the cluster sub-package.
 type SBRConfig = gcluster.SBRConfig
+
+// ShardingConfig holds sharding-specific configuration parsed from HOCON.
+type ShardingConfig struct {
+	// PassivationIdleTimeout is the duration after which an entity that
+	// has not received a message is automatically stopped.
+	// Corresponds to pekko.cluster.sharding.passivation.idle-timeout.
+	PassivationIdleTimeout time.Duration
+
+	// RememberEntities, when true, persists entity lifecycle events so
+	// entities are re-spawned after a Shard restart.
+	// Corresponds to pekko.cluster.sharding.remember-entities.
+	RememberEntities bool
+}
 
 // resolve returns the effective (scheme, system, host, port) for this config.
 func (c ClusterConfig) resolve() (scheme, system, host string, port uint32) {

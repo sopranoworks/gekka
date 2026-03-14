@@ -224,6 +224,18 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		nodeCfg.TLS.ServerName = v
 	}
 
+	// ── Cluster Sharding ────────────────────────────────────────────────────
+	shardingPrefix := prefix + ".cluster.sharding"
+	if v, err := cfg.GetString(shardingPrefix + ".passivation.idle-timeout"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.Sharding.PassivationIdleTimeout = d
+		}
+	}
+	if v, err := cfg.GetString(shardingPrefix + ".remember-entities"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		nodeCfg.Sharding.RememberEntities = v == "on" || v == "true"
+	}
+
 	// ── Split Brain Resolver ────────────────────────────────────────────────
 	sbrPrefix := prefix + ".cluster.split-brain-resolver"
 	if v, err := cfg.GetString(sbrPrefix + ".active-strategy"); err == nil {

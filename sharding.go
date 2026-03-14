@@ -13,16 +13,40 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"time"
 
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/persistence"
 	"github.com/sopranoworks/gekka/sharding"
 )
 
 // ShardingSettings defines configuration for cluster sharding.
 type ShardingSettings struct {
-	Role               string
-	NumberOfShards     int
+	// Role restricts sharding to nodes with this cluster role.
+	Role string
+
+	// NumberOfShards is the total number of shards (immutable after start).
+	NumberOfShards int
+
+	// AllocationStrategy decides which node hosts a given shard.
+	// Defaults to LeastShardAllocationStrategy(threshold=3, maxSimultaneous=1).
 	AllocationStrategy sharding.ShardAllocationStrategy
+
+	// PassivationIdleTimeout, when > 0, automatically stops entities idle
+	// longer than this duration.
+	//
+	// HOCON: pekko.cluster.sharding.passivation.idle-timeout
+	PassivationIdleTimeout time.Duration
+
+	// RememberEntities, when true, persists entity lifecycle events so
+	// entities are re-spawned after a Shard restart or failover.
+	//
+	// HOCON: pekko.cluster.sharding.remember-entities = on
+	RememberEntities bool
+
+	// Journal is used when RememberEntities is true.  Defaults to an
+	// InMemoryJournal if nil (use a durable backend in production).
+	Journal persistence.Journal
 }
 
 // StartSharding starts cluster sharding for a given entity type.
@@ -110,9 +134,15 @@ func StartSharding[Command any, Event any, State any](
 		return ptr.Elem().Interface(), nil
 	}
 
+	shardSettings := sharding.ShardSettings{
+		PassivationIdleTimeout: settings.PassivationIdleTimeout,
+		RememberEntities:       settings.RememberEntities,
+		Journal:                settings.Journal,
+	}
+
 	region, err := sys.ActorOf(actor.Props{
 		New: func() actor.Actor {
-			return sharding.NewShardRegion(typeName, entityCreator, unmarshaler, extract, coordinatorRef)
+			return sharding.NewShardRegion(typeName, entityCreator, unmarshaler, extract, coordinatorRef, shardSettings)
 		},
 	}, typeName+"Region")
 

@@ -613,10 +613,12 @@ func (c *Cluster) Ask(ctx context.Context, dst interface{}, msg interface{}) (*I
 	tempPath := fmt.Sprintf("%s://%s@%s:%d/temp/ask-%s",
 		self.Protocol, self.System, self.Host, self.Port, id)
 
-	// Register a reply channel keyed by the temp path.
+	// Register a reply channel keyed by the path portion only (e.g. "/temp/ask-<id>").
+	// handleUserMessage extracts just the path from the incoming Artery recipient URI.
+	pathKey := "/temp/ask-" + id
 	replyCh := make(chan *core.ArteryMetadata, 1)
-	c.nm.RegisterPendingReply(tempPath, replyCh)
-	defer c.nm.UnregisterPendingReply(tempPath)
+	c.nm.RegisterPendingReply(pathKey, replyCh)
+	defer c.nm.UnregisterPendingReply(pathKey)
 
 	if err := c.router.SendWithSender(ctx, pathStr, tempPath, msg); err != nil {
 		return nil, fmt.Errorf("gekka: Ask: send: %w", err)

@@ -169,8 +169,8 @@ func (cm *ClusterManager) JoinCluster(ctx context.Context, seedHost string, seed
 
 	// In Pekko Cluster, we usually start with InitJoin.
 	// Send a minimal config so Pekko's JoinConfigCompatCheckCluster.check
-	// can call getString("pekko.downing-provider-class") without throwing.
-	minConfig := proto.String(`pekko.downing-provider-class = "org.apache.pekko.sbr.SplitBrainResolverProvider"`)
+	// can call getString("pekko.cluster.downing-provider-class") without throwing.
+	minConfig := proto.String(`pekko.cluster.downing-provider-class = ""`)
 	initJoin := &gproto_cluster.InitJoin{CurrentConfig: minConfig}
 	return cm.Router(ctx, path, initJoin)
 }

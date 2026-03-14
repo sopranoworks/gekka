@@ -745,7 +745,8 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 		addr := req.From.GetAddress()
 		nm := assoc.nodeMgr
 		nm.mu.RLock()
-		var matched *GekkaAssociation
+		var matched *GekkaAssociation          // OUTBOUND in WAITING/INITIATED state
+		var outboundToRemote *GekkaAssociation // any OUTBOUND to this remote (any state)
 
 		normalize := func(h string) string {
 			if h == "localhost" || h == "127.0.0.1" || h == "::1" {
@@ -771,24 +772,40 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 
 			log.Printf("handleHandshakeReq candidate: k=%s role=%v state=%v host=%s port=%d match=%v", k, a.role, a.state, aHost, aPort, hostMatch)
 
-			if isOutbound && isWaiting && hostMatch {
-				matched = a
-				log.Printf("handleHandshakeReq: matched Key=%s Association=%p", k, a)
-				break
+			if isOutbound && hostMatch {
+				if outboundToRemote == nil {
+					outboundToRemote = a
+				}
+				if isWaiting && matched == nil {
+					matched = a
+					log.Printf("handleHandshakeReq: matched Key=%s Association=%p", k, a)
+				}
 			}
 		}
 		nm.mu.RUnlock()
 
-		// Send HandshakeRsp back to the remote so its OUTBOUND association can
-		// transition to ASSOCIATED.  This is correct Artery protocol for both
-		// Pekko and Go peers: the outbound side reads HandshakeRsp after sending
-		// HandshakeReq.
+		// Build HandshakeRsp frame.
 		localUA := &gproto_remote.UniqueAddress{Address: assoc.nodeMgr.LocalAddr, Uid: proto.Uint64(assoc.localUid)}
 		rspProto := &gproto_remote.MessageWithAddress{Address: localUA}
 		if rspPayload, err2 := proto.Marshal(rspProto); err2 == nil {
 			if frame, err2 := BuildArteryFrame(int64(assoc.localUid), actor.ArteryInternalSerializerID, "", "", "e", rspPayload, true); err2 == nil {
-				log.Printf("Association %p (INBOUND): sending HandshakeRsp to remote", assoc)
-				assoc.outbox <- frame
+				if outboundToRemote != nil {
+					// Route HandshakeRsp via our OUTBOUND to the remote (arrives on remote's
+					// INBOUND, which is read-friendly for any Artery implementation).
+					// Pekko's outbound TCP sockets are write-only — writing bytes back onto
+					// them triggers "Unexpected incoming bytes" and UID quarantine.  By
+					// sending via our OUTBOUND instead we avoid that, while still completing
+					// Go-to-Go secondary connections: the remote's INBOUND dispatch calls
+					// handleHandshakeRsp and completes the remote's waiting OUTBOUND to us.
+					log.Printf("Association %p (INBOUND): routing HandshakeRsp via OUTBOUND %p", assoc, outboundToRemote)
+					outboundToRemote.outbox <- frame
+				} else {
+					// No OUTBOUND to this remote yet — send directly on the INBOUND TCP.
+					// This is the first-contact case where the remote dialled us but we have
+					// not yet dialled them (pure inbound-only peer).
+					log.Printf("Association %p (INBOUND): no outbound — sending HandshakeRsp via INBOUND", assoc)
+					assoc.outbox <- frame
+				}
 			}
 		}
 

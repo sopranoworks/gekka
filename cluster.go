@@ -14,6 +14,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"log/slog"
 	"net"
 	"reflect"
@@ -220,6 +221,16 @@ type Cluster struct {
 	logHandler        slog.Handler // nil = use slog.Default().Handler()
 	onMessage         func(ctx context.Context, msg *IncomingMessage) error
 	deployments       map[string]core.DeploymentConfig // keyed by actor path; nil = no deployments
+
+	// Coordinated shutdown — drives the graceful exit sequence.
+	cs *actor.CoordinatedShutdown
+
+	// shardingRegionsMu guards shardingRegions.
+	shardingRegionsMu sync.Mutex
+	// shardingRegions holds refs to every ShardRegion actor spawned on this
+	// node.  Populated by RegisterShardingRegion; consumed during the
+	// cluster-sharding-shutdown-region phase.
+	shardingRegions []ActorRef
 }
 
 // NewCluster creates, wires, and starts a Cluster. The TCP listener is bound
@@ -379,6 +390,12 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	// members join, but it ensures leader actions (like transitioning
 	// Joining -> Up) happen as soon as possible.
 	go cluster.cm.StartGossipLoop(cluster.ctx)
+
+	// ── Coordinated Shutdown ────────────────────────────────────────────────
+	// Wire the built-in graceful exit sequence so that Shutdown() drives the
+	// cluster through Leave → Exiting → Removed before closing TCP connections.
+	cluster.cs = actor.NewCoordinatedShutdown()
+	cluster.registerBuiltinShutdownTasks()
 
 	return cluster, nil
 }
@@ -887,8 +904,93 @@ func (c *Cluster) GetTypeByManifest(manifest string) (reflect.Type, bool) {
 }
 
 
+// CoordinatedShutdown returns the node's CoordinatedShutdown manager.
+// Call AddTask on it to register custom shutdown logic before calling
+// GracefulShutdown.
+func (c *Cluster) CoordinatedShutdown() *actor.CoordinatedShutdown {
+	return c.cs
+}
+
+// RegisterShardingRegion records a ShardRegion actor ref so that the
+// coordinated-shutdown sequence can stop it gracefully before the cluster
+// departs.  Call this once per ShardRegion immediately after spawning it.
+func (c *Cluster) RegisterShardingRegion(ref ActorRef) {
+	c.shardingRegionsMu.Lock()
+	c.shardingRegions = append(c.shardingRegions, ref)
+	c.shardingRegionsMu.Unlock()
+}
+
+// registerBuiltinShutdownTasks wires the standard cluster lifecycle tasks into
+// the CoordinatedShutdown instance.  Must be called once during NewCluster.
+func (c *Cluster) registerBuiltinShutdownTasks() {
+	// ── cluster-sharding-shutdown-region ────────────────────────────────────
+	// Stop every locally registered ShardRegion before departing the cluster.
+	// This lets the coordinator reassign shards to remaining members.
+	c.cs.AddTask("cluster-sharding-shutdown-region", "stop-local-regions", func(ctx context.Context) error {
+		c.shardingRegionsMu.Lock()
+		regions := make([]ActorRef, len(c.shardingRegions))
+		copy(regions, c.shardingRegions)
+		c.shardingRegionsMu.Unlock()
+
+		for _, r := range regions {
+			c.System.Stop(r)
+		}
+		return nil
+	})
+
+	// ── cluster-leave ───────────────────────────────────────────────────────
+	// Send a Leave message to all Up/WeaklyUp members, then wait for this
+	// node's own status to reach Removed (driven by the cluster leader).
+	c.cs.AddTask("cluster-leave", "send-leave-and-wait", func(ctx context.Context) error {
+		if err := c.cm.LeaveCluster(); err != nil {
+			// Non-fatal: we might not be fully joined yet.
+			log.Printf("[CoordinatedShutdown] LeaveCluster: %v", err)
+		}
+		return c.cm.WaitForSelfRemoved(ctx)
+	})
+
+	// ── cluster-shutdown ────────────────────────────────────────────────────
+	// Stop the CRDT replicator after the cluster has been left so that no
+	// gossip is sent to nodes that have already seen us depart.
+	c.cs.AddTask("cluster-shutdown", "stop-replicator", func(_ context.Context) error {
+		c.repl.Stop()
+		return nil
+	})
+
+	// ── actor-system-terminate ──────────────────────────────────────────────
+	// Cancel the root context (stops gossip / heartbeat loops) and close all
+	// TCP connections.  This is the last phase.
+	c.cs.AddTask("actor-system-terminate", "close-transport", func(_ context.Context) error {
+		if c.cancel != nil {
+			c.cancel()
+		}
+		if c.server != nil {
+			return c.server.Shutdown()
+		}
+		return nil
+	})
+}
+
+// GracefulShutdown executes the full coordinated-shutdown sequence and waits
+// for it to complete before returning.  Use this instead of Shutdown() when
+// you need the cluster to drive through Leave → Exiting → Removed before the
+// node closes its TCP connections.
+//
+// The provided ctx acts as a hard deadline.  If it expires mid-sequence the
+// remaining phases are still attempted so the transport is always closed.
+//
+//	shutCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+//	defer cancel()
+//	node.GracefulShutdown(shutCtx)
+func (c *Cluster) GracefulShutdown(ctx context.Context) error {
+	return c.cs.Run(ctx)
+}
+
 // Shutdown stops the TCP server and cancels all background goroutines.
 // It is safe to call multiple times.
+//
+// For a graceful exit that drives the node through the cluster leave/exiting/
+// removed lifecycle, call GracefulShutdown instead.
 func (c *Cluster) Shutdown() error {
 	if c.cancel != nil {
 		c.cancel()

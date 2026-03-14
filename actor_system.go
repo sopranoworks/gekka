@@ -173,6 +173,17 @@ func (b *actorContextBridge) Watch(watcher actor.Ref, target actor.Ref) {
 // Resolve implements actor.ActorContext. It looks up the actor at path and
 // returns its Ref, allowing GroupRouter.PreStart to resolve routee paths
 // without importing the gekka package.
+func (b *actorContextBridge) Stop(ref actor.Ref) {
+	type stopper interface {
+		Stop(target ActorRef)
+	}
+	if s, ok := b.sys.(stopper); ok {
+		if ar, ok := ref.(ActorRef); ok {
+			s.Stop(ar)
+		}
+	}
+}
+
 func (b *actorContextBridge) Resolve(path string) (actor.Ref, error) {
 	type resolver interface {
 		ActorSelection(path string) ActorSelection

@@ -8,7 +8,7 @@ Powered by its own high-performance HOCON engine, [`gekka-config`](https://githu
 
 ## Verified Interoperability
 
-`gekka` is verified against live JVM nodes for both **Apache Pekko 1.0.x** and **Lightbend Akka 2.6.21** using E2E integration tests. This ensures byte-level compatibility for cluster membership, remote messaging (including **Artery TLS** secure transport), and distributed state.
+`gekka` is verified against live JVM nodes for both **Apache Pekko 1.0.x** and **Lightbend Akka 2.6.21** using E2E integration tests. This ensures byte-level compatibility for cluster membership, remote messaging (including **Artery TLS** secure transport), distributed state, and **Cluster Singleton** failover.
 
 
 ## Key Features
@@ -27,7 +27,7 @@ Powered by its own high-performance HOCON engine, [`gekka-config`](https://githu
 - **Actor-aware Logging** — Structured logging contextualized with actor paths and system info.
 - **High-Performance Remoting** — Binary-compatible Artery TCP with transport-level heartbeats.
 - **Observability** — Built-in monitoring with `/healthz` and `/metrics` (JSON/Prometheus).
-- **Cluster Singletons** — Distributed singleton management with auto-failover.
+- **Cluster Singletons** — Full distributed lifecycle management with automatic failover between Go and Pekko/Akka nodes.
 
 ## Quick Start 1: Local Actor System
 
@@ -263,6 +263,37 @@ func main() {
 
 See the [persistence example](examples/persistence/main.go) for a full implementation including snapshots and recovery demonstration.
 
+## Quick Start 8: Cluster Singletons
+
+Gekka ensures that exactly one instance of a singleton actor is alive in the cluster, typically on the oldest node.
+
+```go
+package main
+
+import (
+	"context"
+	"github.com/sopranoworks/gekka"
+	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/cluster"
+)
+
+func main() {
+	node, _ := gekka.NewCluster(...)
+	
+	// 1. Define the singleton manager
+	mgr := cluster.NewClusterSingletonManager(node.ClusterManager(), actor.Props{
+		New: func() actor.Actor { return &MySingleton{} },
+	}, "")
+	
+	// 2. Start the manager (which spawns the singleton on the oldest node)
+	node.System.ActorOf(gekka.Props{New: func() actor.Actor { return mgr }}, "singletonManager")
+	
+	// 3. Access the singleton via a proxy from any node
+	proxy := cluster.NewClusterSingletonProxy(node.ClusterManager(), node.Router(), "/user/singletonManager", "")
+	proxy.Send(context.Background(), "Hello Singleton!")
+}
+```
+
 
 ## Artery TLS
 
@@ -295,6 +326,7 @@ Support for mutual TLS (mTLS) is built-in, ensuring that only authenticated node
 ## New in v0.6.0: Distributed Pub/Sub & CRDTs
 
 v0.6.0 introduces **Distributed Pub/Sub** with GZIP compression support and **Distributed Data** (CRDTs) for decentralized state management. This release also features:
+- **Cluster Singleton Manager** — Automatic failover to the oldest node and interoperability with Scala-hosted singletons.
 - **Artery TLS Transport** — Secure, encrypted cluster communication using PEM-based certificates.
 - **Verified Interoperability** — Extensive E2E test suite against Scala Pekko/Akka processes, now including secure transport.
 - **Protocol-Aware Configuration** — Automatic switching of configuration keys based on the detected protocol.

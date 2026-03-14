@@ -36,8 +36,10 @@ import (
 // scalaSignals collects the named signals emitted by PekkoIntegrationNode on
 // stdout so each sub-test can wait for the event it cares about.
 type scalaSignals struct {
-	ready          chan struct{} // closed when "PEKKO_NODE_READY" is seen
-	pubsubReceived chan string   // carries the payload of every "PEKKO_PUBSUB_RECEIVED:<msg>" line
+	ready             chan struct{} // closed when "PEKKO_NODE_READY" is seen
+	singletonStarted  chan struct{} // closed when "PEKKO_SINGLETON_STARTED" is seen
+	pubsubReceived    chan string   // carries the payload of every "PEKKO_PUBSUB_RECEIVED:<msg>" line
+	singletonReceived chan string   // carries the payload of every "PEKKO_SINGLETON_RECEIVED:<msg>" line
 }
 
 // startPekkoIntegrationNode launches com.example.PekkoIntegrationNode via sbt,
@@ -67,13 +69,16 @@ func startPekkoIntegrationNode(t *testing.T, ctx context.Context) *scalaSignals 
 	})
 
 	sig := &scalaSignals{
-		ready:          make(chan struct{}),
-		pubsubReceived: make(chan string, 16),
+		ready:             make(chan struct{}),
+		singletonStarted:  make(chan struct{}),
+		pubsubReceived:    make(chan string, 16),
+		singletonReceived: make(chan string, 16),
 	}
 
 	go func() {
 		scanner := bufio.NewScanner(stdout)
 		readyOnce := false
+		singletonStartedOnce := false
 		for scanner.Scan() {
 			line := scanner.Text()
 			fmt.Printf("[SCALA] %s\n", line)
@@ -82,10 +87,21 @@ func startPekkoIntegrationNode(t *testing.T, ctx context.Context) *scalaSignals 
 				readyOnce = true
 				close(sig.ready)
 			}
+			if !singletonStartedOnce && strings.Contains(line, "PEKKO_SINGLETON_STARTED") {
+				singletonStartedOnce = true
+				close(sig.singletonStarted)
+			}
 			if strings.HasPrefix(line, "PEKKO_PUBSUB_RECEIVED:") {
 				payload := strings.TrimPrefix(line, "PEKKO_PUBSUB_RECEIVED:")
 				select {
 				case sig.pubsubReceived <- payload:
+				default:
+				}
+			}
+			if strings.HasPrefix(line, "PEKKO_SINGLETON_RECEIVED:") {
+				payload := strings.TrimPrefix(line, "PEKKO_SINGLETON_RECEIVED:")
+				select {
+				case sig.singletonReceived <- payload:
 				default:
 				}
 			}
@@ -301,5 +317,173 @@ func testClusterMembership(t *testing.T, node *Cluster) {
 			t.Fatalf("ClusterMembership: after %v: upCount=%d scalaUp=%v", timeout, upCount, scalaUp)
 		case <-time.After(500 * time.Millisecond):
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestClusterSingletonInterop
+// ---------------------------------------------------------------------------
+
+// TestClusterSingletonInterop verifies that Gekka's ClusterSingletonProxy can
+// successfully send messages to the Scala-hosted ClusterSingletonManager at
+// /user/singletonManager and receive replies from the singleton.
+//
+// The test also confirms that the proxy dynamically resolves the oldest node
+// — in this two-node cluster the Pekko seed (2552) joins first and is oldest,
+// so the singleton runs there and the proxy correctly routes to it.
+//
+// Run with:
+//
+//	go test -v -tags integration -run TestClusterSingletonInterop -timeout 300s .
+func TestClusterSingletonInterop(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+	t.Cleanup(cancel)
+
+	// ── 1. Start Scala/Pekko node ──────────────────────────────────────────
+	sig := startPekkoIntegrationNode(t, ctx)
+
+	log.Println("[WAIT] Waiting for PEKKO_NODE_READY...")
+	select {
+	case <-sig.ready:
+		log.Println("[SCALA] PekkoIntegrationNode is ready.")
+	case <-ctx.Done():
+		t.Fatalf("Scala node did not print PEKKO_NODE_READY within timeout")
+	}
+
+	// Wait for the singleton to start on the Pekko node (it is the seed and
+	// becomes oldest immediately).
+	log.Println("[WAIT] Waiting for PEKKO_SINGLETON_STARTED...")
+	select {
+	case <-sig.singletonStarted:
+		log.Println("[SCALA] IntegrationSingleton is running.")
+	case <-time.After(30 * time.Second):
+		t.Fatalf("PEKKO_SINGLETON_STARTED not received within 30s")
+	}
+
+	// ── 2. Initialize Gekka cluster on port 2553 ───────────────────────────
+	selfAddr := actor.Address{
+		Protocol: "pekko",
+		System:   "GekkaSystem",
+		Host:     "127.0.0.1",
+		Port:     2553,
+	}
+	node, err := NewCluster(ClusterConfig{Address: selfAddr})
+	if err != nil {
+		t.Fatalf("NewCluster: %v", err)
+	}
+	t.Cleanup(func() { node.Shutdown() })
+	log.Printf("[GO] Cluster node listening at %s", node.Addr())
+
+	node.OnMessage(func(_ context.Context, msg *IncomingMessage) error {
+		log.Printf("[GO] OnMessage: sid=%d manifest=%q len=%d", msg.SerializerId, msg.Manifest, len(msg.Payload))
+		return nil
+	})
+
+	// ── 3. Join and wait for handshake ────────────────────────────────────
+	log.Println("[GO] Joining GekkaSystem at 127.0.0.1:2552...")
+	if err := node.Join("127.0.0.1", 2552); err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+
+	log.Println("[GO] Waiting for Artery handshake with 127.0.0.1:2552...")
+	if err := node.WaitForHandshake(ctx, "127.0.0.1", 2552); err != nil {
+		t.Fatalf("WaitForHandshake: %v", err)
+	}
+	log.Println("[GO] Handshake established.")
+
+	// Allow gossip to propagate cluster state.
+	time.Sleep(3 * time.Second)
+
+	// ── Sub-tests ─────────────────────────────────────────────────────────
+
+	t.Run("SingletonAsk", func(t *testing.T) {
+		testSingletonAsk(t, ctx, node, sig)
+	})
+
+	t.Run("SingletonProxyPath", func(t *testing.T) {
+		testSingletonProxyPath(t, node)
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Sub-test: SingletonAsk
+// ---------------------------------------------------------------------------
+
+// testSingletonAsk uses a ClusterSingletonProxy to send an Ask to the Scala
+// singleton and verifies the "Singleton: <msg>" reply.
+func testSingletonAsk(t *testing.T, ctx context.Context, node *Cluster, sig *scalaSignals) {
+	t.Helper()
+
+	proxy := node.SingletonProxy("/user/singletonManager", "")
+
+	askCtx, askCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer askCancel()
+
+	msg := []byte("hello singleton")
+	log.Printf("[SINGLETON] Sending Ask via proxy with msg %q", msg)
+
+	// Resolve the singleton path via the proxy to confirm it points to Scala.
+	singletonPath, err := proxy.CurrentOldestPath()
+	if err != nil {
+		t.Fatalf("SingletonProxy.CurrentOldestPath: %v", err)
+	}
+	log.Printf("[SINGLETON] Resolved singleton path: %s", singletonPath)
+
+	reply, err := node.Ask(askCtx, singletonPath, msg)
+	if err != nil {
+		t.Fatalf("Ask singleton: %v", err)
+	}
+	if reply.SerializerId != 4 {
+		t.Errorf("reply SerializerId = %d, want 4 (ByteArraySerializer)", reply.SerializerId)
+	}
+
+	got := string(reply.Payload)
+	want := "Singleton: hello singleton"
+	if got != want {
+		t.Errorf("Ask singleton reply = %q, want %q", got, want)
+	} else {
+		log.Printf("[SINGLETON] PASS — got %q", got)
+	}
+
+	// Confirm Scala stdout also recorded the receipt.
+	select {
+	case received := <-sig.singletonReceived:
+		wantPayload := string(msg)
+		if received != wantPayload {
+			t.Errorf("PEKKO_SINGLETON_RECEIVED: got %q, want %q", received, wantPayload)
+		} else {
+			log.Printf("[SINGLETON] Scala confirmed receipt of %q", received)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("PEKKO_SINGLETON_RECEIVED not seen within 10s")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Sub-test: SingletonProxyPath
+// ---------------------------------------------------------------------------
+
+// testSingletonProxyPath verifies that the ClusterSingletonProxy correctly
+// resolves the singleton path to the Pekko seed node (127.0.0.1:2552), which
+// is the oldest Up member in this two-node cluster.
+//
+// This confirms that when cluster membership changes the proxy dynamically
+// re-evaluates OldestNode() on every Send() call — here the Pekko seed joined
+// first (upNumber=0) so it is definitively the oldest.
+func testSingletonProxyPath(t *testing.T, node *Cluster) {
+	t.Helper()
+
+	proxy := node.SingletonProxy("/user/singletonManager", "")
+
+	path, err := proxy.CurrentOldestPath()
+	if err != nil {
+		t.Fatalf("CurrentOldestPath: %v", err)
+	}
+
+	const want = "pekko://GekkaSystem@127.0.0.1:2552/user/singletonManager/singleton"
+	if path != want {
+		t.Errorf("singleton path = %q, want %q", path, want)
+	} else {
+		log.Printf("[SINGLETON] PASS — proxy path correctly resolves to %s", path)
 	}
 }

@@ -52,7 +52,7 @@ func TestPhiAccrualFailureDetector(t *testing.T) {
 	}
 
 	if !fd.IsAvailable(node) {
-		// Threshold 8.0, mean 0, stdDev 500. 
+		// Threshold 8.0, mean 0, stdDev 500.
 		// We need timeSinceLast to be large enough.
 		// CDF( (2000-0)/(500*1.41) ) = CDF(2.8) -> p=0.997 -> phi=2.5.
 		// Actually for 8.0 we need p = 1 - 10^-8, which is huge.

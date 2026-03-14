@@ -11,8 +11,8 @@ package sharding
 import (
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"github.com/sopranoworks/gekka/actor"
+	"reflect"
 )
 
 type EntityId = string
@@ -33,7 +33,7 @@ type ExtractEntityId func(msg any) (EntityId, ShardId, any)
 type ShardAllocationStrategy interface {
 	// AllocateShard returns the ShardRegion actor reference where the shard should be allocated.
 	AllocateShard(requester actor.Ref, shardId ShardId, currentShardAllocations map[actor.Ref][]ShardId) actor.Ref
-	
+
 	// Rebalance returns the list of shard IDs that should be rebalanced.
 	Rebalance(currentShardAllocations map[actor.Ref][]ShardId, rebalanceInProgress []ShardId) []ShardId
 }

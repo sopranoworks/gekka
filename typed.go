@@ -37,7 +37,6 @@ func SpawnPersistent[Command any, Event any, State any](sys ActorSystem, behavio
 	return actor.SpawnPersistent(asActorContext(sys, ""), behavior, name, props...)
 }
 
-
 // Ask sends a message to a typed actor and waits for a reply.
 // It follows the Akka Typed 'Ask' pattern where a message factory is provided
 // that takes a 'replyTo' reference and returns the message to be sent.
@@ -50,16 +49,16 @@ func Ask[T any, R any](ctx context.Context, target TypedActorRef[T], timeout tim
 
 	var zero R
 	untyped := target.Untyped()
-	
+
 	type systemProvider interface {
 		System() ActorSystem
 	}
-	
+
 	var sys ActorSystem
 	if sp, ok := untyped.(systemProvider); ok {
 		sys = sp.System()
 	}
-	
+
 	// If we can't find the system, fall back to the old behavior (only works locally)
 	if sys == nil {
 		return actor.Ask(ctx, target, timeout, msgFactory)
@@ -90,7 +89,7 @@ func Ask[T any, R any](ctx context.Context, target TypedActorRef[T], timeout tim
 			// Try to deserialize if possible, though it should already be done by handleUserMessage
 			return zero, fmt.Errorf("sharding: received raw payload in Ask, cannot deserialize")
 		}
-		
+
 		if result, ok := payload.(R); ok {
 			return result, nil
 		}

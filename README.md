@@ -1,4 +1,4 @@
-# gekka &nbsp;[![Version](https://img.shields.io/badge/version-0.6.0--dev-orange)](https://github.com/sopranoworks/gekka) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Go CI](https://github.com/sopranoworks/gekka/actions/workflows/go.yml/badge.svg)](https://github.com/sopranoworks/gekka/actions/workflows/go.yml)
+# gekka &nbsp;[![Version](https://img.shields.io/badge/version-0.6.0-blue)](https://github.com/sopranoworks/gekka) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Go CI](https://github.com/sopranoworks/gekka/actions/workflows/go.yml/badge.svg)](https://github.com/sopranoworks/gekka/actions/workflows/go.yml)
 
 **Pekko/Akka Dual-Compatibility**
 
@@ -430,15 +430,17 @@ Support for mutual TLS (mTLS) is built-in, ensuring that only authenticated node
 - **HOCON-ready**: Configuration can be passed programmatically via `ClusterConfig` or loaded directly from standard `application.conf` files.
 
 
-## New in v0.6.0: Distributed Pub/Sub, CRDTs & Reliable Delivery
+## New in v0.6.0
 
-v0.6.0 introduces **Distributed Pub/Sub** with GZIP compression support, **Distributed Data** (CRDTs) for decentralized state management, and **Reliable Delivery** for at-least-once messaging with Scala/Pekko. This release also features:
-- **Reliable Delivery** — `actor/delivery` package providing `ProducerController` and `ConsumerController` with Pekko-compatible wire format (Serializer ID 36).
-- **Cluster Singleton Manager** — Automatic failover to the oldest node and interoperability with Scala-hosted singletons.
+Gekka v0.6.0 is a major stable release focused on **Advanced Clustering** and **Enterprise-Grade Remoting**. Key additions include:
+
+- **Distributed Pub/Sub** — Full Pekko compatibility with GZIP compression support (Serializer ID 9).
 - **Artery TLS Transport** — Secure, encrypted cluster communication using PEM-based certificates.
-- **Verified Interoperability** — Extensive E2E test suite against Scala Pekko/Akka processes, now including secure transport.
-- **Protocol-Aware Configuration** — Automatic switching of configuration keys based on the detected protocol.
-- **GZIP Support** — Optimized bandwidth for pub-sub and CRDT gossip.
+- **Reliable Delivery** — At-least-once messaging protocol for guaranteed delivery matching Pekko's Serializer ID 36.
+- **Cluster Singleton** — Automatic lifecycle management and failover of singletons across the cluster.
+- **Coordinated Shutdown** — Graceful, phased node exit sequence ensuring clean shard handovers and state flushes.
+- **Distributed Data (CRDTs)** — Optimized G-Counter and OR-Set replication for decentralized state.
+- **Verified Interoperability** — Comprehensive E2E testing against Apache Pekko 1.0.x and Lightbend Akka 2.6.21.
 
 v0.6.0 also includes **Pool** and **Group Routers** that can be configured directly in HOCON:
 

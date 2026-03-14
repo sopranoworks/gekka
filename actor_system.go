@@ -197,4 +197,3 @@ func (b *actorContextBridge) Resolve(path string) (actor.Ref, error) {
 	}
 	return nil, fmt.Errorf("system does not support ActorSelection")
 }
-

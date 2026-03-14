@@ -98,7 +98,7 @@ func TestPersistentActor(t *testing.T) {
 	// 5. Test snapshotting
 	p.Receive(Increment{})
 	p.Receive(Increment{}) // Should trigger snapshot (seqNr 5)
-	
+
 	snap, err := snaps.LoadSnapshot(ctx, "counter-1", persistence.LatestSnapshotCriteria())
 	if err != nil || snap == nil {
 		t.Errorf("expected snapshot to be saved")

@@ -11,8 +11,8 @@ package sharding
 import (
 	"context"
 	"fmt"
-	"time"
 	"github.com/sopranoworks/gekka/actor"
+	"time"
 )
 
 // CoordinatorSender is an interface for sending messages to the coordinator.
@@ -66,7 +66,7 @@ func (p *ShardCoordinatorProxy) Receive(msg any) {
 	if len(p.stash) > 100 {
 		p.stash = p.stash[1:] // Limit stash size
 	}
-	
+
 	p.scheduleRetry()
 }
 
@@ -74,7 +74,7 @@ func (p *ShardCoordinatorProxy) flushStash() {
 	if len(p.stash) == 0 {
 		return
 	}
-	
+
 	p.Log().Debug("Attempting to flush stashed messages", "count", len(p.stash))
 	var remaining []actor.Envelope
 	for _, e := range p.stash {

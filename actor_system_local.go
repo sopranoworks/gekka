@@ -16,9 +16,9 @@ import (
 	"strings"
 	"sync"
 
+	hocon "github.com/sopranoworks/gekka-config"
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/internal/core"
-	hocon "github.com/sopranoworks/gekka-config"
 )
 
 // localActorSystem implements ActorSystem for local-only use without networking.

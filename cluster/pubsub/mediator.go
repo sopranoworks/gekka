@@ -106,8 +106,8 @@ type Send struct {
 // If AllButSelf is true, exclude the local node's subscriber.
 // Serialized as plain Protobuf (no GZIP).
 type SendToAll struct {
-	Path      string
-	Msg       any
+	Path       string
+	Msg        any
 	AllButSelf bool
 }
 

@@ -21,9 +21,9 @@ type producerState struct {
 	selfRef       actor.Ref
 	consumerRef   actor.Ref // resolved when consumer registers
 	nextSeqNr     int64
-	requestedUpTo int64                     // last requestUpToSeqNr from consumer
+	requestedUpTo int64                       // last requestUpToSeqNr from consumer
 	unacked       map[int64]*SequencedMessage // seqNr → buffered message awaiting Ack
-	pending       []*SequencedMessage        // messages waiting to be sent (before window opens)
+	pending       []*SequencedMessage         // messages waiting to be sent (before window opens)
 	windowSize    int
 }
 

@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+-
+## [0.6.0] - 2026-03-14
+
+### Added
+- **Distributed Pub/Sub**: Full Pekko DistributedPubSub compatibility. Supports `Subscribe`, `Unsubscribe`, `Publish`, and `Send`. Includes GZIP compression for gossip state to optimize bandwidth.
+- **Artery TLS Support**: Binary-compatible secure transport using Go's `crypto/tls`. Provides PEM-based certificate management as an alternative to Java JKS.
+- **Reliable Delivery (At-Least-Once)**: Implementation of Pekko's Reliable Delivery protocol (Serializer ID 36). Includes `ProducerController` and `ConsumerController` for guaranteed message delivery between Go and Scala.
+- **Cluster Singleton Manager & Proxy**: Full distributed lifecycle management. Ensures a single instance of an actor exists on the oldest node with automatic failover during cluster membership changes.
+- **Coordinated Shutdown**: Pekko-compatible phased shutdown sequence. Executes tasks in order (`before-service-unbind`, `cluster-leave`, `cluster-shutdown`, etc.) to ensure graceful node departure.
+- **Improved CRDTs**: G-Counter and OR-Set now support optimized gossip and GZIP compression.
+- **New documentation**: `docs/TLS.md`, `docs/DELIVERY.md`, `docs/ROADMAP.md`.
+
+### Fixed
+- **Serialization Registry**: Standardized `internal/core/serialization_registry.go` to avoid fragmentation and ensure consistent ID mappings.
+- **Sharding region cleanup**: Registered Sharding regions are now automatically stopped during the `cluster-sharding-shutdown-region` phase of Coordinated Shutdown.
+- **Gossip Loop**: Improved robustness of the cluster gossip loop during rapid node joins/leaves.
+
+### Improved
+- **Verified Interoperability**: Expanded E2E integration test suite to cover TLS, Singleton failover, and Reliable Delivery against live Pekko 1.0.x nodes.
+- **HOCON Configuration**: Improved protocol auto-detection and support for `tls-tcp` transport keys.
+- **Location Transparency**: Seamless addressing for Cluster Singletons and Sharded Entities across heterogeneous Go/Scala clusters.
+
+---
 
 ## [0.5.0] - 2026-03-13
 

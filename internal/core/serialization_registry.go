@@ -35,12 +35,12 @@ type Serializer interface {
 // SerializationRegistry manages the mapping between message types and manifest strings.
 // It is used by Artery handlers to serialize and deserialize messages.
 type SerializationRegistry struct {
-	mu                sync.RWMutex
-	manifestsToType   map[string]reflect.Type
-	typeToManifests   map[reflect.Type]string
-	serializers       map[int32]Serializer
-	jsonSerializer    *JSONSerializer
-	rawSerializer     *RawSerializer
+	mu                 sync.RWMutex
+	manifestsToType    map[string]reflect.Type
+	typeToManifests    map[reflect.Type]string
+	serializers        map[int32]Serializer
+	jsonSerializer     *JSONSerializer
+	rawSerializer      *RawSerializer
 	protobufSerializer *ProtobufSerializer
 }
 

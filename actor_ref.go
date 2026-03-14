@@ -252,7 +252,6 @@ func (s ActorSelection) Ask(ctx context.Context, msg any) (any, error) {
 	return ref.Ask(ctx, msg)
 }
 
-
 // ActorSelection returns a handle to one or more actors, local or remote,
 // identified by path.
 //
@@ -275,4 +274,3 @@ func ToTyped[T any](ref actor.Ref) actor.TypedActorRef[T] {
 func ToUntyped[T any](ref actor.TypedActorRef[T]) actor.Ref {
 	return actor.ToUntyped(ref)
 }
-

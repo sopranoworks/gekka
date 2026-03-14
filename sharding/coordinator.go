@@ -16,8 +16,8 @@ import (
 type ShardCoordinator struct {
 	actor.BaseActor
 	strategy ShardAllocationStrategy
-	regions map[string]actor.Ref // RegionPath -> Ref
-	shards  map[ShardId]string   // ShardId -> RegionPath
+	regions  map[string]actor.Ref // RegionPath -> Ref
+	shards   map[ShardId]string   // ShardId -> RegionPath
 }
 
 func NewShardCoordinator(strategy ShardAllocationStrategy) *ShardCoordinator {

@@ -91,7 +91,7 @@ func main() {
 	system2, _ := gekka.NewCluster(gekka.ClusterConfig{SystemName: "ShardingSystem", Port: 2552})
 
 	system2.Join("127.0.0.1", 2551)
-	
+
 	// Register user types for sharding serialization
 	system1.RegisterType("main.AddItem", reflect.TypeOf(AddItem{}))
 	system1.RegisterType("main.GetItems", reflect.TypeOf(GetItems{}))
@@ -115,7 +115,7 @@ func main() {
 
 	// 3. Spawn sharded entities on both nodes
 	settings := gekka.ShardingSettings{NumberOfShards: 10}
-	
+
 	factory := ShoppingCartBehavior(journal)
 
 	cartRegion1, err := gekka.StartSharding(system1, "ShoppingCart", factory, ExtractCartEntityId, settings)
@@ -132,7 +132,7 @@ func main() {
 
 	// 4. Send messages to entities via regions
 	fmt.Println("--- Sending messages to carts ---")
-	
+
 	// cartA should go to one shard, cartB to another
 	cartRegion1.Tell(AddItem{CartId: "cartA", Item: "Apple"})
 	cartRegion1.Tell(AddItem{CartId: "cartB", Item: "Banana"})

@@ -11,8 +11,8 @@ package sharding
 import (
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"github.com/sopranoworks/gekka/actor"
+	"reflect"
 )
 
 type ShardRegion struct {

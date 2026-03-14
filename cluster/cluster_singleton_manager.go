@@ -34,9 +34,9 @@ type ClusterSingletonManager struct {
 	actor.BaseActor
 
 	cm             *ClusterManager
-	role           string       // optional role filter; empty = any node
-	singletonProps actor.Props  // factory for the singleton actor
-	singletonRef   actor.Ref    // non-nil when the singleton is running on this node
+	role           string      // optional role filter; empty = any node
+	singletonProps actor.Props // factory for the singleton actor
+	singletonRef   actor.Ref   // non-nil when the singleton is running on this node
 }
 
 // NewClusterSingletonManager creates a manager actor that will spawn/stop the

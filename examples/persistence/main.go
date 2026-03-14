@@ -104,7 +104,7 @@ func main() {
 	time.Sleep(100 * time.Millisecond)
 
 	counter2, _ := gekka.SpawnPersistent(system, Counter(persistenceID, journal, snaps), "counter-new")
-	
+
 	// Increment again (this will trigger snapshot if it reaches 3)
 	counter2.Tell(Increment{})
 	time.Sleep(100 * time.Millisecond)

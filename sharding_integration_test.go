@@ -44,7 +44,7 @@ func TestClusterSharding_Rebalancing(t *testing.T) {
 	// 3. Setup Sharding
 	journal := persistence.NewInMemoryJournal()
 	settings := ShardingSettings{NumberOfShards: 10}
-	
+
 	extractId := func(msg any) (sharding.EntityId, sharding.ShardId, any) {
 		if s, ok := msg.(string); ok {
 			return s, "shard-" + string(s[0]), s
@@ -91,7 +91,7 @@ func TestClusterSharding_Rebalancing(t *testing.T) {
 	// 5. Verify entities are reachable and state is persisted
 	for _, id := range entities {
 		ref, _ := GetEntityRef[string](node2, "TestEntity", id)
-		// We don't have a GetState command in this test behavior, 
+		// We don't have a GetState command in this test behavior,
 		// but we can verify it doesn't crash and delivery happens.
 		ref.Tell("verify-" + id)
 	}
@@ -101,7 +101,7 @@ func TestClusterSharding_Rebalancing(t *testing.T) {
 	defer func() { _ = node3.Shutdown() }()
 	node3.RegisterType("string", reflect.TypeOf(""))
 	_ = node3.Join("127.0.0.1", 2551)
-	
+
 	_, err = StartSharding(node3, "TestEntity", behaviorFactory, extractId, settings)
 	if err != nil {
 		t.Fatalf("node3 sharding: %v", err)

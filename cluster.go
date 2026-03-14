@@ -25,9 +25,9 @@ import (
 	"github.com/sopranoworks/gekka/actor"
 	gcluster "github.com/sopranoworks/gekka/cluster"
 	"github.com/sopranoworks/gekka/crdt"
+	"github.com/sopranoworks/gekka/internal/core"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
-	"github.com/sopranoworks/gekka/internal/core"
 
 	"google.golang.org/protobuf/proto"
 )
@@ -198,7 +198,7 @@ type Cluster struct {
 	cancel     context.CancelFunc
 	localAddr  *gproto_remote.Address
 	seedAddr   *gproto_remote.Address // set by the first Join call
-	seeds      []actor.Address // from ClusterConfig.SeedNodes (populated by LoadConfig)
+	seeds      []actor.Address        // from ClusterConfig.SeedNodes (populated by LoadConfig)
 	metrics    *core.NodeMetrics
 	monitoring *core.MonitoringServer // nil when monitoring is disabled
 
@@ -665,10 +665,10 @@ func (c *Cluster) Ask(ctx context.Context, dst interface{}, msg interface{}) (*I
 	select {
 	case meta := <-replyCh:
 		return &IncomingMessage{
-			RecipientPath: tempPath,
-			Payload:       meta.Payload,
-			SerializerId:  meta.SerializerId,
-			Manifest:      string(meta.MessageManifest),
+			RecipientPath:       tempPath,
+			Payload:             meta.Payload,
+			SerializerId:        meta.SerializerId,
+			Manifest:            string(meta.MessageManifest),
 			DeserializedMessage: meta.DeserializedMessage,
 		}, nil
 	case <-ctx.Done():
@@ -902,7 +902,6 @@ func (c *Cluster) RegisterType(manifest string, typ reflect.Type) {
 func (c *Cluster) GetTypeByManifest(manifest string) (reflect.Type, bool) {
 	return c.nm.SerializerRegistry.GetTypeByManifest(manifest)
 }
-
 
 // CoordinatedShutdown returns the node's CoordinatedShutdown manager.
 // Call AddTask on it to register custom shutdown logic before calling
@@ -1226,5 +1225,3 @@ func (n *Cluster) selfPathURI(path string) string {
 	}
 	return path
 }
-
-

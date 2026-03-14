@@ -16,6 +16,8 @@ import org.apache.pekko.actor.typed.delivery.{ConsumerController, ProducerContro
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.actor.typed.scaladsl.adapter._
 import org.apache.pekko.actor.typed.{ActorRef => TypedActorRef, Behavior}
+import org.apache.pekko.cluster.{Cluster => PekkoCluster, MemberStatus}
+import org.apache.pekko.cluster.ClusterEvent._
 import org.apache.pekko.cluster.pubsub.DistributedPubSub
 import org.apache.pekko.cluster.pubsub.DistributedPubSubMediator.{Subscribe, SubscribeAck}
 import org.apache.pekko.cluster.singleton.{ClusterSingletonManager, ClusterSingletonManagerSettings}
@@ -183,6 +185,47 @@ object ReliableProducerBehavior {
 }
 
 /**
+ * ClusterEventListener — subscribes to cluster domain events and prints
+ * signal lines to stdout so the Go integration test can verify that a
+ * departing member drives through the expected status transitions.
+ *
+ * Signals printed:
+ *   PEKKO_MEMBER_UP:<host>:<port>       — member joined with status Up
+ *   PEKKO_MEMBER_LEFT:<host>:<port>     — member is Leaving
+ *   PEKKO_MEMBER_EXITED:<host>:<port>   — member transitioned to Exiting
+ *   PEKKO_MEMBER_REMOVED:<host>:<port>  — member fully removed
+ */
+class ClusterEventListener extends Actor with ActorLogging {
+  val cluster = PekkoCluster(context.system)
+
+  override def preStart(): Unit =
+    cluster.subscribe(self, initialStateMode = InitialStateAsEvents,
+      classOf[MemberUp], classOf[MemberLeft],
+      classOf[MemberExited], classOf[MemberRemoved])
+
+  override def postStop(): Unit = cluster.unsubscribe(self)
+
+  def receive: Receive = {
+    case MemberUp(member) =>
+      val addr = member.address
+      println(s"PEKKO_MEMBER_UP:${addr.host.getOrElse("")}:${addr.port.getOrElse(0)}")
+      Console.flush()
+    case MemberLeft(member) =>
+      val addr = member.address
+      println(s"PEKKO_MEMBER_LEFT:${addr.host.getOrElse("")}:${addr.port.getOrElse(0)}")
+      Console.flush()
+    case MemberExited(member) =>
+      val addr = member.address
+      println(s"PEKKO_MEMBER_EXITED:${addr.host.getOrElse("")}:${addr.port.getOrElse(0)}")
+      Console.flush()
+    case MemberRemoved(member, _) =>
+      val addr = member.address
+      println(s"PEKKO_MEMBER_REMOVED:${addr.host.getOrElse("")}:${addr.port.getOrElse(0)}")
+      Console.flush()
+  }
+}
+
+/**
  * PekkoIntegrationNode — single entry point for the E2E integration test harness.
  *
  * Starts a Pekko ActorSystem named "GekkaSystem" on 127.0.0.1:2552 with:
@@ -231,6 +274,9 @@ object PekkoIntegrationNode extends App {
   ).withFallback(ConfigFactory.defaultReference())
 
   val system = ActorSystem("GekkaSystem", config)
+
+  // Register the cluster event listener so the Go test can observe member transitions.
+  system.actorOf(Props[ClusterEventListener], "clusterEventListener")
 
   // Register the echo actor at /user/echo.
   system.actorOf(Props[IntegrationEchoActor], "echo")

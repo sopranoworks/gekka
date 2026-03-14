@@ -29,6 +29,7 @@ Powered by its own high-performance HOCON engine, [`gekka-config`](https://githu
 - **Observability** — Built-in monitoring with `/healthz` and `/metrics` (JSON/Prometheus).
 - **Cluster Singletons** — Full distributed lifecycle management with automatic failover between Go and Pekko/Akka nodes.
 - **Reliable Delivery** — At-least-once delivery between Go and Scala/Pekko actors (Serializer ID 36, manifests "a"–"e").
+- **Coordinated Shutdown** — Pekko-compatible phased exit sequence driving the node through Leave → Exiting → Removed before closing TCP connections. Supports shard handover and CRDT flush.
 
 ## Quick Start 1: Local Actor System
 
@@ -296,7 +297,50 @@ func main() {
 ```
 
 
-## Quick Start 9: Reliable Delivery (At-Least-Once)
+## Quick Start 9: Coordinated Shutdown (Graceful Exit)
+
+`gekka` implements a Pekko-compatible **Coordinated Shutdown** sequence that drives the node through the full cluster departure lifecycle — `Leave → Exiting → Removed` — before closing TCP connections.
+
+```go
+package main
+
+import (
+	"context"
+	"time"
+
+	"github.com/sopranoworks/gekka"
+	"github.com/sopranoworks/gekka/actor"
+)
+
+func main() {
+	node, _ := gekka.NewCluster(gekka.ClusterConfig{...})
+
+	// Register a custom task in any standard phase.
+	node.CoordinatedShutdown().AddTask("service-stop", "flush-cache", func(ctx context.Context) error {
+		return flushCache(ctx)
+	})
+
+	// Trigger graceful cluster exit with a 30-second deadline.
+	// The sequence drives through all standard phases in order:
+	//   before-service-unbind → ... → cluster-leave → ... → actor-system-terminate
+	shutCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	node.GracefulShutdown(shutCtx)
+}
+```
+
+Built-in tasks registered automatically:
+
+| Phase | Task | What it does |
+|-------|------|--------------|
+| `cluster-sharding-shutdown-region` | `stop-local-regions` | Stops all ShardRegion actors so the coordinator can reassign shards |
+| `cluster-leave` | `send-leave-and-wait` | Broadcasts Leave; polls gossip until this node reaches Removed status |
+| `cluster-shutdown` | `stop-replicator` | Stops the CRDT gossip loop |
+| `actor-system-terminate` | `close-transport` | Cancels the root context and closes all TCP connections |
+
+Use `node.RegisterShardingRegion(ref)` immediately after spawning a ShardRegion to enrol it in the sharding shutdown phase.
+
+## Quick Start 10: Reliable Delivery (At-Least-Once)
 
 `gekka` implements Pekko's **Reliable Delivery** protocol (Serializer ID 36) for guaranteed at-least-once delivery between Go and Scala actors. The `actor/delivery` package provides `ProducerController` and `ConsumerController` typed actors.
 

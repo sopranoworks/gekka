@@ -211,6 +211,43 @@ func (cm *ClusterManager) LeaveCluster() error {
 	return lastErr
 }
 
+// WaitForSelfRemoved polls the gossip state every 200 ms until this node's
+// own membership entry is absent or in Removed status, or the context expires.
+// It is called by the coordinated-shutdown cluster-leave phase to block until
+// the cluster leader has driven the transition all the way to Removed.
+func (cm *ClusterManager) WaitForSelfRemoved(ctx context.Context) error {
+	localHost := cm.LocalAddress.GetAddress().GetHostname()
+	localPort := cm.LocalAddress.GetAddress().GetPort()
+
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if cm.isSelfRemovedOrGone(localHost, localPort) {
+				return nil
+			}
+		}
+	}
+}
+
+// isSelfRemovedOrGone returns true when this node no longer appears in the
+// gossip members list, or when its status is Removed.
+func (cm *ClusterManager) isSelfRemovedOrGone(host string, port uint32) bool {
+	cm.Mu.RLock()
+	defer cm.Mu.RUnlock()
+	for _, m := range cm.State.GetMembers() {
+		a := cm.State.GetAllAddresses()[m.GetAddressIndex()].GetAddress()
+		if a.GetHostname() == host && a.GetPort() == port {
+			return m.GetStatus() == gproto_cluster.MemberStatus_Removed
+		}
+	}
+	// Member not present in gossip state — treat as fully removed.
+	return true
+}
+
 // HandleIncomingClusterMessage dispatches cluster-level messages.
 // Pekko's ClusterMessageSerializer uses short manifests: "IJ", "IJA", "J", "W", "GE", "GS", "HB", "HBR", "L".
 // remoteAddr is the UniqueAddress of the node that sent this message (from the association handshake).

@@ -45,6 +45,11 @@ type scalaSignals struct {
 	deliveryConsumerReady chan struct{} // closed when "PEKKO_DELIVERY_CONSUMER_READY" is seen
 	deliveryReceived      chan string   // carries the payload of every "PEKKO_DELIVERY_RECEIVED:<msg>" line
 	deliveryProducerNext  chan int      // carries the seq index of every "PEKKO_DELIVERY_PRODUCER_NEXT:<n>" line
+
+	// Cluster member lifecycle signals (emitted by ClusterEventListener).
+	memberLeft    chan string // "host:port" for every PEKKO_MEMBER_LEFT signal
+	memberExited  chan string // "host:port" for every PEKKO_MEMBER_EXITED signal
+	memberRemoved chan string // "host:port" for every PEKKO_MEMBER_REMOVED signal
 }
 
 // startPekkoIntegrationNode launches com.example.PekkoIntegrationNode via sbt,
@@ -81,6 +86,9 @@ func startPekkoIntegrationNode(t *testing.T, ctx context.Context) *scalaSignals 
 		deliveryConsumerReady: make(chan struct{}),
 		deliveryReceived:      make(chan string, 32),
 		deliveryProducerNext:  make(chan int, 32),
+		memberLeft:            make(chan string, 8),
+		memberExited:          make(chan string, 8),
+		memberRemoved:         make(chan string, 8),
 	}
 
 	go func() {
@@ -131,6 +139,22 @@ func startPekkoIntegrationNode(t *testing.T, ctx context.Context) *scalaSignals 
 				if _, err := fmt.Sscanf(rest, "%d", &n); err == nil {
 					select {
 					case sig.deliveryProducerNext <- n:
+					default:
+					}
+				}
+			}
+			for _, prefix := range []struct {
+				p  string
+				ch chan string
+			}{
+				{"PEKKO_MEMBER_LEFT:", sig.memberLeft},
+				{"PEKKO_MEMBER_EXITED:", sig.memberExited},
+				{"PEKKO_MEMBER_REMOVED:", sig.memberRemoved},
+			} {
+				if strings.HasPrefix(line, prefix.p) {
+					addr := strings.TrimPrefix(line, prefix.p)
+					select {
+					case prefix.ch <- addr:
 					default:
 					}
 				}

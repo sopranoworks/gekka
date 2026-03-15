@@ -168,6 +168,33 @@ type ClusterConfig struct {
 	//
 	//	pekko.cluster.multi-data-center.self-data-center = "us-east"
 	DataCenter string
+
+	// Persistence holds persistence-plugin configuration parsed from HOCON.
+	//
+	//	pekko.persistence.journal.plugin   = "sql"
+	//	pekko.persistence.snapshot-store.plugin = "sql"
+	//
+	// After creating the Cluster, call node.ProvideJournalDB(name, db) and
+	// node.ProvideSnapshotStoreDB(name, db) to wire up the provisioned DB.
+	Persistence PersistenceConfig
+}
+
+// PersistenceConfig holds persistence-plugin settings parsed from HOCON.
+// It identifies the registered Journal and SnapshotStore factory names so
+// that the Cluster can resolve them from the persistence registry when a
+// *sql.DB is provided at runtime.
+type PersistenceConfig struct {
+	// JournalPlugin is the registry name of the Journal factory.
+	// e.g. "sql" or "postgres".
+	// Corresponds to pekko.persistence.journal.plugin.
+	// Leave empty to use InMemoryJournal (the default).
+	JournalPlugin string
+
+	// SnapshotPlugin is the registry name of the SnapshotStore factory.
+	// e.g. "sql" or "postgres".
+	// Corresponds to pekko.persistence.snapshot-store.plugin.
+	// Leave empty to use InMemorySnapshotStore (the default).
+	SnapshotPlugin string
 }
 
 // SBRConfig is a re-export of cluster.SBRConfig for use in ClusterConfig.
@@ -267,6 +294,10 @@ type Cluster struct {
 
 	// Coordinated shutdown — drives the graceful exit sequence.
 	cs *actor.CoordinatedShutdown
+
+	// ps holds the optionally-provisioned Journal and SnapshotStore.
+	// Managed by cluster_persistence.go.
+	ps persistenceState
 
 	// shardingRegionsMu guards shardingRegions.
 	shardingRegionsMu sync.Mutex

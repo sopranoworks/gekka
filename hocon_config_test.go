@@ -293,6 +293,49 @@ pekko.cluster.seed-nodes = []
 	}
 }
 
+func TestHOCON_PersistencePlugins(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery.canonical {
+    hostname = "127.0.0.1"
+    port = 2552
+  }
+  cluster.seed-nodes = []
+  persistence {
+    journal.plugin          = "sql"
+    snapshot-store.plugin   = "sql"
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.Persistence.JournalPlugin != "sql" {
+		t.Errorf("JournalPlugin = %q, want sql", cfg.Persistence.JournalPlugin)
+	}
+	if cfg.Persistence.SnapshotPlugin != "sql" {
+		t.Errorf("SnapshotPlugin = %q, want sql", cfg.Persistence.SnapshotPlugin)
+	}
+}
+
+func TestHOCON_PersistencePlugins_Defaults(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko.remote.artery.canonical.hostname = "127.0.0.1"
+pekko.remote.artery.canonical.port = 2552
+pekko.cluster.seed-nodes = []
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	// Both plugin names default to empty string when absent.
+	if cfg.Persistence.JournalPlugin != "" {
+		t.Errorf("JournalPlugin = %q, want empty", cfg.Persistence.JournalPlugin)
+	}
+	if cfg.Persistence.SnapshotPlugin != "" {
+		t.Errorf("SnapshotPlugin = %q, want empty", cfg.Persistence.SnapshotPlugin)
+	}
+}
+
 func TestHOCON_MultiDCConfig(t *testing.T) {
 	cfg, err := parseHOCONString(`
 pekko {

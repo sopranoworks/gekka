@@ -224,6 +224,14 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		nodeCfg.TLS.ServerName = v
 	}
 
+	// ── Persistence plugins ─────────────────────────────────────────────────
+	if v, err := cfg.GetString(prefix + ".persistence.journal.plugin"); err == nil {
+		nodeCfg.Persistence.JournalPlugin = strings.TrimSpace(v)
+	}
+	if v, err := cfg.GetString(prefix + ".persistence.snapshot-store.plugin"); err == nil {
+		nodeCfg.Persistence.SnapshotPlugin = strings.TrimSpace(v)
+	}
+
 	// ── Multi-Data-Center ───────────────────────────────────────────────────
 	if v, err := cfg.GetString(prefix + ".cluster.multi-data-center.self-data-center"); err == nil {
 		nodeCfg.DataCenter = strings.TrimSpace(v)

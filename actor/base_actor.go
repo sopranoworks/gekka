@@ -9,9 +9,13 @@
 package actor
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
+
+	"github.com/sopranoworks/gekka/telemetry"
 )
 
 // Actor is the interface that user-defined actors must implement.
@@ -65,10 +69,11 @@ type Actor interface {
 // NewBaseActorWithSize to override it.
 type BaseActor struct {
 	mailbox            chan any
-	currentSender      Ref          // set for the duration of each Receive call; nil otherwise
-	selfRef            Ref          // this actor's own reference, injected by SpawnActor/ActorOf
-	systemRef          ActorContext // injected by SpawnActor/ActorOf
-	parentRef          Ref          // injected by SpawnActor/ActorOf for children
+	currentSender      Ref              // set for the duration of each Receive call; nil otherwise
+	currentCtx         context.Context  // trace context for the current message; nil outside Receive
+	selfRef            Ref              // this actor's own reference, injected by SpawnActor/ActorOf
+	systemRef          ActorContext     // injected by SpawnActor/ActorOf
+	parentRef          Ref              // injected by SpawnActor/ActorOf for children
 	supervisorStrategy SupervisorStrategy
 	actorLog           ActorLogger
 	watchersMu         sync.Mutex
@@ -123,6 +128,22 @@ func (b *BaseActor) setSystem(s ActorContext) { b.systemRef = s }
 
 // setSender is called by Start before each Receive invocation.
 func (b *BaseActor) setSender(r Ref) { b.currentSender = r }
+
+// CurrentContext returns the trace context associated with the message
+// currently being processed by this actor's Receive method.
+//
+// It is safe to read from within Receive; outside Receive it returns
+// context.Background(). Pass it to TellCtx or to child spans so they are
+// recorded as children of the current trace.
+func (b *BaseActor) CurrentContext() context.Context {
+	if b.currentCtx == nil {
+		return context.Background()
+	}
+	return b.currentCtx
+}
+
+// setCurrentCtx is called by Start before/after each Receive invocation.
+func (b *BaseActor) setCurrentCtx(ctx context.Context) { b.currentCtx = ctx }
 
 // Log returns the actor-aware structured logger for this actor.
 //
@@ -373,8 +394,14 @@ func Start(a Actor) {
 	type senderSetter interface{ setSender(Ref) }
 	ss, hasSS := any(a).(senderSetter)
 
+	type ctxSetter interface{ setCurrentCtx(context.Context) }
+	cs, hasCS := any(a).(ctxSetter)
+
 	type parentGetter interface{ Parent() Ref }
 	pg, hasParent := any(a).(parentGetter)
+
+	// Acquire metric instruments once for this actor's lifetime.
+	mailboxGauge, processDuration := initActorMetrics()
 
 	go func() {
 		defer func() {
@@ -385,6 +412,14 @@ func Start(a Actor) {
 		}()
 
 		a.PreStart()
+
+		// Resolve actor path once for telemetry labels. Safe even when Self
+		// is not yet injected (returns empty string, which is harmless).
+		actorPath := ""
+		if self := a.Self(); self != nil {
+			actorPath = self.Path()
+		}
+		pathAttr := telemetry.StringAttr("actor.path", actorPath)
 
 		for {
 			var shouldContinue bool
@@ -411,6 +446,9 @@ func Start(a Actor) {
 				}()
 
 				for raw := range a.Mailbox() {
+					// ── Telemetry: mailbox size (one message consumed) ─────
+					mailboxGauge.Add(context.Background(), -1, pathAttr)
+
 					switch m := raw.(type) {
 					case resumeSignal:
 						shouldContinue = true
@@ -423,7 +461,23 @@ func Start(a Actor) {
 						if hasSS {
 							ss.setSender(m.Sender)
 						}
+						// ── Telemetry: extract trace context, start span ───
+						msgCtx := context.Background()
+						if len(m.TraceContext) > 0 {
+							msgCtx = actorTracer().Extract(msgCtx, m.TraceContext)
+						}
+						msgCtx, span := actorTracer().Start(msgCtx, "actor.Receive")
+						span.SetAttribute("actor.path", actorPath)
+						if hasCS {
+							cs.setCurrentCtx(msgCtx)
+						}
+						start := time.Now()
 						a.Receive(m.Payload)
+						processDuration.Record(msgCtx, time.Since(start).Seconds(), pathAttr)
+						span.End()
+						if hasCS {
+							cs.setCurrentCtx(nil)
+						}
 						if hasSS {
 							ss.setSender(nil)
 						}
@@ -431,7 +485,19 @@ func Start(a Actor) {
 						if hasSS {
 							ss.setSender(nil)
 						}
+						// ── Telemetry: untagged message ────────────────────
+						msgCtx, span := actorTracer().Start(context.Background(), "actor.Receive")
+						span.SetAttribute("actor.path", actorPath)
+						if hasCS {
+							cs.setCurrentCtx(msgCtx)
+						}
+						start := time.Now()
 						a.Receive(m)
+						processDuration.Record(msgCtx, time.Since(start).Seconds(), pathAttr)
+						span.End()
+						if hasCS {
+							cs.setCurrentCtx(nil)
+						}
 					}
 				}
 			}()

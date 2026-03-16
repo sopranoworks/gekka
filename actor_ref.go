@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/telemetry"
 )
 
 // ActorRef is a location-transparent reference to a specific actor. It
@@ -128,9 +129,60 @@ func (r ActorRef) Tell(msg any, sender ...actor.Ref) {
 //	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 //	defer cancel()
 //	reply, err := ref.Ask(ctx, []byte("ping"))
+// TellCtx delivers msg with W3C trace-context propagation extracted from ctx.
+//
+// For local actors the trace headers are embedded in the Envelope so the
+// recipient's receive loop can start a child span. For remote actors the
+// context is passed through to the underlying Send call.
+//
+// Use TellCtx from within an actor's Receive method by passing
+// BaseActor.CurrentContext() as ctx to ensure automatic parent-child linking:
+//
+//	func (a *MyActor) Receive(msg any) {
+//	    a.Sender().TellCtx(a.CurrentContext(), "ack", a.Self())
+//	}
+func (r ActorRef) TellCtx(ctx context.Context, msg any, sender ...actor.Ref) {
+	var s actor.Ref
+	if len(sender) > 0 && sender[0] != nil && sender[0].Path() != "" {
+		s = sender[0]
+	}
+
+	if r.local != nil {
+		// Inject current span into the trace-context map.
+		var tc map[string]string
+		tracer := telemetry.GetTracer("github.com/sopranoworks/gekka")
+		tmp := make(map[string]string, 2)
+		tracer.Inject(ctx, tmp)
+		if len(tmp) > 0 {
+			tc = tmp
+		}
+		env := actor.Envelope{Payload: msg, Sender: s, TraceContext: tc}
+		select {
+		case r.local.Mailbox() <- env:
+		default:
+		}
+		return
+	}
+
+	if r.sys == nil {
+		return
+	}
+	if s != nil {
+		_ = r.sys.SendWithSender(ctx, r.fullPath, s.Path(), msg)
+	} else {
+		_ = r.sys.Send(ctx, r.fullPath, msg)
+	}
+}
+
 func (r ActorRef) Ask(ctx context.Context, msg any) (any, error) {
+	tracer := telemetry.GetTracer("github.com/sopranoworks/gekka")
+	ctx, span := tracer.Start(ctx, "actor.Ask")
+	span.SetAttribute("actor.path", r.fullPath)
+	defer span.End()
+
 	reply, err := r.sys.Ask(ctx, r.fullPath, msg)
 	if err != nil {
+		span.RecordError(err)
 		return nil, err
 	}
 	if reply.DeserializedMessage != nil {

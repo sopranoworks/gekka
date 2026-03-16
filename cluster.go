@@ -28,6 +28,7 @@ import (
 	"github.com/sopranoworks/gekka/internal/core"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
+	"github.com/sopranoworks/gekka/telemetry"
 
 	"google.golang.org/protobuf/proto"
 )
@@ -177,6 +178,19 @@ type ClusterConfig struct {
 	// After creating the Cluster, call node.ProvideJournalDB(name, db) and
 	// node.ProvideSnapshotStoreDB(name, db) to wire up the provisioned DB.
 	Persistence PersistenceConfig
+
+	// Telemetry controls the built-in OTEL instrumentation.
+	// Parse from HOCON:
+	//
+	//	gekka.telemetry {
+	//	    tracing.enabled = true
+	//	    metrics.enabled = true
+	//	}
+	//
+	// Note: enabling tracing/metrics here only arms the hooks; you must also
+	// call telemetry.SetProvider(telemetry.NewOtelProvider()) and configure
+	// the OTEL SDK to emit data to an exporter.
+	Telemetry TelemetryConfig
 }
 
 // PersistenceConfig holds persistence-plugin settings parsed from HOCON.
@@ -200,6 +214,20 @@ type PersistenceConfig struct {
 // SBRConfig is a re-export of cluster.SBRConfig for use in ClusterConfig.
 // Import gekka directly — you do not need to import the cluster sub-package.
 type SBRConfig = gcluster.SBRConfig
+
+// TelemetryConfig controls the built-in OTEL instrumentation hooks.
+type TelemetryConfig struct {
+	// TracingEnabled enables automatic span creation in actor Receive loops
+	// and in ActorRef.Ask.  Effective only when telemetry.SetProvider has
+	// been called with a non-noop provider.
+	// Corresponds to HOCON: gekka.telemetry.tracing.enabled
+	TracingEnabled bool
+
+	// MetricsEnabled enables recording of mailbox-size and processing-duration
+	// metrics as well as the cluster member count gauge.
+	// Corresponds to HOCON: gekka.telemetry.metrics.enabled
+	MetricsEnabled bool
+}
 
 // ShardingConfig holds sharding-specific configuration parsed from HOCON.
 type ShardingConfig struct {
@@ -477,6 +505,53 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	if sbr := gcluster.NewSBRManager(cm, cfg.SBR); sbr != nil {
 		go sbr.Start(ctx)
 	}
+
+	// ── Telemetry: cluster member count ──────────────────────────────────────
+	// Subscribe to member events and update the OTEL UpDownCounter so
+	// dashboards can track gekka_cluster_members_count{status,dc}.
+	go func() {
+		sub := cm.SubscribeChannel()
+		defer sub.Cancel()
+
+		meter := telemetry.GetMeter("github.com/sopranoworks/gekka/cluster")
+		membersCount := meter.UpDownCounter(
+			"gekka_cluster_members_count",
+			"Current number of cluster members grouped by status and data center.",
+			"{members}",
+		)
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case evt, ok := <-sub.C:
+				if !ok {
+					return
+				}
+				switch e := evt.(type) {
+				case gcluster.MemberUp:
+					membersCount.Add(ctx, 1,
+						telemetry.StringAttr("status", "up"),
+						telemetry.StringAttr("dc", e.Member.DataCenter))
+				case gcluster.MemberRemoved:
+					membersCount.Add(ctx, -1,
+						telemetry.StringAttr("status", "up"),
+						telemetry.StringAttr("dc", e.Member.DataCenter))
+				case gcluster.MemberLeft:
+					membersCount.Add(ctx, -1,
+						telemetry.StringAttr("status", "up"),
+						telemetry.StringAttr("dc", e.Member.DataCenter))
+					membersCount.Add(ctx, 1,
+						telemetry.StringAttr("status", "leaving"),
+						telemetry.StringAttr("dc", e.Member.DataCenter))
+				case gcluster.MemberExited:
+					membersCount.Add(ctx, -1,
+						telemetry.StringAttr("status", "leaving"),
+						telemetry.StringAttr("dc", e.Member.DataCenter))
+				}
+			}
+		}
+	}()
 
 	return cluster, nil
 }

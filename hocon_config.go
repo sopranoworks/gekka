@@ -279,6 +279,16 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		nodeCfg.SBR.QuorumSize = v
 	}
 
+	// ── Telemetry ────────────────────────────────────────────────────────────
+	if v, err := cfg.GetString("gekka.telemetry.tracing.enabled"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		nodeCfg.Telemetry.TracingEnabled = v == "true" || v == "on"
+	}
+	if v, err := cfg.GetString("gekka.telemetry.metrics.enabled"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		nodeCfg.Telemetry.MetricsEnabled = v == "true" || v == "on"
+	}
+
 	return nodeCfg, nil
 }
 

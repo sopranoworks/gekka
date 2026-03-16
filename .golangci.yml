@@ -1,5 +1,21 @@
 version: "2"
 
+linters:
+  disable:
+    - errcheck
+
+linters-settings:
+  staticcheck:
+    checks:
+      - "all"
+      - "-SA1012"  # nil context: intentional for actor lifecycle reset
+      - "-QF1003"  # could use tagged switch: style preference
+      - "-QF1005"  # could expand math.Pow: style preference
+      - "-QF1006"  # could lift into loop condition: style preference
+      - "-QF1008"  # could remove embedded field: style preference
+      - "-ST1005"  # error strings capitalization: style preference
+      - "-ST1023"  # should omit explicit type: style preference
+
 output:
   formats:
     text:

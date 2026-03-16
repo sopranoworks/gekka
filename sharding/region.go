@@ -11,10 +11,7 @@ package sharding
 import (
 	"encoding/json"
 	"fmt"
-	"net"
 	"reflect"
-	"strconv"
-	"strings"
 
 	"github.com/sopranoworks/gekka/actor"
 )
@@ -114,33 +111,6 @@ func (r *ShardRegion) Receive(msg any) {
 	}
 }
 
-// parseHostPortFromPath extracts the host and port from a full Artery actor path.
-// e.g. "pekko://ClusterSystem@127.0.0.1:2553/user/CartRegion" → ("127.0.0.1", 2553).
-// Returns ("", 0) if the path cannot be parsed.
-func parseHostPortFromPath(path string) (string, uint32) {
-	// Strip scheme: "pekko://" or "akka://"
-	rest := path
-	if idx := strings.Index(rest, "://"); idx >= 0 {
-		rest = rest[idx+3:]
-	}
-	// Strip actor-system name: "ClusterSystem@..."
-	if idx := strings.Index(rest, "@"); idx >= 0 {
-		rest = rest[idx+1:]
-	}
-	// Strip path portion: "host:port/user/..."
-	if idx := strings.Index(rest, "/"); idx >= 0 {
-		rest = rest[:idx]
-	}
-	host, portStr, err := net.SplitHostPort(rest)
-	if err != nil {
-		return "", 0
-	}
-	p, err := strconv.ParseUint(portStr, 10, 32)
-	if err != nil {
-		return "", 0
-	}
-	return host, uint32(p)
-}
 
 func (r *ShardRegion) deliverMessageWithSender(shardId ShardId, envelope ShardingEnvelope, sender actor.Ref) {
 	homePath, ok := r.shardHomePaths[shardId]

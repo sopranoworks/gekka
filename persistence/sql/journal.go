@@ -29,12 +29,6 @@ type SQLJournal struct {
 	dialect Dialect
 	codec   PayloadCodec
 	table   string
-
-	// Cached prepared statements (nil until first use; see prepare).
-	stmtInsert      *sql.Stmt
-	stmtHighestSeqNr *sql.Stmt
-	stmtReplay      *sql.Stmt
-	stmtDelete      *sql.Stmt
 }
 
 // NewSQLJournal creates a SQLJournal.

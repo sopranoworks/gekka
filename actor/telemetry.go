@@ -24,17 +24,6 @@ func actorMeter() telemetry.Meter {
 	return telemetry.Global().Meter("github.com/sopranoworks/gekka/actor")
 }
 
-// Lazily-initialised metric instruments (created once on first use).
-// The mailbox-size and processing-duration instruments are keyed by actor path.
-
-var (
-	// mailboxSizeInstrument tracks the number of messages currently queued.
-	mailboxSizeInstrument telemetry.UpDownCounter
-
-	// processDurationInstrument measures time spent inside Receive.
-	processDurationInstrument telemetry.Histogram
-)
-
 // initActorMetrics ensures the two shared instruments are created.
 // Called from Start; safe to call multiple times (instruments are idempotent).
 func initActorMetrics() (telemetry.UpDownCounter, telemetry.Histogram) {

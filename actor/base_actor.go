@@ -476,7 +476,7 @@ func Start(a Actor) {
 						processDuration.Record(msgCtx, time.Since(start).Seconds(), pathAttr)
 						span.End()
 						if hasCS {
-							cs.setCurrentCtx(nil)
+							cs.setCurrentCtx(context.Background())
 						}
 						if hasSS {
 							ss.setSender(nil)
@@ -496,7 +496,7 @@ func Start(a Actor) {
 						processDuration.Record(msgCtx, time.Since(start).Seconds(), pathAttr)
 						span.End()
 						if hasCS {
-							cs.setCurrentCtx(nil)
+							cs.setCurrentCtx(context.Background())
 						}
 					}
 				}

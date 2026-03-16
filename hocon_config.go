@@ -288,6 +288,9 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		v = strings.ToLower(strings.TrimSpace(v))
 		nodeCfg.Telemetry.MetricsEnabled = v == "true" || v == "on"
 	}
+	if v, err := cfg.GetString("gekka.telemetry.exporter.otlp.endpoint"); err == nil {
+		nodeCfg.Telemetry.OtlpEndpoint = strings.TrimSpace(v)
+	}
 
 	// ── HTTP Management ──────────────────────────────────────────────────────
 	mgmtPrefix := "gekka.management.http"

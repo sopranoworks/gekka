@@ -258,6 +258,13 @@ type TelemetryConfig struct {
 	// metrics as well as the cluster member count gauge.
 	// Corresponds to HOCON: gekka.telemetry.metrics.enabled
 	MetricsEnabled bool
+
+	// OtlpEndpoint is the base URL of an OpenTelemetry Protocol (OTLP) HTTP
+	// collector endpoint (e.g. "http://otel-collector:4318").
+	// When non-empty, gekka-metrics will push metrics to this endpoint using
+	// the OTLP/HTTP exporter.  Leave empty to disable OTLP export.
+	// Corresponds to HOCON: gekka.telemetry.exporter.otlp.endpoint
+	OtlpEndpoint string
 }
 
 // ShardingConfig holds sharding-specific configuration parsed from HOCON.

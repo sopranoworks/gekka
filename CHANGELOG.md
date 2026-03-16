@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 -
+## [0.7.0] - 2026-03-16
+
+### Added
+- **Split Brain Resolver (SBR)**: Introduced cluster partition handling strategies including `KeepMajority`, `KeepOldest`, `KeepReferee`, and `StaticQuorum` for enhanced cluster stability.
+- **Multi-Data Center (Multi-DC) Support**: Full DC-awareness via `dc-role` configuration. Support for DC-specific singletons and intelligent sharding affinity.
+- **Advanced Sharding Features**:
+  - **Entity Passivation**: Automatic idle timeout to optimize memory usage by stopping inactive entities.
+  - **Remember Entities**: Durable recovery for sharded entities via event sourcing, ensuring entities are restarted after cluster rebalance or node failure.
+- **SQL Persistence Backend**: Added a driver-agnostic SQL backend for Actor Persistence. Verified with PostgreSQL and includes automated integration tests via Docker.
+- **OpenTelemetry (OTEL) Integration**: Native tracing and metrics infrastructure. Supports W3C TraceContext propagation within Artery envelopes for end-to-end observability.
+
+### Changed
+- **API Alignment**: Renamed `ActorSystem.SpawnTyped` to `ActorSystem.Spawn` to better align with Pekko/Akka naming conventions.
+- **Documentation Overhaul**: Updated `README.md`, `docs/API.md`, and other documentation files to reflect the v0.7.0 API changes and new features.
+
+### Improved
+- **Code Quality**: Conducted a comprehensive project-wide linting and refactoring to ensure adherence to Go best practices and project standards.
+
+---
+
 ## [0.6.0] - 2026-03-14
 
 ### Added
@@ -94,6 +114,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Message Dispatch**: Fixed a critical bug where messages were not correctly routed to registered actors by default when incoming envelopes contained full URIs.
 
 
+[0.7.0]: https://github.com/sopranoworks/gekka/releases/tag/v0.7.0
+[0.6.0]: https://github.com/sopranoworks/gekka/releases/tag/v0.6.0
 [0.5.0]: https://github.com/sopranoworks/gekka/releases/tag/v0.5.0
 [0.4.0]: https://github.com/sopranoworks/gekka/releases/tag/v0.4.0
 [0.3.0]: https://github.com/sopranoworks/gekka/releases/tag/v0.3.0

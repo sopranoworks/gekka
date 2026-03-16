@@ -1245,9 +1245,23 @@ func (c *Cluster) RegisterShardingRegion(ref ActorRef) {
 // registerBuiltinShutdownTasks wires the standard cluster lifecycle tasks into
 // the CoordinatedShutdown instance.  Must be called once during NewCluster.
 func (c *Cluster) registerBuiltinShutdownTasks() {
+	// ── service-unbind ───────────────────────────────────────────────────────
+	// Mark the management server as shutting down so /health/ready immediately
+	// returns 503 with reason "shutting_down".  This causes Kubernetes to stop
+	// routing new requests to this node before any cluster state changes occur,
+	// which is the first gate of rolling-update stability.
+	c.cs.AddTask("service-unbind", "mark-management-shutting-down", func(_ context.Context) error {
+		if c.mgmt != nil {
+			c.mgmt.SetShuttingDown()
+		}
+		return nil
+	})
+
 	// ── cluster-sharding-shutdown-region ────────────────────────────────────
 	// Stop every locally registered ShardRegion before departing the cluster.
-	// This lets the coordinator reassign shards to remaining members.
+	// ShardRegion.PostStop sends RegionHandoffRequest to the coordinator and
+	// waits for HandoffComplete, ensuring shards are reallocated to surviving
+	// members before the Leave message is sent in the next phase.
 	c.cs.AddTask("cluster-sharding-shutdown-region", "stop-local-regions", func(ctx context.Context) error {
 		c.shardingRegionsMu.Lock()
 		regions := make([]ActorRef, len(c.shardingRegions))

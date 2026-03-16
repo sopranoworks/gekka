@@ -65,12 +65,32 @@ func (c *ShardCoordinator) Receive(msg any) {
 		}
 		c.Sender().Tell(ShardHome{ShardId: m.ShardId, RegionPath: regionPath}, c.Self())
 
+	case RegionHandoffRequest:
+		// A region is shutting down gracefully.  Release all shards it owns so
+		// the coordinator can reallocate them to surviving regions, then
+		// acknowledge with HandoffComplete so the departing region's PostStop
+		// can unblock and the coordinated-shutdown sequence can proceed.
+		regionPath := m.RegionPath
+		c.Log().Info("Region handoff requested", "region", regionPath)
+		released := 0
+		for sid, rpath := range c.shards {
+			if rpath == regionPath {
+				delete(c.shards, sid)
+				released++
+			}
+		}
+		delete(c.regions, regionPath)
+		c.Log().Info("Handoff complete: shards released",
+			"region", regionPath, "released", released)
+		c.Sender().Tell(HandoffComplete{RegionPath: regionPath}, c.Self())
+
 	case actor.TerminatedMessage:
-		// Region stopped or node failed
+		// Region stopped unexpectedly (node crash / process kill).
+		// Clean up without sending HandoffComplete — the region is already gone.
 		terminated := m.TerminatedActor()
 		terminatedPath := terminated.Path()
 		if _, ok := c.regions[terminatedPath]; ok {
-			c.Log().Info("Region terminated, removing shards", "region", terminatedPath)
+			c.Log().Info("Region terminated unexpectedly, removing shards", "region", terminatedPath)
 			for sid, rpath := range c.shards {
 				if rpath == terminatedPath {
 					delete(c.shards, sid)

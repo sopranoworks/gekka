@@ -42,6 +42,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/sopranoworks/gekka/cluster"
@@ -88,6 +89,24 @@ type ManagementServer struct {
 	srv          *http.Server
 	listener     net.Listener
 	healthChecks bool // whether /health/* endpoints are registered
+
+	// shuttingDown is set to 1 atomically when the coordinated-shutdown
+	// sequence enters PhaseServiceUnbind.  Once set, /health/ready returns
+	// 503 with reason "shutting_down" immediately, signalling Kubernetes to
+	// stop routing traffic to this node before the cluster Leave is issued.
+	shuttingDown atomic.Bool
+}
+
+// SetShuttingDown marks the server as entering the shutdown sequence.
+// After this call every subsequent /health/ready request returns 503 with
+// reason "shutting_down", regardless of actual cluster membership state.
+//
+// This should be called at the start of PhaseServiceUnbind, before
+// PhaseShardingShutdownRegion and PhaseClusterLeave execute, so that the
+// load-balancer drains connections well before the node stops processing
+// cluster traffic.
+func (ms *ManagementServer) SetShuttingDown() {
+	ms.shuttingDown.Store(true)
 }
 
 // NewManagementServer creates a ManagementServer that will listen on
@@ -305,6 +324,13 @@ func (ms *ManagementServer) handleReady(w http.ResponseWriter, r *http.Request) 
 // to least severe so the most actionable reason is always reported.
 func (ms *ManagementServer) readinessReason() string {
 	cm := ms.provider.ClusterManager()
+
+	// 0. Coordinated-shutdown in progress: the node is intentionally leaving
+	//    the cluster.  Return immediately so the load-balancer stops routing
+	//    before shards are handed off and the Leave message is sent.
+	if ms.shuttingDown.Load() {
+		return "shutting_down"
+	}
 
 	// 1. Quarantine takes highest priority: a quarantined association means a
 	//    UID conflict was detected — the node should be restarted.

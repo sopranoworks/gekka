@@ -1,0 +1,117 @@
+/*
+ * members.go
+ * This file is part of the gekka project.
+ *
+ * Copyright (c) 2026 Sopranoworks, Osamu Takahashi
+ * SPDX-License-Identifier: MIT
+ */
+
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"text/tabwriter"
+	"time"
+
+	"github.com/spf13/cobra"
+)
+
+// memberEntry matches the JSON shape returned by GET /cluster/members.
+type memberEntry struct {
+	Address    string   `json:"address"`
+	Status     string   `json:"status"`
+	Roles      []string `json:"roles"`
+	DataCenter string   `json:"dc"`
+	UpNumber   int32    `json:"upNumber"`
+	Reachable  bool     `json:"reachable"`
+}
+
+func newMembersCmd(root *rootState) *cobra.Command {
+	var flagURL string
+
+	cmd := &cobra.Command{
+		Use:   "members",
+		Short: "List all cluster members and their current status",
+		Long: `Calls GET /cluster/members on the Cluster HTTP Management API and
+prints a human-readable table of all known members, their status,
+roles, data-center, and reachability.
+
+The management URL is resolved in this order:
+  1. --url flag
+  2. --profile flag → profile entry in the config file
+  3. default_profile in the config file
+  4. management_url in the config file
+  5. built-in default (http://127.0.0.1:8558)`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			url := root.resolveURL(flagURL)
+			return runMembers(url, root.jsonOutput)
+		},
+	}
+
+	cmd.Flags().StringVar(&flagURL, "url", "",
+		"Base URL of the management API (overrides config file)")
+
+	return cmd
+}
+
+func runMembers(baseURL string, jsonOut bool) error {
+	endpoint := baseURL + "/cluster/members"
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(endpoint)
+	if err != nil {
+		return fmt.Errorf("members: GET %s: %w", endpoint, err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("members: read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("members: server returned %s: %s", resp.Status, body)
+	}
+
+	if jsonOut {
+		fmt.Fprint(os.Stdout, string(body))
+		return nil
+	}
+
+	var members []memberEntry
+	if err := json.Unmarshal(body, &members); err != nil {
+		return fmt.Errorf("members: parse response: %w", err)
+	}
+
+	if len(members) == 0 {
+		fmt.Println("No cluster members found.")
+		return nil
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "ADDRESS\tSTATUS\tDC\tROLES\tREACHABLE")
+	fmt.Fprintln(w, "-------\t------\t--\t-----\t---------")
+	for _, m := range members {
+		roles := "-"
+		if len(m.Roles) > 0 {
+			roles = ""
+			for i, r := range m.Roles {
+				if i > 0 {
+					roles += ","
+				}
+				roles += r
+			}
+		}
+		reachable := "yes"
+		if !m.Reachable {
+			reachable = "NO"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+			m.Address, m.Status, m.DataCenter, roles, reachable)
+	}
+	return w.Flush()
+}

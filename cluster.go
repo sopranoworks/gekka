@@ -979,6 +979,94 @@ func (c *Cluster) Leave() error {
 	return c.cm.LeaveCluster()
 }
 
+// LeaveMember initiates a graceful leave for the cluster member identified by
+// the Artery address string (e.g. "pekko://GekkaSystem@127.0.0.1:2552").
+//
+// If address refers to the local node, LeaveCluster is called directly.
+// For remote nodes a Leave protocol message is sent to the member's cluster
+// core daemon path so that the remote node initiates its own departure.
+// Returns an error when address cannot be parsed, the member is not found, or
+// message delivery fails.
+func (c *Cluster) LeaveMember(address string) error {
+	addr, err := actor.ParseAddress(address)
+	if err != nil {
+		return fmt.Errorf("management: parse address %q: %w", address, err)
+	}
+
+	localHost := c.cm.LocalAddress.GetAddress().GetHostname()
+	localPort := c.cm.LocalAddress.GetAddress().GetPort()
+	if addr.Host == localHost && uint32(addr.Port) == localPort {
+		return c.cm.LeaveCluster()
+	}
+
+	// Remote member — verify it exists in gossip, then send Leave via Artery.
+	c.cm.Mu.RLock()
+	found := false
+	for _, m := range c.cm.State.GetMembers() {
+		a := c.cm.State.GetAllAddresses()[m.GetAddressIndex()].GetAddress()
+		if a.GetHostname() == addr.Host && uint32(addr.Port) == a.GetPort() {
+			found = true
+			break
+		}
+	}
+	c.cm.Mu.RUnlock()
+
+	if !found {
+		return fmt.Errorf("management: member %q not found in cluster", address)
+	}
+
+	// Build the Leave proto message (an Address) and send to the remote core daemon.
+	// The router maps *gproto_cluster.Address → cluster serializer ID with manifest "L".
+	remotePath := fmt.Sprintf("%s://%s@%s:%d/system/cluster/core/daemon",
+		addr.Protocol, addr.System, addr.Host, addr.Port)
+	leaveMsg := &gproto_cluster.Address{
+		Protocol: proto.String(addr.Protocol),
+		System:   proto.String(addr.System),
+		Hostname: proto.String(addr.Host),
+		Port:     proto.Uint32(uint32(addr.Port)),
+	}
+	if err := c.cm.Router(context.Background(), remotePath, leaveMsg); err != nil {
+		return fmt.Errorf("management: send Leave to %q: %w", remotePath, err)
+	}
+	return nil
+}
+
+// DownMember marks the cluster member identified by the Artery address string
+// (e.g. "pekko://GekkaSystem@127.0.0.1:2552") as Down in the local gossip state.
+//
+// The cluster leader will subsequently transition the Down member to Removed.
+// Returns an error when address cannot be parsed or the member is not found.
+func (c *Cluster) DownMember(address string) error {
+	addr, err := actor.ParseAddress(address)
+	if err != nil {
+		return fmt.Errorf("management: parse address %q: %w", address, err)
+	}
+
+	// Verify the member exists before delegating.
+	c.cm.Mu.RLock()
+	found := false
+	for _, m := range c.cm.State.GetMembers() {
+		a := c.cm.State.GetAllAddresses()[m.GetAddressIndex()].GetAddress()
+		if a.GetHostname() == addr.Host && uint32(addr.Port) == a.GetPort() {
+			found = true
+			break
+		}
+	}
+	c.cm.Mu.RUnlock()
+
+	if !found {
+		return fmt.Errorf("management: member %q not found in cluster", address)
+	}
+
+	c.cm.DownMember(gcluster.MemberAddress{
+		Protocol: addr.Protocol,
+		System:   addr.System,
+		Host:     addr.Host,
+		Port:     uint32(addr.Port),
+	})
+	return nil
+}
+
 // StopHeartbeat suspends heartbeats to the seed node, simulating a node
 // failure from Pekko's perspective. Used in tests and for graceful pre-leave.
 func (c *Cluster) StopHeartbeat() {

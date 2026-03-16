@@ -8,12 +8,11 @@
 
 // Package management implements the Cluster HTTP Management API.
 //
-// It exposes read-only REST endpoints that allow operators and tools to
-// inspect the live cluster state without having to connect over the Artery
-// protocol.  The endpoints match the Pekko Management HTTP API conventions
-// so that existing Pekko-compatible tooling can query a gekka node directly.
+// It exposes REST endpoints that allow operators and tools to inspect and
+// manage the live cluster state without having to connect over the Artery
+// protocol.  The endpoints follow Pekko Management HTTP API conventions.
 //
-// Endpoints:
+// Read endpoints:
 //
 //	GET /cluster/members
 //	    Returns a JSON array of all known cluster members with their current
@@ -23,6 +22,16 @@
 //	    Returns detailed JSON for the member identified by the URL-encoded
 //	    Artery address (e.g. "pekko%3A%2F%2FSystem%40127.0.0.1%3A2552").
 //	    Responds 404 when no matching member is found.
+//
+// Write endpoints:
+//
+//	PUT /cluster/members/{address}
+//	    Initiates a graceful leave for the named member.
+//	    Returns 200 on success, 404 when the address is unknown, 500 on failure.
+//
+//	DELETE /cluster/members/{address}
+//	    Marks the named member as Down immediately.
+//	    Returns 200 on success, 404 when the address is unknown, 500 on failure.
 package management
 
 import (
@@ -31,6 +40,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -45,6 +55,15 @@ import (
 type ClusterStateProvider interface {
 	ClusterManager() *cluster.ClusterManager
 	NodeManager() *core.NodeManager
+
+	// LeaveMember initiates a graceful leave for the member at the given
+	// Artery address string (e.g. "pekko://System@127.0.0.1:2552").
+	// Returns an error when the address is unknown or delivery fails.
+	LeaveMember(address string) error
+
+	// DownMember marks the member at the given Artery address as Down.
+	// Returns an error when the address is unknown.
+	DownMember(address string) error
 }
 
 // MemberInfo is the JSON representation of a single cluster member returned by
@@ -81,7 +100,7 @@ func NewManagementServer(provider ClusterStateProvider, hostname string, port in
 	mux := http.NewServeMux()
 	// NOTE: Go's default mux matches the longest prefix, so registering both
 	// "/cluster/members/" (trailing slash) and "/cluster/members" covers both
-	// the list endpoint and any sub-path (address lookup).
+	// the list endpoint and any sub-path (address lookup / write operations).
 	mux.HandleFunc("/cluster/members/", ms.handleMemberByAddress)
 	mux.HandleFunc("/cluster/members", ms.handleMembers)
 
@@ -115,10 +134,15 @@ func (ms *ManagementServer) Stop(ctx context.Context) error {
 	return ms.srv.Shutdown(ctx)
 }
 
+// ServeHTTP implements http.Handler, delegating to the underlying mux.
+// This allows ManagementServer to be used directly with httptest.NewServer in tests.
+func (ms *ManagementServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	ms.srv.Handler.ServeHTTP(w, r)
+}
+
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
-// handleMembers serves GET /cluster/members — returns all members as a JSON
-// array.
+// handleMembers serves GET /cluster/members.
 func (ms *ManagementServer) handleMembers(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -134,27 +158,50 @@ func (ms *ManagementServer) handleMembers(w http.ResponseWriter, r *http.Request
 	enc.Encode(members) //nolint:errcheck
 }
 
-// handleMemberByAddress serves GET /cluster/members/{address} — looks up a
-// specific member by its URL-encoded Artery address and returns detailed JSON,
-// or 404 when not found.
+// handleMemberByAddress routes requests to /cluster/members/{address} based
+// on the HTTP method:
+//
+//	GET    — return the member's current status (or 404)
+//	PUT    — initiate graceful leave for that member
+//	DELETE — mark that member as Down immediately
 func (ms *ManagementServer) handleMemberByAddress(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	// Strip the "/cluster/members/" prefix to get the address token.
+	// Use RawPath when available (preserves percent-encoding before mux cleans it),
+	// then percent-decode to obtain the actual Artery address string.
+	pathSrc := r.URL.RawPath
+	if pathSrc == "" {
+		pathSrc = r.URL.Path
+	}
+	encoded := strings.TrimPrefix(pathSrc, "/cluster/members/")
+	decoded, err := url.PathUnescape(encoded)
+	if err != nil {
+		http.Error(w, "bad request: invalid address encoding", http.StatusBadRequest)
 		return
 	}
-
-	// Strip the "/cluster/members/" prefix to get the raw (URL-decoded) address.
-	raw := strings.TrimPrefix(r.URL.Path, "/cluster/members/")
-	raw = strings.TrimSpace(raw)
+	raw := strings.TrimSpace(decoded)
 	if raw == "" {
-		// Treat bare /cluster/members/ as a list request.
+		// Treat bare /cluster/members/ as a list request (GET only).
 		ms.handleMembers(w, r)
 		return
 	}
 
+	switch r.Method {
+	case http.MethodGet:
+		ms.handleGetMember(w, raw)
+	case http.MethodPut:
+		ms.handleLeaveMember(w, raw)
+	case http.MethodDelete:
+		ms.handleDownMember(w, raw)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleGetMember returns detailed JSON for the named member, or 404.
+func (ms *ManagementServer) handleGetMember(w http.ResponseWriter, address string) {
 	members := ms.buildMemberList()
 	for i := range members {
-		if members[i].Address == raw {
+		if members[i].Address == address {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			enc := json.NewEncoder(w)
@@ -163,8 +210,61 @@ func (ms *ManagementServer) handleMemberByAddress(w http.ResponseWriter, r *http
 			return
 		}
 	}
+	writeNotFound(w, address)
+}
 
-	http.Error(w, fmt.Sprintf(`{"error":"member not found","address":%q}`+"\n", raw), http.StatusNotFound)
+// handleLeaveMember serves PUT /cluster/members/{address} — initiates a
+// graceful leave for the named member.
+func (ms *ManagementServer) handleLeaveMember(w http.ResponseWriter, address string) {
+	if err := ms.provider.LeaveMember(address); err != nil {
+		if isNotFound(err) {
+			writeNotFound(w, address)
+			return
+		}
+		http.Error(w,
+			fmt.Sprintf(`{"error":%q}`+"\n", err.Error()),
+			http.StatusInternalServerError,
+		)
+		return
+	}
+	writeOK(w, fmt.Sprintf("leave initiated for %s", address))
+}
+
+// handleDownMember serves DELETE /cluster/members/{address} — marks the named
+// member as Down immediately.
+func (ms *ManagementServer) handleDownMember(w http.ResponseWriter, address string) {
+	if err := ms.provider.DownMember(address); err != nil {
+		if isNotFound(err) {
+			writeNotFound(w, address)
+			return
+		}
+		http.Error(w,
+			fmt.Sprintf(`{"error":%q}`+"\n", err.Error()),
+			http.StatusInternalServerError,
+		)
+		return
+	}
+	writeOK(w, fmt.Sprintf("member %s marked as Down", address))
+}
+
+// ── Response helpers ──────────────────────────────────────────────────────────
+
+func writeOK(w http.ResponseWriter, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, `{"message":%q}`+"\n", message) //nolint:errcheck
+}
+
+func writeNotFound(w http.ResponseWriter, address string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotFound)
+	fmt.Fprintf(w, `{"error":"member not found","address":%q}`+"\n", address) //nolint:errcheck
+}
+
+// isNotFound reports whether err indicates a "member not found" condition,
+// as returned by LeaveMember and DownMember when the address is unknown.
+func isNotFound(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "not found")
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
@@ -181,14 +281,11 @@ func (ms *ManagementServer) buildMemberList() []MemberInfo {
 		return []MemberInfo{}
 	}
 
-	// Build a set of unreachable address indices from the local observer's
-	// reachability table.  Index 0 is always the local node itself.
 	unreachable := buildUnreachableSet(gossip)
 
 	result := make([]MemberInfo, 0, len(gossip.GetMembers()))
 	for _, m := range gossip.GetMembers() {
-		info := memberInfoFromProto(gossip, m, unreachable)
-		result = append(result, info)
+		result = append(result, memberInfoFromProto(gossip, m, unreachable))
 	}
 	return result
 }
@@ -202,7 +299,6 @@ func buildUnreachableSet(gossip *gproto_cluster.Gossip) map[int32]struct{} {
 	}
 	for _, obs := range gossip.GetOverview().GetObserverReachability() {
 		if obs.GetAddressIndex() != 0 {
-			// Only consider the local node's view (index 0).
 			continue
 		}
 		for _, subj := range obs.GetSubjectReachability() {
@@ -223,17 +319,16 @@ func memberInfoFromProto(
 ) MemberInfo {
 	addrIdx := m.GetAddressIndex()
 
-	// Resolve the Artery address string.
 	address := ""
 	if int(addrIdx) < len(gossip.GetAllAddresses()) {
 		ua := gossip.GetAllAddresses()[addrIdx]
 		if a := ua.GetAddress(); a != nil {
-			proto := strings.TrimSuffix(a.GetProtocol(), "://")
-			if proto == "" {
-				proto = "pekko"
+			scheme := strings.TrimSuffix(a.GetProtocol(), "://")
+			if scheme == "" {
+				scheme = "pekko"
 			}
 			address = fmt.Sprintf("%s://%s@%s:%d",
-				proto,
+				scheme,
 				a.GetSystem(),
 				a.GetHostname(),
 				a.GetPort(),
@@ -241,7 +336,6 @@ func memberInfoFromProto(
 		}
 	}
 
-	// Collect non-DC roles.
 	roles := []string{}
 	dc := "default"
 	for _, idx := range m.GetRolesIndexes() {

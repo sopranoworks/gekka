@@ -13,6 +13,7 @@ linters:
         - "-QF1006"  # could lift into loop condition: style preference
         - "-QF1008"  # could remove embedded field: style preference
         - "-ST1005"  # error strings capitalization: style preference
+        - "-ST1003"  # naming conventions (Id vs ID, ALL_CAPS): style preference
         - "-ST1023"  # should omit explicit type: style preference
 
 output:

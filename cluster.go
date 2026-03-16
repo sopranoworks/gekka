@@ -188,7 +188,7 @@ type ClusterConfig struct {
 	//	}
 	//
 	// Note: enabling tracing/metrics here only arms the hooks; you must also
-	// call telemetry.SetProvider(telemetry.NewOtelProvider()) and configure
+	// call telemetry.SetProvider(gekkaotel.NewProvider()) (see telemetry/otel) and configure
 	// the OTEL SDK to emit data to an exporter.
 	Telemetry TelemetryConfig
 }

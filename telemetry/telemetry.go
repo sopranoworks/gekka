@@ -9,15 +9,16 @@
 // Package telemetry defines the observability abstractions used by gekka.
 //
 // All interfaces default to no-op implementations so that telemetry has zero
-// overhead when not configured.  To enable real instrumentation register an
-// OtelProvider (or any custom Provider) before starting actors:
+// overhead when not configured.  To enable real instrumentation register a
+// Provider before starting actors:
 //
-//	provider := telemetry.NewOtelProvider()
-//	telemetry.SetProvider(provider)
+//	import gekkaotel "github.com/sopranoworks/gekka/telemetry/otel"
 //
-// The package is intentionally dependency-free in its interface layer; the
-// reference OtelProvider in otel_provider.go is the only file that imports
-// the go.opentelemetry.io family.
+//	telemetry.SetProvider(gekkaotel.NewProvider())
+//
+// The package is intentionally dependency-free; the OTEL-backed implementation
+// lives in the sub-package telemetry/otel and is only linked when explicitly
+// imported.
 package telemetry
 
 import "context"
@@ -25,7 +26,7 @@ import "context"
 // ── Provider ─────────────────────────────────────────────────────────────────
 
 // Provider is the root telemetry factory that bundles a Tracer and a Meter.
-// Obtain one from NewOtelProvider or supply your own implementation.
+// Obtain one from telemetry/otel.NewProvider or supply your own implementation.
 type Provider interface {
 	// Tracer returns the Tracer for the given instrumentation scope name.
 	// The name is typically the fully-qualified package path

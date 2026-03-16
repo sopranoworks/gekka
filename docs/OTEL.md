@@ -17,6 +17,7 @@ import (
 
     "github.com/sopranoworks/gekka"
     "github.com/sopranoworks/gekka/telemetry"
+    gekkaotel "github.com/sopranoworks/gekka/telemetry/otel"
 )
 
 func main() {
@@ -36,7 +37,7 @@ func main() {
     defer tp.Shutdown(ctx)
 
     // 2. Register with gekka — a single call before any actors start.
-    telemetry.SetProvider(telemetry.NewOtelProvider())
+    telemetry.SetProvider(gekkaotel.NewProvider())
 
     // 3. Start your cluster as normal.
     cluster, _ := gekka.NewCluster(gekka.ClusterConfig{
@@ -208,7 +209,8 @@ cfg, _ := gekka.LoadConfig("application.conf")
 ```
 
 > **Note**: setting these to `true` only activates the hooks inside gekka.
-> You must also call `telemetry.SetProvider(telemetry.NewOtelProvider())` and
+> You must also call `telemetry.SetProvider(gekkaotel.NewProvider())` (where
+> `gekkaotel` is `github.com/sopranoworks/gekka/telemetry/otel`) and
 > configure the OTEL SDK with exporters to actually emit data.
 
 ---

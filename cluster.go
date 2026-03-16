@@ -278,6 +278,14 @@ type ShardingConfig struct {
 	// entities are re-spawned after a Shard restart.
 	// Corresponds to pekko.cluster.sharding.remember-entities.
 	RememberEntities bool
+
+	// HandoffTimeout is the maximum time a ShardRegion waits for the
+	// coordinator to acknowledge shard handoff during coordinated shutdown.
+	// Larger clusters or heavily loaded coordinators may need a longer value.
+	// Defaults to 10 seconds when zero or unset.
+	//
+	// HOCON: gekka.cluster.sharding.handoff-timeout
+	HandoffTimeout time.Duration
 }
 
 // resolve returns the effective (scheme, system, host, port) for this config.

@@ -251,6 +251,11 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		v = strings.ToLower(strings.TrimSpace(v))
 		nodeCfg.Sharding.RememberEntities = v == "on" || v == "true"
 	}
+	if v, err := cfg.GetString(shardingPrefix + ".handoff-timeout"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.Sharding.HandoffTimeout = d
+		}
+	}
 
 	// ── Split Brain Resolver ────────────────────────────────────────────────
 	sbrPrefix := prefix + ".cluster.split-brain-resolver"

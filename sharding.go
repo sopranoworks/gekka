@@ -54,6 +54,14 @@ type ShardingSettings struct {
 	// HOCON equivalent:
 	//   pekko.cluster.multi-data-center.self-data-center = "us-east"
 	DataCenter string
+
+	// HandoffTimeout is the maximum time a ShardRegion waits for the
+	// coordinator to acknowledge shard handoff during coordinated shutdown.
+	// Larger clusters or heavily loaded coordinators may need a longer value.
+	// Defaults to 10 seconds when zero or unset.
+	//
+	// HOCON: gekka.cluster.sharding.handoff-timeout
+	HandoffTimeout time.Duration
 }
 
 // StartSharding starts cluster sharding for a given entity type.
@@ -146,6 +154,7 @@ func StartSharding[Command any, Event any, State any](
 		RememberEntities:       settings.RememberEntities,
 		Journal:                settings.Journal,
 		DataCenter:             settings.DataCenter,
+		HandoffTimeout:         settings.HandoffTimeout,
 	}
 
 	// Populate IsLocalDC when both the cluster and DataCenter are available.

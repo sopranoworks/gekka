@@ -70,10 +70,11 @@ func (r *ShardRegion) PreStart() {
 
 // PostStop is called by the actor runtime after the mailbox is drained and the
 // region actor is about to exit.  It sends RegionHandoffRequest to the
-// coordinator and waits up to 10 seconds for HandoffComplete.  This ensures
-// the coordinator releases all locally-owned shards — making them available
-// for reallocation on surviving nodes — before the coordinated-shutdown
-// sequence proceeds to PhaseClusterLeave.
+// coordinator and waits for HandoffComplete.  The wait duration is controlled
+// by ShardSettings.HandoffTimeout (default 10 s).  This ensures the coordinator
+// releases all locally-owned shards — making them available for reallocation on
+// surviving nodes — before the coordinated-shutdown sequence proceeds to
+// PhaseClusterLeave.
 //
 // If the coordinator is unreachable (e.g. it runs on the same node and shut
 // down first), the wait times out and the region logs a warning rather than
@@ -86,12 +87,16 @@ func (r *ShardRegion) PostStop() {
 		"region", r.Self().Path())
 	r.coordinator.Tell(RegionHandoffRequest{RegionPath: r.Self().Path()}, r.Self())
 
+	timeout := r.shardSettings.HandoffTimeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
 	select {
 	case <-r.handoffDone:
 		r.Log().Info("Handoff Completed", "region", r.Self().Path())
-	case <-time.After(10 * time.Second):
+	case <-time.After(timeout):
 		r.Log().Warn("ShardRegion handoff timed out — proceeding without coordinator ack",
-			"region", r.Self().Path())
+			"region", r.Self().Path(), "timeout", timeout)
 	}
 }
 

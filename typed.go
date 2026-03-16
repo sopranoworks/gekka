@@ -26,10 +26,10 @@ type TypedActorRef[T any] = actor.TypedActorRef[T]
 // EventSourcedBehavior defines a behavior for a persistent actor.
 type EventSourcedBehavior[Command any, Event any, State any] = actor.EventSourcedBehavior[Command, Event, State]
 
-// SpawnTyped creates a new typed actor as a top-level actor in the system.
+// Spawn creates a new typed actor as a top-level actor in the system.
 // It is a type-safe wrapper around ActorSystem.ActorOf.
-func SpawnTyped[T any](sys ActorSystem, behavior actor.Behavior[T], name string, props ...actor.Props) (TypedActorRef[T], error) {
-	return actor.SpawnTyped(asActorContext(sys, ""), behavior, name, props...)
+func Spawn[T any](sys ActorSystem, behavior actor.Behavior[T], name string, props ...actor.Props) (TypedActorRef[T], error) {
+	return actor.Spawn(asActorContext(sys, ""), behavior, name, props...)
 }
 
 // SpawnPersistent creates a new persistent actor.

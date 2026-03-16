@@ -178,7 +178,7 @@ func main() {
 	system, _ := gekka.NewActorSystem("TypedSystem")
 	
 	// Spawn a typed actor
-	ref, _ := gekka.SpawnTyped(system, Greeter(), "greeter")
+	ref, _ := gekka.Spawn(system, Greeter(), "greeter")
 	
 	// Send a type-safe message
 	ref.Tell(Greet{Name: "Gopher"})

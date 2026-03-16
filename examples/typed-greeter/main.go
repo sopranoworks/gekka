@@ -77,8 +77,8 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// 2. Spawn the Greeter actor using SpawnTyped
-	greeter, err := gekka.SpawnTyped(system, Greeter(), "greeter")
+	// 2. Spawn the Greeter actor using Spawn
+	greeter, err := gekka.Spawn(system, Greeter(), "greeter")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func main() {
 
 	// 4. Spawn the GreeterBot actor to demonstrate actor-to-actor communication
 	fmt.Println("\n--- Demonstrating GreeterBot ---")
-	_, err = gekka.SpawnTyped(system, GreeterBot(3, greeter), "bot")
+	_, err = gekka.Spawn(system, GreeterBot(3, greeter), "bot")
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -32,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Cluster Sharding**: Introduced the `sharding` package providing `ShardRegion`, `ShardCoordinator`, `ShardCoordinatorProxy`, `ExtractEntityId`, and `EntityRef[T]`. Entities are automatically distributed across nodes, created on demand, and recovered after failures via `StartSharding` / `GetEntityRef` in the root package.
-- **Typed Actors**: Public API in `typed.go` — `SpawnTyped[T]`, `SpawnPersistent[C,E,S]`, `TypedActorRef[T]`, and `Ask[T,R]` provide compile-time type safety for actor messaging via Go generics.
+- **Typed Actors**: Public API in `typed.go` — `Spawn[T]`, `SpawnPersistent[C,E,S]`, `TypedActorRef[T]`, and `Ask[T,R]` provide compile-time type safety for actor messaging via Go generics.
 - **Actor Persistence (Event Sourcing)**: `actor.EventSourcedBehavior[C,E,S]` with `Persist`, `PersistThen`, and `None` effects. `persistence.Journal` and `persistence.SnapshotStore` interfaces with `InMemoryJournal` and `InMemorySnapshotStore` built-in backends.
 - **Public CRDT Package**: `GCounter`, `ORSet`, and `Replicator` promoted to the public `crdt/` package with `WriteLocal` / `WriteAll` consistency levels.
 - **Pekko Interoperability Tests**: `actor/remoting_compatibility_test.go` (package `actor_test`) verifies binary wire format correctness — System Message round-trips (Watch, Terminated, Envelope), manifest mapping for Java/Go types, and SerializerID verification for IDs 2, 4, 5, 9, and 17.

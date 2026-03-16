@@ -26,6 +26,7 @@ import (
 	gcluster "github.com/sopranoworks/gekka/cluster"
 	"github.com/sopranoworks/gekka/crdt"
 	"github.com/sopranoworks/gekka/internal/core"
+	"github.com/sopranoworks/gekka/internal/management"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 	"github.com/sopranoworks/gekka/telemetry"
@@ -315,7 +316,8 @@ type Cluster struct {
 	seedAddr   *gproto_remote.Address // set by the first Join call
 	seeds      []actor.Address        // from ClusterConfig.SeedNodes (populated by LoadConfig)
 	metrics    *core.NodeMetrics
-	monitoring *core.MonitoringServer // nil when monitoring is disabled
+	monitoring *core.MonitoringServer    // nil when monitoring is disabled
+	mgmt       *management.ManagementServer // nil when management API is disabled
 
 	actorsMu sync.RWMutex
 	actors   map[string]actor.Actor // actor path suffix → Actor
@@ -490,6 +492,18 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 		}
 		ms.Start(ctx)
 		cluster.monitoring = ms
+	}
+
+	// Start the optional Cluster HTTP Management API server.
+	if cfg.Management.Enabled {
+		mgmtSrv, err := management.NewManagementServer(cluster, cfg.Management.Hostname, cfg.Management.Port)
+		if err != nil {
+			cancel()
+			_ = server.Shutdown()
+			return nil, fmt.Errorf("gekka: management server: %w", err)
+		}
+		mgmtSrv.Start(ctx)
+		cluster.mgmt = mgmtSrv
 	}
 
 	// Internal watcher to clean up dead cluster event subscribers

@@ -171,6 +171,13 @@ type ClusterConfig struct {
 	//	pekko.cluster.multi-data-center.self-data-center = "us-east"
 	DataCenter string
 
+	// Roles is the list of cluster roles this node advertises to the rest of the
+	// cluster.  These are merged with the automatic "dc-<DataCenter>" role before
+	// the Join message is sent.  Parsed from HOCON:
+	//
+	//	pekko.cluster.roles = ["metrics-exporter"]
+	Roles []string
+
 	// Persistence holds persistence-plugin configuration parsed from HOCON.
 	//
 	//	pekko.persistence.journal.plugin   = "sql"
@@ -413,6 +420,9 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 		return router.Send(ctx, path, msg)
 	}
 	cm.SetLocalDataCenter(cfg.DataCenter)
+	if len(cfg.Roles) > 0 {
+		cm.SetLocalRoles(cfg.Roles)
+	}
 	nm.SetClusterManager(cm)
 
 	ctx, cancel := context.WithCancel(context.Background())

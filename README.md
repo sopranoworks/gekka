@@ -41,19 +41,18 @@ The `--url` flag always overrides the config file.  The `--profile` flag selects
 
 ### gekka-metrics
 
-`gekka-metrics` is a sidecar that periodically scrapes the HTTP Management API and exports cluster-state metrics via **OpenTelemetry Protocol (OTLP/HTTP)**.
+`gekka-metrics` is a **full cluster node** that joins the cluster with the `metrics-exporter` role and reads gossip state directly — no HTTP polling, no dependency on the Management API.  It exports cluster-state metrics via **OpenTelemetry Protocol (OTLP/HTTP)**.
 
 ```
-gekka-metrics [--config FILE] [--url URL] [--interval DURATION] [--otlp ENDPOINT]
+gekka-metrics --config FILE [--otlp ENDPOINT]
 ```
 
-**HOCON configuration** (resolved via the standard `gekka.LoadConfig` loader):
+**HOCON configuration** (same format as any cluster node):
 
 ```hocon
-gekka.metrics {
-  enabled         = true
-  management-url  = "http://127.0.0.1:8558"
-  scrape-interval = "15s"
+pekko {
+  remote.artery.canonical { hostname = "127.0.0.1", port = 2560 }
+  cluster.seed-nodes = ["pekko://ClusterSystem@127.0.0.1:2552"]
 }
 
 gekka.telemetry.exporter.otlp {
@@ -61,13 +60,15 @@ gekka.telemetry.exporter.otlp {
 }
 ```
 
+The `metrics-exporter` role is injected automatically so sharding allocators and singleton managers exclude this node from hosting production workloads.
+
 **Exported metric:**
 
 | Metric | Type | Attributes | Description |
 |---|---|---|---|
 | `gekka.cluster.members` | ObservableGauge | `status`, `dc` | Member count per status/DC combination |
 
-When no OTLP endpoint is configured the process still runs and emits structured JSON log lines (`cluster_members_up`) on every scrape cycle.
+When no OTLP endpoint is configured the process still joins and emits structured JSON log lines (`cluster_state`) every 30 s.
 
 ---
 

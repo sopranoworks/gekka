@@ -1,6 +1,5 @@
-run:
-  go: '1.24'
-
 output:
   formats:
-    - format: colored-line-number
+    text:
+      path: stdout
+      print-linter-name: true

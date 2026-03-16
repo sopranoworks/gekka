@@ -47,6 +47,46 @@ package core
 //	    unreachable cluster members, and no quarantined Artery associations.
 //	    Returns 503 Service Unavailable otherwise, with a JSON body describing
 //	    the reason: "not_up", "unreachable_members", or "quarantined".
+// MetricsExporterConfig holds configuration for the optional metrics exporter
+// that periodically scrapes the Management HTTP API and emits cluster metrics.
+//
+// HOCON schema:
+//
+//	gekka.metrics {
+//	    enabled          = false
+//	    management-url   = "http://127.0.0.1:8558"
+//	    scrape-interval  = "15s"
+//	}
+type MetricsExporterConfig struct {
+	// Enabled controls whether the metrics exporter starts automatically.
+	// Defaults to false.
+	//
+	// HOCON: gekka.metrics.enabled
+	Enabled bool
+
+	// ManagementURL is the base URL of the Management HTTP API to scrape.
+	// Defaults to "http://127.0.0.1:8558".
+	//
+	// HOCON: gekka.metrics.management-url
+	ManagementURL string
+
+	// ScrapeInterval is how often the exporter fetches cluster state.
+	// Defaults to 15 seconds.
+	//
+	// HOCON: gekka.metrics.scrape-interval
+	ScrapeInterval string
+}
+
+// DefaultMetricsExporterConfig returns MetricsExporterConfig populated with
+// recommended defaults.
+func DefaultMetricsExporterConfig() MetricsExporterConfig {
+	return MetricsExporterConfig{
+		Enabled:        false,
+		ManagementURL:  "http://127.0.0.1:8558",
+		ScrapeInterval: "15s",
+	}
+}
+
 type ManagementConfig struct {
 	// Hostname is the interface the HTTP management server binds to.
 	// Defaults to "127.0.0.1" (loopback only).

@@ -11,24 +11,12 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"text/tabwriter"
-	"time"
 
+	"github.com/sopranoworks/gekka/internal/management/client"
 	"github.com/spf13/cobra"
 )
-
-// memberEntry matches the JSON shape returned by GET /cluster/members.
-type memberEntry struct {
-	Address    string   `json:"address"`
-	Status     string   `json:"status"`
-	Roles      []string `json:"roles"`
-	DataCenter string   `json:"dc"`
-	UpNumber   int32    `json:"upNumber"`
-	Reachable  bool     `json:"reachable"`
-}
 
 func newMembersCmd(root *rootState) *cobra.Command {
 	var flagURL string
@@ -59,32 +47,19 @@ The management URL is resolved in this order:
 }
 
 func runMembers(baseURL string, jsonOut bool) error {
-	endpoint := baseURL + "/cluster/members"
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(endpoint)
+	c := client.New(baseURL)
+	members, err := c.Members()
 	if err != nil {
-		return fmt.Errorf("members: GET %s: %w", endpoint, err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("members: read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("members: server returned %s: %s", resp.Status, body)
+		return fmt.Errorf("members: %w", err)
 	}
 
 	if jsonOut {
-		fmt.Fprint(os.Stdout, string(body))
+		b, err := json.Marshal(members)
+		if err != nil {
+			return fmt.Errorf("members: marshal: %w", err)
+		}
+		fmt.Fprintln(os.Stdout, string(b))
 		return nil
-	}
-
-	var members []memberEntry
-	if err := json.Unmarshal(body, &members); err != nil {
-		return fmt.Errorf("members: parse response: %w", err)
 	}
 
 	if len(members) == 0 {

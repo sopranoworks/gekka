@@ -209,6 +209,19 @@ type ClusterConfig struct {
 	//   GET /cluster/members            — list all members and their status
 	//   GET /cluster/members/{address}  — detail for a specific member
 	Management core.ManagementConfig
+
+	// Metrics holds configuration for the optional metrics exporter that
+	// periodically scrapes the Management HTTP API and emits cluster state
+	// metrics as structured log entries (placeholder for full OTEL export).
+	//
+	// Parse from HOCON:
+	//
+	//	gekka.metrics {
+	//	    enabled         = false
+	//	    management-url  = "http://127.0.0.1:8558"
+	//	    scrape-interval = "15s"
+	//	}
+	Metrics core.MetricsExporterConfig
 }
 
 // PersistenceConfig holds persistence-plugin settings parsed from HOCON.

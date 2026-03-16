@@ -307,6 +307,20 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		nodeCfg.Management.HealthChecksEnabled = v == "true" || v == "on"
 	}
 
+	// ── Metrics exporter ─────────────────────────────────────────────────────
+	nodeCfg.Metrics = core.DefaultMetricsExporterConfig()
+	metricsPrefix := "gekka.metrics"
+	if v, err := cfg.GetString(metricsPrefix + ".enabled"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		nodeCfg.Metrics.Enabled = v == "true" || v == "on"
+	}
+	if v, err := cfg.GetString(metricsPrefix + ".management-url"); err == nil {
+		nodeCfg.Metrics.ManagementURL = strings.TrimSpace(v)
+	}
+	if v, err := cfg.GetString(metricsPrefix + ".scrape-interval"); err == nil {
+		nodeCfg.Metrics.ScrapeInterval = strings.TrimSpace(v)
+	}
+
 	return nodeCfg, nil
 }
 

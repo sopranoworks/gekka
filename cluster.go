@@ -191,6 +191,23 @@ type ClusterConfig struct {
 	// call telemetry.SetProvider(gekkaotel.NewProvider()) (see telemetry/otel) and configure
 	// the OTEL SDK to emit data to an exporter.
 	Telemetry TelemetryConfig
+
+	// Management configures the Cluster HTTP Management API (v0.8.0).
+	// When Management.Enabled is true, an HTTP server is started on
+	// Management.Hostname:Management.Port exposing cluster management endpoints.
+	//
+	// Parse from HOCON:
+	//
+	//	gekka.management.http {
+	//	    hostname = "127.0.0.1"
+	//	    port     = 8558
+	//	    enabled  = false
+	//	}
+	//
+	// Endpoints:
+	//   GET /cluster/members            — list all members and their status
+	//   GET /cluster/members/{address}  — detail for a specific member
+	Management core.ManagementConfig
 }
 
 // PersistenceConfig holds persistence-plugin settings parsed from HOCON.

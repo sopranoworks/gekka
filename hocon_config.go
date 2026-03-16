@@ -289,6 +289,20 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		nodeCfg.Telemetry.MetricsEnabled = v == "true" || v == "on"
 	}
 
+	// ── HTTP Management ──────────────────────────────────────────────────────
+	mgmtPrefix := "gekka.management.http"
+	nodeCfg.Management = core.DefaultManagementConfig()
+	if v, err := cfg.GetString(mgmtPrefix + ".hostname"); err == nil {
+		nodeCfg.Management.Hostname = strings.TrimSpace(v)
+	}
+	if v, err := cfg.GetInt(mgmtPrefix + ".port"); err == nil {
+		nodeCfg.Management.Port = v
+	}
+	if v, err := cfg.GetString(mgmtPrefix + ".enabled"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		nodeCfg.Management.Enabled = v == "true" || v == "on"
+	}
+
 	return nodeCfg, nil
 }
 

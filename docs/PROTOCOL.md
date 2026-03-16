@@ -1,4 +1,4 @@
-# Gekka Protocol Details (v0.5.0)
+# Gekka Protocol Details (v0.7.0)
 
 This document covers technical details of the Artery TCP protocol implementation
 and Gekka's internal mechanics. For the serialization subsystem see

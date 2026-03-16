@@ -9,7 +9,7 @@ Powered by its own high-performance HOCON engine, [`gekka-config`](https://githu
 `gekka` is verified against live JVM nodes for both **Apache Pekko 1.0.x** and **Lightbend Akka 2.6.21** using E2E integration tests. This ensures byte-level compatibility for cluster membership, remote messaging (including **Artery TLS** secure transport), distributed state, and **Cluster Singleton** failover.
 
 
-## New in v0.7.0-dev (Latest Milestones)
+## New in v0.7.0 (Latest Milestones)
 
 The v0.7.0 cycle introduces mission-critical features for large-scale, resilient distributed systems:
 

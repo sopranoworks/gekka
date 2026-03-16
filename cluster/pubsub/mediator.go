@@ -146,7 +146,7 @@ type UnsubscribeAck struct {
 // Mediator is the cluster-wide distributed pub-sub interface. Implementations
 // maintain subscription state via gossip and route messages transparently.
 //
-// This interface is intentionally minimal for v0.6.0; additional operations
+// This interface is intentionally minimal for v0.7.0; additional operations
 // (GetTopics, ListTopics, cluster-aware group routing) will be added incrementally.
 type Mediator interface {
 	// Publish sends msg to every subscriber registered for topic across the cluster.

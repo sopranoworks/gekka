@@ -302,6 +302,10 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		v = strings.ToLower(strings.TrimSpace(v))
 		nodeCfg.Management.Enabled = v == "true" || v == "on"
 	}
+	if v, err := cfg.GetString(mgmtPrefix + ".health-checks.enabled"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		nodeCfg.Management.HealthChecksEnabled = v == "true" || v == "on"
+	}
 
 	return nodeCfg, nil
 }

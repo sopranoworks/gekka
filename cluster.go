@@ -496,7 +496,7 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 
 	// Start the optional Cluster HTTP Management API server.
 	if cfg.Management.Enabled {
-		mgmtSrv, err := management.NewManagementServer(cluster, cfg.Management.Hostname, cfg.Management.Port)
+		mgmtSrv, err := management.NewManagementServer(cluster, cfg.Management.Hostname, cfg.Management.Port, cfg.Management.HealthChecksEnabled)
 		if err != nil {
 			cancel()
 			_ = server.Shutdown()
@@ -1065,6 +1065,13 @@ func (c *Cluster) DownMember(address string) error {
 		Port:     uint32(addr.Port),
 	})
 	return nil
+}
+
+// HasQuarantinedAssociation reports whether any Artery association is in
+// QUARANTINED state.  Satisfies management.ClusterStateProvider; used by the
+// /health/ready probe.
+func (c *Cluster) HasQuarantinedAssociation() bool {
+	return c.nm.HasQuarantinedAssociation()
 }
 
 // StopHeartbeat suspends heartbeats to the seed node, simulating a node

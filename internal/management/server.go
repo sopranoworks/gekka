@@ -64,6 +64,11 @@ type ClusterStateProvider interface {
 	// DownMember marks the member at the given Artery address as Down.
 	// Returns an error when the address is unknown.
 	DownMember(address string) error
+
+	// HasQuarantinedAssociation reports whether any Artery association is in
+	// QUARANTINED state — a sign of a UID conflict caused by a node restart
+	// or network split.  Used by the /health/ready probe.
+	HasQuarantinedAssociation() bool
 }
 
 // MemberInfo is the JSON representation of a single cluster member returned by
@@ -79,22 +84,26 @@ type MemberInfo struct {
 
 // ManagementServer hosts the Cluster HTTP Management API.
 type ManagementServer struct {
-	provider ClusterStateProvider
-	srv      *http.Server
-	listener net.Listener
+	provider     ClusterStateProvider
+	srv          *http.Server
+	listener     net.Listener
+	healthChecks bool // whether /health/* endpoints are registered
 }
 
 // NewManagementServer creates a ManagementServer that will listen on
-// hostname:port as specified by cfg.
-func NewManagementServer(provider ClusterStateProvider, hostname string, port int) (*ManagementServer, error) {
+// hostname:port.  When healthChecks is true the /health/alive and
+// /health/ready Kubernetes probe endpoints are also registered.
+func NewManagementServer(provider ClusterStateProvider, hostname string, port int, healthChecks ...bool) (*ManagementServer, error) {
 	ln, err := net.Listen("tcp", fmt.Sprintf("%s:%d", hostname, port))
 	if err != nil {
 		return nil, fmt.Errorf("management: listen on %s:%d: %w", hostname, port, err)
 	}
 
+	enableHealth := len(healthChecks) == 0 || healthChecks[0] // default true
 	ms := &ManagementServer{
-		provider: provider,
-		listener: ln,
+		provider:     provider,
+		listener:     ln,
+		healthChecks: enableHealth,
 	}
 
 	mux := http.NewServeMux()
@@ -103,6 +112,11 @@ func NewManagementServer(provider ClusterStateProvider, hostname string, port in
 	// the list endpoint and any sub-path (address lookup / write operations).
 	mux.HandleFunc("/cluster/members/", ms.handleMemberByAddress)
 	mux.HandleFunc("/cluster/members", ms.handleMembers)
+
+	if enableHealth {
+		mux.HandleFunc("/health/alive", ms.handleAlive)
+		mux.HandleFunc("/health/ready", ms.handleReady)
+	}
 
 	ms.srv = &http.Server{
 		Handler:      mux,
@@ -245,6 +259,75 @@ func (ms *ManagementServer) handleDownMember(w http.ResponseWriter, address stri
 		return
 	}
 	writeOK(w, fmt.Sprintf("member %s marked as Down", address))
+}
+
+// ── Health-check handlers ─────────────────────────────────────────────────────
+
+// handleAlive serves GET /health/alive — the Kubernetes liveness probe.
+// Always returns 200 OK as long as the HTTP server is responsive.
+func (ms *ManagementServer) handleAlive(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, `{"status":"alive"}`+"\n") //nolint:errcheck
+}
+
+// handleReady serves GET /health/ready — the Kubernetes readiness probe.
+// Returns 200 OK only when the local node is healthy for cluster operations:
+//
+//   - The local node's membership status is Up.
+//   - No cluster members are marked as unreachable (SBR unstable state).
+//   - No Artery associations are in QUARANTINED state.
+//
+// Returns 503 with a JSON body describing the reason otherwise.
+func (ms *ManagementServer) handleReady(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	reason := ms.readinessReason()
+	w.Header().Set("Content-Type", "application/json")
+	if reason == "" {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"status":"ready"}`+"\n") //nolint:errcheck
+		return
+	}
+	w.WriteHeader(http.StatusServiceUnavailable)
+	fmt.Fprintf(w, `{"status":"not_ready","reason":%q}`+"\n", reason) //nolint:errcheck
+}
+
+// readinessReason returns a non-empty string describing why the node is not
+// ready, or "" when the node is fully ready.  The checks are ordered from most
+// to least severe so the most actionable reason is always reported.
+func (ms *ManagementServer) readinessReason() string {
+	cm := ms.provider.ClusterManager()
+
+	// 1. Quarantine takes highest priority: a quarantined association means a
+	//    UID conflict was detected — the node should be restarted.
+	if ms.provider.HasQuarantinedAssociation() {
+		return "quarantined"
+	}
+
+	// 2. SBR instability: unreachable members mean a network partition may be
+	//    in progress.  The node should not accept traffic until the partition
+	//    is resolved.
+	cm.Mu.RLock()
+	unreachable := buildUnreachableSet(cm.State)
+	cm.Mu.RUnlock()
+	if len(unreachable) > 0 {
+		return "unreachable_members"
+	}
+
+	// 3. Node not yet Up in the cluster.
+	if !cm.IsUp() {
+		return "not_up"
+	}
+
+	return ""
 }
 
 // ── Response helpers ──────────────────────────────────────────────────────────

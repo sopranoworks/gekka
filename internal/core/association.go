@@ -169,6 +169,24 @@ func (nm *NodeManager) CountAssociations() int {
 	return count
 }
 
+// HasQuarantinedAssociation reports whether any known Artery association is in
+// QUARANTINED state.  A quarantined association means the remote node restarted
+// with a different UID — a network-split symptom that makes the local node
+// unreliable for cluster operations.  Used by the /health/ready endpoint.
+func (nm *NodeManager) HasQuarantinedAssociation() bool {
+	nm.mu.RLock()
+	defer nm.mu.RUnlock()
+	for _, assoc := range nm.associations {
+		assoc.mu.RLock()
+		st := assoc.state
+		assoc.mu.RUnlock()
+		if st == QUARANTINED {
+			return true
+		}
+	}
+	return false
+}
+
 // routePendingReply delivers meta to a waiting Ask call if path is registered.
 // Returns true when a waiting caller was found and the message routed.
 func (nm *NodeManager) routePendingReply(path string, meta *ArteryMetadata) bool {

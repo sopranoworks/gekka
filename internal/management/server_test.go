@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 
@@ -34,15 +35,21 @@ import (
 type mockProvider struct {
 	cm *cluster.ClusterManager
 
-	mu            sync.Mutex
-	leaveCalledOn []string
-	downCalledOn  []string
-	leaveErr      error // if set, LeaveMember returns this error
-	downErr       error // if set, DownMember returns this error
+	mu              sync.Mutex
+	leaveCalledOn   []string
+	downCalledOn    []string
+	leaveErr        error // if set, LeaveMember returns this error
+	downErr         error // if set, DownMember returns this error
+	quarantined     bool  // simulates a quarantined Artery association
 }
 
 func (p *mockProvider) ClusterManager() *cluster.ClusterManager { return p.cm }
 func (p *mockProvider) NodeManager() *core.NodeManager          { return nil }
+func (p *mockProvider) HasQuarantinedAssociation() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.quarantined
+}
 
 func (p *mockProvider) LeaveMember(address string) error {
 	p.mu.Lock()
@@ -136,6 +143,29 @@ func buildGossip(members []memberSpec) *cluster.ClusterManager {
 	cm.Mu.Unlock()
 
 	return cm
+}
+
+// markUnreachable sets addressIndex as unreachable from the local observer
+// (index 0) in the gossip state.  Used to simulate SBR instability.
+func markUnreachable(cm *cluster.ClusterManager, addressIndex int32) {
+	unreachable := gproto_cluster.ReachabilityStatus_Unreachable
+	cm.Mu.Lock()
+	cm.State.Overview = &gproto_cluster.GossipOverview{
+		ObserverReachability: []*gproto_cluster.ObserverReachability{
+			{
+				AddressIndex: proto.Int32(0), // local node is observer
+				Version:      proto.Int64(1),
+				SubjectReachability: []*gproto_cluster.SubjectReachability{
+					{
+						AddressIndex: proto.Int32(addressIndex),
+						Status:       &unreachable,
+						Version:      proto.Int64(1),
+					},
+				},
+			},
+		},
+	}
+	cm.Mu.Unlock()
 }
 
 // newHandler builds a ManagementServer and returns it as an http.Handler.
@@ -389,5 +419,181 @@ func TestMemberInfo_DCRole(t *testing.T) {
 	}
 	if len(members[0].Roles) != 1 || members[0].Roles[0] != "worker" {
 		t.Errorf("expected roles=[worker], got %v", members[0].Roles)
+	}
+}
+
+// ── Health check tests ────────────────────────────────────────────────────────
+
+func TestHealthAlive_AlwaysOK(t *testing.T) {
+	// Liveness probe must return 200 regardless of cluster state.
+	p := &mockProvider{
+		cm: buildGossip([]memberSpec{
+			{"127.0.0.1", 2552, "GekkaSystem", gproto_cluster.MemberStatus_Joining, []string{}},
+		}),
+	}
+	h := newHandler(t, p)
+
+	req := httptest.NewRequest(http.MethodGet, "/health/alive", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "alive") {
+		t.Errorf("expected body to contain 'alive', got: %s", w.Body.String())
+	}
+}
+
+func TestHealthReady_NodeUp_NoUnreachable(t *testing.T) {
+	// Node is Up with no unreachable members — should be ready.
+	p := &mockProvider{
+		cm: buildGossip([]memberSpec{
+			{"127.0.0.1", 2552, "GekkaSystem", gproto_cluster.MemberStatus_Up, []string{}},
+		}),
+	}
+	h := newHandler(t, p)
+
+	req := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "ready") {
+		t.Errorf("expected body to contain 'ready', got: %s", w.Body.String())
+	}
+}
+
+func TestHealthReady_NodeNotUp(t *testing.T) {
+	// Node is still Joining — not ready yet.
+	p := &mockProvider{
+		cm: buildGossip([]memberSpec{
+			{"127.0.0.1", 2552, "GekkaSystem", gproto_cluster.MemberStatus_Joining, []string{}},
+		}),
+	}
+	h := newHandler(t, p)
+
+	req := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "not_up") {
+		t.Errorf("expected reason 'not_up', got: %s", w.Body.String())
+	}
+}
+
+func TestHealthReady_UnreachableMembers(t *testing.T) {
+	// Node is Up but there is an unreachable member — SBR instability.
+	p := &mockProvider{
+		cm: buildGossip([]memberSpec{
+			{"127.0.0.1", 2552, "GekkaSystem", gproto_cluster.MemberStatus_Up, []string{}},
+			{"127.0.0.2", 2552, "GekkaSystem", gproto_cluster.MemberStatus_Up, []string{}},
+		}),
+	}
+	// Mark the second member (index 1) as unreachable.
+	markUnreachable(p.cm, 1)
+
+	h := newHandler(t, p)
+
+	req := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "unreachable_members") {
+		t.Errorf("expected reason 'unreachable_members', got: %s", w.Body.String())
+	}
+}
+
+func TestHealthReady_Quarantined(t *testing.T) {
+	// Node is Up but has a quarantined Artery association — not safe.
+	p := &mockProvider{
+		cm: buildGossip([]memberSpec{
+			{"127.0.0.1", 2552, "GekkaSystem", gproto_cluster.MemberStatus_Up, []string{}},
+		}),
+		quarantined: true,
+	}
+	h := newHandler(t, p)
+
+	req := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "quarantined") {
+		t.Errorf("expected reason 'quarantined', got: %s", w.Body.String())
+	}
+}
+
+func TestHealthReady_QuarantinedTakesPriorityOverUnreachable(t *testing.T) {
+	// Both quarantined AND unreachable — quarantined reason wins (more severe).
+	p := &mockProvider{
+		cm: buildGossip([]memberSpec{
+			{"127.0.0.1", 2552, "GekkaSystem", gproto_cluster.MemberStatus_Up, []string{}},
+			{"127.0.0.2", 2552, "GekkaSystem", gproto_cluster.MemberStatus_Up, []string{}},
+		}),
+		quarantined: true,
+	}
+	markUnreachable(p.cm, 1)
+
+	h := newHandler(t, p)
+
+	req := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "quarantined") {
+		t.Errorf("expected reason 'quarantined', got: %s", w.Body.String())
+	}
+}
+
+func TestHealthChecks_DisabledByDefault_WhenExplicitlyDisabled(t *testing.T) {
+	// When healthChecks=false, /health/* should return 404.
+	p := &mockProvider{
+		cm: buildGossip([]memberSpec{
+			{"127.0.0.1", 2552, "GekkaSystem", gproto_cluster.MemberStatus_Up, []string{}},
+		}),
+	}
+	ms, err := management.NewManagementServer(p, "127.0.0.1", 0, false)
+	if err != nil {
+		t.Fatalf("NewManagementServer: %v", err)
+	}
+
+	for _, path := range []string{"/health/alive", "/health/ready"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		w := httptest.NewRecorder()
+		ms.ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("%s with health disabled: expected 404, got %d", path, w.Code)
+		}
+	}
+}
+
+func TestHealthAlive_MethodNotAllowed(t *testing.T) {
+	p := &mockProvider{
+		cm: buildGossip([]memberSpec{
+			{"127.0.0.1", 2552, "GekkaSystem", gproto_cluster.MemberStatus_Up, []string{}},
+		}),
+	}
+	h := newHandler(t, p)
+
+	req := httptest.NewRequest(http.MethodPost, "/health/alive", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d", w.Code)
 	}
 }

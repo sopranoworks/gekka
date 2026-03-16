@@ -16,31 +16,37 @@ package core
 //	    hostname = "127.0.0.1"
 //	    port     = 8558
 //	    enabled  = false
+//
+//	    health-checks {
+//	        enabled = true
+//	    }
 //	}
 //
-// Endpoints (draft — implemented in v0.8.0):
+// Cluster member endpoints:
 //
 //	GET /cluster/members
 //	    Returns a JSON array of all cluster members and their current status.
-//	    Example response:
-//	      [
-//	        {"address":"pekko://GekkaSystem@127.0.0.1:2552","status":"Up","roles":["backend"]},
-//	        {"address":"pekko://GekkaSystem@127.0.0.2:2552","status":"Up","roles":[]}
-//	      ]
 //
 //	GET /cluster/members/{address}
-//	    Returns detailed status for the node identified by {address}.
-//	    {address} is URL-encoded, e.g. "pekko%3A%2F%2FGekkaSystem%40127.0.0.1%3A2552".
+//	    Returns detailed status for the node identified by the URL-encoded address.
 //	    404 when the address is not a known cluster member.
-//	    Example response:
-//	      {
-//	        "address":"pekko://GekkaSystem@127.0.0.1:2552",
-//	        "status":"Up",
-//	        "roles":["backend"],
-//	        "upNumber":1,
-//	        "dataCenter":"default",
-//	        "reachable":true
-//	      }
+//
+//	PUT /cluster/members/{address}
+//	    Initiates graceful leave for the named member.
+//
+//	DELETE /cluster/members/{address}
+//	    Marks the named member as Down immediately.
+//
+// Kubernetes health-check endpoints (when health-checks.enabled = true):
+//
+//	GET /health/alive
+//	    Liveness probe — always 200 OK while the HTTP server is running.
+//
+//	GET /health/ready
+//	    Readiness probe — 200 OK only when the local node is Up, has no
+//	    unreachable cluster members, and no quarantined Artery associations.
+//	    Returns 503 Service Unavailable otherwise, with a JSON body describing
+//	    the reason: "not_up", "unreachable_members", or "quarantined".
 type ManagementConfig struct {
 	// Hostname is the interface the HTTP management server binds to.
 	// Defaults to "127.0.0.1" (loopback only).
@@ -60,18 +66,28 @@ type ManagementConfig struct {
 	//
 	// HOCON: gekka.management.http.enabled
 	Enabled bool
+
+	// HealthChecksEnabled controls whether the /health/alive and /health/ready
+	// endpoints are registered on the management server.  Defaults to true when
+	// the management server is enabled so that Kubernetes probes work out of the
+	// box.
+	//
+	// HOCON: gekka.management.http.health-checks.enabled
+	HealthChecksEnabled bool
 }
 
 // DefaultManagementConfig returns a ManagementConfig populated with the
-// recommended defaults matching the Pekko Management defaults:
+// recommended defaults:
 //
-//	hostname = "127.0.0.1"
-//	port     = 8558
-//	enabled  = false
+//	hostname              = "127.0.0.1"
+//	port                  = 8558
+//	enabled               = false
+//	health-checks.enabled = true
 func DefaultManagementConfig() ManagementConfig {
 	return ManagementConfig{
-		Hostname: "127.0.0.1",
-		Port:     8558,
-		Enabled:  false,
+		Hostname:            "127.0.0.1",
+		Port:                8558,
+		Enabled:             false,
+		HealthChecksEnabled: true,
 	}
 }

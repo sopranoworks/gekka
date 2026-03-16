@@ -1,8 +1,6 @@
-# gekka &nbsp;[![Version](https://img.shields.io/badge/version-0.6.0-blue)](https://github.com/sopranoworks/gekka) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Go CI](https://github.com/sopranoworks/gekka/actions/workflows/go.yml/badge.svg)](https://github.com/sopranoworks/gekka/actions/workflows/go.yml)
+# gekka &nbsp;[![Version](https://img.shields.io/badge/version-0.7.0--dev-orange)](https://github.com/sopranoworks/gekka) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Go CI](https://github.com/sopranoworks/gekka/actions/workflows/go.yml/badge.svg)](https://github.com/sopranoworks/gekka/actions/workflows/go.yml)
 
-**Pekko/Akka Dual-Compatibility**
-
-`gekka` is a distributed actor model library for Go, engineered for seamless interoperability with [Apache Pekko](https://pekko.apache.org/) and [Lightbend Akka](https://www.lightbend.com/akka) via the Artery TCP protocol. It provides a robust **Hierarchical Actor System**, **Self-Healing Supervision**, and true **Location Transparency**.
+`gekka` is a distributed actor model library for Go, engineered for seamless interoperability with [Apache Pekko](https://pekko.apache.org/) and [Lightbend Akka](https://www.lightbend.com/akka).
 
 Powered by its own high-performance HOCON engine, [`gekka-config`](https://github.com/sopranoworks/gekka-config), `gekka` supports both automatic cluster formation and direct node-to-node communication using the standard `pekko://` and `akka://` URI schemes.
 
@@ -11,24 +9,34 @@ Powered by its own high-performance HOCON engine, [`gekka-config`](https://githu
 `gekka` is verified against live JVM nodes for both **Apache Pekko 1.0.x** and **Lightbend Akka 2.6.21** using E2E integration tests. This ensures byte-level compatibility for cluster membership, remote messaging (including **Artery TLS** secure transport), distributed state, and **Cluster Singleton** failover.
 
 
+## New in v0.7.0 (Latest Milestones)
+
+The v0.7.0 cycle introduces mission-critical features for large-scale, resilient distributed systems:
+
+- **Split Brain Resolver (SBR)** — Automated cluster partition resolution using Keep Majority, Keep Oldest, Keep Referee, and Static Quorum strategies.
+- **Multi-Data Center (Multi-DC) Support** — Data center awareness via `dc-` role convention, enabling DC-specific Cluster Singletons and Sharding affinity.
+- **Advanced Cluster Sharding** — Implemented Entity Passivation for memory optimization and Remember Entities via event sourcing for automatic state recovery.
+- **SQL Persistence Backend** — A pluggable, driver-agnostic SQL backend for journaling and snapshotting, fully verified with PostgreSQL.
+
 ## Key Features
 
 - **Hierarchical Actor System** — Parent-child relationships with reliable lifecycle management.
-- **Self-Healing Supervision** — Automatic fault tolerance with `OneForOneStrategy` (Restart, Resume, Stop, Escalate).
-- **Pekko/Akka Remote & Cluster Compatibility** — Verified interop with Scala/Java actors via Artery TCP.
-- **Secure Communication (TLS)** — Binary-compatible Artery TLS support for encrypted cluster traffic using Go's `crypto/tls`.
+- **Self-Healing Supervision** — Automatic fault tolerance with `OneForOneStrategy`.
+- **Pekko/Akka Compatibility** — Verified interop with Scala/Java actors via Artery TCP (Pekko 1.0.x / Akka 2.6.21).
+- **Split Brain Resolver** — Hardened cluster integrity during network partitions.
+- **Multi-DC Awareness** — Optimized routing and management across geographical regions.
+- **Advanced Sharding** — Location-transparent actor placement with passivation and durable recovery.
+- **SQL Persistence** — Driver-agnostic event sourcing and snapshotting (PostgreSQL verified).
+- **Secure Communication (TLS)** — Binary-compatible Artery TLS support using Go's `crypto/tls`.
+- **Cluster Singletons** — Automatic failover and lifecycle management across mixed Go/JVM clusters.
+- **Reliable Delivery** — At-least-once delivery (Serializer ID 36) between Go and Scala/Pekko.
 - **Type-safe Actors using Go Generics** — Compile-time safety for message passing.
 - **Actor Persistence & Event Sourcing** — State recovery via event journaling and snapshotting.
 - **Distributed Pub/Sub (Pekko Compatible)** — Decentralized messaging with GZIP-compressed gossip state (Serializer ID 9).
-- **Distributed Data / CRDTs** — Decentrallized state replication (G-Counter, OR-Set) with Serializer ID 11/12.
+- **Distributed Data / CRDTs** — Decentralized state replication (G-Counter, OR-Set) with Serializer ID 11/12.
 - **Location Transparency** — Identical `Tell` and `Ask` semantics for local and remote actors.
-- **Location Transparent Senders** — Reply to originators without manual address tracking.
 - **Extensible Serialization** — Built-in support for Protobuf (ID 2), Raw Bytes (ID 4), and JSON (ID 9).
-- **Actor-aware Logging** — Structured logging contextualized with actor paths and system info.
-- **High-Performance Remoting** — Binary-compatible Artery TCP with transport-level heartbeats.
 - **Observability** — Built-in monitoring with `/healthz` and `/metrics` (JSON/Prometheus).
-- **Cluster Singletons** — Full distributed lifecycle management with automatic failover between Go and Pekko/Akka nodes.
-- **Reliable Delivery** — At-least-once delivery between Go and Scala/Pekko actors (Serializer ID 36, manifests "a"–"e").
 - **Coordinated Shutdown** — Pekko-compatible phased exit sequence driving the node through Leave → Exiting → Removed before closing TCP connections. Supports shard handover and CRDT flush.
 
 ## Quick Start 1: Local Actor System
@@ -170,7 +178,7 @@ func main() {
 	system, _ := gekka.NewActorSystem("TypedSystem")
 	
 	// Spawn a typed actor
-	ref, _ := gekka.SpawnTyped(system, Greeter(), "greeter")
+	ref, _ := gekka.Spawn(system, Greeter(), "greeter")
 	
 	// Send a type-safe message
 	ref.Tell(Greet{Name: "Gopher"})
@@ -430,7 +438,7 @@ Support for mutual TLS (mTLS) is built-in, ensuring that only authenticated node
 - **HOCON-ready**: Configuration can be passed programmatically via `ClusterConfig` or loaded directly from standard `application.conf` files.
 
 
-## New in v0.6.0
+## New in v0.6.0 (Stable)
 
 Gekka v0.6.0 is a major stable release focused on **Advanced Clustering** and **Enterprise-Grade Remoting**. Key additions include:
 
@@ -460,7 +468,9 @@ See [ROUTING.md](docs/ROUTING.md) for more details.
 - [**API Reference**](docs/API.md) — Detailed function and method signatures.
 - [**Protocol Notes**](docs/PROTOCOL.md) — Artery TCP framing, serialization IDs, and CRDTs.
 - [**Routing Features**](docs/ROUTING.md) — Pool/Group routers and HOCON deployment.
-- [**Cluster Sharding**](docs/SHARDING.md) — Distributed actor placement and rebalancing.
+- [**Cluster Sharding**](docs/SHARDING.md) — Distributed actor placement, passivation, and remember-entities.
+- [**Split Brain Resolver**](docs/SBR.md) — Partition resolution strategies and interoperability testing.
+- [**Multi-Data Center**](docs/MULTI_DC.md) — DC-aware cluster configuration and routing.
 - [**Secure Transport (TLS)**](docs/TLS.md) — Configuring and using Artery TLS with PEM certificates.
 
 ## License

@@ -11,6 +11,7 @@ package cluster
 import (
 	"fmt"
 	"reflect"
+	"strings"
 
 	"github.com/sopranoworks/gekka/actor"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
@@ -40,15 +41,34 @@ type ClusterDomainEvent interface {
 
 // MemberAddress identifies the cluster member that an event concerns.
 type MemberAddress struct {
-	Protocol string // "pekko" or "akka"
-	System   string // actor system name, e.g. "ClusterSystem"
-	Host     string // hostname or IP
-	Port     uint32 // TCP port
+	Protocol   string // "pekko" or "akka"
+	System     string // actor system name, e.g. "ClusterSystem"
+	Host       string // hostname or IP
+	Port       uint32 // TCP port
+	DataCenter string // data-center name, e.g. "us-east" (from "dc-us-east" role); "default" when unset
 }
 
 // String returns the member's address in Artery URI form ("pekko://System@host:port").
 func (m MemberAddress) String() string {
 	return fmt.Sprintf("%s://%s@%s:%d", m.Protocol, m.System, m.Host, m.Port)
+}
+
+// DataCenterForMember extracts the data-center name from a member's roles.
+// Pekko encodes the DC as a role with the "dc-" prefix (e.g. "dc-us-east" → "us-east").
+// Returns "default" when no DC role is present.
+func DataCenterForMember(gossip *gproto_cluster.Gossip, member *gproto_cluster.Member) string {
+	if gossip == nil || member == nil {
+		return "default"
+	}
+	for _, idx := range member.GetRolesIndexes() {
+		if int(idx) < len(gossip.AllRoles) {
+			role := gossip.AllRoles[idx]
+			if strings.HasPrefix(role, "dc-") {
+				return strings.TrimPrefix(role, "dc-")
+			}
+		}
+	}
+	return "default"
 }
 
 // MemberUp is published when a cluster member transitions to Up status.

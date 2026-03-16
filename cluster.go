@@ -28,6 +28,7 @@ import (
 	"github.com/sopranoworks/gekka/internal/core"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
+	"github.com/sopranoworks/gekka/telemetry"
 
 	"google.golang.org/protobuf/proto"
 )
@@ -142,6 +143,103 @@ type ClusterConfig struct {
 	//	    },
 	//	})
 	Deployments map[string]core.DeploymentConfig
+
+	// SBR configures the Split Brain Resolver. Leave zero-valued to disable SBR.
+	//
+	// Example — keep-majority with a 10-second stable-after delay:
+	//
+	//	SBR: gekka.SBRConfig{
+	//	    ActiveStrategy: "keep-majority",
+	//	    StableAfter:    10 * time.Second,
+	//	},
+	SBR SBRConfig
+
+	// Sharding holds parsed sharding configuration from HOCON.
+	// It is used to populate ShardingSettings when StartSharding is called.
+	//
+	//	pekko.cluster.sharding {
+	//	    passivation.idle-timeout = 2m
+	//	    remember-entities = on
+	//	}
+	Sharding ShardingConfig
+
+	// DataCenter identifies which data center this node belongs to.
+	// Corresponds to pekko.cluster.multi-data-center.self-data-center.
+	// Defaults to "default" when unset or when parsed from HOCON without the key.
+	//
+	//	pekko.cluster.multi-data-center.self-data-center = "us-east"
+	DataCenter string
+
+	// Persistence holds persistence-plugin configuration parsed from HOCON.
+	//
+	//	pekko.persistence.journal.plugin   = "sql"
+	//	pekko.persistence.snapshot-store.plugin = "sql"
+	//
+	// After creating the Cluster, call node.ProvideJournalDB(name, db) and
+	// node.ProvideSnapshotStoreDB(name, db) to wire up the provisioned DB.
+	Persistence PersistenceConfig
+
+	// Telemetry controls the built-in OTEL instrumentation.
+	// Parse from HOCON:
+	//
+	//	gekka.telemetry {
+	//	    tracing.enabled = true
+	//	    metrics.enabled = true
+	//	}
+	//
+	// Note: enabling tracing/metrics here only arms the hooks; you must also
+	// call telemetry.SetProvider(gekkaotel.NewProvider()) (see telemetry/otel) and configure
+	// the OTEL SDK to emit data to an exporter.
+	Telemetry TelemetryConfig
+}
+
+// PersistenceConfig holds persistence-plugin settings parsed from HOCON.
+// It identifies the registered Journal and SnapshotStore factory names so
+// that the Cluster can resolve them from the persistence registry when a
+// *sql.DB is provided at runtime.
+type PersistenceConfig struct {
+	// JournalPlugin is the registry name of the Journal factory.
+	// e.g. "sql" or "postgres".
+	// Corresponds to pekko.persistence.journal.plugin.
+	// Leave empty to use InMemoryJournal (the default).
+	JournalPlugin string
+
+	// SnapshotPlugin is the registry name of the SnapshotStore factory.
+	// e.g. "sql" or "postgres".
+	// Corresponds to pekko.persistence.snapshot-store.plugin.
+	// Leave empty to use InMemorySnapshotStore (the default).
+	SnapshotPlugin string
+}
+
+// SBRConfig is a re-export of cluster.SBRConfig for use in ClusterConfig.
+// Import gekka directly — you do not need to import the cluster sub-package.
+type SBRConfig = gcluster.SBRConfig
+
+// TelemetryConfig controls the built-in OTEL instrumentation hooks.
+type TelemetryConfig struct {
+	// TracingEnabled enables automatic span creation in actor Receive loops
+	// and in ActorRef.Ask.  Effective only when telemetry.SetProvider has
+	// been called with a non-noop provider.
+	// Corresponds to HOCON: gekka.telemetry.tracing.enabled
+	TracingEnabled bool
+
+	// MetricsEnabled enables recording of mailbox-size and processing-duration
+	// metrics as well as the cluster member count gauge.
+	// Corresponds to HOCON: gekka.telemetry.metrics.enabled
+	MetricsEnabled bool
+}
+
+// ShardingConfig holds sharding-specific configuration parsed from HOCON.
+type ShardingConfig struct {
+	// PassivationIdleTimeout is the duration after which an entity that
+	// has not received a message is automatically stopped.
+	// Corresponds to pekko.cluster.sharding.passivation.idle-timeout.
+	PassivationIdleTimeout time.Duration
+
+	// RememberEntities, when true, persists entity lifecycle events so
+	// entities are re-spawned after a Shard restart.
+	// Corresponds to pekko.cluster.sharding.remember-entities.
+	RememberEntities bool
 }
 
 // resolve returns the effective (scheme, system, host, port) for this config.
@@ -225,6 +323,10 @@ type Cluster struct {
 	// Coordinated shutdown — drives the graceful exit sequence.
 	cs *actor.CoordinatedShutdown
 
+	// ps holds the optionally-provisioned Journal and SnapshotStore.
+	// Managed by cluster_persistence.go.
+	ps persistenceState
+
 	// shardingRegionsMu guards shardingRegions.
 	shardingRegionsMu sync.Mutex
 	// shardingRegions holds refs to every ShardRegion actor spawned on this
@@ -263,6 +365,7 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	cm.Router = func(ctx context.Context, path string, msg any) error {
 		return router.Send(ctx, path, msg)
 	}
+	cm.SetLocalDataCenter(cfg.DataCenter)
 	nm.SetClusterManager(cm)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -397,6 +500,59 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	cluster.cs = actor.NewCoordinatedShutdown()
 	cluster.registerBuiltinShutdownTasks()
 
+	// ── Split Brain Resolver ─────────────────────────────────────────────────
+	// Start the SBR manager goroutine when a strategy is configured.
+	if sbr := gcluster.NewSBRManager(cm, cfg.SBR); sbr != nil {
+		go sbr.Start(ctx)
+	}
+
+	// ── Telemetry: cluster member count ──────────────────────────────────────
+	// Subscribe to member events and update the OTEL UpDownCounter so
+	// dashboards can track gekka_cluster_members_count{status,dc}.
+	go func() {
+		sub := cm.SubscribeChannel()
+		defer sub.Cancel()
+
+		meter := telemetry.GetMeter("github.com/sopranoworks/gekka/cluster")
+		membersCount := meter.UpDownCounter(
+			"gekka_cluster_members_count",
+			"Current number of cluster members grouped by status and data center.",
+			"{members}",
+		)
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case evt, ok := <-sub.C:
+				if !ok {
+					return
+				}
+				switch e := evt.(type) {
+				case gcluster.MemberUp:
+					membersCount.Add(ctx, 1,
+						telemetry.StringAttr("status", "up"),
+						telemetry.StringAttr("dc", e.Member.DataCenter))
+				case gcluster.MemberRemoved:
+					membersCount.Add(ctx, -1,
+						telemetry.StringAttr("status", "up"),
+						telemetry.StringAttr("dc", e.Member.DataCenter))
+				case gcluster.MemberLeft:
+					membersCount.Add(ctx, -1,
+						telemetry.StringAttr("status", "up"),
+						telemetry.StringAttr("dc", e.Member.DataCenter))
+					membersCount.Add(ctx, 1,
+						telemetry.StringAttr("status", "leaving"),
+						telemetry.StringAttr("dc", e.Member.DataCenter))
+				case gcluster.MemberExited:
+					membersCount.Add(ctx, -1,
+						telemetry.StringAttr("status", "leaving"),
+						telemetry.StringAttr("dc", e.Member.DataCenter))
+				}
+			}
+		}
+	}()
+
 	return cluster, nil
 }
 
@@ -415,6 +571,27 @@ func (a *clusterWatcherActor) Receive(msg any) {
 // OS-assigned port when ClusterConfig.Port was 0.
 func (c *Cluster) Addr() net.Addr {
 	return c.server.Addr()
+}
+
+// MuteNode silently drops all outbound frames to and all inbound frames from
+// the cluster node at host:port. Use this in tests to simulate a network
+// partition without stopping the process.
+func (c *Cluster) MuteNode(host string, port int) {
+	c.nm.MuteNode(host, uint32(port))
+}
+
+// UnmuteNode reverses a previous MuteNode call. Safe to call even if the node
+// was never muted.
+func (c *Cluster) UnmuteNode(host string, port int) {
+	c.nm.UnmuteNode(host, uint32(port))
+}
+
+// SubscribeChannel creates a buffered channel subscription for cluster domain
+// events. The caller must call Cancel on the returned subscription to avoid
+// resource leaks. When types is non-empty only those event types are delivered;
+// omit types to receive all ClusterDomainEvents.
+func (c *Cluster) SubscribeChannel(types ...reflect.Type) *gcluster.ChanSubscription {
+	return c.cm.SubscribeChannel(types...)
 }
 
 // IsUp returns true if the cluster state contains at least one Up member.

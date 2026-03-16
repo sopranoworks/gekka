@@ -40,15 +40,15 @@ type typedMockRef struct {
 func (r *typedMockRef) Path() string                { return r.path }
 func (r *typedMockRef) Tell(msg any, sender ...Ref) {}
 
-func TestSpawnTyped(t *testing.T) {
+func TestSpawn(t *testing.T) {
 	ctx := &typedMockContext{}
 	behavior := func(ctx TypedContext[string], msg string) Behavior[string] {
 		return Same[string]()
 	}
 
-	ref, err := SpawnTyped(ctx, behavior, "test")
+	ref, err := Spawn(ctx, behavior, "test")
 	if err != nil {
-		t.Fatalf("SpawnTyped failed: %v", err)
+		t.Fatalf("Spawn failed: %v", err)
 	}
 
 	if ref.Path() != "/user/test" {

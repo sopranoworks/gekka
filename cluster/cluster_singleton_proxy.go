@@ -11,6 +11,8 @@ package cluster
 import (
 	"context"
 	"fmt"
+
+	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 )
 
 // ClusterSingletonProxy routes messages to the singleton actor on the oldest cluster node.
@@ -22,6 +24,7 @@ type ClusterSingletonProxy struct {
 	managerPath   string // relative actor path of the singleton manager, e.g. "/user/singletonManager"
 	singletonName string // name of the singleton actor, defaults to "singleton"
 	role          string // optional role filter; empty means any node
+	dataCenter    string // optional DC filter; empty means any DC
 }
 
 func NewClusterSingletonProxy(cm *ClusterManager, router Router, managerPath, role string) *ClusterSingletonProxy {
@@ -32,6 +35,12 @@ func NewClusterSingletonProxy(cm *ClusterManager, router Router, managerPath, ro
 		singletonName: "singleton",
 		role:          role,
 	}
+}
+
+// WithDataCenter restricts routing to the oldest node in the given data center.
+func (p *ClusterSingletonProxy) WithDataCenter(dc string) *ClusterSingletonProxy {
+	p.dataCenter = dc
+	return p
 }
 
 // WithSingletonName sets the name of the singleton actor.
@@ -45,7 +54,12 @@ func (p *ClusterSingletonProxy) WithSingletonName(name string) *ClusterSingleton
 // CurrentOldestPath returns the full Pekko actor path to the singleton on the current oldest node.
 // Returns an error if no eligible node is known yet.
 func (p *ClusterSingletonProxy) CurrentOldestPath() (string, error) {
-	ua := p.cm.OldestNode(p.role)
+	var ua *gproto_cluster.UniqueAddress
+	if p.dataCenter != "" {
+		ua = p.cm.OldestNodeInDC(p.dataCenter, p.role)
+	} else {
+		ua = p.cm.OldestNode(p.role)
+	}
 	if ua == nil {
 		return "", fmt.Errorf("ClusterSingletonProxy: no oldest node available (cluster state not yet known)")
 	}

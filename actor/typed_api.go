@@ -113,8 +113,8 @@ func (r TypedActorRef[T]) Untyped() Ref {
 	return r.ref
 }
 
-// SpawnTyped creates a new typed actor as a child of the given context.
-func SpawnTyped[T any](ctx ActorContext, behavior Behavior[T], name string, props ...Props) (TypedActorRef[T], error) {
+// Spawn creates a new typed actor as a child of the given context.
+func Spawn[T any](ctx ActorContext, behavior Behavior[T], name string, props ...Props) (TypedActorRef[T], error) {
 	p := Props{
 		New: func() Actor { return NewTypedActor(behavior) },
 	}
@@ -130,7 +130,7 @@ func SpawnTyped[T any](ctx ActorContext, behavior Behavior[T], name string, prop
 
 // SpawnChild creates a new typed actor as a child of the given typed context.
 func SpawnChild[T any, U any](ctx TypedContext[T], behavior Behavior[U], name string, props ...Props) (TypedActorRef[U], error) {
-	return SpawnTyped(ctx.System(), behavior, name, props...)
+	return Spawn(ctx.System(), behavior, name, props...)
 }
 
 // Ask sends a message to a typed actor and waits for a reply.

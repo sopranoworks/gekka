@@ -282,11 +282,11 @@ actor.  The business actor never sees `ChunkedMessage` directly.
 
 ## 8. Public API Surface
 
-The package exposes typed actor behaviors for use with `gekka.SpawnTyped`:
+The package exposes typed actor behaviors for use with `gekka.Spawn`:
 
 ```go
 // NewProducerBehavior returns a Behavior that drives a ProducerController.
-// Use with SpawnTyped to obtain a TypedActorRef[ProducerMessage[T]].
+// Use with Spawn to obtain a TypedActorRef[ProducerMessage[T]].
 func NewProducerBehavior[T any](consumer actor.Ref, cfg ProducerConfig) actor.Behavior[ProducerMessage[T]]
 
 // NewConsumerBehavior returns a Behavior that drives a ConsumerController.
@@ -298,13 +298,13 @@ Example:
 
 ```go
 // Sender side
-producer, _ := gekka.SpawnTyped(sys,
+producer, _ := gekka.Spawn(sys,
     delivery.NewProducerBehavior[MyMsg](consumerRef, delivery.ProducerConfig{}),
     "myProducer",
 )
 
 // Receiver side
-consumer, _ := gekka.SpawnTyped(sys,
+consumer, _ := gekka.Spawn(sys,
     delivery.NewConsumerBehavior[MyMsg](producerRef, businessActor, delivery.ConsumerConfig{}),
     "myConsumer",
 )

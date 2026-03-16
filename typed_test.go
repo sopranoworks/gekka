@@ -16,15 +16,15 @@ import (
 	"github.com/sopranoworks/gekka/actor"
 )
 
-func TestSpawnTyped_System(t *testing.T) {
+func TestSpawn_System(t *testing.T) {
 	sys, _ := NewActorSystem("test")
 	behavior := func(ctx actor.TypedContext[string], msg string) actor.Behavior[string] {
 		return actor.Same[string]()
 	}
 
-	ref, err := SpawnTyped(sys, behavior, "test")
+	ref, err := Spawn(sys, behavior, "test")
 	if err != nil {
-		t.Fatalf("SpawnTyped failed: %v", err)
+		t.Fatalf("Spawn failed: %v", err)
 	}
 
 	if ref.Path() == "" {
@@ -53,9 +53,9 @@ func TestAsk_Typed(t *testing.T) {
 		return actor.Same[Ping]()
 	}
 
-	ref, err := SpawnTyped(sys, behavior, "pinger")
+	ref, err := Spawn(sys, behavior, "pinger")
 	if err != nil {
-		t.Fatalf("SpawnTyped failed: %v", err)
+		t.Fatalf("Spawn failed: %v", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)

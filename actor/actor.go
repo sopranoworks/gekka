@@ -78,8 +78,9 @@ var NoSender Ref
 // clears it afterwards. User code never needs to create or inspect Envelope
 // directly.
 type Envelope struct {
-	Payload any // the actual message delivered to Receive
-	Sender  Ref // nil ↔ NoSender
+	Payload      any               // the actual message delivered to Receive
+	Sender       Ref               // nil ↔ NoSender
+	TraceContext map[string]string // W3C trace headers for span propagation (nil = no tracing)
 }
 
 // Props is a factory specification for creating an actor instance.

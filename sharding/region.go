@@ -11,8 +11,12 @@ package sharding
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/sopranoworks/gekka/actor"
+	"net"
 	"reflect"
+	"strconv"
+	"strings"
+
+	"github.com/sopranoworks/gekka/actor"
 )
 
 type ShardRegion struct {
@@ -22,6 +26,7 @@ type ShardRegion struct {
 	messageUnmarshaler func(manifest string, data json.RawMessage) (any, error)
 	extractEntityId    ExtractEntityId
 	coordinator        actor.Ref
+	shardSettings      ShardSettings
 
 	shards          map[ShardId]actor.Ref // Local shards
 	shardHomePaths  map[ShardId]string    // ShardId -> Region Path (cached)
@@ -34,6 +39,7 @@ func NewShardRegion(
 	unmarshaler func(string, json.RawMessage) (any, error),
 	extract ExtractEntityId,
 	coordinator actor.Ref,
+	shardSettings ShardSettings,
 ) *ShardRegion {
 	return &ShardRegion{
 		BaseActor:          actor.NewBaseActor(),
@@ -42,6 +48,7 @@ func NewShardRegion(
 		messageUnmarshaler: unmarshaler,
 		extractEntityId:    extract,
 		coordinator:        coordinator,
+		shardSettings:      shardSettings,
 		shards:             make(map[ShardId]actor.Ref),
 		shardHomePaths:     make(map[ShardId]string),
 		pendingMessages:    make(map[ShardId][]actor.Envelope),
@@ -107,6 +114,34 @@ func (r *ShardRegion) Receive(msg any) {
 	}
 }
 
+// parseHostPortFromPath extracts the host and port from a full Artery actor path.
+// e.g. "pekko://ClusterSystem@127.0.0.1:2553/user/CartRegion" → ("127.0.0.1", 2553).
+// Returns ("", 0) if the path cannot be parsed.
+func parseHostPortFromPath(path string) (string, uint32) {
+	// Strip scheme: "pekko://" or "akka://"
+	rest := path
+	if idx := strings.Index(rest, "://"); idx >= 0 {
+		rest = rest[idx+3:]
+	}
+	// Strip actor-system name: "ClusterSystem@..."
+	if idx := strings.Index(rest, "@"); idx >= 0 {
+		rest = rest[idx+1:]
+	}
+	// Strip path portion: "host:port/user/..."
+	if idx := strings.Index(rest, "/"); idx >= 0 {
+		rest = rest[:idx]
+	}
+	host, portStr, err := net.SplitHostPort(rest)
+	if err != nil {
+		return "", 0
+	}
+	p, err := strconv.ParseUint(portStr, 10, 32)
+	if err != nil {
+		return "", 0
+	}
+	return host, uint32(p)
+}
+
 func (r *ShardRegion) deliverMessageWithSender(shardId ShardId, envelope ShardingEnvelope, sender actor.Ref) {
 	homePath, ok := r.shardHomePaths[shardId]
 	if !ok || homePath == "" {
@@ -128,8 +163,11 @@ func (r *ShardRegion) deliverMessageWithSender(shardId ShardId, envelope Shardin
 			// Spawn shard
 			r.Log().Debug("Spawning local shard", "shardId", shardId)
 			var err error
+			sid := shardId // capture for closure
 			shard, err = r.System().ActorOf(actor.Props{
-				New: func() actor.Actor { return NewShard(r.typeName, r.entityCreator, r.messageUnmarshaler) },
+				New: func() actor.Actor {
+					return NewShard(r.typeName, sid, r.entityCreator, r.messageUnmarshaler, r.shardSettings)
+				},
 			}, shardId)
 			if err != nil {
 				r.Log().Error("Failed to spawn shard", "shardId", shardId, "error", err)

@@ -10,6 +10,7 @@ package gekka
 
 import (
 	"testing"
+	"time"
 
 	"github.com/sopranoworks/gekka/actor"
 )
@@ -154,6 +155,222 @@ func TestSpawnFromConfig_Pekko(t *testing.T) {
 	}
 	if seeds[0].Port != 2552 {
 		t.Errorf("Seeds[0].Port = %d, want 2552", seeds[0].Port)
+	}
+}
+
+func TestHOCON_SBRConfig(t *testing.T) {
+	const hocon = `
+pekko {
+  remote.artery.canonical {
+    hostname = "127.0.0.1"
+    port = 2553
+  }
+  cluster {
+    seed-nodes = ["pekko://ClusterSystem@127.0.0.1:2552"]
+    split-brain-resolver {
+      active-strategy = keep-majority
+      stable-after    = 10s
+      keep-majority {
+        role = "worker"
+      }
+    }
+  }
+}
+`
+	cfg, err := parseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.SBR.ActiveStrategy != "keep-majority" {
+		t.Errorf("ActiveStrategy = %q, want keep-majority", cfg.SBR.ActiveStrategy)
+	}
+	if cfg.SBR.StableAfter != 10*time.Second {
+		t.Errorf("StableAfter = %v, want 10s", cfg.SBR.StableAfter)
+	}
+	if cfg.SBR.Role != "worker" {
+		t.Errorf("Role = %q, want worker", cfg.SBR.Role)
+	}
+}
+
+func TestHOCON_SBRConfig_KeepOldest(t *testing.T) {
+	const hocon = `
+pekko {
+  remote.artery.canonical {
+    hostname = "127.0.0.1"
+    port = 2553
+  }
+  cluster {
+    seed-nodes = ["pekko://ClusterSystem@127.0.0.1:2552"]
+    split-brain-resolver {
+      active-strategy = keep-oldest
+      stable-after    = "5 seconds"
+      keep-oldest {
+        down-if-alone = on
+      }
+    }
+  }
+}
+`
+	cfg, err := parseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.SBR.ActiveStrategy != "keep-oldest" {
+		t.Errorf("ActiveStrategy = %q, want keep-oldest", cfg.SBR.ActiveStrategy)
+	}
+	if cfg.SBR.StableAfter != 5*time.Second {
+		t.Errorf("StableAfter = %v, want 5s", cfg.SBR.StableAfter)
+	}
+	if !cfg.SBR.DownIfAlone {
+		t.Errorf("DownIfAlone = false, want true")
+	}
+}
+
+func TestHOCON_SBRConfig_StaticQuorum(t *testing.T) {
+	const hocon = `
+pekko {
+  remote.artery.canonical {
+    hostname = "127.0.0.1"
+    port = 2553
+  }
+  cluster {
+    seed-nodes = ["pekko://ClusterSystem@127.0.0.1:2552"]
+    split-brain-resolver {
+      active-strategy = static-quorum
+      stable-after    = 20s
+      static-quorum {
+        quorum-size = 3
+      }
+    }
+  }
+}
+`
+	cfg, err := parseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.SBR.ActiveStrategy != "static-quorum" {
+		t.Errorf("ActiveStrategy = %q, want static-quorum", cfg.SBR.ActiveStrategy)
+	}
+	if cfg.SBR.QuorumSize != 3 {
+		t.Errorf("QuorumSize = %d, want 3", cfg.SBR.QuorumSize)
+	}
+}
+
+func TestHOCON_ShardingConfig(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko.remote.artery.canonical.hostname = "127.0.0.1"
+pekko.remote.artery.canonical.port = 2552
+pekko.cluster.seed-nodes = []
+pekko.cluster.sharding.passivation.idle-timeout = "2m"
+pekko.cluster.sharding.remember-entities = on
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.Sharding.PassivationIdleTimeout != 2*time.Minute {
+		t.Errorf("PassivationIdleTimeout = %v, want 2m", cfg.Sharding.PassivationIdleTimeout)
+	}
+	if !cfg.Sharding.RememberEntities {
+		t.Error("RememberEntities = false, want true")
+	}
+}
+
+func TestHOCON_ShardingConfig_Defaults(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko.remote.artery.canonical.hostname = "127.0.0.1"
+pekko.remote.artery.canonical.port = 2552
+pekko.cluster.seed-nodes = []
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.Sharding.PassivationIdleTimeout != 0 {
+		t.Errorf("expected zero PassivationIdleTimeout by default, got %v", cfg.Sharding.PassivationIdleTimeout)
+	}
+	if cfg.Sharding.RememberEntities {
+		t.Error("expected RememberEntities=false by default")
+	}
+}
+
+func TestHOCON_PersistencePlugins(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery.canonical {
+    hostname = "127.0.0.1"
+    port = 2552
+  }
+  cluster.seed-nodes = []
+  persistence {
+    journal.plugin          = "sql"
+    snapshot-store.plugin   = "sql"
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.Persistence.JournalPlugin != "sql" {
+		t.Errorf("JournalPlugin = %q, want sql", cfg.Persistence.JournalPlugin)
+	}
+	if cfg.Persistence.SnapshotPlugin != "sql" {
+		t.Errorf("SnapshotPlugin = %q, want sql", cfg.Persistence.SnapshotPlugin)
+	}
+}
+
+func TestHOCON_PersistencePlugins_Defaults(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko.remote.artery.canonical.hostname = "127.0.0.1"
+pekko.remote.artery.canonical.port = 2552
+pekko.cluster.seed-nodes = []
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	// Both plugin names default to empty string when absent.
+	if cfg.Persistence.JournalPlugin != "" {
+		t.Errorf("JournalPlugin = %q, want empty", cfg.Persistence.JournalPlugin)
+	}
+	if cfg.Persistence.SnapshotPlugin != "" {
+		t.Errorf("SnapshotPlugin = %q, want empty", cfg.Persistence.SnapshotPlugin)
+	}
+}
+
+func TestHOCON_MultiDCConfig(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery.canonical {
+    hostname = "10.0.0.1"
+    port = 2552
+  }
+  cluster {
+    seed-nodes = ["pekko://ClusterSystem@10.0.0.1:2552"]
+    multi-data-center {
+      self-data-center = "us-east"
+    }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.DataCenter != "us-east" {
+		t.Errorf("DataCenter = %q, want us-east", cfg.DataCenter)
+	}
+}
+
+func TestHOCON_MultiDCConfig_Default(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko.remote.artery.canonical.hostname = "127.0.0.1"
+pekko.remote.artery.canonical.port = 2552
+pekko.cluster.seed-nodes = []
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	// When the key is absent, the default is "default".
+	if cfg.DataCenter != "default" {
+		t.Errorf("DataCenter = %q, want default", cfg.DataCenter)
 	}
 }
 

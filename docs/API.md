@@ -1,4 +1,4 @@
-# Gekka API Reference (v0.5.0)
+# Gekka API Reference (v0.7.0)
 
 This document provides a comprehensive reference for the Gekka public API.
 
@@ -12,7 +12,7 @@ This document provides a comprehensive reference for the Gekka public API.
 | `NewClusterFromConfig(path string, fallbacks ...string) (*Cluster, error)` | Load HOCON file and start a node |
 | `LoadConfig(path string, fallbacks ...string) (ClusterConfig, error)` | Parse HOCON into `ClusterConfig` without spawning |
 | `ParseHOCONString(text string) (ClusterConfig, error)` | Parse an in-memory HOCON string |
-| `SpawnTyped[T](sys, behavior, name, props...) (TypedActorRef[T], error)` | Spawn a type-safe actor |
+| `Spawn[T](sys, behavior, name, props...) (TypedActorRef[T], error)` | Spawn a type-safe actor |
 | `SpawnPersistent[C,E,S](sys, behavior, name, props...) (TypedActorRef[C], error)` | Spawn a persistent (event-sourced) actor |
 | `Ask[T,R](ctx, target, timeout, msgFactory)` | Type-safe request-response |
 | `StartSharding[C,E,S](sys, typeName, behaviorFactory, extract, settings)` | Start cluster sharding for an entity type |
@@ -88,7 +88,7 @@ A location-transparent reference to an actor (local or remote):
 A generic, compile-time type-safe actor reference:
 
 ```go
-ref, err := gekka.SpawnTyped(cluster.System, myBehavior, "greeter")
+ref, err := gekka.Spawn(cluster.System, myBehavior, "greeter")
 ref.Tell(Greet{Name: "world"})  // only Greet accepted — compile-time checked
 ```
 

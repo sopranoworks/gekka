@@ -79,6 +79,14 @@ type NodeManager struct {
 	pendingRepliesMu sync.RWMutex
 	pendingReplies   map[string]chan *ArteryMetadata // keyed by temp actor path
 
+	// mutedMu guards mutedNodes.
+	mutedMu sync.RWMutex
+	// mutedNodes is a set of "host:port" strings for which all outbound
+	// frames are silently dropped and all inbound frames are ignored.
+	// Populate via MuteNode / UnmuteNode to simulate a network partition
+	// in tests without terminating the process.
+	mutedNodes map[string]struct{}
+
 	// TLSConfig is the *tls.Config to use for outbound connections.
 	// Nil means plain TCP (default).
 	TLSConfig *tls.Config
@@ -95,7 +103,38 @@ func NewNodeManager(local *gproto_remote.Address, uid uint64) *NodeManager {
 		localUid:           uid,
 		SerializerRegistry: NewSerializationRegistry(),
 		pendingReplies:     make(map[string]chan *ArteryMetadata),
+		mutedNodes:         make(map[string]struct{}),
 	}
+}
+
+// MuteNode silently drops all outbound frames to and all inbound frames from
+// the node at host:port. This simulates a one-sided or full network partition
+// without terminating either process. Safe to call concurrently.
+func (nm *NodeManager) MuteNode(host string, port uint32) {
+	key := fmt.Sprintf("%s:%d", host, port)
+	nm.mutedMu.Lock()
+	nm.mutedNodes[key] = struct{}{}
+	nm.mutedMu.Unlock()
+	log.Printf("NodeManager: muted node %s (outbound dropped, inbound ignored)", key)
+}
+
+// UnmuteNode reverses a previous MuteNode call. Safe to call even if the node
+// was never muted.
+func (nm *NodeManager) UnmuteNode(host string, port uint32) {
+	key := fmt.Sprintf("%s:%d", host, port)
+	nm.mutedMu.Lock()
+	delete(nm.mutedNodes, key)
+	nm.mutedMu.Unlock()
+	log.Printf("NodeManager: unmuted node %s", key)
+}
+
+// isNodeMuted returns true when host:port has been muted.
+func (nm *NodeManager) isNodeMuted(host string, port uint32) bool {
+	key := fmt.Sprintf("%s:%d", host, port)
+	nm.mutedMu.RLock()
+	_, ok := nm.mutedNodes[key]
+	nm.mutedMu.RUnlock()
+	return ok
 }
 
 // RegisterPendingReply records a channel to receive a single reply addressed to path.
@@ -354,6 +393,15 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 				if !ok {
 					return
 				}
+				// Check mute state before writing (catches buffered frames
+				// queued before MuteNode was called). Use assoc.remote under
+				// read lock since it's updated after the handshake.
+				assoc.mu.RLock()
+				remoteAddr := assoc.remote.GetAddress()
+				assoc.mu.RUnlock()
+				if remoteAddr != nil && nm.isNodeMuted(remoteAddr.GetHostname(), remoteAddr.GetPort()) {
+					continue
+				}
 				log.Printf("Association %p: SENDING frame of %d bytes", assoc, len(msg))
 				if err := WriteFrame(assoc.conn, msg); err != nil {
 					log.Printf("Association %p: write error: %v", assoc, err)
@@ -410,6 +458,14 @@ func (assoc *GekkaAssociation) Process(ctx context.Context) error {
 }
 
 func (assoc *GekkaAssociation) dispatch(ctx context.Context, meta *ArteryMetadata) error {
+	// Drop all inbound frames from a muted node (simulates network partition).
+	if assoc.nodeMgr != nil && assoc.remote != nil {
+		a := assoc.remote.GetAddress()
+		if assoc.nodeMgr.isNodeMuted(a.GetHostname(), a.GetPort()) {
+			return nil
+		}
+	}
+
 	assoc.mu.Lock()
 	assoc.lastSeen = time.Now()
 	assoc.mu.Unlock()
@@ -528,6 +584,14 @@ func (assoc *GekkaAssociation) SendWithSender(recipient, senderPath string, payl
 		return fmt.Errorf("cannot send to quarantined node")
 	}
 
+	// Drop outbound frames when the target node is muted.
+	if assoc.nodeMgr != nil && assoc.remote != nil {
+		a := assoc.remote.GetAddress()
+		if assoc.nodeMgr.isNodeMuted(a.GetHostname(), a.GetPort()) {
+			return nil
+		}
+	}
+
 	frame, err := BuildArteryFrame(int64(assoc.localUid), serializerId, senderPath, recipient, manifest, payload, false)
 	if err != nil {
 		return err
@@ -577,6 +641,14 @@ func (assoc *GekkaAssociation) Send(recipient string, payload []byte, serializer
 
 	if st == QUARANTINED {
 		return fmt.Errorf("cannot send to quarantined node")
+	}
+
+	// Drop outbound frames when the target node is muted.
+	if assoc.nodeMgr != nil && assoc.remote != nil {
+		a := assoc.remote.GetAddress()
+		if assoc.nodeMgr.isNodeMuted(a.GetHostname(), a.GetPort()) {
+			return nil
+		}
 	}
 
 	sender := fmt.Sprintf("%s://%s@%s:%d/user/echo",

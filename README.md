@@ -1,4 +1,4 @@
-# gekka &nbsp;[![Version](https://img.shields.io/badge/version-0.7.0-blue)](https://github.com/sopranoworks/gekka) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Go CI](https://github.com/sopranoworks/gekka/actions/workflows/go.yml/badge.svg)](https://github.com/sopranoworks/gekka/actions/workflows/go.yml)
+# gekka &nbsp;[![Version](https://img.shields.io/badge/version-0.8.0--dev-orange)](https://github.com/sopranoworks/gekka) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Go CI](https://github.com/sopranoworks/gekka/actions/workflows/go.yml/badge.svg)](https://github.com/sopranoworks/gekka/actions/workflows/go.yml)
 
 `gekka` is a distributed actor model library for Go, engineered for seamless interoperability with [Apache Pekko](https://pekko.apache.org/) and [Lightbend Akka](https://www.lightbend.com/akka).
 
@@ -462,6 +462,69 @@ gekka.actor.deployment {
 ```
 
 See [ROUTING.md](docs/ROUTING.md) for more details.
+
+## Operational Tools
+
+Two standalone binaries ship with the gekka module for cluster operators.
+
+### gekka-cli
+
+`gekka-cli` is a command-line interface for inspecting and managing a live cluster via the HTTP Management API.
+
+```
+gekka-cli [--config FILE] [--profile NAME] [--json] <subcommand>
+```
+
+| Subcommand | Description |
+|---|---|
+| `members` | List all cluster members with status, roles, DC, and reachability |
+| `leave` | Initiate a graceful leave for a named member (`PUT /cluster/members/{address}`) |
+| `down` | Mark a member as Down immediately (`DELETE /cluster/members/{address}`) |
+
+**Config file** (`~/.gekka/config.yaml` by default):
+
+```yaml
+management_url: http://127.0.0.1:8558
+default_profile: local
+
+profiles:
+  local:
+    management_url: http://127.0.0.1:8558
+  staging:
+    management_url: http://staging-node:8558
+```
+
+The `--url` flag always overrides the config file.  The `--profile` flag selects a named profile.
+
+### gekka-metrics
+
+`gekka-metrics` is a sidecar that periodically scrapes the HTTP Management API and exports cluster-state metrics via **OpenTelemetry Protocol (OTLP/HTTP)**.
+
+```
+gekka-metrics [--config FILE] [--url URL] [--interval DURATION] [--otlp ENDPOINT]
+```
+
+**HOCON configuration** (resolved via the standard `gekka.LoadConfig` loader):
+
+```hocon
+gekka.metrics {
+  enabled         = true
+  management-url  = "http://127.0.0.1:8558"
+  scrape-interval = "15s"
+}
+
+gekka.telemetry.exporter.otlp {
+  endpoint = "http://otel-collector:4318"
+}
+```
+
+**Exported metric:**
+
+| Metric | Type | Attributes | Description |
+|---|---|---|---|
+| `gekka.cluster.members` | ObservableGauge | `status`, `dc` | Member count per status/DC combination |
+
+When no OTLP endpoint is configured the process still runs and emits structured JSON log lines (`cluster_members_up`) on every scrape cycle.
 
 ## Documentation
 

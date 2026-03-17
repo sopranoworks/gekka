@@ -144,6 +144,45 @@ The v0.7.0 cycle introduces mission-critical features for large-scale, resilient
 
 ---
 
+## Quick Start: Classic Actor
+
+The simplest entry point — a local actor with no cluster or networking required.
+
+```go
+package main
+
+import (
+	"log"
+
+	"github.com/sopranoworks/gekka"
+	"github.com/sopranoworks/gekka/actor"
+)
+
+type HelloActor struct {
+	actor.BaseActor
+}
+
+func (a *HelloActor) Receive(msg any) {
+	if s, ok := msg.(string); ok {
+		log.Printf("Received: %s", s)
+	}
+}
+
+func main() {
+	system, _ := gekka.NewActorSystem("HelloSystem")
+
+	ref, _ := system.ActorOf(gekka.Props{
+		New: func() actor.Actor {
+			return &HelloActor{BaseActor: actor.NewBaseActor()}
+		},
+	}, "hello")
+
+	ref.Tell("Hello, world!")
+}
+```
+
+---
+
 ## Quick Start: Joining a Cluster
 
 Initialize your node to join an existing Pekko/Akka cluster. `gekka` handles Artery handshakes and membership synchronization automatically.

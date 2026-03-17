@@ -80,6 +80,23 @@ func (s Source[T, Mat]) Take(n int) Source[T, Mat] {
 	}
 }
 
+// ─── Async boundary ───────────────────────────────────────────────────────
+
+// Async inserts an asynchronous boundary after this Source.  Elements are
+// buffered in a channel of capacity [DefaultAsyncBufSize]; the upstream source
+// runs in a dedicated goroutine.  When the buffer is full the goroutine blocks,
+// propagating demand-driven back-pressure to the original source.
+//
+// Use [ActorMaterializer] when running graphs that contain async boundaries.
+func (s Source[T, Mat]) Async() Source[T, Mat] {
+	return Source[T, Mat]{
+		factory: func() (iterator[T], Mat) {
+			up, mat := s.factory()
+			return newAsyncBoundary[T](up, DefaultAsyncBufSize), mat
+		},
+	}
+}
+
 // ─── Graph assembly ───────────────────────────────────────────────────────
 
 // To connects this Source to sink, returning a [RunnableGraph] that keeps the

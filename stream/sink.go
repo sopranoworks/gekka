@@ -27,6 +27,22 @@ func (s Sink[In, Mat]) connect(upstream iterator[In]) error {
 	return err
 }
 
+// ─── Async boundary ───────────────────────────────────────────────────────
+
+// Async inserts an asynchronous boundary before this Sink.  Upstream runs in a
+// dedicated goroutine and pushes elements into a bounded channel of capacity
+// [DefaultAsyncBufSize]; the Sink drains from that channel.  When the channel
+// is full the upstream goroutine blocks, enforcing demand-driven back-pressure
+// on the producer even when the Sink is the slower party.
+func (s Sink[In, Mat]) Async() Sink[In, Mat] {
+	return Sink[In, Mat]{
+		runWith: func(upstream iterator[In]) (Mat, error) {
+			ab := newAsyncBoundary[In](upstream, DefaultAsyncBufSize)
+			return s.runWith(ab)
+		},
+	}
+}
+
 // ─── Constructors ─────────────────────────────────────────────────────────
 
 // Foreach creates a Sink that calls fn for each incoming element.

@@ -51,6 +51,22 @@ func Take[T any](n int) Flow[T, T, NotUsed] {
 	}
 }
 
+// ─── Async boundary ───────────────────────────────────────────────────────
+
+// Async inserts an asynchronous boundary after this Flow's output port.
+// The output iterator runs in a dedicated goroutine backed by a bounded channel
+// of capacity [DefaultAsyncBufSize], decoupling the upstream and downstream
+// execution islands.  When the channel is full the upstream goroutine blocks,
+// enforcing demand-driven back-pressure across the boundary.
+func (f Flow[In, Out, Mat]) Async() Flow[In, Out, Mat] {
+	return Flow[In, Out, Mat]{
+		attach: func(up iterator[In]) (iterator[Out], Mat) {
+			out, mat := f.attach(up)
+			return newAsyncBoundary[Out](out, DefaultAsyncBufSize), mat
+		},
+	}
+}
+
 // ─── Flow chaining ────────────────────────────────────────────────────────
 
 // ViaFlow connects two flows, producing a composite Flow.

@@ -8,6 +8,21 @@
 
 ## Released
 
+### v0.8.0 (2026-03-17)
+- **Cluster HTTP Management API**: REST endpoints for `/cluster/members`, `/health/alive`, `/health/ready` (Kubernetes probe compatible)
+- **`gekka-cli`**: Command-line cluster management tool (`members` command, HOCON config loading)
+- **`gekka-metrics`**: Dedicated metrics node with native OpenTelemetry export
+- **Coordinated Shutdown refinement**: Phased exit sequence with readiness gate and shard handoff timeout (configurable via HOCON)
+- **Rolling Update Optimization**: Operational suite for zero-downtime cluster upgrades
+- **Pekko 1.1.2 Upgrade**: Verified interoperability; DC-scoped leader election for multi-DC Go nodes
+
+### v0.7.0 (2026-03-16)
+- Split Brain Resolver: `keep-majority`, `keep-oldest`, `keep-referee`, `static-quorum`
+- Multi-Data Center support: DC-role gossip, DC-scoped singletons, DC-aware sharding
+- Advanced Sharding: Entity Passivation (`PassivationIdleTimeout`) and Remember Entities
+- SQL Persistence Backend (PostgreSQL, driver-agnostic)
+- OpenTelemetry integration: tracing and metrics with W3C TraceContext propagation
+
 ### v0.6.0 (2026-03-14)
 - Distributed Pub/Sub (Full Pekko compatibility, GZIP support)
 - Artery TLS Transport (Secure encrypted cluster traffic)
@@ -21,37 +36,39 @@
 
 ## Upcoming
 
-### v0.7.0 — Split Brain Resolution, Tracing & Production Database Support
+### v0.9.0 — Streams, TUI & Cloud-Native Scaling
 
 **Target:** Q3 2026
 
-#### Split Brain Resolver (SBR)
-Implementation of the standard SBR strategies to handle network partitions and node crashes:
-- `keep-majority`
-- `keep-oldest`
-- `static-quorum`
+#### 1. Akka Typed API Refinement
+Closing the gap with Pekko/Akka's typed actor API:
+- **Timers**: `TimerScheduler` for recurring and single-shot messages inside typed actors
+- **Stash**: `StashBuffer` for deferring messages until a behavior transition
 
-#### Distributed Tracing (`OpenTelemetry`)
-Seamless integration with OpenTelemetry to provide cross-node distributed tracing across actor boundaries (especially during `Ask` patterns).
+#### 2. Gekka Streams
+A reactive streams implementation aligned with the Akka Streams programming model:
+- Source / Flow / Sink pipeline DSL
+- Backpressure-aware async stages
+- Integration with actor `Source.actorRef` and `Sink.actorRef`
 
-#### Production-ready Persistence Backends
-Durable backends for Event Sourcing:
-- **PostgreSQL** support via `database/sql`
-- **SQL-based** generic drivers
-- **Pebble** (LSM) embedded backend
+#### 3. Kubernetes Discovery
+Native cluster formation without a pre-configured seed list:
+- **Kubernetes API discovery**: query the K8s API server for pod endpoints
+- **DNS SRV discovery**: headless-service SRV record resolution for seed-node bootstrap
+- HOCON configuration: `pekko.discovery.method = kubernetes-api | akka-dns`
 
-#### Advanced Sharding Features ✅
-Enhancing the `cluster/sharding` package:
-- **Entity Passivation**: Automatic offloading of idle entities via `PassivationIdleTimeout` + self-initiated `Passivate`. ✅
-- **Remember Entities**: Persisting `EntityStarted`/`EntityStopped` events so entities are re-spawned after Shard restart. ✅
+#### 4. Zero-copy Serialization
+Protocol-level optimization to reduce allocation pressure on the hot path:
+- Custom frame builder avoiding intermediate `[]byte` copies
+- Pluggable codec interface for user-defined zero-copy serializers
+- Benchmarks validating throughput improvement vs. current JSON/proto path
 
-#### Multi-DC Cluster Support ✅
-Enhanced awareness and routing for multi-datacenter cluster topologies:
-- `DataCenter` field in `ClusterConfig` / HOCON `pekko.cluster.multi-data-center.self-data-center`. ✅
-- DC encoded as `"dc-<name>"` role in gossip (Pekko wire-compatible). ✅
-- `OldestNodeInDC`, `MembersInDataCenter`, `IsInDataCenter` on `ClusterManager`. ✅
-- DC-scoped `ClusterSingletonManager.WithDataCenter` and `ClusterSingletonProxy.WithDataCenter`. ✅
-- `DataCenter` / `IsLocalDC` fields in `ShardingSettings` / `ShardSettings` for DC-aware allocation. ✅
+#### 5. `gekka-cli` Dashboard (TUI)
+Visual cluster management terminal UI built on top of the existing `gekka-cli`:
+- Real-time member state table (role, status, DC, uptime)
+- Shard distribution heatmap per region
+- Log tail panel with severity filtering
+- Interactive commands: `leave`, `down`, `join`
 
 ---
 

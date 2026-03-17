@@ -29,6 +29,7 @@ type localActorSystem struct {
 	actors     map[string]actor.Actor
 	actorsMu   sync.RWMutex
 	logHandler slog.Handler
+	sched      *systemScheduler
 }
 
 // NewActorSystem creates and returns a local-only ActorSystem.
@@ -40,8 +41,19 @@ func NewActorSystem(name string, config ...*hocon.Config) (ActorSystem, error) {
 		ctx:    ctx,
 		cancel: cancel,
 		actors: make(map[string]actor.Actor),
+		sched:  newSystemScheduler(),
 	}
+	// Terminate the scheduler when the system context is cancelled.
+	go func() {
+		<-ctx.Done()
+		s.sched.terminate()
+	}()
 	return s, nil
+}
+
+// Scheduler implements ActorSystem.
+func (s *localActorSystem) Scheduler() Scheduler {
+	return s.sched
 }
 
 // ActorOf implements ActorSystem.

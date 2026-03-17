@@ -387,6 +387,8 @@ type Cluster struct {
 	// node.  Populated by RegisterShardingRegion; consumed during the
 	// cluster-sharding-shutdown-region phase.
 	shardingRegions []ActorRef
+
+	sched *systemScheduler
 }
 
 // NewCluster creates, wires, and starts a Cluster. The TCP listener is bound
@@ -495,7 +497,13 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 		remoteWatchers: make(map[string]map[string][]ActorRef),
 		logHandler:     cfg.LogHandler,
 		deployments:    cfg.Deployments,
+		sched:          newSystemScheduler(),
 	}
+	// Terminate the scheduler when the cluster context is cancelled.
+	go func() {
+		<-ctx.Done()
+		cluster.sched.terminate()
+	}()
 	cluster.System = cluster
 	cluster.cm.Sys = asActorContext(cluster, "")
 
@@ -1447,6 +1455,11 @@ func (c *Cluster) Stop(target ActorRef) {
 	if target.local != nil {
 		close(target.local.Mailbox())
 	}
+}
+
+// Scheduler implements ActorSystem.
+func (c *Cluster) Scheduler() Scheduler {
+	return c.sched
 }
 
 // RemoteActorOf implements ActorSystem.

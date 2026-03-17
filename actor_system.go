@@ -102,6 +102,11 @@ type ActorSystem interface {
 	// ActorSelection returns a handle to one or more actors, local or remote,
 	// identified by path.
 	ActorSelection(path string) ActorSelection
+
+	// Scheduler returns the system-level task scheduler.
+	// Scheduled tasks run in their own goroutines and are automatically
+	// cancelled when the ActorSystem is terminated.
+	Scheduler() Scheduler
 }
 
 // internalSystem is an unexported interface used by ActorRef and ActorSelection

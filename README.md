@@ -6,6 +6,36 @@ Configuration is loaded via [`gekka-config`](https://github.com/sopranoworks/gek
 
 ---
 
+## Features
+
+- **Hierarchical Actor System** — Parent-child relationships with supervisor-managed lifecycle.
+- **Supervision** — Fault isolation with `OneForOneStrategy`.
+- **Pekko/Akka Compatibility** — Wire-level interop with Scala/Java actors via Artery TCP (Pekko 1.0.x / Akka 2.6.21).
+- **Split Brain Resolver** — Partition resolution during network splits (Keep Majority, Keep Oldest, Static Quorum).
+- **Multi-DC Awareness** — Routing and management across multiple data centers.
+- **Cluster Sharding** — Location-transparent actor placement with passivation and durable recovery.
+- **SQL Persistence** — Driver-agnostic event sourcing and snapshotting (PostgreSQL verified).
+- **Artery TLS** — Encrypted cluster transport using Go's `crypto/tls`, binary-compatible with Pekko's `tls-tcp`.
+- **Cluster Singletons** — Singleton failover and lifecycle management across mixed Go/JVM clusters.
+- **Reliable Delivery** — At-least-once delivery (Serializer ID 36) compatible with Pekko.
+- **Typed Actors (Go Generics)** — Compile-time message type safety.
+- **Actor Persistence** — State recovery via event journaling and snapshotting.
+- **Distributed Pub/Sub** — Decentralized messaging with GZIP-compressed gossip (Serializer ID 9).
+- **Distributed Data / CRDTs** — G-Counter and OR-Set replication (Serializer ID 11/12).
+- **Pool and Group Routers** — Round-robin and random routing, configurable via HOCON deployment config.
+- **Location Transparency** — `Tell` and `Ask` work identically for local and remote actors.
+- **Extensible Serialization** — Protobuf (ID 2), raw bytes (ID 4), and JSON (ID 9).
+- **Coordinated Shutdown** — Phased exit with readiness drain gate, shard handoff, and CRDT flush.
+- **Rolling Update Support** — `/health/ready` drain gate and shard handoff handshake for zero-downtime pod restarts.
+
+---
+
+## Verified Interoperability
+
+`gekka` is tested against live JVM nodes for both **Apache Pekko 1.0.x** and **Lightbend Akka 2.6.21** using E2E integration tests, covering cluster membership, remote messaging (including Artery TLS), distributed state, and Cluster Singleton failover.
+
+---
+
 ## Operational Tooling
 
 Two standalone binaries ship with the gekka module for cluster operators.
@@ -72,9 +102,9 @@ When no OTLP endpoint is configured the process still joins and emits structured
 
 ---
 
-## Rolling Update Support (v0.8.0)
+## Rolling Update Support
 
-The v0.8.0 release adds support for zero-downtime rolling updates in Kubernetes-hosted clusters.  Two mechanisms are used together:
+v0.8.0 includes two coordinated mechanisms for zero-downtime rolling updates in Kubernetes-hosted clusters.
 
 ### /health/ready drain gate
 
@@ -97,7 +127,7 @@ Before `cluster-leave` runs, each `ShardRegion` actor executes `PostStop`:
 
 This ensures the coordinator can reallocate shards to surviving members before the departing node's membership status changes, preventing missed-message windows during pod restarts.
 
-**Rolling-update shutdown sequence:**
+**Shutdown sequence:**
 
 ```
 service-unbind              → /health/ready returns 503 "shutting_down"
@@ -106,41 +136,6 @@ cluster-leave               → Leave → Exiting → Removed
 cluster-shutdown            → CRDT replicator stop
 actor-system-terminate      → TCP close
 ```
-
----
-
-## Verified Interoperability
-
-`gekka` is tested against live JVM nodes for both **Apache Pekko 1.0.x** and **Lightbend Akka 2.6.21** using E2E integration tests, covering cluster membership, remote messaging (including Artery TLS), distributed state, and Cluster Singleton failover.
-
-## New in v0.7.0
-
-The v0.7.0 cycle adds the following features for large-scale distributed systems:
-
-- **Split Brain Resolver (SBR)** — Cluster partition resolution using Keep Majority, Keep Oldest, Keep Referee, and Static Quorum strategies.
-- **Multi-Data Center (Multi-DC) Support** — Data center awareness via `dc-` role convention, enabling DC-specific Cluster Singletons and Sharding affinity.
-- **Cluster Sharding** — Entity passivation and remember-entities (event-sourced recovery).
-- **SQL Persistence Backend** — A driver-agnostic SQL backend for journaling and snapshotting, verified with PostgreSQL.
-
-## Features
-
-- **Hierarchical Actor System** — Parent-child relationships with supervisor-managed lifecycle.
-- **Supervision** — Fault isolation with `OneForOneStrategy`.
-- **Pekko/Akka Compatibility** — Wire-level interop with Scala/Java actors via Artery TCP (Pekko 1.0.x / Akka 2.6.21).
-- **Split Brain Resolver** — Partition resolution during network splits (Keep Majority, Keep Oldest, Static Quorum).
-- **Multi-DC Awareness** — Routing and management across multiple data centers.
-- **Cluster Sharding** — Location-transparent actor placement with passivation and durable recovery.
-- **SQL Persistence** — Driver-agnostic event sourcing and snapshotting (PostgreSQL verified).
-- **Artery TLS** — Encrypted cluster transport using Go's `crypto/tls`, binary-compatible with Pekko's `tls-tcp`.
-- **Cluster Singletons** — Singleton failover and lifecycle management across mixed Go/JVM clusters.
-- **Reliable Delivery** — At-least-once delivery (Serializer ID 36) compatible with Pekko.
-- **Typed Actors (Go Generics)** — Compile-time message type safety.
-- **Actor Persistence** — State recovery via event journaling and snapshotting.
-- **Distributed Pub/Sub** — Decentralized messaging with GZIP-compressed gossip (Serializer ID 9).
-- **Distributed Data / CRDTs** — G-Counter and OR-Set replication (Serializer ID 11/12).
-- **Location Transparency** — `Tell` and `Ask` work identically for local and remote actors.
-- **Extensible Serialization** — Protobuf (ID 2), raw bytes (ID 4), and JSON (ID 9).
-- **Coordinated Shutdown** — Phased exit with readiness drain gate, shard handoff, and CRDT flush.
 
 ---
 
@@ -260,7 +255,7 @@ More examples — local actors, pub/sub, CRDTs, persistence, singletons, coordin
 
 ## Artery TLS
 
-`gekka` supports secure transport via Artery TLS, maintaining binary compatibility with Pekko/Akka's `tls-tcp` transport. While JVM nodes typically use JKS keystores, `gekka` leverages Go's `crypto/tls` to provide a modern, PEM-based alternative for managing certificates and private keys.
+`gekka` supports Artery TLS, maintaining binary compatibility with Pekko/Akka's `tls-tcp` transport. Go nodes use PEM-based certificates via `crypto/tls` in place of JVM keystores.
 
 ### HOCON Configuration
 
@@ -279,33 +274,6 @@ pekko.remote.artery {
 ```
 
 Mutual TLS (mTLS) is supported; nodes must present a valid certificate to connect.
-
----
-
-## New in v0.6.0
-
-v0.6.0 adds the following features:
-
-- **Distributed Pub/Sub** — Pekko-compatible pub/sub with GZIP-compressed gossip (Serializer ID 9).
-- **Artery TLS** — Encrypted cluster transport using PEM certificates.
-- **Reliable Delivery** — At-least-once messaging compatible with Pekko's Serializer ID 36.
-- **Cluster Singletons** — Singleton lifecycle management and failover across the cluster.
-- **Coordinated Shutdown** — Phased node exit with shard handover and state flush.
-- **Distributed Data (CRDTs)** — G-Counter and OR-Set replication for decentralized state.
-- **Verified Interoperability** — E2E tested against Apache Pekko 1.0.x and Lightbend Akka 2.6.21.
-
-v0.6.0 also includes **Pool** and **Group Routers** that can be configured directly in HOCON:
-
-```hocon
-gekka.actor.deployment {
-  "/user/workerPool" {
-    router = round-robin-pool
-    nr-of-instances = 5
-  }
-}
-```
-
-See [ROUTING.md](docs/ROUTING.md) for more details.
 
 ---
 

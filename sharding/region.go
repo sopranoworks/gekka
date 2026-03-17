@@ -104,8 +104,14 @@ func (r *ShardRegion) Receive(msg any) {
 	r.Log().Debug("Region received message", "type", fmt.Sprintf("%T", msg))
 	switch m := msg.(type) {
 	case ShardingEnvelope:
-		r.Log().Debug("Routing ShardingEnvelope", "shardId", m.ShardId, "entityId", m.EntityId)
-		r.deliverMessageWithSender(m.ShardId, m, r.Sender())
+		shardId := m.ShardId
+		if shardId == "" && m.EntityId != "" {
+			// EntityRef.Tell wraps messages without a ShardId — derive it now.
+			_, shardId, _ = r.extractEntityId(m.EntityId)
+			m.ShardId = shardId
+		}
+		r.Log().Debug("Routing ShardingEnvelope", "shardId", shardId, "entityId", m.EntityId)
+		r.deliverMessageWithSender(shardId, m, r.Sender())
 
 	case ShardHome:
 		r.Log().Debug("Received ShardHome", "shardId", m.ShardId, "region", m.RegionPath)

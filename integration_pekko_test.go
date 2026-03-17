@@ -585,6 +585,8 @@ func TestShardingPassivationInterop(t *testing.T) {
 	}
 
 	// ── 2. Start Go node A (port 2553, joins Scala) ───────────────────────
+	// Use role "go-shard" so the shard coordinator is placed on the oldest
+	// Go node (not Pekko's seed at 2552 which cannot host a Go coordinator).
 	nodeA, err := NewCluster(ClusterConfig{
 		Address: actor.Address{
 			Protocol: "pekko",
@@ -592,6 +594,7 @@ func TestShardingPassivationInterop(t *testing.T) {
 			Host:     "127.0.0.1",
 			Port:     2553,
 		},
+		Roles: []string{"go-shard"},
 	})
 	if err != nil {
 		t.Fatalf("NewCluster nodeA: %v", err)
@@ -611,6 +614,7 @@ func TestShardingPassivationInterop(t *testing.T) {
 		SystemName: "GekkaSystem",
 		Host:       "127.0.0.1",
 		Port:       0,
+		Roles:      []string{"go-shard"},
 	})
 	if err != nil {
 		t.Fatalf("NewCluster nodeB: %v", err)
@@ -621,12 +625,12 @@ func TestShardingPassivationInterop(t *testing.T) {
 		t.Fatalf("nodeB.Join: %v", err)
 	}
 
-	// Wait for the Go nodes to be Up in the cluster view.
+	// Wait for each Go node itself (not just any cluster member) to be Up.
 	waitUp := func(n *Cluster, label string) {
 		t.Helper()
 		deadline := time.Now().Add(30 * time.Second)
 		for time.Now().Before(deadline) {
-			if n.IsUp() {
+			if n.IsLocalNodeUp() {
 				return
 			}
 			time.Sleep(500 * time.Millisecond)
@@ -647,6 +651,7 @@ func TestShardingPassivationInterop(t *testing.T) {
 		PassivationIdleTimeout: 2 * time.Second,
 		RememberEntities:       true,
 		Journal:                journal,
+		Role:                   "go-shard", // restrict coordinator to Go nodes only
 	}
 
 	extractId := func(msg any) (sharding.EntityId, sharding.ShardId, any) {
@@ -815,7 +820,7 @@ func TestMultiDCInterop(t *testing.T) {
 		t.Helper()
 		deadline := time.Now().Add(30 * time.Second)
 		for time.Now().Before(deadline) {
-			if n.IsUp() {
+			if n.IsLocalNodeUp() {
 				return
 			}
 			time.Sleep(200 * time.Millisecond)

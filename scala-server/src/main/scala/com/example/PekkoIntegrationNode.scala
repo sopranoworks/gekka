@@ -158,30 +158,21 @@ object ReliableConsumerBehavior {
  *   PEKKO_DELIVERY_PRODUCER_NEXT:<n>    — message n handed to ProducerController
  */
 object ReliableProducerBehavior {
-  sealed trait Command
-  private final case class Wrapped(
-      rn: ProducerController.RequestNext[Array[Byte]]
-  ) extends Command
-
-  def apply(totalToSend: Int): Behavior[Command] =
-    Behaviors.setup { ctx =>
-      val adapter =
-        ctx.messageAdapter[ProducerController.RequestNext[Array[Byte]]](Wrapped(_))
-      // Tell the ProducerController where to send RequestNext signals.
-      // This happens by the ProducerController calling Start(adapter) from the outside.
-      var sent = 0
-      Behaviors.receiveMessage {
-        case Wrapped(rn) =>
-          if (sent < totalToSend) {
-            val msg = s"scala-delivery-$sent".getBytes("UTF-8")
-            rn.sendNextTo ! msg
-            println(s"PEKKO_DELIVERY_PRODUCER_NEXT:$sent")
-            Console.flush()
-            sent += 1
-          }
-          Behaviors.same
+  // Pekko 1.1.x: ProducerController.Start requires ActorRef[RequestNext[T]] directly.
+  // The message-adapter indirection used in 1.0.x is no longer needed.
+  def apply(totalToSend: Int): Behavior[ProducerController.RequestNext[Array[Byte]]] = {
+    var sent = 0
+    Behaviors.receiveMessage { rn =>
+      if (sent < totalToSend) {
+        val msg = s"scala-delivery-$sent".getBytes("UTF-8")
+        rn.sendNextTo ! msg
+        println(s"PEKKO_DELIVERY_PRODUCER_NEXT:$sent")
+        Console.flush()
+        sent += 1
       }
+      Behaviors.same
     }
+  }
 }
 
 /**

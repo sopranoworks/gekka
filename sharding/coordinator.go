@@ -10,6 +10,7 @@ package sharding
 
 import (
 	"fmt"
+
 	"github.com/sopranoworks/gekka/actor"
 )
 
@@ -39,7 +40,12 @@ func (c *ShardCoordinator) Receive(msg any) {
 		c.System().Watch(c.Self(), c.Sender())
 
 	case GetShardHome:
-		c.Log().Debug("Handling GetShardHome", "shardId", m.ShardId, "sender", c.Sender().Path())
+		c.Log().Debug("Handling GetShardHome", "shardId", m.ShardId, "sender", func() string {
+			if c.Sender() != nil {
+				return c.Sender().Path()
+			}
+			return "<nil>"
+		}())
 		regionPath, ok := c.shards[m.ShardId]
 		if !ok {
 			c.Log().Debug("Allocating new shard", "shardId", m.ShardId)

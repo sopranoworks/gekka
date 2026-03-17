@@ -18,6 +18,7 @@ import (
 	"math/rand"
 
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -57,7 +58,8 @@ func gzipCompress(data []byte) ([]byte, error) {
 type ClusterManager struct {
 	Mu              sync.RWMutex
 	LocalAddress    *gproto_cluster.UniqueAddress
-	LocalHash       int32 // for VectorClock version
+	LocalHash       int32  // for VectorClock version (initial UID-based hash)
+	LocalHashStr    string // Pekko-assigned hash for this node (murmur format); overrides LocalHash
 	State           *gproto_cluster.Gossip
 	Metrics         Metrics
 	Fd              *PhiAccrualFailureDetector
@@ -112,9 +114,91 @@ func (cm *ClusterManager) HeartbeatPath(system, host string, port uint32) string
 	return fmt.Sprintf("%s://%s@%s:%d/system/cluster/heartbeatReceiver", cm.Proto(), system, host, port)
 }
 
+// localHashString returns the hash string used for this node's VectorClock entry.
+// If a Pekko-assigned hash has been adopted it takes precedence; otherwise the
+// UID-based fallback is used.
+func (cm *ClusterManager) localHashString() string {
+	if cm.LocalHashStr != "" {
+		return cm.LocalHashStr
+	}
+	return fmt.Sprintf("%d", cm.LocalHash)
+}
+
+// syncLocalHashFromStateLocked scans cm.State.AllAddresses for the local
+// node and, if a non-empty hash is found in AllHashes at the corresponding
+// index, adopts it as LocalHashStr and updates the AllHashes entry in
+// cm.State.  Must be called with cm.Mu held (write).
+func (cm *ClusterManager) syncLocalHashFromStateLocked() {
+	localHost := cm.LocalAddress.GetAddress().GetHostname()
+	localPort := cm.LocalAddress.GetAddress().GetPort()
+	for i, ua := range cm.State.AllAddresses {
+		if ua.GetAddress().GetHostname() != localHost || ua.GetAddress().GetPort() != localPort {
+			continue
+		}
+		if i >= len(cm.State.AllHashes) || cm.State.AllHashes[i] == "" {
+			break
+		}
+		newHash := cm.State.AllHashes[i]
+		oldHash := cm.localHashString()
+		if newHash == oldHash {
+			break
+		}
+		log.Printf("Cluster: adopting Pekko hash %q for local node (was %q)", newHash, oldHash)
+		cm.LocalHashStr = newHash
+		// Replace the old hash key in the VectorClock Version entries.
+		for _, ver := range cm.State.Version.GetVersions() {
+			if int(ver.GetHashIndex()) < len(cm.State.AllHashes) &&
+				cm.State.AllHashes[ver.GetHashIndex()] == oldHash {
+				// AllHashes[i] is already newHash; nothing else to change.
+				break
+			}
+		}
+		break
+	}
+}
+
+// adoptHashFromGossipLocked looks for the local node's address in an
+// incoming gossip message.  If found, and the corresponding AllHashes entry
+// differs from the current LocalHashStr, it updates LocalHashStr and patches
+// the same index in cm.State.AllHashes so future VectorClock increments use
+// the Pekko-compatible murmur hash.  Must be called with cm.Mu held (write).
+func (cm *ClusterManager) adoptHashFromGossipLocked(incoming *gproto_cluster.Gossip) {
+	localHost := cm.LocalAddress.GetAddress().GetHostname()
+	localPort := cm.LocalAddress.GetAddress().GetPort()
+
+	// Find our address in the incoming gossip.
+	var pekkoHash string
+	for i, ua := range incoming.AllAddresses {
+		if ua.GetAddress().GetHostname() == localHost && ua.GetAddress().GetPort() == localPort {
+			if i < len(incoming.AllHashes) && incoming.AllHashes[i] != "" {
+				pekkoHash = incoming.AllHashes[i]
+			}
+			break
+		}
+	}
+	if pekkoHash == "" || pekkoHash == cm.localHashString() {
+		return
+	}
+
+	log.Printf("Cluster: adopting Pekko hash %q for local node (was %q)", pekkoHash, cm.localHashString())
+	oldHash := cm.localHashString()
+	cm.LocalHashStr = pekkoHash
+
+	// Update the AllHashes entry for our address in cm.State so that
+	// vectorClockToMap and incrementVersionWithLockHeld use the new hash.
+	for i, ua := range cm.State.AllAddresses {
+		if ua.GetAddress().GetHostname() == localHost && ua.GetAddress().GetPort() == localPort {
+			if i < len(cm.State.AllHashes) && cm.State.AllHashes[i] == oldHash {
+				cm.State.AllHashes[i] = pekkoHash
+			}
+			break
+		}
+	}
+}
+
 func NewClusterManager(local *gproto_cluster.UniqueAddress, router func(context.Context, string, any) error) *ClusterManager {
 	clLocal := local                   // Already a gproto_cluster.UniqueAddress
-	localHash := int32(local.GetUid()) // simplified hash as UID
+	localHash := int32(local.GetUid()) // UID-based hash fallback (used only when leader)
 	return &ClusterManager{
 		LocalAddress: local,
 		LocalHash:    localHash,
@@ -129,16 +213,14 @@ func NewClusterManager(local *gproto_cluster.UniqueAddress, router func(context.
 				},
 			},
 			AllAddresses: []*gproto_cluster.UniqueAddress{clLocal},
-			AllHashes:    []string{fmt.Sprintf("%d", localHash)},
-			Overview:     &gproto_cluster.GossipOverview{},
-			Version: &gproto_cluster.VectorClock{
-				Versions: []*gproto_cluster.VectorClock_Version{
-					{
-						HashIndex: proto.Int32(0),
-						Timestamp: proto.Int64(1),
-					},
-				},
-			},
+			// Start with no AllHashes/Version so that the first incoming gossip
+			// from the Pekko seed is always ClockBefore → we replace our state
+			// with Pekko's canonical state including Pekko's murmur hashes.
+			// incrementVersionWithLockHeld becomes a no-op until we adopt a hash
+			// from an incoming gossip state via syncLocalHashFromStateLocked.
+			AllHashes: []string{},
+			Overview:  &gproto_cluster.GossipOverview{},
+			Version:   &gproto_cluster.VectorClock{},
 		},
 	}
 }
@@ -148,6 +230,29 @@ func (cm *ClusterManager) IsUp() bool {
 	defer cm.Mu.RUnlock()
 	for _, m := range cm.State.GetMembers() {
 		if m.GetStatus() == gproto_cluster.MemberStatus_Up {
+			return true
+		}
+	}
+	return false
+}
+
+// IsLocalNodeUp returns true if the local node itself has reached Up or
+// WeaklyUp status in the gossip state. WeaklyUp is included because
+// multi-DC members may remain WeaklyUp from the majority DC's perspective
+// while still being fully functional.
+func (cm *ClusterManager) IsLocalNodeUp() bool {
+	localHost := cm.LocalAddress.GetAddress().GetHostname()
+	localPort := cm.LocalAddress.GetAddress().GetPort()
+	cm.Mu.RLock()
+	defer cm.Mu.RUnlock()
+	for _, m := range cm.State.GetMembers() {
+		st := m.GetStatus()
+		if st != gproto_cluster.MemberStatus_Up && st != gproto_cluster.MemberStatus_WeaklyUp {
+			continue
+		}
+		ua := cm.State.AllAddresses[m.GetAddressIndex()]
+		a := ua.GetAddress()
+		if a.GetHostname() == localHost && a.GetPort() == localPort {
 			return true
 		}
 	}
@@ -500,7 +605,14 @@ func (cm *ClusterManager) addMemberToGossipLocked(joiningAddr *gproto_cluster.Un
 			// Already known — add Member if not present.
 			for _, m := range cm.State.Members {
 				if m.GetAddressIndex() == int32(i) {
-					return // already a member
+					// Already a member; still ensure the local hash is present
+					// and bump the version so that the Welcome we're about to
+					// send is guaranteed to be ClockAfter the joiner's empty
+					// initial state (handles races where the joiner's address
+					// was inserted into our state before the Join arrived).
+					cm.ensureLocalHashInAllHashesLocked()
+					cm.incrementVersionWithLockHeld()
+					return
 				}
 			}
 			cm.State.Members = append(cm.State.Members, &gproto_cluster.Member{
@@ -509,6 +621,7 @@ func (cm *ClusterManager) addMemberToGossipLocked(joiningAddr *gproto_cluster.Un
 				UpNumber:     proto.Int32(int32(len(cm.State.Members) + 1)),
 				RolesIndexes: roleIdxs,
 			})
+			cm.ensureLocalHashInAllHashesLocked()
 			cm.incrementVersionWithLockHeld()
 			return
 		}
@@ -524,7 +637,74 @@ func (cm *ClusterManager) addMemberToGossipLocked(joiningAddr *gproto_cluster.Un
 		UpNumber:     proto.Int32(int32(len(cm.State.Members) + 1)),
 		RolesIndexes: roleIdxs,
 	})
+	cm.ensureLocalHashInAllHashesLocked()
 	cm.incrementVersionWithLockHeld()
+}
+
+// mergeSeenLocked unions the incoming gossip's Overview.Seen into the local state.
+// Must be called with cm.Mu held (write).
+func (cm *ClusterManager) mergeSeenLocked(incoming *gproto_cluster.Gossip) {
+	if incoming.GetOverview() == nil {
+		return
+	}
+	if cm.State.Overview == nil {
+		cm.State.Overview = &gproto_cluster.GossipOverview{}
+	}
+	existing := make(map[int32]bool, len(cm.State.Overview.Seen))
+	for _, s := range cm.State.Overview.Seen {
+		existing[s] = true
+	}
+	for _, s := range incoming.GetOverview().GetSeen() {
+		if !existing[s] {
+			cm.State.Overview.Seen = append(cm.State.Overview.Seen, s)
+			existing[s] = true
+		}
+	}
+}
+
+// markLocalSeenLocked adds the local node's AllAddresses index to Overview.Seen,
+// signalling to Pekko's leader that this node has "seen" the current gossip.
+// Pekko's convergence check (members.forall(m => Exiting || seen(m.address)))
+// requires ALL members (not just Up ones) to be in Seen before leader actions
+// (Joining→Up promotion) can run. Must be called with cm.Mu held (write).
+func (cm *ClusterManager) markLocalSeenLocked() {
+	localHost := cm.LocalAddress.GetAddress().GetHostname()
+	localPort := cm.LocalAddress.GetAddress().GetPort()
+	localIdx := int32(-1)
+	for i, ua := range cm.State.AllAddresses {
+		if ua.GetAddress().GetHostname() == localHost && ua.GetAddress().GetPort() == localPort {
+			localIdx = int32(i)
+			break
+		}
+	}
+	if localIdx < 0 {
+		return
+	}
+	if cm.State.Overview == nil {
+		cm.State.Overview = &gproto_cluster.GossipOverview{}
+	}
+	for _, s := range cm.State.Overview.Seen {
+		if s == localIdx {
+			return // already marked
+		}
+	}
+	cm.State.Overview.Seen = append(cm.State.Overview.Seen, localIdx)
+}
+
+// ensureLocalHashInAllHashesLocked adds the local node's hash to AllHashes if
+// it is not already present. This is needed when AllHashes starts empty (e.g.
+// after adopting a Pekko seed's canonical gossip state) and this node is acting
+// as a seed for another Go node — incrementVersionWithLockHeld silently drops
+// increments for hashes that are not listed in AllHashes.
+// Must be called with cm.Mu held (write).
+func (cm *ClusterManager) ensureLocalHashInAllHashesLocked() {
+	localHashStr := cm.localHashString()
+	for _, h := range cm.State.AllHashes {
+		if h == localHashStr {
+			return
+		}
+	}
+	cm.State.AllHashes = append(cm.State.AllHashes, localHashStr)
 }
 
 // markMemberLeavingLocked transitions an Up/WeaklyUp member to Leaving status.
@@ -625,14 +805,16 @@ func (cm *ClusterManager) handleGossipStatus(payload []byte, manifest string) er
 	var localHashes []string
 	if ordering == ClockAfter || ordering == ClockConcurrent {
 		statePayload, _ = proto.Marshal(cm.State)
-	} else if ordering == ClockBefore {
+	}
+	if ordering == ClockBefore {
 		localVersion = cm.State.Version
 		localHashes = cm.State.AllHashes
 	}
 	cm.Mu.RUnlock()
 
 	if ordering == ClockAfter || ordering == ClockConcurrent {
-		// Our state is newer or concurrent, send full GossipEnvelope.
+		// Our state is newer or concurrent: send our full GossipEnvelope so the
+		// partner can merge any state it is missing.
 		// Pekko expects GossipEnvelope.serializedGossip to be GZIP-compressed.
 		if statePayload != nil {
 			compressedGossip, err := gzipCompress(statePayload)
@@ -644,10 +826,15 @@ func (cm *ClusterManager) handleGossipStatus(payload []byte, manifest string) er
 				To:               status.From,
 				SerializedGossip: compressedGossip,
 			}
-			return cm.Router(context.Background(), path, env)
+			if err := cm.Router(context.Background(), path, env); err != nil {
+				return err
+			}
 		}
-	} else if ordering == ClockBefore {
-		// Their state is newer, reply with our GossipStatus so they will send us their GossipEnvelope
+	}
+
+	if ordering == ClockBefore {
+		// Their state is strictly newer: send our GossipStatus so the partner
+		// knows to reply with its full GossipEnvelope.
 		myStatus := &gproto_cluster.GossipStatus{
 			From:      cm.LocalAddress,
 			AllHashes: localHashes,
@@ -664,7 +851,6 @@ func (cm *ClusterManager) processIncomingGossip(gossip *gproto_cluster.Gossip, r
 
 	m1 := cm.vectorClockToMap(cm.State.Version, cm.State.AllHashes)
 	m2 := cm.vectorClockToMap(gossip.Version, gossip.AllHashes)
-	log.Printf("Cluster: Comparison - localHashes=%v incomingHashes=%v localMap=%v incomingMap=%v", cm.State.AllHashes, gossip.AllHashes, m1, m2)
 	ordering := cm.compareResolvedClocks(m1, m2)
 
 	var events []ClusterDomainEvent
@@ -673,6 +859,14 @@ func (cm *ClusterManager) processIncomingGossip(gossip *gproto_cluster.Gossip, r
 		log.Printf("Cluster: received newer Gossip, replacing local state")
 		events = diffGossipMembers(cm.State, gossip)
 		cm.State = gossip
+		// Adopt Pekko's hash for our own address so future VectorClock comparisons
+		// use a format compatible with Pekko's murmur-hash scheme.
+		cm.syncLocalHashFromStateLocked()
+		// Mark this node as having "seen" the gossip so Pekko's leader can achieve
+		// convergence (Pekko requires all members to be in Overview.Seen before
+		// promoting Joining→Up). Without this, Pekko's convergence check fails
+		// and joining nodes are never promoted.
+		cm.markLocalSeenLocked()
 		cm.connectToNewMembers(gossip)
 	} else if ordering == ClockConcurrent {
 		// Merge concurrent states: union of members, pairwise-max vector clock.
@@ -680,8 +874,26 @@ func (cm *ClusterManager) processIncomingGossip(gossip *gproto_cluster.Gossip, r
 		merged := cm.mergeGossipStates(cm.State, gossip)
 		events = diffGossipMembers(cm.State, merged)
 		cm.State = merged
+		// Adopt Pekko's hash for our own address if the incoming gossip carries it.
+		// This must happen before incrementVersionWithLockHeld so the new hash is used.
+		cm.adoptHashFromGossipLocked(gossip)
 		cm.incrementVersionWithLockHeld()
+		cm.markLocalSeenLocked()
 		cm.connectToNewMembers(merged)
+	} else if ordering == ClockSame {
+		// Same VectorClock version: member statuses are identical, but Overview.Seen
+		// and AllAddresses may differ (e.g. a new member was added under the same
+		// version number by a concurrent Join on another node). Merge member/address
+		// sets and union the Seen sets so convergence can progress.
+		merged := cm.mergeGossipStates(cm.State, gossip)
+		if len(merged.AllAddresses) > len(cm.State.AllAddresses) || len(merged.Members) > len(cm.State.Members) {
+			events = diffGossipMembers(cm.State, merged)
+			cm.State = merged
+		}
+		// Always merge Seen sets into our local state so Pekko's convergence
+		// check can see that we've acknowledged all known members.
+		cm.mergeSeenLocked(gossip)
+		cm.markLocalSeenLocked()
 	}
 
 	if remoteAddr != nil {
@@ -866,7 +1078,13 @@ func (cm *ClusterManager) mergeGossipStates(s1, s2 *gproto_cluster.Gossip) *gpro
 		if _, ok := addrMap[key]; !ok {
 			addrMap[key] = int32(len(merged.AllAddresses))
 			merged.AllAddresses = append(merged.AllAddresses, ua)
-			merged.AllHashes = append(merged.AllHashes, s2.AllHashes[i])
+			// AllHashes may be shorter than AllAddresses in Pekko 1.1.x gossip
+			// when tombstone entries are present without a corresponding hash.
+			var hash string
+			if i < len(s2.AllHashes) {
+				hash = s2.AllHashes[i]
+			}
+			merged.AllHashes = append(merged.AllHashes, hash)
 		}
 	}
 
@@ -901,6 +1119,27 @@ func (cm *ClusterManager) mergeGossipStates(s1, s2 *gproto_cluster.Gossip) *gpro
 		}
 	}
 
+	// Merge AllRoles from s2 into merged, building a remap table so that
+	// RolesIndexes carried by s2 members can be translated to merged indices.
+	// This is necessary because s1 and s2 may have different AllRoles orderings
+	// (Pekko 1.1.x no longer guarantees a stable ordering across gossip messages).
+	roleRemap := make(map[int32]int32) // s2 role idx → merged role idx
+	for s2Idx, role := range s2.AllRoles {
+		found := false
+		for mergedIdx, r := range merged.AllRoles {
+			if r == role {
+				roleRemap[int32(s2Idx)] = int32(mergedIdx)
+				found = true
+				break
+			}
+		}
+		if !found {
+			newIdx := int32(len(merged.AllRoles))
+			merged.AllRoles = append(merged.AllRoles, role)
+			roleRemap[int32(s2Idx)] = newIdx
+		}
+	}
+
 	// Union of members with highest status/upNumber
 	memberMap := make(map[int32]*gproto_cluster.Member)
 	for _, m := range merged.Members {
@@ -919,9 +1158,29 @@ func (cm *ClusterManager) mergeGossipStates(s1, s2 *gproto_cluster.Gossip) *gpro
 			if m2.GetUpNumber() > m1.GetUpNumber() {
 				m1.UpNumber = m2.UpNumber
 			}
+			// Adopt roles from incoming state if the local entry has none.
+			// Roles are immutable for the lifetime of a node, so the first
+			// non-empty RolesIndexes we see from any gossip source is canonical.
+			if len(m1.GetRolesIndexes()) == 0 && len(m2.GetRolesIndexes()) > 0 {
+				remapped := make([]int32, 0, len(m2.GetRolesIndexes()))
+				for _, ri := range m2.GetRolesIndexes() {
+					if idx, ok2 := roleRemap[ri]; ok2 {
+						remapped = append(remapped, idx)
+					}
+				}
+				m1.RolesIndexes = remapped
+			}
 		} else {
 			newM := proto.Clone(m2).(*gproto_cluster.Member)
 			newM.AddressIndex = proto.Int32(idxMerged)
+			// Remap RolesIndexes from s2's AllRoles space to merged AllRoles space.
+			remapped := make([]int32, 0, len(newM.GetRolesIndexes()))
+			for _, ri := range newM.GetRolesIndexes() {
+				if idx, ok := roleRemap[ri]; ok {
+					remapped = append(remapped, idx)
+				}
+			}
+			newM.RolesIndexes = remapped
 			merged.Members = append(merged.Members, newM)
 			memberMap[idxMerged] = newM
 		}
@@ -932,7 +1191,7 @@ func (cm *ClusterManager) mergeGossipStates(s1, s2 *gproto_cluster.Gossip) *gpro
 
 func (cm *ClusterManager) incrementVersionWithLockHeld() {
 	m := cm.vectorClockToMap(cm.State.Version, cm.State.AllHashes)
-	localHashStr := fmt.Sprintf("%d", cm.LocalHash)
+	localHashStr := cm.localHashString()
 	m[localHashStr]++
 
 	cm.State.Version = &gproto_cluster.VectorClock{}
@@ -1161,14 +1420,135 @@ func (cm *ClusterManager) IsInDataCenter(host string, port uint32, dc string) bo
 	return false
 }
 
+// localDC returns the data-center name for the local node extracted from its
+// roles (format "dc-<name>"). Returns "" if the local node has no DC role.
+func (cm *ClusterManager) localDC() string {
+	cm.Mu.RLock()
+	defer cm.Mu.RUnlock()
+
+	localHost := cm.LocalAddress.GetAddress().GetHostname()
+	localPort := cm.LocalAddress.GetAddress().GetPort()
+
+	for _, m := range cm.State.Members {
+		ua := cm.State.AllAddresses[m.GetAddressIndex()]
+		if ua.GetAddress().GetHostname() != localHost || ua.GetAddress().GetPort() != localPort {
+			continue
+		}
+		for _, idx := range m.GetRolesIndexes() {
+			if int(idx) < len(cm.State.AllRoles) {
+				role := cm.State.AllRoles[idx]
+				if strings.HasPrefix(role, "dc-") {
+					return strings.TrimPrefix(role, "dc-")
+				}
+			}
+		}
+		return ""
+	}
+	return ""
+}
+
+// determineDCLeader returns the DC leader for the given data center: the
+// address-order-smallest Up/WeaklyUp member, falling back to Joining if none
+// are Up/WeaklyUp yet.
+func (cm *ClusterManager) determineDCLeader(dc string) *gproto_cluster.UniqueAddress {
+	dcRole := "dc-" + dc
+	cm.Mu.RLock()
+	defer cm.Mu.RUnlock()
+
+	var candidates []*gproto_cluster.UniqueAddress
+	var joiningFallback []*gproto_cluster.UniqueAddress
+
+	for _, m := range cm.State.Members {
+		hasDC := false
+		for _, idx := range m.GetRolesIndexes() {
+			if int(idx) < len(cm.State.AllRoles) && cm.State.AllRoles[idx] == dcRole {
+				hasDC = true
+				break
+			}
+		}
+		if !hasDC {
+			continue
+		}
+		ua := cm.State.AllAddresses[m.GetAddressIndex()]
+		st := m.GetStatus()
+		if st == gproto_cluster.MemberStatus_Up || st == gproto_cluster.MemberStatus_WeaklyUp {
+			candidates = append(candidates, ua)
+		} else if st == gproto_cluster.MemberStatus_Joining {
+			joiningFallback = append(joiningFallback, ua)
+		}
+	}
+
+	pool := candidates
+	if len(pool) == 0 {
+		pool = joiningFallback
+	}
+	if len(pool) == 0 {
+		return nil
+	}
+
+	sort.Slice(pool, func(i, j int) bool {
+		a, b := pool[i], pool[j]
+		if a.GetAddress().GetHostname() != b.GetAddress().GetHostname() {
+			return a.GetAddress().GetHostname() < b.GetAddress().GetHostname()
+		}
+		return a.GetAddress().GetPort() < b.GetAddress().GetPort()
+	})
+	return pool[0]
+}
+
+// promoteDCMembers promotes Joining members within the given DC to Up.
+// Called when the local node is the DC leader.
+func (cm *ClusterManager) promoteDCMembers(dc string) {
+	dcRole := "dc-" + dc
+	cm.Mu.Lock()
+	var events []ClusterDomainEvent
+	changed := false
+	for _, m := range cm.State.Members {
+		if m.GetStatus() != gproto_cluster.MemberStatus_Joining {
+			continue
+		}
+		hasDC := false
+		for _, idx := range m.GetRolesIndexes() {
+			if int(idx) < len(cm.State.AllRoles) && cm.State.AllRoles[idx] == dcRole {
+				hasDC = true
+				break
+			}
+		}
+		if !hasDC {
+			continue
+		}
+		ua := cm.State.AllAddresses[m.GetAddressIndex()]
+		ma := memberAddressFromUA(ua)
+		m.Status = gproto_cluster.MemberStatus_Up.Enum()
+		m.UpNumber = proto.Int32(int32(len(cm.State.Members)))
+		events = append(events, MemberUp{Member: ma})
+		if cm.Metrics != nil {
+			cm.Metrics.IncrementMemberUp()
+		}
+		changed = true
+		log.Printf("DC-Leader[%s]: transitioned member %s:%d Joining → Up", dc, ma.Host, ma.Port)
+	}
+	if changed {
+		cm.incrementVersionWithLockHeld()
+	}
+	cm.Mu.Unlock()
+
+	for _, evt := range events {
+		cm.publishEvent(evt)
+	}
+}
+
 func (cm *ClusterManager) performLeaderActions() {
 	leader := cm.DetermineLeader()
 	if leader == nil {
 		return
 	}
 
-	isLeader := leader.GetAddress().GetHostname() == cm.LocalAddress.Address.GetHostname() &&
-		leader.GetAddress().GetPort() == cm.LocalAddress.Address.GetPort() &&
+	localHost := cm.LocalAddress.GetAddress().GetHostname()
+	localPort := cm.LocalAddress.GetAddress().GetPort()
+
+	isLeader := leader.GetAddress().GetHostname() == localHost &&
+		leader.GetAddress().GetPort() == localPort &&
 		leader.GetUid() == cm.LocalAddress.GetUid()
 
 	if isLeader {
@@ -1220,9 +1600,19 @@ func (cm *ClusterManager) performLeaderActions() {
 			cm.publishEvent(evt)
 		}
 	} else {
-		log.Printf("Leader is %s:%d-%d, I am %s:%d-%d",
-			leader.GetAddress().GetHostname(), leader.GetAddress().GetPort(), leader.GetUid(),
-			cm.LocalAddress.GetAddress().GetHostname(), cm.LocalAddress.GetAddress().GetPort(), cm.LocalAddress.GetUid())
+		// Not the global leader. Check if we are the DC leader and can promote
+		// Joining members within our own DC without waiting for the global leader.
+		// This is necessary in multi-DC deployments where the global leader only
+		// promotes members in its own DC.
+		localDC := cm.localDC()
+		if localDC != "" && localDC != "default" {
+			dcLeader := cm.determineDCLeader(localDC)
+			if dcLeader != nil &&
+				dcLeader.GetAddress().GetHostname() == localHost &&
+				dcLeader.GetAddress().GetPort() == localPort {
+				cm.promoteDCMembers(localDC)
+			}
+		}
 	}
 }
 
@@ -1327,7 +1717,24 @@ func (cm *ClusterManager) gossipTick() {
 	cm.Mu.RLock()
 	members := cm.State.Members
 	addresses := cm.State.AllAddresses
-	version := cm.State.Version
+	localIdx := int32(-1)
+	localHost := cm.LocalAddress.Address.GetHostname()
+	localPort := cm.LocalAddress.Address.GetPort()
+	for i, ua := range cm.State.AllAddresses {
+		if ua.GetAddress().GetHostname() == localHost && ua.GetAddress().GetPort() == localPort {
+			localIdx = int32(i)
+			break
+		}
+	}
+	localInSeen := false
+	if cm.State.Overview != nil {
+		for _, s := range cm.State.Overview.Seen {
+			if s == localIdx {
+				localInSeen = true
+				break
+			}
+		}
+	}
 	cm.Mu.RUnlock()
 
 	if len(members) <= 1 {
@@ -1340,15 +1747,9 @@ func (cm *ClusterManager) gossipTick() {
 	targetAddr := addresses[addrIdx]
 
 	// If it's us, skip
-	if targetAddr.GetAddress().GetHostname() == cm.LocalAddress.Address.GetHostname() &&
-		targetAddr.GetAddress().GetPort() == cm.LocalAddress.Address.GetPort() {
+	if targetAddr.GetAddress().GetHostname() == localHost &&
+		targetAddr.GetAddress().GetPort() == localPort {
 		return
-	}
-
-	status := &gproto_cluster.GossipStatus{
-		From:      cm.LocalAddress,
-		AllHashes: cm.State.AllHashes,
-		Version:   version,
 	}
 
 	path := cm.ClusterCorePath(
@@ -1356,6 +1757,43 @@ func (cm *ClusterManager) gossipTick() {
 		targetAddr.GetAddress().GetHostname(),
 		targetAddr.GetAddress().GetPort())
 
+	// If this node has marked itself as Seen (i.e., it has processed and
+	// acknowledged the current gossip), send a full GossipEnvelope so the
+	// target (especially the Pekko seed) can learn about our Seen state.
+	// Pekko's convergence check requires ALL members to be in Overview.Seen
+	// before promoting Joining→Up; if we only send GossipStatus, Pekko never
+	// receives our Seen info and convergence never completes.
+	if localInSeen {
+		cm.Mu.RLock()
+		statePayload, err := proto.Marshal(cm.State)
+		cm.Mu.RUnlock()
+		if err == nil {
+			compressedGossip, err := gzipCompress(statePayload)
+			if err == nil {
+				cm.Mu.RLock()
+				to := cm.State.AllAddresses[addrIdx]
+				cm.Mu.RUnlock()
+				env := &gproto_cluster.GossipEnvelope{
+					From:             cm.LocalAddress,
+					To:               to,
+					SerializedGossip: compressedGossip,
+				}
+				_ = cm.Router(context.Background(), path, env)
+				return
+			}
+		}
+	}
+
+	cm.Mu.RLock()
+	version := cm.State.Version
+	allHashes := cm.State.AllHashes
+	cm.Mu.RUnlock()
+
+	status := &gproto_cluster.GossipStatus{
+		From:      cm.LocalAddress,
+		AllHashes: allHashes,
+		Version:   version,
+	}
 	_ = cm.Router(context.Background(), path, status)
 }
 

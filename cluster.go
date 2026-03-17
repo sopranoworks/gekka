@@ -668,6 +668,12 @@ func (c *Cluster) IsUp() bool {
 	return c.cm.IsUp()
 }
 
+// IsLocalNodeUp returns true if this specific node has reached Up status
+// in the gossip state.
+func (c *Cluster) IsLocalNodeUp() bool {
+	return c.cm.IsLocalNodeUp()
+}
+
 // Port returns the TCP port this node is bound to. When ClusterConfig.Port was 0
 // this is the OS-assigned port resolved after Spawn.
 func (c *Cluster) Port() uint32 {

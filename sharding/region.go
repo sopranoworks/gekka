@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"time"
 
 	"github.com/sopranoworks/gekka/actor"
 )
@@ -28,6 +29,12 @@ type ShardRegion struct {
 	shards          map[ShardId]actor.Ref // Local shards
 	shardHomePaths  map[ShardId]string    // ShardId -> Region Path (cached)
 	pendingMessages map[ShardId][]actor.Envelope
+
+	// handoffDone is closed by Receive when a HandoffComplete message arrives
+	// from the coordinator.  PostStop blocks on this channel (with a timeout)
+	// to ensure the coordinator has released all locally-owned shards before
+	// the region actor exits the actor system.
+	handoffDone chan struct{}
 }
 
 func NewShardRegion(
@@ -49,6 +56,7 @@ func NewShardRegion(
 		shards:             make(map[ShardId]actor.Ref),
 		shardHomePaths:     make(map[ShardId]string),
 		pendingMessages:    make(map[ShardId][]actor.Envelope),
+		handoffDone:        make(chan struct{}),
 	}
 }
 
@@ -57,6 +65,38 @@ func (r *ShardRegion) PreStart() {
 	if r.coordinator != nil {
 		r.Log().Debug("Registering region with coordinator", "path", r.Self().Path())
 		r.coordinator.Tell(RegisterRegion{RegionPath: r.Self().Path()}, r.Self())
+	}
+}
+
+// PostStop is called by the actor runtime after the mailbox is drained and the
+// region actor is about to exit.  It sends RegionHandoffRequest to the
+// coordinator and waits for HandoffComplete.  The wait duration is controlled
+// by ShardSettings.HandoffTimeout (default 10 s).  This ensures the coordinator
+// releases all locally-owned shards — making them available for reallocation on
+// surviving nodes — before the coordinated-shutdown sequence proceeds to
+// PhaseClusterLeave.
+//
+// If the coordinator is unreachable (e.g. it runs on the same node and shut
+// down first), the wait times out and the region logs a warning rather than
+// blocking indefinitely.
+func (r *ShardRegion) PostStop() {
+	if r.coordinator == nil {
+		return
+	}
+	r.Log().Info("ShardRegion stopping: sending handoff request to coordinator",
+		"region", r.Self().Path())
+	r.coordinator.Tell(RegionHandoffRequest{RegionPath: r.Self().Path()}, r.Self())
+
+	timeout := r.shardSettings.HandoffTimeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	select {
+	case <-r.handoffDone:
+		r.Log().Info("Handoff Completed", "region", r.Self().Path())
+	case <-time.After(timeout):
+		r.Log().Warn("ShardRegion handoff timed out — proceeding without coordinator ack",
+			"region", r.Self().Path(), "timeout", timeout)
 	}
 }
 
@@ -79,6 +119,16 @@ func (r *ShardRegion) Receive(msg any) {
 				}
 			}
 			delete(r.pendingMessages, m.ShardId)
+		}
+
+	case HandoffComplete:
+		// Coordinator has released all locally-owned shards; signal PostStop.
+		r.Log().Info("Received HandoffComplete from coordinator", "region", m.RegionPath)
+		select {
+		case <-r.handoffDone:
+			// Already closed — ignore duplicate acks.
+		default:
+			close(r.handoffDone)
 		}
 
 	case actor.TerminatedMessage:
@@ -110,7 +160,6 @@ func (r *ShardRegion) Receive(msg any) {
 		}
 	}
 }
-
 
 func (r *ShardRegion) deliverMessageWithSender(shardId ShardId, envelope ShardingEnvelope, sender actor.Ref) {
 	homePath, ok := r.shardHomePaths[shardId]

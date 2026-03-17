@@ -232,6 +232,18 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		nodeCfg.Persistence.SnapshotPlugin = strings.TrimSpace(v)
 	}
 
+	// ── Cluster Roles ───────────────────────────────────────────────────────
+	var rolesTmp struct {
+		PekkoRoles []string `hocon:"pekko.cluster.roles"`
+		AkkaRoles  []string `hocon:"akka.cluster.roles"`
+	}
+	_ = cfg.Unmarshal(&rolesTmp)
+	if prefix == "pekko" {
+		nodeCfg.Roles = rolesTmp.PekkoRoles
+	} else {
+		nodeCfg.Roles = rolesTmp.AkkaRoles
+	}
+
 	// ── Multi-Data-Center ───────────────────────────────────────────────────
 	if v, err := cfg.GetString(prefix + ".cluster.multi-data-center.self-data-center"); err == nil {
 		nodeCfg.DataCenter = strings.TrimSpace(v)
@@ -250,6 +262,11 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 	if v, err := cfg.GetString(shardingPrefix + ".remember-entities"); err == nil {
 		v = strings.ToLower(strings.TrimSpace(v))
 		nodeCfg.Sharding.RememberEntities = v == "on" || v == "true"
+	}
+	if v, err := cfg.GetString(shardingPrefix + ".handoff-timeout"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.Sharding.HandoffTimeout = d
+		}
 	}
 
 	// ── Split Brain Resolver ────────────────────────────────────────────────

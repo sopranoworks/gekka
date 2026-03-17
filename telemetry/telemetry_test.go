@@ -21,11 +21,11 @@ import (
 
 // spySpan records whether End was called and what attributes were set.
 type spySpan struct {
-	mu         sync.Mutex
-	ended      bool
-	attrs      map[string]any
-	errors     []error
-	traceID    string // synthetic trace ID injected by spyTracer
+	mu      sync.Mutex
+	ended   bool
+	attrs   map[string]any
+	errors  []error
+	traceID string // synthetic trace ID injected by spyTracer
 }
 
 func newSpySpan(traceID string) *spySpan {
@@ -33,15 +33,18 @@ func newSpySpan(traceID string) *spySpan {
 }
 
 func (s *spySpan) End() {
-	s.mu.Lock(); defer s.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.ended = true
 }
 func (s *spySpan) SetAttribute(key string, value any) {
-	s.mu.Lock(); defer s.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.attrs[key] = value
 }
 func (s *spySpan) RecordError(err error) {
-	s.mu.Lock(); defer s.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.errors = append(s.errors, err)
 }
 func (s *spySpan) IsRecording() bool { return true }
@@ -86,12 +89,14 @@ func (t *spyTracer) Extract(ctx context.Context, carrier map[string]string) cont
 }
 
 func (t *spyTracer) spanCount() int {
-	t.mu.Lock(); defer t.mu.Unlock()
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	return len(t.spans)
 }
 
 func (t *spyTracer) lastSpan() *spySpan {
-	t.mu.Lock(); defer t.mu.Unlock()
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	if len(t.spans) == 0 {
 		return nil
 	}

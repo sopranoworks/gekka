@@ -69,11 +69,11 @@ type Actor interface {
 // NewBaseActorWithSize to override it.
 type BaseActor struct {
 	mailbox            chan any
-	currentSender      Ref              // set for the duration of each Receive call; nil otherwise
-	currentCtx         context.Context  // trace context for the current message; nil outside Receive
-	selfRef            Ref              // this actor's own reference, injected by SpawnActor/ActorOf
-	systemRef          ActorContext     // injected by SpawnActor/ActorOf
-	parentRef          Ref              // injected by SpawnActor/ActorOf for children
+	currentSender      Ref             // set for the duration of each Receive call; nil otherwise
+	currentCtx         context.Context // trace context for the current message; nil outside Receive
+	selfRef            Ref             // this actor's own reference, injected by SpawnActor/ActorOf
+	systemRef          ActorContext    // injected by SpawnActor/ActorOf
+	parentRef          Ref             // injected by SpawnActor/ActorOf for children
 	supervisorStrategy SupervisorStrategy
 	actorLog           ActorLogger
 	watchersMu         sync.Mutex

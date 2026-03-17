@@ -4,466 +4,9 @@
 
 Powered by its own high-performance HOCON engine, [`gekka-config`](https://github.com/sopranoworks/gekka-config), `gekka` supports both automatic cluster formation and direct node-to-node communication using the standard `pekko://` and `akka://` URI schemes.
 
-## Verified Interoperability
+---
 
-`gekka` is verified against live JVM nodes for both **Apache Pekko 1.0.x** and **Lightbend Akka 2.6.21** using E2E integration tests. This ensures byte-level compatibility for cluster membership, remote messaging (including **Artery TLS** secure transport), distributed state, and **Cluster Singleton** failover.
-
-
-## New in v0.7.0 (Latest Milestones)
-
-The v0.7.0 cycle introduces mission-critical features for large-scale, resilient distributed systems:
-
-- **Split Brain Resolver (SBR)** — Automated cluster partition resolution using Keep Majority, Keep Oldest, Keep Referee, and Static Quorum strategies.
-- **Multi-Data Center (Multi-DC) Support** — Data center awareness via `dc-` role convention, enabling DC-specific Cluster Singletons and Sharding affinity.
-- **Advanced Cluster Sharding** — Implemented Entity Passivation for memory optimization and Remember Entities via event sourcing for automatic state recovery.
-- **SQL Persistence Backend** — A pluggable, driver-agnostic SQL backend for journaling and snapshotting, fully verified with PostgreSQL.
-
-## Key Features
-
-- **Hierarchical Actor System** — Parent-child relationships with reliable lifecycle management.
-- **Self-Healing Supervision** — Automatic fault tolerance with `OneForOneStrategy`.
-- **Pekko/Akka Compatibility** — Verified interop with Scala/Java actors via Artery TCP (Pekko 1.0.x / Akka 2.6.21).
-- **Split Brain Resolver** — Hardened cluster integrity during network partitions.
-- **Multi-DC Awareness** — Optimized routing and management across geographical regions.
-- **Advanced Sharding** — Location-transparent actor placement with passivation and durable recovery.
-- **SQL Persistence** — Driver-agnostic event sourcing and snapshotting (PostgreSQL verified).
-- **Secure Communication (TLS)** — Binary-compatible Artery TLS support using Go's `crypto/tls`.
-- **Cluster Singletons** — Automatic failover and lifecycle management across mixed Go/JVM clusters.
-- **Reliable Delivery** — At-least-once delivery (Serializer ID 36) between Go and Scala/Pekko.
-- **Type-safe Actors using Go Generics** — Compile-time safety for message passing.
-- **Actor Persistence & Event Sourcing** — State recovery via event journaling and snapshotting.
-- **Distributed Pub/Sub (Pekko Compatible)** — Decentralized messaging with GZIP-compressed gossip state (Serializer ID 9).
-- **Distributed Data / CRDTs** — Decentralized state replication (G-Counter, OR-Set) with Serializer ID 11/12.
-- **Location Transparency** — Identical `Tell` and `Ask` semantics for local and remote actors.
-- **Extensible Serialization** — Built-in support for Protobuf (ID 2), Raw Bytes (ID 4), and JSON (ID 9).
-- **Observability** — Built-in monitoring with `/healthz` and `/metrics` (JSON/Prometheus).
-- **Coordinated Shutdown** — Pekko-compatible phased exit sequence driving the node through Leave → Exiting → Removed before closing TCP connections. Supports shard handover and CRDT flush.
-
-## Quick Start 1: Local Actor System
-
-For applications that don't need networking, `gekka` provides a lightweight `LocalActorSystem`. This is ideal for in-process concurrency with actor semantics.
-
-```go
-package main
-
-import (
-	"log"
-
-	"github.com/sopranoworks/gekka"
-	"github.com/sopranoworks/gekka/actor"
-)
-
-func main() {
-	// 1. Initialize a local-only actor system (no networking)
-	system, err := gekka.NewActorSystem("LocalSystem")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// 2. Create an actor
-	ref, _ := system.ActorOf(gekka.Props{
-		New: func() actor.Actor { return &MyActor{BaseActor: actor.NewBaseActor()} },
-	}, "worker")
-
-	// 3. Send a message
-	ref.Tell("Hello Local!")
-}
-
-type MyActor struct { actor.BaseActor }
-func (a *MyActor) Receive(msg any) { log.Printf("Got: %v", msg) }
-```
-
-## Quick Start 2: Joining a Cluster
-
-Initialize your node to join an existing Pekko/Akka cluster. `gekka` handles Artery handshakes and membership synchronization automatically.
-
-```go
-package main
-
-import (
-	"log"
-
-	"github.com/sopranoworks/gekka"
-	"github.com/sopranoworks/gekka/actor"
-)
-
-func main() {
-	// 1. Initialize the cluster and join as a member
-	cluster, err := gekka.NewCluster(gekka.ClusterConfig{
-		SystemName: "MyCluster",
-		Port:       2553,
-		// Provide seed nodes to join an existing cluster
-		SeedNodes: []actor.Address{
-			{Protocol: "pekko", System: "MyCluster", Host: "192.168.1.10", Port: 2552},
-		},
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer cluster.Shutdown()
-
-	log.Printf("Gekka cluster started at %s, joining cluster...", cluster.Addr())
-}
-```
-
-## Quick Start 3: Defining and Using Actors
-
-Once joined, you can define actors to handle business logic. This example shows the request-response (**Ask**) pattern.
-
-```go
-package main
-
-import (
-	"context"
-	"log"
-	"time"
-
-	"github.com/sopranoworks/gekka"
-	"github.com/sopranoworks/gekka/actor"
-)
-
-// 1. Define your business logic in an actor
-type EchoActor struct {
-	actor.BaseActor
-}
-
-func (a *EchoActor) Receive(msg any) {
-	if s, ok := msg.(string); ok {
-		a.Log().Info("Received", "payload", s)
-		a.Sender().Tell("Echo: "+s, a.Self())
-	}
-}
-
-func main() {
-	cluster, _ := gekka.NewCluster(gekka.ClusterConfig{SystemName: "ExampleSystem"})
-	defer cluster.Shutdown()
-
-	// 2. Create a named actor instance
-	ref, _ := cluster.System.ActorOf(gekka.Props{
-		New: func() actor.Actor { return &EchoActor{BaseActor: actor.NewBaseActor()} },
-	}, "echo")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-
-	// 3. Interact via the Ask pattern (request-response)
-	reply, _ := ref.Ask(ctx, "Hello Gekka!")
-	log.Printf("Reply: %v", reply)
-}
-```
-
-## Quick Start 4: Typed Actors (Go Generics)
-
-Gekka provides a **Typed Actor API** leveraging Go Generics for compile-time type safety.
-
-```go
-package main
-
-import (
-	"fmt"
-	"github.com/sopranoworks/gekka"
-	"github.com/sopranoworks/gekka/actor"
-)
-
-type Greet struct { Name string }
-
-func Greeter() actor.Behavior[Greet] {
-	return func(ctx actor.TypedContext[Greet], msg Greet) actor.Behavior[Greet] {
-		fmt.Printf("Hello, %s!\n", msg.Name)
-		return actor.Same[Greet]()
-	}
-}
-
-func main() {
-	system, _ := gekka.NewActorSystem("TypedSystem")
-	
-	// Spawn a typed actor
-	ref, _ := gekka.Spawn(system, Greeter(), "greeter")
-	
-	// Send a type-safe message
-	ref.Tell(Greet{Name: "Gopher"})
-}
-```
-
-## Quick Start 5: Distributed Pub/Sub
-
-`gekka` supports distributed publish-subscribe across the cluster, fully compatible with Pekko's `DistributedPubSub`.
-
-```go
-package main
-
-import (
-	"context"
-	"github.com/sopranoworks/gekka"
-	"github.com/sopranoworks/gekka/cluster/pubsub"
-)
-
-func main() {
-	cluster, _ := gekka.NewCluster(...)
-	
-	// 1. Get the mediator (distributed pub-sub interface)
-	mediator := cluster.Mediator()
-	
-	// 2. Subscribe an actor to a topic
-	mediator.Subscribe(context.Background(), "news", "", "/user/my-actor")
-	
-	// 3. Publish a message to all subscribers cluster-wide
-	mediator.Publish(context.Background(), "news", []byte("Hello Cluster!"))
-}
-```
-
-## Quick Start 6: Distributed Data (CRDTs)
-
-Replicate state across nodes using conflict-free replicated data types.
-
-```go
-package main
-
-import (
-	"github.com/sopranoworks/gekka"
-)
-
-func main() {
-	cluster, _ := gekka.NewCluster(...)
-	repl := cluster.Replicator()
-
-	// Increment a distributed counter
-	repl.IncrementCounter("hits", 1, gekka.WriteLocal)
-	
-	// Read the merged value from all nodes
-	val := repl.GCounter("hits").Value() 
-}
-```
-
-## Quick Start 7: Persistent Actors (Event Sourcing)
-
-Persistent actors automatically recover their state by replaying events from a journal upon restart.
-
-```go
-package main
-
-import (
-	"github.com/sopranoworks/gekka"
-	"github.com/sopranoworks/gekka/actor"
-	"github.com/sopranoworks/gekka/persistence"
-)
-
-func Counter(id string, journal persistence.Journal) *gekka.EventSourcedBehavior[any, int, int] {
-	return &gekka.EventSourcedBehavior[any, int, int]{
-		PersistenceID: id,
-		Journal:       journal,
-		InitialState:  0,
-		CommandHandler: func(ctx actor.TypedContext[any], state int, cmd any) actor.Effect[int, int] {
-			return actor.Persist[int, int](1)
-		},
-		EventHandler: func(state int, event int) int {
-			return state + event
-		},
-	}
-}
-func main() {
-	system, _ := gekka.NewActorSystem("PersistenceSystem")
-	journal := persistence.NewInMemoryJournal()
-	
-	// Spawn a persistent actor (automatically recovers state from journal)
-	ref, _ := gekka.SpawnPersistent(system, Counter("my-id", journal), "counter")
-	ref.Tell(Increment{})
-}
-```
-
-See the [persistence example](examples/persistence/main.go) for a full implementation including snapshots and recovery demonstration.
-
-## Quick Start 8: Cluster Singletons
-
-Gekka ensures that exactly one instance of a singleton actor is alive in the cluster, typically on the oldest node.
-
-```go
-package main
-
-import (
-	"context"
-	"github.com/sopranoworks/gekka"
-	"github.com/sopranoworks/gekka/actor"
-	"github.com/sopranoworks/gekka/cluster"
-)
-
-func main() {
-	node, _ := gekka.NewCluster(...)
-	
-	// 1. Define the singleton manager
-	mgr := cluster.NewClusterSingletonManager(node.ClusterManager(), actor.Props{
-		New: func() actor.Actor { return &MySingleton{} },
-	}, "")
-	
-	// 2. Start the manager (which spawns the singleton on the oldest node)
-	node.System.ActorOf(gekka.Props{New: func() actor.Actor { return mgr }}, "singletonManager")
-	
-	// 3. Access the singleton via a proxy from any node
-	proxy := cluster.NewClusterSingletonProxy(node.ClusterManager(), node.Router(), "/user/singletonManager", "")
-	proxy.Send(context.Background(), "Hello Singleton!")
-}
-```
-
-
-## Quick Start 9: Coordinated Shutdown (Graceful Exit)
-
-`gekka` implements a Pekko-compatible **Coordinated Shutdown** sequence that drives the node through the full cluster departure lifecycle — `Leave → Exiting → Removed` — before closing TCP connections.
-
-```go
-package main
-
-import (
-	"context"
-	"time"
-
-	"github.com/sopranoworks/gekka"
-	"github.com/sopranoworks/gekka/actor"
-)
-
-func main() {
-	node, _ := gekka.NewCluster(gekka.ClusterConfig{...})
-
-	// Register a custom task in any standard phase.
-	node.CoordinatedShutdown().AddTask("service-stop", "flush-cache", func(ctx context.Context) error {
-		return flushCache(ctx)
-	})
-
-	// Trigger graceful cluster exit with a 30-second deadline.
-	// The sequence drives through all standard phases in order:
-	//   before-service-unbind → ... → cluster-leave → ... → actor-system-terminate
-	shutCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	node.GracefulShutdown(shutCtx)
-}
-```
-
-Built-in tasks registered automatically:
-
-| Phase | Task | What it does |
-|-------|------|--------------|
-| `cluster-sharding-shutdown-region` | `stop-local-regions` | Stops all ShardRegion actors so the coordinator can reassign shards |
-| `cluster-leave` | `send-leave-and-wait` | Broadcasts Leave; polls gossip until this node reaches Removed status |
-| `cluster-shutdown` | `stop-replicator` | Stops the CRDT gossip loop |
-| `actor-system-terminate` | `close-transport` | Cancels the root context and closes all TCP connections |
-
-Use `node.RegisterShardingRegion(ref)` immediately after spawning a ShardRegion to enrol it in the sharding shutdown phase.
-
-## Quick Start 10: Reliable Delivery (At-Least-Once)
-
-`gekka` implements Pekko's **Reliable Delivery** protocol (Serializer ID 36) for guaranteed at-least-once delivery between Go and Scala actors. The `actor/delivery` package provides `ProducerController` and `ConsumerController` typed actors.
-
-```go
-package main
-
-import (
-	"github.com/sopranoworks/gekka"
-	"github.com/sopranoworks/gekka/actor"
-	"github.com/sopranoworks/gekka/actor/delivery"
-)
-
-// App-level consumer actor that receives Delivery messages.
-type MyConsumer struct{ actor.BaseActor }
-
-func (a *MyConsumer) Receive(msg any) {
-	if d, ok := msg.(delivery.Delivery); ok {
-		// Process the message, then confirm.
-		d.ConfirmTo.Tell(delivery.Confirmed{SeqNr: d.SeqNr}, a.Self())
-	}
-}
-
-func main() {
-	node, _ := gekka.NewCluster(gekka.ClusterConfig{...})
-	defer node.Shutdown()
-
-	// Register the Reliable Delivery serializer (must be done before any
-	// delivery messages are sent or received).
-	node.RegisterSerializer(delivery.NewSerializer())
-
-	// ── Go → Scala direction ──────────────────────────────────────────────
-	// Spawn a ProducerController targeting Scala's ConsumerController.
-	scalaConsumerPath := "pekko://MySystem@scala-host:2552/user/scalaConsumer"
-	pc := delivery.NewProducerController("my-producer", scalaConsumerPath, delivery.DefaultWindowSize)
-	producerRef, _ := node.System.ActorOf(gekka.Props{New: func() actor.Actor {
-		return actor.NewTypedActor[any](pc)
-	}}, "goProducer")
-
-	// Enqueue messages — they are delivered reliably, with flow control.
-	producerRef.Tell(delivery.SendMessage{
-		Payload:      []byte("hello from Go"),
-		SerializerID: 4, // ByteArraySerializer
-	})
-
-	// ── Scala → Go direction ──────────────────────────────────────────────
-	// Spawn a ConsumerController and connect it to Scala's ProducerController.
-	appRef, _ := node.System.ActorOf(gekka.Props{New: func() actor.Actor {
-		return &MyConsumer{BaseActor: actor.NewBaseActor()}
-	}}, "goConsumerApp")
-
-	cc := delivery.NewConsumerController(appRef, delivery.DefaultWindowSize)
-	ccRef, _ := node.System.ActorOf(gekka.Props{New: func() actor.Actor {
-		return actor.NewTypedActor[any](cc)
-	}}, "goConsumer")
-
-	// Initiate registration with the remote ProducerController.
-	scalaProducerPath := "pekko://MySystem@scala-host:2552/user/scalaProducer"
-	ccRef.Tell(delivery.ConsumerStart{ProducerPath: scalaProducerPath})
-}
-```
-
-## Artery TLS
-
-`gekka` supports secure transport via Artery TLS, maintaining binary compatibility with Pekko/Akka's `tls-tcp` transport. While JVM nodes typically use JKS keystores, `gekka` leverages Go's `crypto/tls` to provide a modern, PEM-based alternative for managing certificates and private keys.
-
-### HOCON Configuration
-
-Enable TLS by setting the `transport` to `tls-tcp` and providing the paths to your PEM files:
-
-```hocon
-pekko.remote.artery {
-  transport = "tls-tcp"
-  tls {
-    certificate = "/path/to/cert.pem"
-    private-key = "/path/to/key.pem"
-    ca-certificates = "/path/to/ca.pem"
-    # Optional: require-client-auth, server-name, min-version
-  }
-}
-```
-
-Support for mutual TLS (mTLS) is built-in, ensuring that only authenticated nodes can join the cluster.
-
-### How it works
-
-- **Location Transparency**: Messaging works the same way whether the actor is local or remote. The `ActorRef` abstracts away the network layer.
-- **HOCON-ready**: Configuration can be passed programmatically via `ClusterConfig` or loaded directly from standard `application.conf` files.
-
-
-## New in v0.6.0 (Stable)
-
-Gekka v0.6.0 is a major stable release focused on **Advanced Clustering** and **Enterprise-Grade Remoting**. Key additions include:
-
-- **Distributed Pub/Sub** — Full Pekko compatibility with GZIP compression support (Serializer ID 9).
-- **Artery TLS Transport** — Secure, encrypted cluster communication using PEM-based certificates.
-- **Reliable Delivery** — At-least-once messaging protocol for guaranteed delivery matching Pekko's Serializer ID 36.
-- **Cluster Singleton** — Automatic lifecycle management and failover of singletons across the cluster.
-- **Coordinated Shutdown** — Graceful, phased node exit sequence ensuring clean shard handovers and state flushes.
-- **Distributed Data (CRDTs)** — Optimized G-Counter and OR-Set replication for decentralized state.
-- **Verified Interoperability** — Comprehensive E2E testing against Apache Pekko 1.0.x and Lightbend Akka 2.6.21.
-
-v0.6.0 also includes **Pool** and **Group Routers** that can be configured directly in HOCON:
-
-```hocon
-gekka.actor.deployment {
-  "/user/workerPool" {
-    router = round-robin-pool
-    nr-of-instances = 5
-  }
-}
-```
-
-See [ROUTING.md](docs/ROUTING.md) for more details.
-
-## Operational Tools
+## Operational Excellence
 
 Two standalone binaries ship with the gekka module for cluster operators.
 
@@ -498,19 +41,18 @@ The `--url` flag always overrides the config file.  The `--profile` flag selects
 
 ### gekka-metrics
 
-`gekka-metrics` is a sidecar that periodically scrapes the HTTP Management API and exports cluster-state metrics via **OpenTelemetry Protocol (OTLP/HTTP)**.
+`gekka-metrics` is a **full cluster node** that joins the cluster with the `metrics-exporter` role and reads gossip state directly — no HTTP polling, no dependency on the Management API.  It exports cluster-state metrics via **OpenTelemetry Protocol (OTLP/HTTP)**.
 
 ```
-gekka-metrics [--config FILE] [--url URL] [--interval DURATION] [--otlp ENDPOINT]
+gekka-metrics --config FILE [--otlp ENDPOINT]
 ```
 
-**HOCON configuration** (resolved via the standard `gekka.LoadConfig` loader):
+**HOCON configuration** (same format as any cluster node):
 
 ```hocon
-gekka.metrics {
-  enabled         = true
-  management-url  = "http://127.0.0.1:8558"
-  scrape-interval = "15s"
+pekko {
+  remote.artery.canonical { hostname = "127.0.0.1", port = 2560 }
+  cluster.seed-nodes = ["pekko://ClusterSystem@127.0.0.1:2552"]
 }
 
 gekka.telemetry.exporter.otlp {
@@ -518,16 +60,215 @@ gekka.telemetry.exporter.otlp {
 }
 ```
 
+The `metrics-exporter` role is injected automatically so sharding allocators and singleton managers exclude this node from hosting production workloads.
+
 **Exported metric:**
 
 | Metric | Type | Attributes | Description |
 |---|---|---|---|
 | `gekka.cluster.members` | ObservableGauge | `status`, `dc` | Member count per status/DC combination |
 
-When no OTLP endpoint is configured the process still runs and emits structured JSON log lines (`cluster_members_up`) on every scrape cycle.
+When no OTLP endpoint is configured the process still joins and emits structured JSON log lines (`cluster_state`) every 30 s.
+
+---
+
+## Current Focus: Rolling Update Reliability
+
+The v0.8.0-dev cycle targets zero-downtime rolling updates for Kubernetes-hosted clusters.  Two mechanisms work together:
+
+### /health/ready drain gate
+
+When `GracefulShutdown` is called, the **first** coordinated-shutdown task (`service-unbind`) calls `ManagementServer.SetShuttingDown()`.  From that point every `GET /health/ready` request returns **503 Service Unavailable** with body:
+
+```json
+{"status":"not_ready","reason":"shutting_down"}
+```
+
+This causes Kubernetes to stop routing traffic to the node immediately — before any cluster membership changes occur — giving in-flight requests time to complete while the node is still fully joined.
+
+### Shard handoff handshake
+
+Before `cluster-leave` runs, each `ShardRegion` actor executes `PostStop`:
+
+1. Sends `RegionHandoffRequest{RegionPath}` to the `ShardCoordinator`.
+2. Blocks on an internal channel (10-second timeout) waiting for `HandoffComplete`.
+3. The coordinator releases all locally-owned shards from its allocation table and replies `HandoffComplete{RegionPath}`.
+4. The log line **"Handoff Completed"** is emitted; `PostStop` returns; the node proceeds to `cluster-leave`.
+
+This guarantees the coordinator can reallocate shards to surviving members before the departing node's membership status changes, preventing missed-message windows during pod restarts.
+
+**Rolling-update shutdown sequence:**
+
+```
+service-unbind              → /health/ready returns 503 "shutting_down"
+cluster-sharding-shutdown   → RegionHandoffRequest → HandoffComplete (10 s window)
+cluster-leave               → Leave → Exiting → Removed
+cluster-shutdown            → CRDT replicator stop
+actor-system-terminate      → TCP close
+```
+
+---
+
+## Verified Interoperability
+
+`gekka` is verified against live JVM nodes for both **Apache Pekko 1.0.x** and **Lightbend Akka 2.6.21** using E2E integration tests. This ensures byte-level compatibility for cluster membership, remote messaging (including **Artery TLS** secure transport), distributed state, and **Cluster Singleton** failover.
+
+## New in v0.7.0 (Latest Milestones)
+
+The v0.7.0 cycle introduces mission-critical features for large-scale, resilient distributed systems:
+
+- **Split Brain Resolver (SBR)** — Automated cluster partition resolution using Keep Majority, Keep Oldest, Keep Referee, and Static Quorum strategies.
+- **Multi-Data Center (Multi-DC) Support** — Data center awareness via `dc-` role convention, enabling DC-specific Cluster Singletons and Sharding affinity.
+- **Advanced Cluster Sharding** — Entity Passivation for memory optimization and Remember Entities via event sourcing for automatic state recovery.
+- **SQL Persistence Backend** — A pluggable, driver-agnostic SQL backend for journaling and snapshotting, fully verified with PostgreSQL.
+
+## Key Features
+
+- **Hierarchical Actor System** — Parent-child relationships with reliable lifecycle management.
+- **Self-Healing Supervision** — Automatic fault tolerance with `OneForOneStrategy`.
+- **Pekko/Akka Compatibility** — Verified interop with Scala/Java actors via Artery TCP (Pekko 1.0.x / Akka 2.6.21).
+- **Split Brain Resolver** — Hardened cluster integrity during network partitions.
+- **Multi-DC Awareness** — Optimized routing and management across geographical regions.
+- **Advanced Sharding** — Location-transparent actor placement with passivation and durable recovery.
+- **SQL Persistence** — Driver-agnostic event sourcing and snapshotting (PostgreSQL verified).
+- **Secure Communication (TLS)** — Binary-compatible Artery TLS support using Go's `crypto/tls`.
+- **Cluster Singletons** — Automatic failover and lifecycle management across mixed Go/JVM clusters.
+- **Reliable Delivery** — At-least-once delivery (Serializer ID 36) between Go and Scala/Pekko.
+- **Type-safe Actors using Go Generics** — Compile-time safety for message passing.
+- **Actor Persistence & Event Sourcing** — State recovery via event journaling and snapshotting.
+- **Distributed Pub/Sub (Pekko Compatible)** — Decentralized messaging with GZIP-compressed gossip state (Serializer ID 9).
+- **Distributed Data / CRDTs** — Decentralized state replication (G-Counter, OR-Set) with Serializer ID 11/12.
+- **Location Transparency** — Identical `Tell` and `Ask` semantics for local and remote actors.
+- **Extensible Serialization** — Built-in support for Protobuf (ID 2), Raw Bytes (ID 4), and JSON (ID 9).
+- **Coordinated Shutdown** — Pekko-compatible phased exit with readiness drain gate, shard handoff handshake, and CRDT flush.
+
+---
+
+## Quick Start: Joining a Cluster
+
+Initialize your node to join an existing Pekko/Akka cluster. `gekka` handles Artery handshakes and membership synchronization automatically.
+
+```go
+package main
+
+import (
+	"log"
+
+	"github.com/sopranoworks/gekka"
+	"github.com/sopranoworks/gekka/actor"
+)
+
+func main() {
+	// 1. Initialize the cluster and join as a member
+	cluster, err := gekka.NewCluster(gekka.ClusterConfig{
+		SystemName: "MyCluster",
+		Port:       2553,
+		// Provide seed nodes to join an existing cluster
+		SeedNodes: []actor.Address{
+			{Protocol: "pekko", System: "MyCluster", Host: "192.168.1.10", Port: 2552},
+		},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer cluster.Shutdown()
+
+	log.Printf("Gekka cluster started at %s, joining cluster...", cluster.Addr())
+}
+```
+
+## Quick Start: Typed Actors (Go Generics)
+
+Gekka provides a **Typed Actor API** leveraging Go Generics for compile-time type safety.
+
+```go
+package main
+
+import (
+	"fmt"
+
+	"github.com/sopranoworks/gekka"
+	"github.com/sopranoworks/gekka/actor"
+)
+
+type Greet struct{ Name string }
+
+func Greeter() actor.Behavior[Greet] {
+	return func(ctx actor.TypedContext[Greet], msg Greet) actor.Behavior[Greet] {
+		fmt.Printf("Hello, %s!\n", msg.Name)
+		return actor.Same[Greet]()
+	}
+}
+
+func main() {
+	system, _ := gekka.NewActorSystem("TypedSystem")
+
+	// Spawn a typed actor
+	ref, _ := gekka.Spawn(system, Greeter(), "greeter")
+
+	// Send a type-safe message
+	ref.Tell(Greet{Name: "Gopher"})
+}
+```
+
+More examples — local actors, pub/sub, CRDTs, persistence, singletons, coordinated shutdown, and reliable delivery — are in [docs/EXAMPLES.md](docs/EXAMPLES.md).
+
+---
+
+## Artery TLS
+
+`gekka` supports secure transport via Artery TLS, maintaining binary compatibility with Pekko/Akka's `tls-tcp` transport. While JVM nodes typically use JKS keystores, `gekka` leverages Go's `crypto/tls` to provide a modern, PEM-based alternative for managing certificates and private keys.
+
+### HOCON Configuration
+
+Enable TLS by setting the `transport` to `tls-tcp` and providing the paths to your PEM files:
+
+```hocon
+pekko.remote.artery {
+  transport = "tls-tcp"
+  tls {
+    certificate = "/path/to/cert.pem"
+    private-key = "/path/to/key.pem"
+    ca-certificates = "/path/to/ca.pem"
+    # Optional: require-client-auth, server-name, min-version
+  }
+}
+```
+
+Support for mutual TLS (mTLS) is built-in, ensuring that only authenticated nodes can join the cluster.
+
+---
+
+## New in v0.6.0 (Stable)
+
+Gekka v0.6.0 is a major stable release focused on **Advanced Clustering** and **Enterprise-Grade Remoting**. Key additions include:
+
+- **Distributed Pub/Sub** — Full Pekko compatibility with GZIP compression support (Serializer ID 9).
+- **Artery TLS Transport** — Secure, encrypted cluster communication using PEM-based certificates.
+- **Reliable Delivery** — At-least-once messaging protocol for guaranteed delivery matching Pekko's Serializer ID 36.
+- **Cluster Singleton** — Automatic lifecycle management and failover of singletons across the cluster.
+- **Coordinated Shutdown** — Graceful, phased node exit sequence ensuring clean shard handovers and state flushes.
+- **Distributed Data (CRDTs)** — Optimized G-Counter and OR-Set replication for decentralized state.
+- **Verified Interoperability** — Comprehensive E2E testing against Apache Pekko 1.0.x and Lightbend Akka 2.6.21.
+
+v0.6.0 also includes **Pool** and **Group Routers** that can be configured directly in HOCON:
+
+```hocon
+gekka.actor.deployment {
+  "/user/workerPool" {
+    router = round-robin-pool
+    nr-of-instances = 5
+  }
+}
+```
+
+See [ROUTING.md](docs/ROUTING.md) for more details.
+
+---
 
 ## Documentation
 
+- [**Examples**](docs/EXAMPLES.md) — Extended code examples for all major features.
 - [**API Reference**](docs/API.md) — Detailed function and method signatures.
 - [**Protocol Notes**](docs/PROTOCOL.md) — Artery TCP framing, serialization IDs, and CRDTs.
 - [**Routing Features**](docs/ROUTING.md) — Pool/Group routers and HOCON deployment.

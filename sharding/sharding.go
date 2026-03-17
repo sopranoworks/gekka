@@ -81,4 +81,22 @@ type (
 	ShardHomes struct {
 		Homes map[ShardId]string
 	}
+
+	// RegionHandoffRequest is sent by ShardRegion.PostStop to the coordinator
+	// during coordinated shutdown to request that all locally-owned shards be
+	// released so the coordinator can reallocate them to surviving regions.
+	// This must complete before PhaseClusterLeave runs.
+	RegionHandoffRequest struct {
+		// RegionPath is the Artery actor path of the departing region.
+		RegionPath string
+	}
+
+	// HandoffComplete is the coordinator's acknowledgement that all shards
+	// previously owned by RegionPath have been released from its allocation
+	// table.  The departing region uses this as the signal that handoff is
+	// done and it is safe to proceed with the cluster Leave.
+	HandoffComplete struct {
+		// RegionPath echoes the path from the corresponding RegionHandoffRequest.
+		RegionPath string
+	}
 )

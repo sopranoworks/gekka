@@ -73,6 +73,10 @@ type ClusterManager struct {
 	// Defaults to "default" when empty.
 	LocalDataCenter string
 
+	// localRoles holds application-defined cluster roles (e.g. "metrics-exporter").
+	// Set via SetLocalRoles before JoinCluster.  The dc-<dc> role is always appended.
+	localRoles []string
+
 	// Router is a function for sending messages, avoiding a cycle with the root package.
 	Router func(ctx context.Context, path string, msg any) error
 
@@ -200,6 +204,13 @@ func (cm *ClusterManager) SetLocalDataCenter(dc string) {
 	cm.Mu.Unlock()
 }
 
+// SetLocalRoles records application-defined roles (e.g. "metrics-exporter") that
+// are advertised to other cluster members alongside the automatic "dc-<dc>" role.
+// Must be called before JoinCluster.
+func (cm *ClusterManager) SetLocalRoles(roles []string) {
+	cm.localRoles = roles
+}
+
 // localDCRole returns the "dc-<dc>" role string for this node.
 func (cm *ClusterManager) localDCRole() string {
 	dc := cm.LocalDataCenter
@@ -233,9 +244,10 @@ func (cm *ClusterManager) upsertRolesLocked(roles []string) []int32 {
 
 // ProceedJoin sends the actual Join message after receiving InitJoinAck
 func (cm *ClusterManager) ProceedJoin(ctx context.Context, actorPath string) error {
+	roles := append([]string{cm.localDCRole()}, cm.localRoles...)
 	join := &gproto_cluster.Join{
 		Node:  cm.LocalAddress,
-		Roles: []string{cm.localDCRole()},
+		Roles: roles,
 	}
 	log.Printf("Cluster: sending Join to %s", actorPath)
 	return cm.Router(ctx, actorPath, join)

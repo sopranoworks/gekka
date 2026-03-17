@@ -171,6 +171,13 @@ type ClusterConfig struct {
 	//	pekko.cluster.multi-data-center.self-data-center = "us-east"
 	DataCenter string
 
+	// Roles is the list of cluster roles this node advertises to the rest of the
+	// cluster.  These are merged with the automatic "dc-<DataCenter>" role before
+	// the Join message is sent.  Parsed from HOCON:
+	//
+	//	pekko.cluster.roles = ["metrics-exporter"]
+	Roles []string
+
 	// Persistence holds persistence-plugin configuration parsed from HOCON.
 	//
 	//	pekko.persistence.journal.plugin   = "sql"
@@ -278,6 +285,14 @@ type ShardingConfig struct {
 	// entities are re-spawned after a Shard restart.
 	// Corresponds to pekko.cluster.sharding.remember-entities.
 	RememberEntities bool
+
+	// HandoffTimeout is the maximum time a ShardRegion waits for the
+	// coordinator to acknowledge shard handoff during coordinated shutdown.
+	// Larger clusters or heavily loaded coordinators may need a longer value.
+	// Defaults to 10 seconds when zero or unset.
+	//
+	// HOCON: gekka.cluster.sharding.handoff-timeout
+	HandoffTimeout time.Duration
 }
 
 // resolve returns the effective (scheme, system, host, port) for this config.
@@ -336,7 +351,7 @@ type Cluster struct {
 	seedAddr   *gproto_remote.Address // set by the first Join call
 	seeds      []actor.Address        // from ClusterConfig.SeedNodes (populated by LoadConfig)
 	metrics    *core.NodeMetrics
-	monitoring *core.MonitoringServer    // nil when monitoring is disabled
+	monitoring *core.MonitoringServer       // nil when monitoring is disabled
 	mgmt       *management.ManagementServer // nil when management API is disabled
 
 	actorsMu sync.RWMutex
@@ -405,6 +420,9 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 		return router.Send(ctx, path, msg)
 	}
 	cm.SetLocalDataCenter(cfg.DataCenter)
+	if len(cfg.Roles) > 0 {
+		cm.SetLocalRoles(cfg.Roles)
+	}
 	nm.SetClusterManager(cm)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1245,9 +1263,23 @@ func (c *Cluster) RegisterShardingRegion(ref ActorRef) {
 // registerBuiltinShutdownTasks wires the standard cluster lifecycle tasks into
 // the CoordinatedShutdown instance.  Must be called once during NewCluster.
 func (c *Cluster) registerBuiltinShutdownTasks() {
+	// ── service-unbind ───────────────────────────────────────────────────────
+	// Mark the management server as shutting down so /health/ready immediately
+	// returns 503 with reason "shutting_down".  This causes Kubernetes to stop
+	// routing new requests to this node before any cluster state changes occur,
+	// which is the first gate of rolling-update stability.
+	c.cs.AddTask("service-unbind", "mark-management-shutting-down", func(_ context.Context) error {
+		if c.mgmt != nil {
+			c.mgmt.SetShuttingDown()
+		}
+		return nil
+	})
+
 	// ── cluster-sharding-shutdown-region ────────────────────────────────────
 	// Stop every locally registered ShardRegion before departing the cluster.
-	// This lets the coordinator reassign shards to remaining members.
+	// ShardRegion.PostStop sends RegionHandoffRequest to the coordinator and
+	// waits for HandoffComplete, ensuring shards are reallocated to surviving
+	// members before the Leave message is sent in the next phase.
 	c.cs.AddTask("cluster-sharding-shutdown-region", "stop-local-regions", func(ctx context.Context) error {
 		c.shardingRegionsMu.Lock()
 		regions := make([]ActorRef, len(c.shardingRegions))

@@ -269,4 +269,3 @@ func (s *Shard) persistEntityStopped(entityId EntityId) {
 		},
 	})
 }
-

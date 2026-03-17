@@ -6,23 +6,30 @@
  * SPDX-License-Identifier: MIT
  */
 
-// gekka-metrics is a sidecar process that periodically scrapes the Gekka
-// Cluster HTTP Management API and exports cluster-state metrics via the
-// OpenTelemetry Protocol (OTLP/HTTP).
+// gekka-metrics joins the cluster as a dedicated monitoring node and exports
+// cluster-state metrics via the OpenTelemetry Protocol (OTLP/HTTP).
 //
-// Configuration is loaded from a HOCON application.conf via the standard
-// gekka config loader.  All settings can be overridden with CLI flags.
+// Unlike a sidecar that polls the Management HTTP API, gekka-metrics participates
+// in the gossip protocol directly.  This gives it a live, first-class view of
+// cluster membership without depending on any management endpoint.
+//
+// The node joins with the "metrics-exporter" role so that production workloads
+// (sharding, singletons) can exclude it via role-based allocation.
+//
+// Configuration is loaded from a HOCON application.conf.  The --otlp flag
+// overrides gekka.telemetry.exporter.otlp.endpoint from config.
 //
 // HOCON keys consumed:
 //
-//	gekka.metrics.management-url               base URL of the Management API
-//	gekka.metrics.scrape-interval              how often to fetch cluster state
-//	gekka.telemetry.exporter.otlp.endpoint     OTLP/HTTP collector endpoint
+//	pekko.remote.artery.canonical.hostname  this node's advertised host
+//	pekko.remote.artery.canonical.port      this node's listen port
+//	pekko.cluster.seed-nodes               seed nodes to join
+//	gekka.telemetry.exporter.otlp.endpoint OTLP/HTTP collector endpoint
 //
 // Usage:
 //
 //	gekka-metrics --config application.conf
-//	gekka-metrics --url http://node1:8558 --interval 30s --otlp http://otel:4318
+//	gekka-metrics --config application.conf --otlp http://otel:4318
 package main
 
 import (
@@ -31,12 +38,12 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"sync"
+	"strings"
 	"syscall"
 	"time"
 
 	gekka "github.com/sopranoworks/gekka"
-	"github.com/sopranoworks/gekka/internal/management/client"
+	gcluster "github.com/sopranoworks/gekka/cluster"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -48,59 +55,38 @@ import (
 )
 
 func main() {
-	flagConfig := flag.String("config", "", "Path to HOCON application.conf (optional)")
-	flagURL := flag.String("url", "", "Management API base URL (overrides config)")
-	flagInterval := flag.String("interval", "", "Scrape interval, e.g. 15s (overrides config)")
+	flagConfig := flag.String("config", "", "Path to HOCON application.conf (required)")
 	flagOtlp := flag.String("otlp", "", "OTLP/HTTP collector endpoint, e.g. http://otel:4318 (overrides config)")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
-	// ── Resolve configuration ─────────────────────────────────────────────────
-
-	managementURL := "http://127.0.0.1:8558"
-	scrapeInterval := 15 * time.Second
-	otlpEndpoint := ""
-
-	if *flagConfig != "" {
-		cfg, err := gekka.LoadConfig(*flagConfig)
-		if err != nil {
-			logger.Error("load config", "error", err)
-			os.Exit(1)
-		}
-		if cfg.Metrics.ManagementURL != "" {
-			managementURL = cfg.Metrics.ManagementURL
-		}
-		if cfg.Metrics.ScrapeInterval != "" {
-			if d, err := time.ParseDuration(cfg.Metrics.ScrapeInterval); err == nil {
-				scrapeInterval = d
-			} else {
-				logger.Warn("invalid scrape-interval in config, using default",
-					"value", cfg.Metrics.ScrapeInterval, "default", scrapeInterval)
-			}
-		}
-		otlpEndpoint = cfg.Telemetry.OtlpEndpoint
+	if *flagConfig == "" {
+		logger.Error("--config is required")
+		os.Exit(1)
 	}
 
-	// CLI flags override config values.
-	if *flagURL != "" {
-		managementURL = *flagURL
+	// ── Load HOCON config and inject metrics-exporter role ────────────────────
+
+	cfg, err := gekka.LoadConfig(*flagConfig)
+	if err != nil {
+		logger.Error("load config", "error", err)
+		os.Exit(1)
 	}
-	if *flagInterval != "" {
-		d, err := time.ParseDuration(*flagInterval)
-		if err != nil {
-			logger.Error("invalid --interval", "value", *flagInterval, "error", err)
-			os.Exit(1)
-		}
-		scrapeInterval = d
-	}
+
+	// Add the "metrics-exporter" role so sharding/singleton allocators can
+	// exclude this node.  Preserve any roles already declared in the config.
+	cfg.Roles = appendIfMissing(cfg.Roles, "metrics-exporter")
+
+	otlpEndpoint := cfg.Telemetry.OtlpEndpoint
 	if *flagOtlp != "" {
 		otlpEndpoint = *flagOtlp
 	}
 
 	logger.Info("gekka-metrics starting",
-		"management_url", managementURL,
-		"scrape_interval", scrapeInterval,
+		"host", cfg.Host,
+		"port", cfg.Port,
+		"roles", cfg.Roles,
 		"otlp_endpoint", otlpEndpoint,
 	)
 
@@ -123,31 +109,50 @@ func main() {
 	}()
 	otel.SetMeterProvider(mp)
 
-	// ── Metric instruments ────────────────────────────────────────────────────
+	// ── Join the cluster ──────────────────────────────────────────────────────
+
+	node, err := gekka.NewCluster(cfg)
+	if err != nil {
+		logger.Error("create cluster node", "error", err)
+		os.Exit(1)
+	}
+	defer node.Shutdown()
+
+	if err := node.JoinSeeds(); err != nil {
+		logger.Error("join cluster", "error", err)
+		os.Exit(1)
+	}
+	logger.Info("joined cluster, waiting for gossip convergence")
+
+	// ── Register OTEL gauge ───────────────────────────────────────────────────
 
 	meter := mp.Meter("github.com/sopranoworks/gekka/cmd/gekka-metrics")
 
-	// snapshot holds the latest scraped data read by the observable gauge callback.
-	var snapshotMu sync.RWMutex
-	var snapshot []client.MemberInfo
+	cm := node.ClusterManager()
 
 	// gekka.cluster.members is an observable (async) gauge that reports the
 	// number of cluster members broken down by "status" and "dc" attributes.
 	// The OTEL SDK calls the registered callback on every collection cycle.
+	// The callback reads gossip state directly — no HTTP round-trip required.
 	_, err = meter.Int64ObservableGauge(
 		"gekka.cluster.members",
 		otelmetric.WithDescription("Number of cluster members in each status/dc combination"),
 		otelmetric.WithUnit("{members}"),
 		otelmetric.WithInt64Callback(func(_ context.Context, obs otelmetric.Int64Observer) error {
-			snapshotMu.RLock()
-			members := snapshot
-			snapshotMu.RUnlock()
+			cm.Mu.RLock()
+			gossip := cm.State
+			cm.Mu.RUnlock()
 
-			// Aggregate member counts by (status, dc).
+			if gossip == nil {
+				return nil
+			}
+
 			type groupKey struct{ status, dc string }
 			counts := make(map[groupKey]int64)
-			for _, m := range members {
-				counts[groupKey{m.Status, m.DataCenter}]++
+			for _, m := range gossip.GetMembers() {
+				status := statusString(m.GetStatus().String())
+				dc := gcluster.DataCenterForMember(gossip, m)
+				counts[groupKey{status, dc}]++
 			}
 			for k, n := range counts {
 				obs.Observe(n,
@@ -165,19 +170,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	// ── Scrape loop ───────────────────────────────────────────────────────────
+	// ── Periodic status log ───────────────────────────────────────────────────
 
-	c := client.New(managementURL)
-	ticker := time.NewTicker(scrapeInterval)
+	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
-
-	// Initial scrape before the first tick so metrics are available immediately.
-	doScrape(logger, c, &snapshotMu, &snapshot)
 
 	for {
 		select {
 		case <-ticker.C:
-			doScrape(logger, c, &snapshotMu, &snapshot)
+			logClusterState(logger, cm)
 		case <-ctx.Done():
 			logger.Info("shutting down")
 			return
@@ -185,31 +186,40 @@ func main() {
 	}
 }
 
-// doScrape fetches cluster state, updates the snapshot used by the OTEL gauge
-// callback, and logs a summary.
-func doScrape(
-	logger *slog.Logger,
-	c *client.Client,
-	mu *sync.RWMutex,
-	snapshot *[]client.MemberInfo,
-) {
-	members, err := c.Members()
-	if err != nil {
-		logger.Error("scrape failed", "error", err)
+// logClusterState logs a brief summary of current gossip state.
+func logClusterState(logger *slog.Logger, cm *gcluster.ClusterManager) {
+	cm.Mu.RLock()
+	gossip := cm.State
+	cm.Mu.RUnlock()
+
+	if gossip == nil {
 		return
 	}
 
-	mu.Lock()
-	*snapshot = members
-	mu.Unlock()
-
+	total := len(gossip.GetMembers())
 	upCount := 0
-	for _, m := range members {
-		if m.Status == "Up" {
+	for _, m := range gossip.GetMembers() {
+		if m.GetStatus().String() == "Up" {
 			upCount++
 		}
 	}
-	logger.Info("cluster_members_up", "count", upCount, "total", len(members))
+	logger.Info("cluster_state", "up", upCount, "total", total)
+}
+
+// statusString normalises the proto enum name to a short status string.
+// Proto generates names like "Up", "Joining", "WeaklyUp", etc.
+func statusString(s string) string {
+	return strings.TrimPrefix(s, "MemberStatus_")
+}
+
+// appendIfMissing appends role to roles only if it is not already present.
+func appendIfMissing(roles []string, role string) []string {
+	for _, r := range roles {
+		if r == role {
+			return roles
+		}
+	}
+	return append(roles, role)
 }
 
 // initMeterProvider creates an sdkmetric.MeterProvider.

@@ -49,4 +49,12 @@ type ShardSettings struct {
 	// host:port is in the same data center as this node.  Populated by
 	// StartSharding when DataCenter is set; leave nil if not using multi-DC.
 	IsLocalDC func(host string, port uint32) bool
+
+	// HandoffTimeout is the maximum duration ShardRegion.PostStop waits for
+	// a HandoffComplete acknowledgement from the ShardCoordinator before
+	// proceeding with shutdown.  When zero the default of 10 seconds applies.
+	//
+	// Equivalent HOCON key:
+	//   gekka.cluster.sharding.handoff-timeout = 10s
+	HandoffTimeout time.Duration
 }

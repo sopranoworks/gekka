@@ -37,11 +37,11 @@ import (
 // sbrSignals collects stdout signals emitted by SBRTestNode so sub-tests can
 // block until the expected cluster event arrives.
 type sbrSignals struct {
-	ready            chan struct{} // closed when "SBR_NODE_READY" is seen
-	memberUp         chan string   // "host:port" for every PEKKO_MEMBER_UP
-	memberUnreachable chan string  // "host:port" for every PEKKO_MEMBER_UNREACHABLE
-	memberDown       chan string   // "host:port" for every PEKKO_MEMBER_DOWN
-	memberRemoved    chan string   // "host:port" for every PEKKO_MEMBER_REMOVED
+	ready             chan struct{} // closed when "SBR_NODE_READY" is seen
+	memberUp          chan string   // "host:port" for every PEKKO_MEMBER_UP
+	memberUnreachable chan string   // "host:port" for every PEKKO_MEMBER_UNREACHABLE
+	memberDown        chan string   // "host:port" for every PEKKO_MEMBER_DOWN
+	memberRemoved     chan string   // "host:port" for every PEKKO_MEMBER_REMOVED
 }
 
 // startSBRTestNode launches com.example.SBRTestNode via sbt with the given

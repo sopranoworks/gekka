@@ -29,6 +29,7 @@ import (
 	"github.com/sopranoworks/gekka/internal/management"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
+	"github.com/sopranoworks/gekka/stream"
 	"github.com/sopranoworks/gekka/telemetry"
 
 	"google.golang.org/protobuf/proto"
@@ -1460,6 +1461,11 @@ func (c *Cluster) Stop(target ActorRef) {
 // Scheduler implements ActorSystem.
 func (c *Cluster) Scheduler() Scheduler {
 	return c.sched
+}
+
+// Materializer implements ActorSystem.
+func (c *Cluster) Materializer() stream.Materializer {
+	return stream.ActorMaterializer{}
 }
 
 // RemoteActorOf implements ActorSystem.

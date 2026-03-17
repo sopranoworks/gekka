@@ -16,6 +16,7 @@ import (
 
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/internal/core"
+	"github.com/sopranoworks/gekka/stream"
 )
 
 // Props is a factory specification for creating an actor.
@@ -107,6 +108,12 @@ type ActorSystem interface {
 	// Scheduled tasks run in their own goroutines and are automatically
 	// cancelled when the ActorSystem is terminated.
 	Scheduler() Scheduler
+
+	// Materializer returns the default stream Materializer for this system.
+	// Use it to run stream graphs created with the stream package:
+	//
+	//	graph.Run(sys.Materializer())
+	Materializer() stream.Materializer
 }
 
 // internalSystem is an unexported interface used by ActorRef and ActorSelection

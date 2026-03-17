@@ -1,0 +1,95 @@
+/*
+ * sink.go
+ * This file is part of the gekka project.
+ *
+ * Copyright (c) 2026 Sopranoworks, Osamu Takahashi
+ * SPDX-License-Identifier: MIT
+ */
+
+package stream
+
+// Sink[In, Mat] is a stream stage with exactly one input port.  It consumes
+// elements of type In and materializes to a value of type Mat.
+//
+// Connect a Sink to a Source or composite Source using [Source.To] (to keep
+// the Source's mat) or the package-level [RunWith] (to obtain the Sink's mat).
+type Sink[In, Mat any] struct {
+	// runWith is the internal runner: drains upstream and returns Mat.
+	runWith func(upstream iterator[In]) (Mat, error)
+}
+
+// ─── sinkConnector implementation ─────────────────────────────────────────
+
+// connect implements [sinkConnector], allowing Sink to be passed to [Source.To].
+// The Sink's materialized value is discarded.
+func (s Sink[In, Mat]) connect(upstream iterator[In]) error {
+	_, err := s.runWith(upstream)
+	return err
+}
+
+// ─── Constructors ─────────────────────────────────────────────────────────
+
+// Foreach creates a Sink that calls fn for each incoming element.
+// The materialized value is NotUsed.  If fn panics the panic propagates.
+func Foreach[T any](fn func(T)) Sink[T, NotUsed] {
+	return Sink[T, NotUsed]{
+		runWith: func(upstream iterator[T]) (NotUsed, error) {
+			for {
+				elem, ok, err := upstream.next()
+				if err != nil {
+					return NotUsed{}, err
+				}
+				if !ok {
+					break
+				}
+				fn(elem)
+			}
+			return NotUsed{}, nil
+		},
+	}
+}
+
+// Ignore creates a Sink that discards all elements.
+// Equivalent to Foreach with a no-op function.
+func Ignore[T any]() Sink[T, NotUsed] {
+	return Foreach[T](func(T) {})
+}
+
+// Collect creates a Sink that accumulates all elements into a slice.
+// The materialized value is the collected slice.
+func Collect[T any]() Sink[T, []T] {
+	return Sink[T, []T]{
+		runWith: func(upstream iterator[T]) ([]T, error) {
+			var out []T
+			for {
+				elem, ok, err := upstream.next()
+				if err != nil {
+					return out, err
+				}
+				if !ok {
+					break
+				}
+				out = append(out, elem)
+			}
+			return out, nil
+		},
+	}
+}
+
+// Head creates a Sink that captures the first element and completes.
+// Returns the zero value if the source is empty.
+func Head[T any]() Sink[T, *T] {
+	return Sink[T, *T]{
+		runWith: func(upstream iterator[T]) (*T, error) {
+			elem, ok, err := upstream.next()
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				return nil, nil
+			}
+			v := elem
+			return &v, nil
+		},
+	}
+}

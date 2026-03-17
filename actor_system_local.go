@@ -19,6 +19,7 @@ import (
 	hocon "github.com/sopranoworks/gekka-config"
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/internal/core"
+	"github.com/sopranoworks/gekka/stream"
 )
 
 // localActorSystem implements ActorSystem for local-only use without networking.
@@ -54,6 +55,11 @@ func NewActorSystem(name string, config ...*hocon.Config) (ActorSystem, error) {
 // Scheduler implements ActorSystem.
 func (s *localActorSystem) Scheduler() Scheduler {
 	return s.sched
+}
+
+// Materializer implements ActorSystem.
+func (s *localActorSystem) Materializer() stream.Materializer {
+	return stream.ActorMaterializer{}
 }
 
 // ActorOf implements ActorSystem.

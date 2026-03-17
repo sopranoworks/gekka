@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/sopranoworks/gekka/internal/cli"
 	"github.com/spf13/cobra"
 )
@@ -30,10 +31,17 @@ func (r *rootState) resolveURL(flagURL string) string {
 func main() {
 	root := &rootState{}
 
+	// Minimalist Logo: ❀ gekka-cli v0.9.0
+	logo := lipgloss.JoinHorizontal(lipgloss.Center,
+		lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Render("❀"),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Bold(true).Render(" gekka-cli"),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("242")).Render(" v0.9.0"),
+	)
+
 	rootCmd := &cobra.Command{
 		Use:   "gekka-cli",
 		Short: "CLI tool for managing a Gekka / Pekko cluster",
-		Long: `gekka-cli is a command-line interface for inspecting and managing
+		Long: logo + "\n\n" + `gekka-cli is a command-line interface for inspecting and managing
 a Gekka (or Apache Pekko) cluster via its HTTP Management API.`,
 		SilenceUsage: true,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {

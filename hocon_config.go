@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
-	"github.com/sopranoworks/gekka/discovery"
 	"github.com/sopranoworks/gekka/internal/core"
 
 	hocon "github.com/sopranoworks/gekka-config"

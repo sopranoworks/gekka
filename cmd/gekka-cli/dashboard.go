@@ -117,11 +117,11 @@ func (m dashboardModel) View() string {
 		return "Shutting down dashboard...\n"
 	}
 
-	// Header: [❀] Gekka v0.9.0
+	// Header: [❀] gekka-cli v0.9.0
 	header := headerBoxStyle.Render(
-		lipgloss.JoinHorizontal(lipgloss.Middle,
+		lipgloss.JoinHorizontal(lipgloss.Center,
 			iconStyle.Render("❀"),
-			nameStyle.Render("Gekka"),
+			nameStyle.Render("gekka-cli"),
 			versionStyle.Render("v0.9.0"),
 		),
 	)

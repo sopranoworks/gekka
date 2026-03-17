@@ -1,4 +1,4 @@
-# gekka &nbsp;[![Version](https://img.shields.io/badge/version-0.8.0--dev-orange)](https://github.com/sopranoworks/gekka) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Go CI](https://github.com/sopranoworks/gekka/actions/workflows/go.yml/badge.svg)](https://github.com/sopranoworks/gekka/actions/workflows/go.yml)
+# gekka &nbsp;[![Version](https://img.shields.io/badge/version-0.8.0-blue)](https://github.com/sopranoworks/gekka) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Go CI](https://github.com/sopranoworks/gekka/actions/workflows/go.yml/badge.svg)](https://github.com/sopranoworks/gekka/actions/workflows/go.yml)
 
 A Go implementation of the Pekko/Akka actor protocol, with wire-level interoperability with [Apache Pekko](https://pekko.apache.org/) and [Lightbend Akka](https://www.lightbend.com/akka).
 
@@ -72,9 +72,9 @@ When no OTLP endpoint is configured the process still joins and emits structured
 
 ---
 
-## Rolling Update Support (v0.8.0-dev)
+## Rolling Update Support (v0.8.0)
 
-The v0.8.0-dev cycle adds support for zero-downtime rolling updates in Kubernetes-hosted clusters.  Two mechanisms are used together:
+The v0.8.0 release adds support for zero-downtime rolling updates in Kubernetes-hosted clusters.  Two mechanisms are used together:
 
 ### /health/ready drain gate
 

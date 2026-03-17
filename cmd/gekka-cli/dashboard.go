@@ -1,5 +1,5 @@
 /*
- * dashboard_ui.go
+ * dashboard.go
  * This file is part of the gekka project.
  *
  * Copyright (c) 2026 Sopranoworks, Osamu Takahashi
@@ -23,14 +23,20 @@ import (
 // ── Styles ──────────────────────────────────────────────────────────────────
 
 var (
-	headerStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("12")).
-			Bold(true).
-			MarginBottom(1)
+	iconStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("252")). // Soft white
+			MarginRight(1)
 
-	logoStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("13")).
+	nameStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("255")). // High-contrast white
 			Bold(true)
+
+	versionStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("242")). // Muted grey
+			MarginLeft(1)
+
+	headerBoxStyle = lipgloss.NewStyle().
+			MarginBottom(1)
 
 	nodeUpStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("10"))
@@ -46,18 +52,6 @@ var (
 	infoStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("14"))
 )
-
-const gekkaLogo = `
-  ▄████  ▓█████  ██░ ██  ██░ ██  ▄▄▄      
- ██▒ ▀█▒ ▓█   ▀ ▓██░ ██▒▓██░ ██▒▒████▄    
-▒██░▄▄▄░ ▒███   ▒██▀▀██░▒██▀▀██░▒██  ▀█▄  
-░▓█  ██▓ ▒▓█  ▄ ░▓█ ░██ ░▓█ ░██ ░██▄▄▄▄██ 
-░▒▓███▀▒ ░▒████▒░▓█▒░██▓░▓█▒░██▓ ▓█   ▓██▒
- ░▒   ▒  ░░ ▒░ ░ ▒ ░░▒░▒ ▒ ░░▒░▒ ▒▒   ▓▒█░
-  ░   ░   ░ ░  ░ ▒ ░▒░ ░ ▒ ░▒░ ░  ▒   ▒▒ ░
-░ ░   ░     ░    ░  ░░ ░ ░  ░░ ░  ░   ▒   
-      ░     ░  ░ ░  ░  ░ ░  ░  ░      ░  ░
-`
 
 // ── Model ───────────────────────────────────────────────────────────────────
 
@@ -123,10 +117,13 @@ func (m dashboardModel) View() string {
 		return "Shutting down dashboard...\n"
 	}
 
-	// Header
-	header := lipgloss.JoinVertical(lipgloss.Left,
-		logoStyle.Render(gekkaLogo),
-		headerStyle.Render(fmt.Sprintf("Cluster: %s", m.cfg.SystemName)),
+	// Header: [❀] Gekka v0.9.0
+	header := headerBoxStyle.Render(
+		lipgloss.JoinHorizontal(lipgloss.Middle,
+			iconStyle.Render("❀"),
+			nameStyle.Render("Gekka"),
+			versionStyle.Render("v0.9.0"),
+		),
 	)
 
 	// Node List

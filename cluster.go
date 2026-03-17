@@ -25,6 +25,7 @@ import (
 	"github.com/sopranoworks/gekka/actor"
 	gcluster "github.com/sopranoworks/gekka/cluster"
 	"github.com/sopranoworks/gekka/crdt"
+	"github.com/sopranoworks/gekka/discovery"
 	"github.com/sopranoworks/gekka/internal/core"
 	"github.com/sopranoworks/gekka/internal/management"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
@@ -230,6 +231,35 @@ type ClusterConfig struct {
 	//	    scrape-interval = "15s"
 	//	}
 	Metrics core.MetricsExporterConfig
+
+	// Discovery configures the dynamic seed node discovery (v0.9.0).
+	// When Enabled is true, the cluster will use the specified Type to
+	// discover seed nodes at startup.
+	//
+	// Parse from HOCON:
+	//
+	//	gekka.cluster.discovery {
+	//	    enabled = true
+	//	    type    = "kubernetes-api"
+	//	    config {
+	//	        namespace      = "default"
+	//	        label-selector = "app=gekka"
+	//	        port           = 2552
+	//	    }
+	//	}
+	Discovery DiscoveryConfig
+}
+
+// DiscoveryConfig holds dynamic seed discovery settings.
+type DiscoveryConfig struct {
+	// Enabled enables dynamic discovery when true.
+	Enabled bool
+
+	// Type selects the discovery mechanism: "kubernetes-api" or "kubernetes-dns".
+	Type string
+
+	// Config holds provider-specific configuration.
+	Config discovery.DiscoveryConfig
 }
 
 // PersistenceConfig holds persistence-plugin settings parsed from HOCON.
@@ -396,6 +426,27 @@ type Cluster struct {
 // immediately; call node.Addr() to discover the assigned port when ClusterConfig.Port == 0.
 func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	scheme, system, host, port := cfg.resolve()
+
+	// Dynamic seed discovery (v0.9.0)
+	if cfg.Discovery.Enabled {
+		provider, err := discovery.Get(cfg.Discovery.Type, cfg.Discovery.Config)
+		if err != nil {
+			return nil, fmt.Errorf("gekka: discovery: %w", err)
+		}
+
+		discovered, err := provider.FetchSeedNodes()
+		if err != nil {
+			log.Printf("[Discovery] %s: %v", cfg.Discovery.Type, err)
+		} else {
+			for _, s := range discovered {
+				// Discovered seeds must match the same system and protocol.
+				uri := fmt.Sprintf("%s://%s@%s", scheme, system, s)
+				if addr, err := actor.ParseAddress(uri); err == nil {
+					cfg.SeedNodes = append(cfg.SeedNodes, addr)
+				}
+			}
+		}
+	}
 
 	localAddr := &gproto_remote.Address{
 		Protocol: &scheme,

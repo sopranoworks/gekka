@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/discovery"
 	"github.com/sopranoworks/gekka/internal/core"
 
 	hocon "github.com/sopranoworks/gekka-config"
@@ -339,6 +340,21 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 	}
 	if v, err := cfg.GetString(metricsPrefix + ".scrape-interval"); err == nil {
 		nodeCfg.Metrics.ScrapeInterval = strings.TrimSpace(v)
+	}
+
+	// ── Discovery ────────────────────────────────────────────────────────────
+	discoveryPrefix := "gekka.cluster.discovery"
+	if v, err := cfg.GetString(discoveryPrefix + ".enabled"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		nodeCfg.Discovery.Enabled = v == "true" || v == "on"
+	}
+	if v, err := cfg.GetString(discoveryPrefix + ".type"); err == nil {
+		nodeCfg.Discovery.Type = strings.TrimSpace(v)
+	}
+
+	nodeCfg.Discovery.Config.Config = make(map[string]any)
+	if configObj, err := cfg.GetConfig(discoveryPrefix + ".config"); err == nil {
+		_ = configObj.Unmarshal(&nodeCfg.Discovery.Config.Config)
 	}
 
 	return nodeCfg, nil

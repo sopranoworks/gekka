@@ -150,7 +150,56 @@ func main() {
 
 ---
 
-## 5. Persistent Actors (Event Sourcing)
+## 5. Typed Actors (Go Generics)
+
+`gekka.Spawn` is the Go-idiomatic equivalent of Pekko/Akka's `system.spawn(behavior, name)`.
+Because Go does not permit generic methods on interfaces, the `ActorSystem` is the first argument.
+
+```go
+package main
+
+import (
+	"fmt"
+
+	"github.com/sopranoworks/gekka"
+	"github.com/sopranoworks/gekka/actor"
+)
+
+type Greet struct{ Name string }
+
+func Greeter() actor.Behavior[Greet] {
+	return func(ctx actor.TypedContext[Greet], msg Greet) actor.Behavior[Greet] {
+		fmt.Printf("Hello, %s!\n", msg.Name)
+		return actor.Same[Greet]()
+	}
+}
+
+func main() {
+	system, _ := gekka.NewActorSystem("TypedSystem")
+
+	// Spawn a typed actor — equivalent to system.spawn(Greeter(), "greeter") in Pekko
+	ref, _ := gekka.Spawn(system, Greeter(), "greeter")
+
+	// Send a type-safe message — compiler rejects any non-Greet message
+	ref.Tell(Greet{Name: "Gopher"})
+}
+```
+
+Child typed actors can be spawned from within a parent's behavior using `actor.SpawnChild`:
+
+```go
+func Parent() actor.Behavior[string] {
+	return func(ctx actor.TypedContext[string], msg string) actor.Behavior[string] {
+		child, _ := actor.SpawnChild(ctx, Greeter(), "child")
+		child.Tell(Greet{Name: msg})
+		return actor.Same[string]()
+	}
+}
+```
+
+---
+
+## 6. Persistent Actors (Event Sourcing)
 
 Persistent actors automatically recover their state by replaying events from a
 journal upon restart.
@@ -193,7 +242,7 @@ implementation including snapshots and recovery demonstration.
 
 ---
 
-## 6. Cluster Singletons
+## 7. Cluster Singletons
 
 Gekka ensures that exactly one instance of a singleton actor is alive in the
 cluster, typically on the oldest node.
@@ -231,7 +280,7 @@ func main() {
 
 ---
 
-## 7. Coordinated Shutdown (Graceful Exit)
+## 8. Coordinated Shutdown (Graceful Exit)
 
 `gekka` implements a Pekko-compatible **Coordinated Shutdown** sequence that
 drives the node through the full cluster departure lifecycle —
@@ -280,7 +329,7 @@ etc.) are available in the `actor` package to avoid raw-string phase names.
 
 ---
 
-## 8. Reliable Delivery (At-Least-Once)
+## 9. Reliable Delivery (At-Least-Once)
 
 `gekka` implements Pekko's **Reliable Delivery** protocol (Serializer ID 36)
 for guaranteed at-least-once delivery between Go and Scala actors.  The

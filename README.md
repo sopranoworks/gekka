@@ -181,6 +181,10 @@ func main() {
 
 Gekka provides a **Typed Actor API** leveraging Go Generics for compile-time type safety.
 
+`gekka.Spawn` is the Go-idiomatic equivalent of Pekko/Akka's `system.spawn(behavior, name)`.
+Because Go does not permit generic methods on interfaces, the `ActorSystem` is passed as the
+first argument — the semantics are identical.
+
 ```go
 package main
 
@@ -203,7 +207,7 @@ func Greeter() actor.Behavior[Greet] {
 func main() {
 	system, _ := gekka.NewActorSystem("TypedSystem")
 
-	// Spawn a typed actor
+	// Spawn a typed actor — equivalent to system.spawn(Greeter(), "greeter") in Pekko
 	ref, _ := gekka.Spawn(system, Greeter(), "greeter")
 
 	// Send a type-safe message

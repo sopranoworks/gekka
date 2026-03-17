@@ -27,14 +27,37 @@ type TypedActorRef[T any] = actor.TypedActorRef[T]
 type EventSourcedBehavior[Command any, Event any, State any] = actor.EventSourcedBehavior[Command, Event, State]
 
 // Spawn creates a new typed actor as a top-level actor in the system.
-// It is a type-safe wrapper around ActorSystem.ActorOf.
+// This is the Go-idiomatic equivalent of Pekko/Akka's ActorSystem.spawn(behavior, name).
+// Because Go does not permit generic methods on interface or non-generic receiver types,
+// the ActorSystem is passed as the first argument rather than used as a receiver.
 func Spawn[T any](sys ActorSystem, behavior actor.Behavior[T], name string, props ...actor.Props) (TypedActorRef[T], error) {
-	return actor.Spawn(asActorContext(sys, ""), behavior, name, props...)
+	p := actor.Props{
+		New: func() actor.Actor { return actor.NewTypedActor(behavior) },
+	}
+	if len(props) > 0 {
+		p.SupervisorStrategy = props[0].SupervisorStrategy
+	}
+	ref, err := sys.ActorOf(p, name)
+	if err != nil {
+		return TypedActorRef[T]{}, err
+	}
+	return actor.NewTypedActorRef[T](ref), nil
 }
 
-// SpawnPersistent creates a new persistent actor.
+// SpawnPersistent creates a new persistent typed actor.
+// Like Spawn, this is the Go-idiomatic equivalent of a method on ActorSystem.
 func SpawnPersistent[Command any, Event any, State any](sys ActorSystem, behavior *EventSourcedBehavior[Command, Event, State], name string, props ...actor.Props) (TypedActorRef[Command], error) {
-	return actor.SpawnPersistent(asActorContext(sys, ""), behavior, name, props...)
+	p := actor.Props{
+		New: func() actor.Actor { return actor.NewPersistentActor(behavior) },
+	}
+	if len(props) > 0 {
+		p.SupervisorStrategy = props[0].SupervisorStrategy
+	}
+	ref, err := sys.ActorOf(p, name)
+	if err != nil {
+		return TypedActorRef[Command]{}, err
+	}
+	return actor.NewTypedActorRef[Command](ref), nil
 }
 
 // Ask sends a message to a typed actor and waits for a reply.

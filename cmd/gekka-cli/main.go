@@ -54,6 +54,7 @@ a Gekka (or Apache Pekko) cluster via its HTTP Management API.`,
 		"Output raw JSON instead of a formatted table")
 
 	rootCmd.AddCommand(newMembersCmd(root))
+	rootCmd.AddCommand(newDiscoveryCheckCmd(root))
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

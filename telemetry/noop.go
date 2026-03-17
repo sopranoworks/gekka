@@ -28,8 +28,8 @@ func (NoopTracer) Start(ctx context.Context, _ string) (context.Context, Span) {
 	return ctx, NoopSpan{}
 }
 
-func (NoopTracer) Inject(_ context.Context, _ map[string]string)                          {}
-func (NoopTracer) Extract(ctx context.Context, _ map[string]string) context.Context       { return ctx }
+func (NoopTracer) Inject(_ context.Context, _ map[string]string)                    {}
+func (NoopTracer) Extract(ctx context.Context, _ map[string]string) context.Context { return ctx }
 
 // ── NoopSpan ──────────────────────────────────────────────────────────────────
 

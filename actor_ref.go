@@ -129,6 +129,7 @@ func (r ActorRef) Tell(msg any, sender ...actor.Ref) {
 //	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 //	defer cancel()
 //	reply, err := ref.Ask(ctx, []byte("ping"))
+//
 // TellCtx delivers msg with W3C trace-context propagation extracted from ctx.
 //
 // For local actors the trace headers are embedded in the Envelope so the

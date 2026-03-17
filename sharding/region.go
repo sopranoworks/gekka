@@ -161,7 +161,6 @@ func (r *ShardRegion) Receive(msg any) {
 	}
 }
 
-
 func (r *ShardRegion) deliverMessageWithSender(shardId ShardId, envelope ShardingEnvelope, sender actor.Ref) {
 	homePath, ok := r.shardHomePaths[shardId]
 	if !ok || homePath == "" {

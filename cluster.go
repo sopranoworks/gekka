@@ -351,7 +351,7 @@ type Cluster struct {
 	seedAddr   *gproto_remote.Address // set by the first Join call
 	seeds      []actor.Address        // from ClusterConfig.SeedNodes (populated by LoadConfig)
 	metrics    *core.NodeMetrics
-	monitoring *core.MonitoringServer    // nil when monitoring is disabled
+	monitoring *core.MonitoringServer       // nil when monitoring is disabled
 	mgmt       *management.ManagementServer // nil when management API is disabled
 
 	actorsMu sync.RWMutex

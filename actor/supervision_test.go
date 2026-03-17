@@ -21,7 +21,7 @@ type SupervisionTestActor struct {
 	stopCount    int32
 	restartCount int32
 	panicCount   int32
-	lastMsg      any
+	lastMsg      atomic.Value
 }
 
 func (t *SupervisionTestActor) PreStart() {
@@ -38,7 +38,7 @@ func (t *SupervisionTestActor) PreRestart(reason error, message any) {
 }
 
 func (t *SupervisionTestActor) Receive(msg any) {
-	t.lastMsg = msg
+	t.lastMsg.Store(msg)
 	if s, ok := msg.(string); ok && s == "panic" {
 		atomic.AddInt32(&t.panicCount, 1)
 		panic("intentional panic")
@@ -75,7 +75,7 @@ func TestSupervisionStrategies(t *testing.T) {
 		// Verify it's still alive
 		ref.Tell("alive")
 		time.Sleep(50 * time.Millisecond)
-		if child.lastMsg != "alive" {
+		if child.lastMsg.Load() != "alive" {
 			t.Errorf("expected actor to be alive after restart")
 		}
 	})
@@ -108,7 +108,7 @@ func TestSupervisionStrategies(t *testing.T) {
 
 		ref.Tell("alive")
 		time.Sleep(50 * time.Millisecond)
-		if child.lastMsg != "alive" {
+		if child.lastMsg.Load() != "alive" {
 			t.Errorf("expected actor to be alive after resume")
 		}
 	})
@@ -174,7 +174,7 @@ func TestSupervisionStrategies(t *testing.T) {
 
 		ref.Tell("alive")
 		time.Sleep(50 * time.Millisecond)
-		if child.lastMsg != "alive" {
+		if child.lastMsg.Load() != "alive" {
 			t.Errorf("expected actor to be alive after rapid panics")
 		}
 	})

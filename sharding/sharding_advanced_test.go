@@ -11,6 +11,7 @@ package sharding
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,11 +23,16 @@ import (
 
 type mockRef struct {
 	path     string
+	mu       sync.Mutex
 	messages []any
 }
 
-func (r *mockRef) Path() string               { return r.path }
-func (r *mockRef) Tell(msg any, _ ...actor.Ref) { r.messages = append(r.messages, msg) }
+func (r *mockRef) Path() string { return r.path }
+func (r *mockRef) Tell(msg any, _ ...actor.Ref) {
+	r.mu.Lock()
+	r.messages = append(r.messages, msg)
+	r.mu.Unlock()
+}
 
 type mockActorContext struct {
 	actor.ActorContext
@@ -57,8 +63,8 @@ func (m *mockActorContext) Stop(ref actor.Ref) {
 	}
 }
 
-func (m *mockActorContext) Watch(_, _ actor.Ref)          {}
-func (m *mockActorContext) Context() context.Context       { return context.Background() }
+func (m *mockActorContext) Watch(_, _ actor.Ref)     {}
+func (m *mockActorContext) Context() context.Context { return context.Background() }
 func (m *mockActorContext) Resolve(path string) (actor.Ref, error) {
 	return &mockRef{path: path}, nil
 }

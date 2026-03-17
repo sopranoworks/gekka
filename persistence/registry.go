@@ -29,9 +29,9 @@ type JournalFactory func(db *sql.DB) Journal
 type SnapshotStoreFactory func(db *sql.DB) SnapshotStore
 
 var (
-	registryMu      sync.RWMutex
-	journalReg      = make(map[string]JournalFactory)
-	snapshotReg     = make(map[string]SnapshotStoreFactory)
+	registryMu  sync.RWMutex
+	journalReg  = make(map[string]JournalFactory)
+	snapshotReg = make(map[string]SnapshotStoreFactory)
 )
 
 // RegisterJournal registers a JournalFactory under name.

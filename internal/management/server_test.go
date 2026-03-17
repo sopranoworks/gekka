@@ -35,12 +35,12 @@ import (
 type mockProvider struct {
 	cm *cluster.ClusterManager
 
-	mu              sync.Mutex
-	leaveCalledOn   []string
-	downCalledOn    []string
-	leaveErr        error // if set, LeaveMember returns this error
-	downErr         error // if set, DownMember returns this error
-	quarantined     bool  // simulates a quarantined Artery association
+	mu            sync.Mutex
+	leaveCalledOn []string
+	downCalledOn  []string
+	leaveErr      error // if set, LeaveMember returns this error
+	downErr       error // if set, DownMember returns this error
+	quarantined   bool  // simulates a quarantined Artery association
 }
 
 func (p *mockProvider) ClusterManager() *cluster.ClusterManager { return p.cm }

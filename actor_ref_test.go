@@ -10,6 +10,7 @@ package gekka
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -45,12 +46,14 @@ func newTestNode(t *testing.T, system, host string, port uint32) *Cluster {
 }
 
 // echoActor records the last received message.
+// lastMsg is stored via atomic.Value to avoid a data race between the actor
+// goroutine (writer) and the test goroutine (reader).
 type echoActor struct {
 	actor.BaseActor
-	lastMsg any
+	lastMsg atomic.Value
 }
 
-func (a *echoActor) Receive(msg any) { a.lastMsg = msg }
+func (a *echoActor) Receive(msg any) { a.lastMsg.Store(msg) }
 
 // ── ActorRef ──────────────────────────────────────────────────────────────────
 
@@ -79,8 +82,8 @@ func TestActorRef_Tell_Local(t *testing.T) {
 
 	// Give the goroutine a moment to process.
 	time.Sleep(20 * time.Millisecond)
-	if a.lastMsg != "hello" {
-		t.Errorf("actor received %v, want %q", a.lastMsg, "hello")
+	if got := a.lastMsg.Load(); got != "hello" {
+		t.Errorf("actor received %v, want %q", got, "hello")
 	}
 }
 
@@ -228,8 +231,8 @@ func TestActorSelection_Tell_Local(t *testing.T) {
 	node.ActorSelection("/user/echo").Tell("ping")
 	time.Sleep(20 * time.Millisecond)
 
-	if a.lastMsg != "ping" {
-		t.Errorf("actor received %v, want %q", a.lastMsg, "ping")
+	if got := a.lastMsg.Load(); got != "ping" {
+		t.Errorf("actor received %v, want %q", got, "ping")
 	}
 }
 

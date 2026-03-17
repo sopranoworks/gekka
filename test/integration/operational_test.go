@@ -15,7 +15,6 @@
 package integration_test
 
 import (
-	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -231,10 +230,6 @@ func TestMetricsNodeAndCLISynergy(t *testing.T) {
 
 	// Assertion 5: the gossip observed by the metrics node itself also shows
 	// 2 Up members (verifies the direct gossip read path used by gekka-metrics).
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_ = ctx
-
 	cm := metricsNode.ClusterManager()
 	cm.Mu.RLock()
 	gossip := cm.State

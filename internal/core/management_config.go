@@ -47,6 +47,7 @@ package core
 //	    unreachable cluster members, and no quarantined Artery associations.
 //	    Returns 503 Service Unavailable otherwise, with a JSON body describing
 //	    the reason: "not_up", "unreachable_members", or "quarantined".
+//
 // MetricsExporterConfig holds configuration for the optional metrics exporter
 // that periodically scrapes the Management HTTP API and emits cluster metrics.
 //

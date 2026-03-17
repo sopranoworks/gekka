@@ -56,8 +56,8 @@ type SBRConfig struct {
 // It is a flattened, SBR-friendly view of the gossip proto types.
 type Member struct {
 	Address   MemberAddress
-	Reachable bool   // false = marked unreachable by local FD
-	UpNumber  int32  // monotonic join order; lower = older
+	Reachable bool  // false = marked unreachable by local FD
+	UpNumber  int32 // monotonic join order; lower = older
 	Roles     []string
 }
 

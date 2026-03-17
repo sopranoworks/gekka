@@ -47,6 +47,14 @@ type TypedContext[T any] interface {
 
 	// Passivate requests the parent actor to stop this actor.
 	Passivate()
+
+	// Timers returns the TimerScheduler for scheduling time-based messages
+	// to this actor. All timers are automatically cancelled on actor stop.
+	Timers() TimerScheduler[T]
+
+	// Stash returns the StashBuffer for temporarily holding messages that
+	// should not be processed in the actor's current behavior.
+	Stash() StashBuffer[T]
 }
 
 // typedContext is the internal implementation of TypedContext[T].
@@ -92,11 +100,21 @@ func (c *typedContext[T]) Passivate() {
 	}
 }
 
+func (c *typedContext[T]) Timers() TimerScheduler[T] {
+	return c.actor.timers
+}
+
+func (c *typedContext[T]) Stash() StashBuffer[T] {
+	return c.actor.stash
+}
+
 // typedActor is the internal bridge between the untyped actor system and typed behaviors.
 type typedActor[T any] struct {
 	BaseActor
 	behavior Behavior[T]
 	ctx      *typedContext[T]
+	timers   *timerScheduler[T]
+	stash    *stashBuffer[T]
 }
 
 // newTypedActor creates a new typedActor instance with the given initial behavior.
@@ -107,6 +125,18 @@ func newTypedActor[T any](behavior Behavior[T]) *typedActor[T] {
 	}
 	a.ctx = &typedContext[T]{actor: a}
 	return a
+}
+
+// PreStart initialises the timer scheduler and stash buffer once the actor's
+// self reference has been injected by the actor system.
+func (a *typedActor[T]) PreStart() {
+	a.timers = newTimerScheduler[T](a.Self())
+	a.stash = newStashBuffer[T](a.Self(), DefaultStashCapacity)
+}
+
+// PostStop cancels all active timers so their goroutines exit cleanly.
+func (a *typedActor[T]) PostStop() {
+	a.timers.cancelAll()
 }
 
 // NewTypedActor creates a new Actor that handles messages of type T using the given behavior.

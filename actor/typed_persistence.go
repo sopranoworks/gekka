@@ -80,7 +80,9 @@ type persistentActor[Command any, Event any, State any] struct {
 	lastSnapSeqNr uint64
 	recovering    bool
 	tctx          TypedContext[Command]
-	stash         []Command
+	stash         []Command // internal recovery stash; separate from user StashBuffer
+	timers        *timerScheduler[Command]
+	userStash     *stashBuffer[Command]
 }
 
 func NewPersistentActor[Command any, Event any, State any](b *EventSourcedBehavior[Command, Event, State]) Actor {
@@ -137,8 +139,22 @@ func (c *persistentTypedContext[C, E, S]) Passivate() {
 	}
 }
 
+func (c *persistentTypedContext[C, E, S]) Timers() TimerScheduler[C] {
+	return c.actor.timers
+}
+
+func (c *persistentTypedContext[C, E, S]) Stash() StashBuffer[C] {
+	return c.actor.userStash
+}
+
 func (p *persistentActor[Command, Event, State]) PreStart() {
+	p.timers = newTimerScheduler[Command](p.Self())
+	p.userStash = newStashBuffer[Command](p.Self(), DefaultStashCapacity)
 	p.recover()
+}
+
+func (p *persistentActor[Command, Event, State]) PostStop() {
+	p.timers.cancelAll()
 }
 
 func (p *persistentActor[Command, Event, State]) Receive(msg any) {

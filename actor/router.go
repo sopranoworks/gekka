@@ -179,6 +179,15 @@ func (r *RouterActor) RouteesSnapshot() []Ref {
 	return cp
 }
 
+// Behavior returns a typed actor Behavior that drives the router.
+func (r *RouterActor) Behavior() Behavior[any] {
+	return func(ctx TypedContext[any], msg any) Behavior[any] {
+		r.currentSender = ctx.Sender()
+		InjectSystem(r, ctx.System())
+		r.Receive(msg)
+		return Same[any]()
+	}
+}
 // AddRoutee appends ref to the routee list. Safe to call from Receive; not
 // safe to call concurrently from outside the actor's goroutine.
 func (r *RouterActor) AddRoutee(ref Ref) {
@@ -212,13 +221,21 @@ func (r *RouterActor) Receive(msg any) {
 		if len(r.Routees) == 0 {
 			return
 		}
+
+		// Support BroadcastRoutingLogic explicitly
+		if _, ok := r.Logic.(*BroadcastRoutingLogic); ok {
+			for _, rt := range r.Routees {
+				rt.Tell(msg, r.Sender())
+			}
+			return
+		}
+
 		target := r.Logic.Select(msg, r.Routees)
 		if target != nil {
 			target.Tell(msg, r.Sender())
 		}
 	}
 }
-
 // ── Pool router ───────────────────────────────────────────────────────────────
 
 // AdjustPoolSize is a management message sent to a PoolRouter to request a
@@ -357,6 +374,18 @@ func (l *RandomRoutingLogic) Select(_ any, routees []Ref) Ref {
 		return nil
 	}
 	return routees[rand.Intn(len(routees))]
+}
+
+// BroadcastRoutingLogic is a special routing logic that indicates the message
+// should be delivered to all routees. While RouterActor handles Broadcast
+// messages explicitly, this logic allows configuring a router to always
+// broadcast every message it receives.
+type BroadcastRoutingLogic struct{}
+
+// Select returns nil for BroadcastRoutingLogic because it doesn't select a
+// single routee; the RouterActor must handle this logic specifically.
+func (l *BroadcastRoutingLogic) Select(_ any, _ []Ref) Ref {
+	return nil
 }
 
 // ── Consistent Hashing ───────────────────────────────────────────────────────

@@ -113,7 +113,7 @@ func StartSharding[Command any, Event any, State any](
 			},
 		}, typeName+"CoordinatorProxy")
 		if err != nil {
-			return sharding.EntityRef[Command]{}, err
+			return sharding.ClusterEntityRef[Command]{}, err
 		}
 		coordinatorRef = ref
 	}

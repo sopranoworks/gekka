@@ -180,7 +180,7 @@ func (f *FSM[S, D]) Behavior() Behavior[any] {
 			f.initialized = true
 		}
 
-		ctx.Log().Info("FSM: processing message", "state", f.currentState, "msgType", fmt.Sprintf("%T", msg), "msg", msg, "address", fmt.Sprintf("%p", f))
+		ctx.Log().Debug("FSM: processing message", "state", f.currentState, "msgType", fmt.Sprintf("%T", msg), "msg", msg, "address", fmt.Sprintf("%p", f))
 
 		handler, ok := f.handlers[f.currentState]
 		event := Event[D]{Msg: msg, Data: f.stateData}

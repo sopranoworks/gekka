@@ -10,7 +10,6 @@ package sharding
 
 import (
 	"encoding/json"
-	"fmt"
 	"github.com/sopranoworks/gekka/actor"
 	"reflect"
 )
@@ -38,20 +37,19 @@ type ShardAllocationStrategy interface {
 	Rebalance(currentShardAllocations map[actor.Ref][]ShardId, rebalanceInProgress []ShardId) []ShardId
 }
 
-// EntityRef[T] is a location-transparent handle to send messages to a specific entity.
-type EntityRef[T any] struct {
+// ClusterEntityRef is a location-transparent handle to send messages to a specific entity.
+// Deprecated: use EntityRef[T] for type-safe interaction.
+type ClusterEntityRef[T any] struct {
 	EntityId EntityId
 	Region   actor.Ref
 }
 
-func (r EntityRef[T]) Tell(msg T) {
+func (r ClusterEntityRef[T]) Tell(msg T) {
 	if r.EntityId == "" {
-		fmt.Printf("EntityRef.Tell (direct): msg=%T\n", msg)
 		r.Region.Tell(msg)
 		return
 	}
 	data, _ := json.Marshal(msg)
-	fmt.Printf("EntityRef.Tell (wrapped): entityId=%s manifest=%s\n", r.EntityId, reflect.TypeOf(msg).String())
 	r.Region.Tell(ShardingEnvelope{
 		EntityId:        r.EntityId,
 		Message:         data,

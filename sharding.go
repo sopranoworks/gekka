@@ -72,7 +72,7 @@ func StartSharding[Command any, Event any, State any](
 	behaviorFactory func(entityId string) *EventSourcedBehavior[Command, Event, State],
 	extract sharding.ExtractEntityId,
 	settings ShardingSettings,
-) (sharding.EntityRef[Command], error) {
+) (sharding.ClusterEntityRef[Command], error) {
 
 	// Register sharding types for serialization
 	sys.RegisterType("sharding.RegisterRegion", reflect.TypeOf(sharding.RegisterRegion{}))
@@ -172,29 +172,37 @@ func StartSharding[Command any, Event any, State any](
 	}, typeName+"Region")
 
 	if err != nil {
-		return sharding.EntityRef[Command]{}, fmt.Errorf("failed to spawn region: %w", err)
+		return sharding.ClusterEntityRef[Command]{}, fmt.Errorf("failed to spawn region: %w", err)
 	}
 
-	return sharding.EntityRef[Command]{
+	return sharding.ClusterEntityRef[Command]{
 		EntityId: "", // entry point for the region
 		Region:   region,
 	}, nil
 }
 
-// GetEntityRef returns an EntityRef for a specific entity.
-func GetEntityRef[T any](sys ActorSystem, typeName string, entityId string) (sharding.EntityRef[T], error) {
-	// ShardRegion is registered at typeName+"Region"
+// EntityRefFor returns a type-safe EntityRef for a specific entity.
+func EntityRefFor[M any](sys ActorSystem, typeName string, entityID string) (*sharding.EntityRef[M], error) {
 	regionPath := "/user/" + typeName + "Region"
-
-	// Resolve the region reference.
-	// In a clustered environment, we can use ActorSelection to find it locally.
 	ref, err := sys.ActorSelection(regionPath).Resolve(context.TODO())
 	if err != nil {
-		return sharding.EntityRef[T]{}, fmt.Errorf("sharding: failed to resolve region %q: %w", regionPath, err)
+		return nil, fmt.Errorf("sharding: failed to resolve region %q: %w", regionPath, err)
 	}
+	return sharding.NewEntityRef[M](typeName, entityID, ref), nil
+}
 
-	return sharding.EntityRef[T]{
-		EntityId: entityId,
-		Region:   ref,
-	}, nil
+// StartTyped starts cluster sharding for a given typed entity.
+// It returns the ShardRegion actor reference.
+func StartTyped[M any, Event any, State any](
+	sys ActorSystem,
+	typeName string,
+	behaviorFactory func(entityId string) *EventSourcedBehavior[M, Event, State],
+	extract sharding.ExtractEntityId,
+	settings ShardingSettings,
+) (actor.Ref, error) {
+	res, err := StartSharding(sys, typeName, behaviorFactory, extract, settings)
+	if err != nil {
+		return nil, err
+	}
+	return res.Region, nil
 }

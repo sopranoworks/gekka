@@ -23,18 +23,6 @@ import (
 // ── Styles ──────────────────────────────────────────────────────────────────
 
 var (
-	iconStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("252")). // Soft white
-			MarginRight(1)
-
-	nameStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("255")). // High-contrast white
-			Bold(true)
-
-	versionStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("242")). // Muted grey
-			MarginLeft(1)
-
 	headerBoxStyle = lipgloss.NewStyle().
 			MarginBottom(1)
 
@@ -133,7 +121,7 @@ func (m dashboardModel) View() string {
 
 	// Text Components
 	title := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Bold(true).Render("gekka-cli")
-	version := lipgloss.NewStyle().Foreground(lipgloss.Color("#808080")).Render("v0.9.0")
+	version := lipgloss.NewStyle().Foreground(lipgloss.Color("#808080")).Render("v" + gekka.Version)
 
 	// Line Assembly
 	topLine := lipgloss.JoinHorizontal(lipgloss.Bottom, iconTop, "  ", title)

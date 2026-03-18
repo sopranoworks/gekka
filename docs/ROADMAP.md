@@ -8,6 +8,13 @@
 
 ## Released
 
+### v0.9.0 (2026-03-18)
+- **Akka Typed API Refinement**: Integrated **Timers** (`TimerScheduler`) and **Stash** (`StashBuffer`) for full functional parity with Pekko/Akka's typed actor model.
+- **Gekka Streams**: Reactive streams implementation aligned with the Akka Streams programming model, featuring backpressure-aware async stages and actor integration.
+- **Kubernetes-native Discovery**: Automated cluster formation using the **Kubernetes API** or **DNS SRV** (headless services) for dynamic seed node resolution.
+- **Zero-copy Serialization**: High-performance Artery transport framing using `net.Buffers`, delivering **8.5x faster** throughput and zero allocations on the hot path.
+- **`gekka-cli` / `gekka-metrics` TUI**: Enhanced operational tools with interactive terminal dashboards and unified Nebula/Forest branding.
+
 ### v0.8.0 (2026-03-17)
 - **Cluster HTTP Management API**: REST endpoints for `/cluster/members`, `/health/alive`, `/health/ready` (Kubernetes probe compatible)
 - **`gekka-cli`**: Command-line cluster management tool (`members` command, HOCON config loading)
@@ -36,39 +43,18 @@
 
 ## Upcoming
 
-### v0.9.0 — Streams, TUI & Cloud-Native Scaling
+### v1.0.0 — Production Readiness & Stability
 
-**Target:** Q3 2026
+**Target:** Q4 2026
 
-#### 1. Akka Typed API Refinement
-Closing the gap with Pekko/Akka's typed actor API:
-- **Timers**: `TimerScheduler` for recurring and single-shot messages inside typed actors
-- **Stash**: `StashBuffer` for deferring messages until a behavior transition
+#### 1. API Stabilization
+Finalize public interfaces and package structures for the first stable 1.0 release.
 
-#### 2. Gekka Streams
-A reactive streams implementation aligned with the Akka Streams programming model:
-- Source / Flow / Sink pipeline DSL
-- Backpressure-aware async stages
-- Integration with actor `Source.actorRef` and `Sink.actorRef`
+#### 2. Performance Tuning
+Exhaustive benchmarking and optimization of the mailbox processing loop and gossip propagation.
 
-#### 3. Kubernetes Discovery
-Native cluster formation without a pre-configured seed list:
-- **Kubernetes API discovery**: query the K8s API server for pod endpoints
-- **DNS SRV discovery**: headless-service SRV record resolution for seed-node bootstrap
-- HOCON configuration: `pekko.discovery.method = kubernetes-api | akka-dns`
-
-#### 4. Zero-copy Serialization
-Protocol-level optimization to reduce allocation pressure on the hot path:
-- Custom frame builder avoiding intermediate `[]byte` copies
-- Pluggable codec interface for user-defined zero-copy serializers
-- Benchmarks validating throughput improvement vs. current JSON/proto path
-
-#### 5. `gekka-cli` Dashboard (TUI)
-Visual cluster management terminal UI built on top of the existing `gekka-cli`:
-- Real-time member state table (role, status, DC, uptime)
-- Shard distribution heatmap per region
-- Log tail panel with severity filtering
-- Interactive commands: `leave`, `down`, `join`
+#### 3. Documentation & Guides
+Comprehensive user manual, architectural deep-dives, and production deployment best practices.
 
 ---
 

@@ -92,7 +92,7 @@ func runMembers(baseURL string, jsonOut bool) error {
 			status = cli.SuccessStyle.Render(status)
 		}
 
-		reachable := "yes"
+		var reachable string
 		if !m.Reachable {
 			reachable = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render("NO")
 		} else {

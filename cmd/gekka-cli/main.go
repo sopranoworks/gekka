@@ -13,6 +13,7 @@ import (
 	"os"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/sopranoworks/gekka"
 	"github.com/sopranoworks/gekka/internal/cli"
 	"github.com/spf13/cobra"
 )
@@ -47,7 +48,7 @@ func main() {
 
 	// Text Components
 	title := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Bold(true).Render("gekka-cli")
-	version := lipgloss.NewStyle().Foreground(lipgloss.Color("#808080")).Render("v0.9.0")
+	version := lipgloss.NewStyle().Foreground(lipgloss.Color("#808080")).Render("v" + gekka.Version)
 
 	// Line Assembly
 	topLine := lipgloss.JoinHorizontal(lipgloss.Bottom, iconTop, "  ", title)

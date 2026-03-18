@@ -107,7 +107,7 @@ func decodeCumulativeDemand(b []byte) (int64, error) {
 func encodeRemoteStreamCompleted(seqNr int64) []byte { return encodeCumulativeDemand(seqNr) }
 
 // decodeRemoteStreamCompleted decodes a RemoteStreamCompleted message.
-func decodeRemoteStreamCompleted(b []byte) (int64, error) { return decodeCumulativeDemand(b) }
+// func decodeRemoteStreamCompleted(b []byte) (int64, error) { return decodeCumulativeDemand(b) }
 
 // encodeRemoteStreamFailure encodes a RemoteStreamFailure message.
 //

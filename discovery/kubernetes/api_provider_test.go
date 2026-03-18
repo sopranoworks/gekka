@@ -10,7 +10,7 @@ import (
 )
 
 func TestAPIProvider_FetchSeedNodes(t *testing.T) {
-	clientset := fake.NewSimpleClientset(
+	clientset := fake.NewClientset(
 		&corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "pod-1",

@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -184,7 +183,7 @@ type tcpInIterator[T any] struct {
 	stopCh   chan struct{}  // closed by stop() to terminate goroutines
 
 	demanded atomic.Int64 // monotonically-increasing cumulative demand
-	stopOnce sync.Once
+	// stopOnce sync.Once
 }
 
 func newTcpInIterator[T any](conn net.Conn, decode Decoder[T]) (*tcpInIterator[T], error) {
@@ -339,9 +338,11 @@ func (it *tcpInIterator[T]) next() (T, bool, error) {
 	return elem, true, nil
 }
 
+/*
 func (it *tcpInIterator[T]) stop() {
 	it.stopOnce.Do(func() { close(it.stopCh) })
 }
+*/
 
 // ─── TcpOut ───────────────────────────────────────────────────────────────
 

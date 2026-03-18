@@ -233,8 +233,7 @@ func TestTypedActor_TimerDelivery(t *testing.T) {
 
 // loopbackRef routes Tell back into the actor's Receive, simulating a mailbox.
 type loopbackRef struct {
-	a    *typedActor[string]
-	path string
+	a *typedActor[string]
 }
 
 func (r *loopbackRef) Tell(msg any, _ ...Ref) { r.a.Receive(msg) }

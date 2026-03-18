@@ -22,6 +22,8 @@ type Sink[In, Mat any] struct {
 
 // connect implements [sinkConnector], allowing Sink to be passed to [Source.To].
 // The Sink's materialized value is discarded.
+//
+//nolint:unused
 func (s Sink[In, Mat]) connect(upstream iterator[In]) error {
 	_, err := s.runWith(upstream)
 	return err

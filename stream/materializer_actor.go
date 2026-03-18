@@ -31,7 +31,7 @@ type asyncBoundary[T any] struct {
 	ch     chan T
 	errCh  chan error
 	stopCh chan struct{}
-	once   sync.Once
+	// once   sync.Once
 }
 
 func newAsyncBoundary[T any](upstream iterator[T], bufSize int) *asyncBoundary[T] {
@@ -84,9 +84,11 @@ func (a *asyncBoundary[T]) next() (T, bool, error) {
 
 // cancel signals the upstream goroutine to stop early, for example when the
 // downstream has signalled completion or an error.  Safe to call multiple times.
+/*
 func (a *asyncBoundary[T]) cancel() {
 	a.once.Do(func() { close(a.stopCh) })
 }
+*/
 
 // ─── GraphInterpreter ─────────────────────────────────────────────────────
 

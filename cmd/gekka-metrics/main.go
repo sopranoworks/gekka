@@ -171,7 +171,7 @@ func (m model) View() string {
 
 	// Header Text
 	title := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Bold(true).Render("gekka-metrics")
-	version := lipgloss.NewStyle().Foreground(lipgloss.Color("#808080")).Render("v0.9.0")
+	version := lipgloss.NewStyle().Foreground(lipgloss.Color("#808080")).Render("v" + gekka.Version)
 
 	// Header Assembly
 	topLine := lipgloss.JoinHorizontal(lipgloss.Bottom, iconTop, "  ", title)

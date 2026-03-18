@@ -1,4 +1,4 @@
-# gekka &nbsp;[![Version](https://img.shields.io/badge/version-0.8.0-blue)](https://github.com/sopranoworks/gekka) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Go CI](https://github.com/sopranoworks/gekka/actions/workflows/go.yml/badge.svg)](https://github.com/sopranoworks/gekka/actions/workflows/go.yml)
+# gekka &nbsp;[![Version](https://img.shields.io/badge/version-0.9.0-blue)](https://github.com/sopranoworks/gekka) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Go CI](https://github.com/sopranoworks/gekka/actions/workflows/go.yml/badge.svg)](https://github.com/sopranoworks/gekka/actions/workflows/go.yml)
 
 A Go implementation of the Pekko/Akka actor protocol, with wire-level interoperability with [Apache Pekko](https://pekko.apache.org/) and [Lightbend Akka](https://www.lightbend.com/akka).
 
@@ -10,7 +10,7 @@ Configuration is loaded via [`gekka-config`](https://github.com/sopranoworks/gek
 
 - **Hierarchical Actor System** — Parent-child relationships with supervisor-managed lifecycle.
 - **Supervision** — Fault isolation with `OneForOneStrategy`.
-- **Pekko/Akka Compatibility** — Wire-level interop with Scala/Java actors via Artery TCP (Pekko 1.0.x / Akka 2.6.21).
+- **Pekko/Akka Compatibility** — Wire-level interop with Scala/Java actors via Artery TCP (Pekko 1.1.x / Akka 2.6.21).
 - **Split Brain Resolver** — Partition resolution during network splits (Keep Majority, Keep Oldest, Static Quorum).
 - **Multi-DC Awareness** — Routing and management across multiple data centers.
 - **Cluster Sharding** — Location-transparent actor placement with passivation and durable recovery.
@@ -18,8 +18,11 @@ Configuration is loaded via [`gekka-config`](https://github.com/sopranoworks/gek
 - **Artery TLS** — Encrypted cluster transport using Go's `crypto/tls`, binary-compatible with Pekko's `tls-tcp`.
 - **Cluster Singletons** — Singleton failover and lifecycle management across mixed Go/JVM clusters.
 - **Reliable Delivery** — At-least-once delivery (Serializer ID 36) compatible with Pekko.
-- **Typed Actors (Go Generics)** — Compile-time message type safety.
+- **Typed Actors (Go Generics)** — Compile-time message type safety with **Timers** and **Stash** support.
 - **Actor Persistence** — State recovery via event journaling and snapshotting.
+- **Gekka Streams** — Reactive streams implementation with backpressure-aware async stages.
+- **Kubernetes-native Discovery** — Automatic cluster formation via K8s API or DNS SRV.
+- **Zero-copy Serialization** — High-performance transport framing with 8.5x faster throughput.
 - **Distributed Pub/Sub** — Decentralized messaging with GZIP-compressed gossip (Serializer ID 9).
 - **Distributed Data / CRDTs** — G-Counter and OR-Set replication (Serializer ID 11/12).
 - **Pool and Group Routers** — Round-robin and random routing, configurable via HOCON deployment config.
@@ -32,7 +35,7 @@ Configuration is loaded via [`gekka-config`](https://github.com/sopranoworks/gek
 
 ## Verified Interoperability
 
-`gekka` is tested against live JVM nodes for both **Apache Pekko 1.0.x** and **Lightbend Akka 2.6.21** using E2E integration tests, covering cluster membership, remote messaging (including Artery TLS), distributed state, and Cluster Singleton failover.
+`gekka` is tested against live JVM nodes for both **Apache Pekko 1.1.x** and **Lightbend Akka 2.6.21** using E2E integration tests, covering cluster membership, remote messaging (including Artery TLS), distributed state, and Cluster Singleton failover.
 
 ---
 
@@ -53,6 +56,7 @@ gekka-cli [--config FILE] [--profile NAME] [--json] <subcommand>
 | `members` | List all cluster members with status, roles, DC, and reachability |
 | `leave` | Initiate a graceful leave for a named member (`PUT /cluster/members/{address}`) |
 | `down` | Mark a member as Down immediately (`DELETE /cluster/members/{address}`) |
+| `discovery-check` | Diagnostic tool for testing Kubernetes API/DNS discovery settings |
 
 **Config file** (`~/.gekka/config.yaml` by default):
 
@@ -98,13 +102,13 @@ The `metrics-exporter` role is injected automatically so sharding allocators and
 |---|---|---|---|
 | `gekka.cluster.members` | ObservableGauge | `status`, `dc` | Member count per status/DC combination |
 
-When no OTLP endpoint is configured the process still joins and emits structured JSON log lines (`cluster_state`) every 30 s.
+When no OTLP endpoint is configured the process still joins and exports metrics locally.
 
 ---
 
 ## Rolling Update Support
 
-v0.8.0 includes two coordinated mechanisms for zero-downtime rolling updates in Kubernetes-hosted clusters.
+v0.9.0 continues to support zero-downtime rolling updates in Kubernetes-hosted clusters through coordinated mechanisms.
 
 ### /health/ready drain gate
 
@@ -249,7 +253,7 @@ func main() {
 }
 ```
 
-More examples — local actors, pub/sub, CRDTs, persistence, singletons, coordinated shutdown, and reliable delivery — are in [docs/EXAMPLES.md](docs/EXAMPLES.md).
+More examples — local actors, reactive streams, pub/sub, CRDTs, persistence, singletons, coordinated shutdown, and reliable delivery — are in [docs/EXAMPLES.md](docs/EXAMPLES.md).
 
 ---
 

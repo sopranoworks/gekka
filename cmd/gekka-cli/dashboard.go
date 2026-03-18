@@ -117,16 +117,20 @@ func (m dashboardModel) View() string {
 		return "Shutting down dashboard...\n"
 	}
 
-	// High-fidelity Multi-line Icon (Gekka Bijin motif)
+	// Modular Staggered Block Icon
 	mg := lipgloss.Color("#FF00FF") // Magenta
 	wt := lipgloss.Color("#FFFFFF") // White
 	yl := lipgloss.Color("#FFFF00") // Yellow
 
+	mStyle := lipgloss.NewStyle().Foreground(mg)
+	wStyle := lipgloss.NewStyle().Foreground(wt)
+	yStyle := lipgloss.NewStyle().Foreground(yl)
+
 	icon := lipgloss.JoinVertical(lipgloss.Left,
-		lipgloss.NewStyle().Foreground(mg).Render("  ▄▄  "),
-		lipgloss.NewStyle().Foreground(wt).Render("▄██")+lipgloss.NewStyle().Foreground(yl).Render("▄▄")+lipgloss.NewStyle().Foreground(wt).Render("██▄"),
-		lipgloss.NewStyle().Foreground(wt).Render("▀██")+lipgloss.NewStyle().Foreground(yl).Render("▀▀")+lipgloss.NewStyle().Foreground(wt).Render("██▀"),
-		lipgloss.NewStyle().Foreground(mg).Render("  ▀▀  "),
+		mStyle.Render("█"),
+		mStyle.Render("█")+wStyle.Render("█"),
+		" "+wStyle.Render("█")+yStyle.Render("█"),
+		"  "+wStyle.Render("█"),
 	)
 
 	title := lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Bold(true).Render("gekka-cli")

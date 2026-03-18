@@ -31,16 +31,20 @@ func (r *rootState) resolveURL(flagURL string) string {
 func main() {
 	root := &rootState{}
 
-	// High-fidelity Multi-line Icon (Gekka Bijin motif)
+	// Modular Staggered Block Icon
 	m := lipgloss.Color("#FF00FF") // Magenta
 	w := lipgloss.Color("#FFFFFF") // White
 	y := lipgloss.Color("#FFFF00") // Yellow
 
+	mStyle := lipgloss.NewStyle().Foreground(m)
+	wStyle := lipgloss.NewStyle().Foreground(w)
+	yStyle := lipgloss.NewStyle().Foreground(y)
+
 	icon := lipgloss.JoinVertical(lipgloss.Left,
-		lipgloss.NewStyle().Foreground(m).Render("  ▄▄  "),
-		lipgloss.NewStyle().Foreground(w).Render("▄██")+lipgloss.NewStyle().Foreground(y).Render("▄▄")+lipgloss.NewStyle().Foreground(w).Render("██▄"),
-		lipgloss.NewStyle().Foreground(w).Render("▀██")+lipgloss.NewStyle().Foreground(y).Render("▀▀")+lipgloss.NewStyle().Foreground(w).Render("██▀"),
-		lipgloss.NewStyle().Foreground(m).Render("  ▀▀  "),
+		mStyle.Render("█"),
+		mStyle.Render("█")+wStyle.Render("█"),
+		" "+wStyle.Render("█")+yStyle.Render("█"),
+		"  "+wStyle.Render("█"),
 	)
 
 	title := lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Bold(true).Render("gekka-cli")

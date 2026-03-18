@@ -375,6 +375,7 @@ type Cluster struct {
 	cm         *gcluster.ClusterManager
 	router     *actor.Router
 	repl       *crdt.Replicator
+	mg         *gcluster.MetricsGossip
 	server     *core.TcpServer
 	ctx        context.Context
 	cancel     context.CancelFunc
@@ -533,12 +534,14 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 
 	nodeID := fmt.Sprintf("%s:%d", host, actualPort)
 	repl := crdt.NewReplicator(nodeID, router)
+	mg := gcluster.NewMetricsGossip(nodeID, repl, 5*time.Second)
 
 	cluster := &Cluster{
 		nm:             nm,
 		cm:             cm,
 		router:         router,
 		repl:           repl,
+		mg:             mg,
 		server:         server,
 		ctx:            ctx,
 		cancel:         cancel,
@@ -558,6 +561,8 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	}()
 	cluster.System = cluster
 	cluster.cm.Sys = asActorContext(cluster, "")
+	actor.SetMailboxLengthProvider(cluster)
+	actor.SetClusterMetricsProvider(cluster)
 
 	// Set default Artery message dispatcher to handle registered actors.
 	nm.UserMessageCallback = cluster.handleArteryMessage
@@ -622,6 +627,7 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	// members join, but it ensures leader actions (like transitioning
 	// Joining -> Up) happen as soon as possible.
 	go cluster.cm.StartGossipLoop(cluster.ctx)
+	cluster.mg.Start(cluster.ctx)
 
 	// ── Coordinated Shutdown ────────────────────────────────────────────────
 	// Wire the built-in graceful exit sequence so that Shutdown() drives the
@@ -1657,4 +1663,20 @@ func (c *Cluster) SubscribeToReceptionist(keyID string, subscriber actor.TypedAc
 		subscriber: subscriber,
 		sendUpdate: callback,
 	})
+}
+
+// GetMailboxLengths implements actor.MailboxLengthProvider.
+func (c *Cluster) GetMailboxLengths() map[string]int {
+	c.actorsMu.RLock()
+	defer c.actorsMu.RUnlock()
+	res := make(map[string]int, len(c.actors))
+	for path, a := range c.actors {
+		res[path] = len(a.Mailbox())
+	}
+	return res
+}
+
+// GetClusterPressure implements actor.ClusterMetricsProvider.
+func (c *Cluster) GetClusterPressure() map[string]float64 {
+	return c.mg.ClusterPressure()
 }

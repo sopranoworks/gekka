@@ -10,8 +10,9 @@ package sharding
 
 import (
 	"encoding/json"
-	"github.com/sopranoworks/gekka/actor"
 	"reflect"
+
+	"github.com/sopranoworks/gekka/actor"
 )
 
 type EntityId = string
@@ -55,6 +56,46 @@ func (r ClusterEntityRef[T]) Tell(msg T) {
 		Message:         data,
 		MessageManifest: reflect.TypeOf(msg).String(),
 	})
+}
+
+// EntityProps defines how sharded entities are created.
+type EntityProps struct {
+	// New is a factory function that creates a new entity actor instance for a given entity ID.
+	New func(entityId EntityId) actor.Actor
+}
+
+// StartTyped starts cluster sharding for a given typed entity.
+func StartTyped[M any](
+	sys actor.ActorContext,
+	typeName string,
+	entityProps EntityProps,
+	settings ShardSettings,
+	extract ExtractEntityId,
+	coordinator actor.Ref,
+) (*ShardRegion, error) {
+	// messageUnmarshaler is needed but since we are typed, we can assume JSON for now
+	// or use a generic unmarshaler.
+	unmarshaler := func(manifest string, data json.RawMessage) (any, error) {
+		var msg M
+		if err := json.Unmarshal(data, &msg); err != nil {
+			return nil, err
+		}
+		return msg, nil
+	}
+
+	region := NewShardRegion(typeName, func(ctx actor.ActorContext, id EntityId) (actor.Ref, error) {
+		p := actor.Props{
+			New: func() actor.Actor { return entityProps.New(id) },
+		}
+		return ctx.ActorOf(p, id)
+	}, unmarshaler, extract, coordinator, settings)
+
+	return region, nil
+}
+
+// EntityRefFor returns a type-safe EntityRef for a specific entity.
+func EntityRefFor[M any](typeName string, entityID string, region actor.Ref) *EntityRef[M] {
+	return NewEntityRef[M](typeName, entityID, region)
 }
 
 // Internal messages for sharding coordinator and regions.

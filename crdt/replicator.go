@@ -21,7 +21,7 @@ import (
 
 // ReplicatorMsg is the JSON envelope sent over Artery for gossip.
 type ReplicatorMsg struct {
-	Type    string          `json:"type"` // "gcounter-gossip", "orset-gossip", "get-reply"
+	Type    string          `json:"type"` // "gcounter-gossip", "orset-gossip", "lwwmap-gossip", "get-reply"
 	Key     string          `json:"key"`
 	Payload json.RawMessage `json:"payload"`
 }
@@ -34,6 +34,11 @@ type GCounterPayload struct {
 // ORSetPayload carries an ORSet snapshot.
 type ORSetPayload struct {
 	ORSetSnapshot
+}
+
+// LWWMapPayload carries an LWWMap snapshot.
+type LWWMapPayload struct {
+	State map[string]LWWEntry `json:"state"`
 }
 
 // Consistency levels for Write operations.
@@ -50,6 +55,7 @@ type Replicator struct {
 	nodeID   string
 	counters map[string]*GCounter
 	sets     map[string]*ORSet
+	maps     map[string]*LWWMap
 
 	peers  []peerInfo // remote actor paths to gossip to
 	router *actor.Router
@@ -72,6 +78,7 @@ func NewReplicator(nodeID string, router *actor.Router) *Replicator {
 		nodeID:         nodeID,
 		counters:       make(map[string]*GCounter),
 		sets:           make(map[string]*ORSet),
+		maps:           make(map[string]*LWWMap),
 		router:         router,
 		GossipInterval: 2 * time.Second,
 		stopCh:         make(chan struct{}),
@@ -109,6 +116,18 @@ func (r *Replicator) ORSet(key string) *ORSet {
 	return s
 }
 
+// LWWMap returns (or creates) the named LWWMap.
+func (r *Replicator) LWWMap(key string) *LWWMap {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if m, ok := r.maps[key]; ok {
+		return m
+	}
+	m := NewLWWMap()
+	r.maps[key] = m
+	return m
+}
+
 // IncrementCounter increments the named counter for this node.
 func (r *Replicator) IncrementCounter(key string, delta uint64, consistency WriteConsistency) {
 	c := r.GCounter(key)
@@ -133,6 +152,15 @@ func (r *Replicator) RemoveFromSet(key, element string, consistency WriteConsist
 	s.Remove(element)
 	if consistency == WriteAll {
 		r.gossipSet(context.Background(), key, s)
+	}
+}
+
+// PutInMap adds/updates a value in the named LWWMap.
+func (r *Replicator) PutInMap(key, itemKey string, value any, consistency WriteConsistency) {
+	m := r.LWWMap(key)
+	m.Put(itemKey, value)
+	if consistency == WriteAll {
+		r.gossipMap(context.Background(), key, m)
 	}
 }
 
@@ -188,6 +216,15 @@ func (r *Replicator) HandleIncoming(data []byte) error {
 		s.MergeSnapshot(snap)
 		log.Printf("Replicator: merged ORSet[%s], elements=%v", msg.Key, s.Elements())
 
+	case "lwwmap-gossip":
+		var p LWWMapPayload
+		if err := json.Unmarshal(msg.Payload, &p); err != nil {
+			return err
+		}
+		m := r.LWWMap(msg.Key)
+		m.Merge(p.State)
+		log.Printf("Replicator: merged LWWMap[%s], keys=%d", msg.Key, len(m.Entries()))
+
 	default:
 		if r.OnUnknownKey != nil {
 			r.OnUnknownKey(msg.Key, msg)
@@ -206,6 +243,10 @@ func (r *Replicator) gossipAll(ctx context.Context) {
 	for k, v := range r.sets {
 		sets[k] = v
 	}
+	maps := make(map[string]*LWWMap, len(r.maps))
+	for k, v := range r.maps {
+		maps[k] = v
+	}
 	r.mu.RUnlock()
 
 	for key, c := range counters {
@@ -213,6 +254,9 @@ func (r *Replicator) gossipAll(ctx context.Context) {
 	}
 	for key, s := range sets {
 		r.gossipSet(ctx, key, s)
+	}
+	for key, m := range maps {
+		r.gossipMap(ctx, key, m)
 	}
 }
 
@@ -232,6 +276,15 @@ func (r *Replicator) gossipSet(ctx context.Context, key string, s *ORSet) {
 		return
 	}
 	msg := ReplicatorMsg{Type: "orset-gossip", Key: key, Payload: payload}
+	r.sendToPeers(ctx, msg)
+}
+
+func (r *Replicator) gossipMap(ctx context.Context, key string, m *LWWMap) {
+	payload, err := json.Marshal(LWWMapPayload{State: m.Snapshot()})
+	if err != nil {
+		return
+	}
+	msg := ReplicatorMsg{Type: "lwwmap-gossip", Key: key, Payload: payload}
 	r.sendToPeers(ctx, msg)
 }
 

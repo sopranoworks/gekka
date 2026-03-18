@@ -13,6 +13,7 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/sopranoworks/gekka/persistence"
@@ -89,6 +90,7 @@ func (j *SQLJournal) AsyncWriteMessages(ctx context.Context, messages []persiste
 			msg.SenderPath,
 			msg.Deleted,
 			now,
+			strings.Join(msg.Tags, ","),
 		); err != nil {
 			return fmt.Errorf("sqljournal: insert %s/%d: %w",
 				msg.PersistenceID, msg.SequenceNr, err)

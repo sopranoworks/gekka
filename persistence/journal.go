@@ -19,6 +19,7 @@ type PersistentRepr struct {
 	Payload       any
 	Deleted       bool
 	SenderPath    string
+	Tags          []string
 }
 
 // Journal is the interface for storing and replaying events.

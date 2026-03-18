@@ -6,24 +6,6 @@
  * SPDX-License-Identifier: MIT
  */
 
-// Package sqlstore provides a driver-agnostic SQL persistence backend for
-// Gekka's Journal and SnapshotStore interfaces.
-//
-// It uses only the standard library's database/sql package; no specific
-// database driver is imported here.  Choose a dialect that matches your
-// database, open a *sql.DB using any compatible driver, and pass both to
-// NewSQLJournal / NewSQLSnapshotStore:
-//
-//	import (
-//	    "database/sql"
-//	    _ "github.com/jackc/pgx/v5/stdlib" // register driver — in YOUR code
-//	    "github.com/sopranoworks/gekka/persistence/sql"
-//	)
-//
-//	db, _ := sql.Open("pgx", dsn)
-//	codec := sqlstore.NewJSONCodec()
-//	codec.Register(MyEvent{})
-//	journal := sqlstore.NewSQLJournal(db, sqlstore.PostgresDialect{}, codec, sqlstore.DefaultConfig())
 package sqlstore
 
 import "fmt"
@@ -47,8 +29,8 @@ type Dialect interface {
 
 	// JournalInsertSQL returns the parameterised INSERT (or INSERT/UPSERT)
 	// statement for a single journal row.
-	// Bind order: persistence_id, sequence_nr, payload, manifest,
-	//             sender_path, deleted, created_at.
+	// Bind order: persistence_id, sequence_nr, event_payload, event_manifest,
+	//             sender_path, deleted, created_at, tags.
 	JournalInsertSQL(table string) string
 
 	// JournalHighestSeqNrSQL returns the SELECT statement that returns
@@ -64,6 +46,10 @@ type Dialect interface {
 	// for a persistence ID up to and including a sequence number.
 	// Bind order: persistence_id, to_sequence_nr.
 	JournalDeleteSQL(table string) string
+
+	// JournalEventsByTagSQL returns the SELECT statement for events matching a tag.
+	// Bind order: tag, offset_seq_nr, limit.
+	JournalEventsByTagSQL(table string) string
 
 	// SnapshotUpsertSQL returns the INSERT/UPSERT statement for a snapshot.
 	// Bind order: persistence_id, sequence_nr, created_at,
@@ -89,14 +75,13 @@ type Dialect interface {
 
 // ── PostgresDialect ───────────────────────────────────────────────────────────
 
-// PostgresDialect implements Dialect for PostgreSQL.
-// It uses numbered placeholders ($1, $2, …) and PostgreSQL DDL syntax.
 type PostgresDialect struct{}
 
 func (PostgresDialect) Placeholder(n int) string { return fmt.Sprintf("$%d", n) }
 
 func (PostgresDialect) CreateJournalTableSQL(table string) string {
 	return `CREATE TABLE IF NOT EXISTS ` + table + ` (
+    ordering        BIGSERIAL    NOT NULL,
     persistence_id  VARCHAR(255) NOT NULL,
     sequence_nr     BIGINT       NOT NULL,
     event_payload   BYTEA        NOT NULL,
@@ -104,10 +89,11 @@ func (PostgresDialect) CreateJournalTableSQL(table string) string {
     sender_path     VARCHAR(512) NOT NULL DEFAULT '',
     deleted         BOOLEAN      NOT NULL DEFAULT false,
     created_at      BIGINT       NOT NULL,
+    tags            VARCHAR(512) NOT NULL DEFAULT '',
     PRIMARY KEY (persistence_id, sequence_nr)
 );
-CREATE INDEX IF NOT EXISTS ` + table + `_pid_seqnr
-    ON ` + table + ` (persistence_id, sequence_nr);`
+CREATE INDEX IF NOT EXISTS ` + table + `_ordering ON ` + table + ` (ordering);
+CREATE INDEX IF NOT EXISTS ` + table + `_tags ON ` + table + ` (tags);`
 }
 
 func (PostgresDialect) CreateSnapshotTableSQL(table string) string {
@@ -123,8 +109,8 @@ func (PostgresDialect) CreateSnapshotTableSQL(table string) string {
 
 func (PostgresDialect) JournalInsertSQL(table string) string {
 	return `INSERT INTO ` + table + `
-    (persistence_id, sequence_nr, event_payload, event_manifest, sender_path, deleted, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+    (persistence_id, sequence_nr, event_payload, event_manifest, sender_path, deleted, created_at, tags)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (persistence_id, sequence_nr) DO NOTHING`
 }
 
@@ -135,13 +121,23 @@ WHERE persistence_id = $1 AND sequence_nr >= $2`
 }
 
 func (PostgresDialect) JournalReplaySQL(table string) string {
-	return `SELECT persistence_id, sequence_nr, event_payload, event_manifest, sender_path
+	return `SELECT persistence_id, sequence_nr, event_payload, event_manifest, sender_path, created_at, ordering
 FROM ` + table + `
 WHERE persistence_id = $1
   AND sequence_nr BETWEEN $2 AND $3
   AND deleted = false
 ORDER BY sequence_nr ASC
 LIMIT $4`
+}
+
+func (PostgresDialect) JournalEventsByTagSQL(table string) string {
+	return `SELECT persistence_id, sequence_nr, event_payload, event_manifest, sender_path, created_at, ordering
+FROM ` + table + `
+WHERE tags LIKE '%' || $1 || '%'
+  AND ordering > $2
+  AND deleted = false
+ORDER BY ordering ASC
+LIMIT $3`
 }
 
 func (PostgresDialect) JournalDeleteSQL(table string) string {
@@ -183,14 +179,13 @@ WHERE persistence_id = $1
 
 // ── MySQLDialect ──────────────────────────────────────────────────────────────
 
-// MySQLDialect implements Dialect for MySQL 8+ (and compatible databases
-// such as MariaDB 10.5+).  It uses positional "?" placeholders and MySQL DDL.
 type MySQLDialect struct{}
 
 func (MySQLDialect) Placeholder(_ int) string { return "?" }
 
 func (MySQLDialect) CreateJournalTableSQL(table string) string {
 	return `CREATE TABLE IF NOT EXISTS ` + table + ` (
+    ordering        BIGINT       NOT NULL AUTO_INCREMENT,
     persistence_id  VARCHAR(255) NOT NULL,
     sequence_nr     BIGINT       NOT NULL,
     event_payload   BLOB         NOT NULL,
@@ -198,8 +193,10 @@ func (MySQLDialect) CreateJournalTableSQL(table string) string {
     sender_path     VARCHAR(512) NOT NULL DEFAULT '',
     deleted         TINYINT(1)   NOT NULL DEFAULT 0,
     created_at      BIGINT       NOT NULL,
+    tags            VARCHAR(512) NOT NULL DEFAULT '',
     PRIMARY KEY (persistence_id, sequence_nr),
-    INDEX ` + table + `_pid_seqnr (persistence_id, sequence_nr)
+    UNIQUE INDEX ` + table + `_ordering (ordering),
+    INDEX ` + table + `_tags (tags)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
 }
 
@@ -216,8 +213,8 @@ func (MySQLDialect) CreateSnapshotTableSQL(table string) string {
 
 func (MySQLDialect) JournalInsertSQL(table string) string {
 	return `INSERT IGNORE INTO ` + table + `
-    (persistence_id, sequence_nr, event_payload, event_manifest, sender_path, deleted, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?)`
+    (persistence_id, sequence_nr, event_payload, event_manifest, sender_path, deleted, created_at, tags)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 }
 
 func (MySQLDialect) JournalHighestSeqNrSQL(table string) string {
@@ -227,12 +224,22 @@ WHERE persistence_id = ? AND sequence_nr >= ?`
 }
 
 func (MySQLDialect) JournalReplaySQL(table string) string {
-	return `SELECT persistence_id, sequence_nr, event_payload, event_manifest, sender_path
+	return `SELECT persistence_id, sequence_nr, event_payload, event_manifest, sender_path, created_at, ordering
 FROM ` + table + `
 WHERE persistence_id = ?
   AND sequence_nr BETWEEN ? AND ?
   AND deleted = 0
 ORDER BY sequence_nr ASC
+LIMIT ?`
+}
+
+func (MySQLDialect) JournalEventsByTagSQL(table string) string {
+	return `SELECT persistence_id, sequence_nr, event_payload, event_manifest, sender_path, created_at, ordering
+FROM ` + table + `
+WHERE tags LIKE CONCAT('%', ?, '%')
+  AND ordering > ?
+  AND deleted = 0
+ORDER BY ordering ASC
 LIMIT ?`
 }
 

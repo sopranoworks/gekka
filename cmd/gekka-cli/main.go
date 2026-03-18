@@ -31,8 +31,10 @@ func (r *rootState) resolveURL(flagURL string) string {
 func main() {
 	root := &rootState{}
 
-	// Minimalist Logo: ❀ gekka-cli v0.9.0
+	// High-fidelity Logo: >_❀ gekka-cli v0.9.0
 	logo := lipgloss.JoinHorizontal(lipgloss.Center,
+		lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Render(">"),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("13")).Render("_"),
 		lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Render("❀"),
 		lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Bold(true).Render(" gekka-cli"),
 		lipgloss.NewStyle().Foreground(lipgloss.Color("242")).Render(" v0.9.0"),

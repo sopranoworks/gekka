@@ -15,6 +15,7 @@ import (
 
 	"github.com/sopranoworks/gekka"
 	"github.com/sopranoworks/gekka/discovery"
+	"github.com/sopranoworks/gekka/internal/cli"
 	_ "github.com/sopranoworks/gekka/discovery/kubernetes"
 	"github.com/spf13/cobra"
 )
@@ -69,10 +70,15 @@ func runDiscoveryCheck(path string) error {
 		return nil
 	}
 
-	fmt.Printf("SUCCESS: Discovered %d seed node(s):\n\n", len(seeds))
+	fmt.Println(cli.SuccessStyle.Bold(true).Render(fmt.Sprintf("SUCCESS: Discovered %d seed node(s):", len(seeds))))
+	fmt.Println()
+
+	header := cli.HeaderStyle.Render
+	border := cli.BorderStyle.Render
+
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "INDEX\tADDRESS")
-	fmt.Fprintln(w, "-----\t-------")
+	fmt.Fprintf(w, "%s\t%s\n", header("INDEX"), header("ADDRESS"))
+	fmt.Fprintf(w, "%s\t%s\n", border("-----"), border("-------"))
 	for i, s := range seeds {
 		fmt.Fprintf(w, "%d\t%s\n", i+1, s)
 	}

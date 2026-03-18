@@ -14,6 +14,8 @@ import (
 	"os"
 	"text/tabwriter"
 
+	"github.com/charmbracelet/lipgloss"
+	"github.com/sopranoworks/gekka/internal/cli"
 	"github.com/sopranoworks/gekka/internal/management/client"
 	"github.com/spf13/cobra"
 )
@@ -67,9 +69,12 @@ func runMembers(baseURL string, jsonOut bool) error {
 		return nil
 	}
 
+	header := cli.HeaderStyle.Render
+	border := cli.BorderStyle.Render
+
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "ADDRESS\tSTATUS\tDC\tROLES\tREACHABLE")
-	fmt.Fprintln(w, "-------\t------\t--\t-----\t---------")
+	fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", header("ADDRESS"), header("STATUS"), header("DC"), header("ROLES"), header("REACHABLE"))
+	fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", border("-------"), border("------"), border("--"), border("-----"), border("---------"))
 	for _, m := range members {
 		roles := "-"
 		if len(m.Roles) > 0 {
@@ -81,12 +86,21 @@ func runMembers(baseURL string, jsonOut bool) error {
 				roles += r
 			}
 		}
+
+		status := m.Status
+		if status == "Up" || status == "Joining" {
+			status = cli.SuccessStyle.Render(status)
+		}
+
 		reachable := "yes"
 		if !m.Reachable {
-			reachable = "NO"
+			reachable = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render("NO")
+		} else {
+			reachable = cli.SuccessStyle.Render("yes")
 		}
+
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
-			m.Address, m.Status, m.DataCenter, roles, reachable)
+			m.Address, status, m.DataCenter, roles, reachable)
 	}
 	return w.Flush()
 }

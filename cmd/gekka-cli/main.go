@@ -31,7 +31,7 @@ func (r *rootState) resolveURL(flagURL string) string {
 func main() {
 	root := &rootState{}
 
-	// Nebula Parallel-Slash Icon
+	// Nebula Parallel-Slash Icon Colors
 	c1 := lipgloss.Color("#6A4CFF")
 	c2 := lipgloss.Color("#8265FF")
 	c3 := lipgloss.Color("#9B7FFF")
@@ -41,16 +41,19 @@ func main() {
 	c7 := lipgloss.Color("#F2AEFF")
 	c8 := lipgloss.Color("#FFC9FF")
 
-	icon := lipgloss.JoinVertical(lipgloss.Left,
-		"  "+lipgloss.NewStyle().Foreground(c3).Render("▄")+lipgloss.NewStyle().Foreground(c4).Render("▀")+"  "+lipgloss.NewStyle().Foreground(c7).Render("▄")+lipgloss.NewStyle().Foreground(c8).Render("▀"),
-		lipgloss.NewStyle().Foreground(c1).Render("▄")+lipgloss.NewStyle().Foreground(c2).Render("▀")+"  "+lipgloss.NewStyle().Foreground(c5).Render("▄")+lipgloss.NewStyle().Foreground(c6).Render("▀"),
-	)
+	// Icon Segments
+	iconTop := "  " + lipgloss.NewStyle().Foreground(c3).Render("▄") + lipgloss.NewStyle().Foreground(c4).Render("▀") + "  " + lipgloss.NewStyle().Foreground(c7).Render("▄") + lipgloss.NewStyle().Foreground(c8).Render("▀")
+	iconBottom := lipgloss.NewStyle().Foreground(c1).Render("▄") + lipgloss.NewStyle().Foreground(c2).Render("▀") + "  " + lipgloss.NewStyle().Foreground(c5).Render("▄") + lipgloss.NewStyle().Foreground(c6).Render("▀")
 
+	// Text Components
 	title := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Bold(true).Render("gekka-cli")
-	version := lipgloss.NewStyle().Foreground(lipgloss.Color("#808080")).Render(" v0.9.0")
-	headerText := lipgloss.JoinHorizontal(lipgloss.Bottom, title, version)
+	version := lipgloss.NewStyle().Foreground(lipgloss.Color("#808080")).Render("v0.9.0")
 
-	logo := lipgloss.JoinHorizontal(lipgloss.Center, icon, "   ", headerText)
+	// Line Assembly
+	topLine := lipgloss.JoinHorizontal(lipgloss.Bottom, iconTop, "  ", title)
+	bottomLine := lipgloss.JoinHorizontal(lipgloss.Bottom, iconBottom, "      ", version)
+
+	logo := lipgloss.JoinVertical(lipgloss.Left, topLine, bottomLine)
 
 	rootCmd := &cobra.Command{
 		Use:   "gekka-cli",

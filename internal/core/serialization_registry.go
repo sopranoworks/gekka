@@ -11,6 +11,7 @@ package core
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"reflect"
 	"sync"
 
@@ -156,6 +157,32 @@ func (s *RawSerializer) FromBinary(data []byte, manifest string) (interface{}, e
 	return data, nil
 }
 
+func (s *RawSerializer) WriteTo(w io.Writer, msg interface{}) (int64, error) {
+	if data, ok := msg.([]byte); ok {
+		n, err := w.Write(data)
+		return int64(n), err
+	}
+	return 0, fmt.Errorf("RawSerializer: msg is not []byte")
+}
+
+func (s *RawSerializer) MarshalTo(buf []byte, msg interface{}) (int, error) {
+	if data, ok := msg.([]byte); ok {
+		if len(buf) < len(data) {
+			return 0, io.ErrShortBuffer
+		}
+		n := copy(buf, data)
+		return n, nil
+	}
+	return 0, fmt.Errorf("RawSerializer: msg is not []byte")
+}
+
+func (s *RawSerializer) Size(msg interface{}) int {
+	if data, ok := msg.([]byte); ok {
+		return len(data)
+	}
+	return 0
+}
+
 // ProtobufSerializer handles Protobuf serialization.
 type ProtobufSerializer struct{}
 
@@ -172,4 +199,35 @@ func (s *ProtobufSerializer) ToBinary(msg interface{}) ([]byte, error) {
 
 func (s *ProtobufSerializer) FromBinary(data []byte, manifest string) (interface{}, error) {
 	return nil, fmt.Errorf("ProtobufSerializer: FromBinary not implemented (requires type registry for Protobuf types)")
+}
+
+func (s *ProtobufSerializer) WriteTo(w io.Writer, msg interface{}) (int64, error) {
+	if pmsg, ok := msg.(proto.Message); ok {
+		data, err := proto.Marshal(pmsg)
+		if err != nil {
+			return 0, err
+		}
+		n, err := w.Write(data)
+		return int64(n), err
+	}
+	return 0, fmt.Errorf("ProtobufSerializer: msg is not proto.Message")
+}
+
+func (s *ProtobufSerializer) MarshalTo(buf []byte, msg interface{}) (int, error) {
+	if pmsg, ok := msg.(proto.Message); ok {
+		options := proto.MarshalOptions{}
+		data, err := options.MarshalAppend(buf[:0], pmsg)
+		if err != nil {
+			return 0, err
+		}
+		return len(data), nil
+	}
+	return 0, fmt.Errorf("ProtobufSerializer: msg is not proto.Message")
+}
+
+func (s *ProtobufSerializer) Size(msg interface{}) int {
+	if pmsg, ok := msg.(proto.Message); ok {
+		return proto.Size(pmsg)
+	}
+	return 0
 }

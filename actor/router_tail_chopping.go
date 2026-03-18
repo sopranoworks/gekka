@@ -9,13 +9,53 @@
 package actor
 
 import (
-	"fmt"
 	"time"
 )
+
+// TailChoppingRoutingLogic implements the tail-chopping pattern.
+type TailChoppingRoutingLogic struct {
+	Within time.Duration
+}
+
+func (l *TailChoppingRoutingLogic) Select(_ any, routees []Ref) Ref {
+	if len(routees) == 0 {
+		return nil
+	}
+	return routees[0] // fallback
+}
+
+func (l *TailChoppingRoutingLogic) Route(router *RouterActor, msg any) bool {
+	if len(router.Routees) == 0 {
+		return false
+	}
+
+	sys := router.System()
+	aggregatorProps := Props{
+		New: func() Actor {
+			return &tailChoppingAggregator{
+				BaseActor:      NewBaseActor(),
+				originalSender: router.Sender(),
+				interval:       l.Within,
+				routees:        router.RouteesSnapshot(),
+				msg:            msg,
+			}
+		},
+	}
+	aggRef, err := sys.ActorOf(aggregatorProps, "")
+	if err != nil {
+		router.Log().Error("TailChopping: failed to spawn aggregator", "error", err)
+		return false
+	}
+
+	aggRef.Tell(nextChoppingCycle{}, router.Self())
+	return true
+}
 
 // TailChoppingFirstCompleted is a router implementation that sends a message
 // to one routee at a time with a 'within' interval, providing the first 
 // response received back to the original sender.
+//
+// Deprecated: use NewGroupRouter or NewPoolRouter with TailChoppingRoutingLogic.
 type TailChoppingFirstCompleted struct {
 	RouterActor
 	within time.Duration
@@ -26,7 +66,7 @@ func NewTailChoppingFirstCompleted(routees []Ref, within time.Duration) *TailCho
 	return &TailChoppingFirstCompleted{
 		RouterActor: RouterActor{
 			BaseActor: NewBaseActor(),
-			Logic:     &RandomRoutingLogic{}, // Use random order for chopping
+			Logic:     &TailChoppingRoutingLogic{Within: within},
 			Routees:   routees,
 		},
 		within: within,
@@ -45,31 +85,7 @@ func (r *TailChoppingFirstCompleted) Behavior() Behavior[any] {
 
 // Receive handles the tail-chopping logic.
 func (r *TailChoppingFirstCompleted) Receive(msg any) {
-	if len(r.Routees) == 0 {
-		return
-	}
-
-	// Create a temporary aggregator actor.
-	sys := r.System()
-	aggregatorProps := Props{
-		New: func() Actor {
-			return &tailChoppingAggregator{
-				BaseActor:      NewBaseActor(),
-				originalSender: r.currentSender,
-				interval:       r.within,
-				routees:        r.RouteesSnapshot(),
-				msg:            msg,
-			}
-		},
-	}
-	aggRef, err := sys.ActorOf(aggregatorProps, "")
-	if err != nil {
-		r.Log().Error("TailChopping: failed to spawn aggregator", "error", err)
-		return
-	}
-
-	// Kick off the first send.
-	aggRef.Tell(nextChoppingCycle{}, r.Self())
+	r.RouterActor.Receive(msg)
 }
 
 type nextChoppingCycle struct{}
@@ -108,7 +124,9 @@ func (a *tailChoppingAggregator) Receive(msg any) {
 	case StatusFailure:
 		// Termination if all failed or timeout (simplified)
 		a.responded = true
-		a.originalSender.Tell(m, a.Self())
+		if a.originalSender != nil {
+			a.originalSender.Tell(m, a.Self())
+		}
 		a.System().Stop(a.Self())
 
 	default:
@@ -118,44 +136,5 @@ func (a *tailChoppingAggregator) Receive(msg any) {
 			a.originalSender.Tell(msg, a.Self())
 		}
 		a.System().Stop(a.Self())
-	}
-}
-
-type tailChoppingPoolActor struct {
-	BaseActor
-	nrOfInstances int
-	props         Props
-	within        time.Duration
-	routees       []Ref
-}
-
-func (a *tailChoppingPoolActor) PreStart() {
-	sys := a.System()
-	a.routees = make([]Ref, 0, a.nrOfInstances)
-	for i := 0; i < a.nrOfInstances; i++ {
-		name := fmt.Sprintf("$pool-%d", i)
-		ref, err := sys.ActorOf(a.props, name)
-		if err == nil {
-			a.routees = append(a.routees, ref)
-			sys.Watch(a.Self(), ref)
-		}
-	}
-}
-
-func (a *tailChoppingPoolActor) Receive(msg any) {
-	switch m := msg.(type) {
-	case TerminatedMessage:
-		for i, r := range a.routees {
-			if r.Path() == m.TerminatedActor().Path() {
-				a.routees = append(a.routees[:i], a.routees[i+1:]...)
-				break
-			}
-		}
-	default:
-		router := NewTailChoppingFirstCompleted(a.routees, a.within)
-		InjectSystem(router, a.System())
-		router.SetSelf(a.Self())
-		router.currentSender = a.Sender()
-		router.Receive(msg)
 	}
 }

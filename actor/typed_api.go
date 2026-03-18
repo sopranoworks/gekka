@@ -200,11 +200,7 @@ func BroadcastPool(nrOfInstances int, props Props) Props {
 func ScatterGatherPool(nrOfInstances int, props Props, within time.Duration) Props {
 	return Props{
 		New: func() Actor {
-			return &scatterGatherPoolActor{
-				nrOfInstances: nrOfInstances,
-				props:         props,
-				within:        within,
-			}
+			return NewPoolRouter(&ScatterGatherRoutingLogic{Within: within}, nrOfInstances, props)
 		},
 	}
 }
@@ -213,7 +209,7 @@ func ScatterGatherPool(nrOfInstances int, props Props, within time.Duration) Pro
 func TailChoppingGroup(routees []Ref, within time.Duration) Props {
 	return Props{
 		New: func() Actor {
-			return NewTailChoppingFirstCompleted(routees, within)
+			return NewGroupRouter(&TailChoppingRoutingLogic{Within: within}, routees)
 		},
 	}
 }
@@ -222,11 +218,7 @@ func TailChoppingGroup(routees []Ref, within time.Duration) Props {
 func TailChoppingPool(nrOfInstances int, props Props, within time.Duration) Props {
 	return Props{
 		New: func() Actor {
-			return &tailChoppingPoolActor{
-				nrOfInstances: nrOfInstances,
-				props:         props,
-				within:        within,
-			}
+			return NewPoolRouter(&TailChoppingRoutingLogic{Within: within}, nrOfInstances, props)
 		},
 	}
 }

@@ -148,11 +148,38 @@ func TestRouter_TailChopping(t *testing.T) {
 	// because it has 0 delay vs slow's 200ms (total 200ms vs 100ms+0ms).
 	select {
 	case msg := <-received:
-		t.Logf("Test confirmed receipt: %s", msg)
+		t.Logf("Received response: %s", msg)
 		assert.Equal(t, "fast-reply", msg)
 	case <-time.After(2 * time.Second):
 		t.Fatal("No response from TailChopping")
 	}
+}
+
+func TestRouter_ClassicAdaptive(t *testing.T) {
+	// Mock metrics provider
+	mockProvider := &mockClusterMetricsProvider{
+		pressure: map[string]float64{
+			"node1:2552": 0.9,
+			"node2:2552": 0.1,
+		},
+	}
+	SetClusterMetricsProvider(mockProvider)
+
+	w1 := &functionalMockRef{path: "pekko://Sys@node1:2552/user/w1", handler: func(any) {}}
+	w2 := &functionalMockRef{path: "pekko://Sys@node2:2552/user/w2", handler: func(any) {}}
+
+	// Classic PoolRouter with Adaptive logic
+	pool := NewPoolRouter(&AdaptiveLoadBalancingRoutingLogic{}, 0, Props{})
+	pool.Routees = []Ref{w1, w2}
+
+	counts := make(map[string]int)
+	for i := 0; i < 1000; i++ {
+		target := pool.Logic.Select("test", pool.Routees)
+		counts[target.Path()]++
+	}
+
+	t.Logf("Classic Adaptive counts: w1=%d, w2=%d", counts[w1.Path()], counts[w2.Path()])
+	assert.True(t, counts[w2.Path()] > counts[w1.Path()]*2)
 }
 
 type functionalMockRef struct {

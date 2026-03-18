@@ -13,9 +13,50 @@ import (
 	"time"
 )
 
+// ScatterGatherRoutingLogic implements the scatter-gather pattern.
+type ScatterGatherRoutingLogic struct {
+	Within time.Duration
+}
+
+func (l *ScatterGatherRoutingLogic) Select(_ any, routees []Ref) Ref {
+	if len(routees) == 0 {
+		return nil
+	}
+	return routees[0] // fallback
+}
+
+func (l *ScatterGatherRoutingLogic) Route(router *RouterActor, msg any) bool {
+	if len(router.Routees) == 0 {
+		return false
+	}
+
+	sys := router.System()
+	aggregatorProps := Props{
+		New: func() Actor {
+			return &scatterGatherAggregator{
+				BaseActor:      NewBaseActor(),
+				originalSender: router.Sender(),
+				timeout:        l.Within,
+			}
+		},
+	}
+	aggRef, err := sys.ActorOf(aggregatorProps, "")
+	if err != nil {
+		router.Log().Error("ScatterGather: failed to spawn aggregator", "error", err)
+		return false
+	}
+
+	for _, rt := range router.Routees {
+		rt.Tell(msg, aggRef)
+	}
+	return true
+}
+
 // ScatterGatherFirstCompleted is a router implementation that broadcasts
 // a message to all routees and provides the first response received back
 // to the original sender.
+//
+// Deprecated: use NewGroupRouter or NewPoolRouter with ScatterGatherRoutingLogic.
 type ScatterGatherFirstCompleted struct {
 	RouterActor
 	within time.Duration
@@ -26,7 +67,7 @@ func NewScatterGatherFirstCompleted(routees []Ref, within time.Duration) *Scatte
 	return &ScatterGatherFirstCompleted{
 		RouterActor: RouterActor{
 			BaseActor: NewBaseActor(),
-			Logic:     &BroadcastRoutingLogic{},
+			Logic:     &ScatterGatherRoutingLogic{Within: within},
 			Routees:   routees,
 		},
 		within: within,
@@ -45,31 +86,7 @@ func (r *ScatterGatherFirstCompleted) Behavior() Behavior[any] {
 
 // Receive handles the scatter-gather logic.
 func (r *ScatterGatherFirstCompleted) Receive(msg any) {
-	if len(r.Routees) == 0 {
-		return
-	}
-
-	// Create a temporary aggregator actor to collect the first response.
-	sys := r.System()
-	aggregatorProps := Props{
-		New: func() Actor {
-			return &scatterGatherAggregator{
-				BaseActor:      NewBaseActor(),
-				originalSender: r.currentSender, // Use currentSender set in Behavior
-				timeout:        r.within,
-			}
-		},
-	}
-	aggRef, err := sys.ActorOf(aggregatorProps, "")
-	if err != nil {
-		r.Log().Error("ScatterGather: failed to spawn aggregator", "error", err)
-		return
-	}
-
-	// Broadcast the message to all routees, with the aggregator as the sender.
-	for _, rt := range r.Routees {
-		rt.Tell(msg, aggRef)
-	}
+	r.RouterActor.Receive(msg)
 }
 
 // scatterGatherAggregator is a temporary actor that waits for the first response.
@@ -101,56 +118,6 @@ func (a *scatterGatherAggregator) Receive(msg any) {
 	a.System().Stop(a.Self())
 }
 
-type scatterGatherPoolActor struct {
-	BaseActor
-	nrOfInstances int
-	props         Props
-	within        time.Duration
-	routees       []Ref
-}
-
-func (a *scatterGatherPoolActor) PreStart() {
-	sys := a.System()
-	a.routees = make([]Ref, 0, a.nrOfInstances)
-	for i := 0; i < a.nrOfInstances; i++ {
-		name := fmt.Sprintf("$pool-%d", i)
-		ref, err := sys.ActorOf(a.props, name)
-		if err == nil {
-			a.routees = append(a.routees, ref)
-			sys.Watch(a.Self(), ref)
-		}
-	}
-}
-
-func (a *scatterGatherPoolActor) Receive(msg any) {
-	switch m := msg.(type) {
-	case TerminatedMessage:
-		// Evict routee
-		for i, r := range a.routees {
-			if r.Path() == m.TerminatedActor().Path() {
-				a.routees = append(a.routees[:i], a.routees[i+1:]...)
-				break
-			}
-		}
-	default:
-		// Delegate to scatter-gather logic
-		router := NewScatterGatherFirstCompleted(a.routees, a.within)
-		InjectSystem(router, a.System())
-		router.SetSelf(a.Self())
-		router.currentSender = a.Sender()
-		router.Receive(msg)
-	}
-}
-
 type StatusFailure struct {
 	Reason error
-}
-
-// ScatterGatherGroup returns props for a ScatterGatherGroup router.
-func ScatterGatherGroup(routees []Ref, within time.Duration) Props {
-	return Props{
-		New: func() Actor {
-			return NewScatterGatherFirstCompleted(routees, within)
-		},
-	}
 }

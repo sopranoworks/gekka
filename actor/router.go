@@ -20,6 +20,7 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
@@ -130,6 +131,15 @@ type RoutingLogic interface {
 	Select(message any, routees []Ref) Ref
 }
 
+// AdvancedRoutingLogic is an optional interface that RoutingLogic can implement
+// to take full control of the routing process, including spawning temporary
+// actors or performing multiple deliveries.
+type AdvancedRoutingLogic interface {
+	RoutingLogic
+	// Route handles the message delivery. Returns true if the message was handled.
+	Route(router *RouterActor, msg any) bool
+}
+
 // Broadcast is a wrapper message that instructs the RouterActor to deliver
 // the inner Message to every routee, bypassing the RoutingLogic selector.
 //
@@ -220,6 +230,13 @@ func (r *RouterActor) Receive(msg any) {
 	default:
 		if len(r.Routees) == 0 {
 			return
+		}
+
+		// Support AdvancedRoutingLogic
+		if adv, ok := r.Logic.(AdvancedRoutingLogic); ok {
+			if adv.Route(r, msg) {
+				return
+			}
 		}
 
 		// Support BroadcastRoutingLogic explicitly
@@ -582,6 +599,16 @@ func (r *GroupRouter) PreStart() {
 		}
 		r.Routees = append(r.Routees, ref)
 	}
+}
+
+// NewScatterGatherPool returns a PoolRouter using ScatterGatherRoutingLogic.
+func NewScatterGatherPool(nrOfInstances int, props Props, within time.Duration) *PoolRouter {
+	return NewPoolRouter(&ScatterGatherRoutingLogic{Within: within}, nrOfInstances, props)
+}
+
+// NewTailChoppingGroup returns a GroupRouter using TailChoppingRoutingLogic.
+func NewTailChoppingGroup(routees []Ref, within time.Duration) *GroupRouter {
+	return NewGroupRouter(&TailChoppingRoutingLogic{Within: within}, routees)
 }
 
 // ── Router Factories ─────────────────────────────────────────────────────

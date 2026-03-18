@@ -11,7 +11,6 @@ package actor
 import (
 	"log/slog"
 	"reflect"
-	"sync"
 )
 
 // Behavior is the definition of how an actor reacts to a message.
@@ -115,6 +114,7 @@ type typedActor[T any] struct {
 	ctx      *typedContext[T]
 	timers   *timerScheduler[T]
 	stash    *stashBuffer[T]
+	stopped  bool
 }
 
 // newTypedActor creates a new typedActor instance with the given initial behavior.
@@ -146,18 +146,21 @@ func NewTypedActor[T any](behavior Behavior[T]) Actor {
 
 // Receive implements the Actor interface.
 func (a *typedActor[T]) Receive(msg any) {
+	if a.stopped {
+		return
+	}
 	if m, ok := msg.(T); ok {
 		next := a.behavior(a.ctx, m)
 		if next != nil {
 			if isStopped(next) {
+				a.Log().Debug("TypedActor: behavior stopped, stopping actor")
+				a.stopped = true
 				a.ctx.Stop(a.Self())
 			} else {
 				a.behavior = next
 			}
 		}
 	}
-	// TerminatedMessage and other lifecycle signals are silently ignored at this
-	// level — Behavior[T] only accepts T and cannot handle untyped signals.
 }
 
 // isStopped returns true if the behavior is the Stopped sentinel.
@@ -165,27 +168,17 @@ func isStopped[T any](b Behavior[T]) bool {
 	if b == nil {
 		return false
 	}
-	// In Go, generic function pointers are not stable.
-	// We use reflect to compare the pointer with a stable sentinel obtained via Stopped[T]().
+	// We use a specific function pointer comparison for Stopped sentinel.
 	return reflect.ValueOf(b).Pointer() == reflect.ValueOf(Stopped[T]()).Pointer()
 }
 
-var stoppedBehaviors sync.Map
-
 // Stopped returns a sentinel behavior indicating that the actor should stop.
 func Stopped[T any]() Behavior[T] {
-	var zero T
-	typeName := reflect.TypeOf(zero).String()
-	if b, ok := stoppedBehaviors.Load(typeName); ok {
-		return b.(Behavior[T])
-	}
-	b := Behavior[T](stopped[T])
-	stoppedBehaviors.Store(typeName, b)
-	return b
+	return stoppedSentinel[T]
 }
 
-func stopped[T any](ctx TypedContext[T], msg T) Behavior[T] {
-	return Stopped[T]()
+func stoppedSentinel[T any](ctx TypedContext[T], msg T) Behavior[T] {
+	return stoppedSentinel[T]
 }
 
 // Same returns a sentinel behavior indicating that the actor should keep its current behavior.
@@ -198,13 +191,24 @@ func Same[T any]() Behavior[T] {
 // The factory function is called once when the actor starts, before it
 // processes its first message.
 func Setup[T any](factory func(TypedContext[T]) Behavior[T]) Behavior[T] {
+	var inner Behavior[T]
 	return func(ctx TypedContext[T], msg T) Behavior[T] {
-		// In a function-based Behavior, Setup is evaluated on the first message.
-		// The factory produces the initial behavior, which then processes the message.
-		behavior := factory(ctx)
-		if behavior == nil {
-			return nil // Same
+		if inner == nil {
+			ctx.Log().Debug("TypedActor: executing setup behavior")
+			inner = factory(ctx)
+			if inner == nil {
+				inner = Same[T]()
+			}
+			ctx.Log().Debug("TypedActor: setup returned new behavior", "type", reflect.TypeOf(inner))
 		}
-		return behavior(ctx, msg)
+		next := inner(ctx, msg)
+		if next != nil {
+			// If inner returned Stopped, we must return Stopped to the actor loop.
+			if isStopped(next) {
+				return Stopped[T]()
+			}
+			inner = next
+		}
+		return next
 	}
 }

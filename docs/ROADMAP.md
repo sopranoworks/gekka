@@ -43,9 +43,21 @@
 
 ## Upcoming
 
-### v1.0.0 — Production Readiness & Stability
+### v0.10.0 — Finite State Machines & Cluster Resilience
 
 **Target:** Q4 2026
+
+#### 1. (Classic) FSM API
+Implementation of the Finite State Machine DSL for managing complex actor state transitions with:
+- `StartWith(state, data)`
+- `When(state, partialFunction)`
+- `OnTransition(handler)`
+- `Goto(nextState).Using(nextData)` / `Stay()`
+- Integrated state-based timers
+
+### v1.0.0 — Production Readiness & Stability
+
+**Target:** 2027
 
 #### 1. API Stabilization
 Finalize public interfaces and package structures for the first stable 1.0 release.

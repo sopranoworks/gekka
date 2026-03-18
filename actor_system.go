@@ -114,6 +114,9 @@ type ActorSystem interface {
 	//
 	//	graph.Run(sys.Materializer())
 	Materializer() stream.Materializer
+
+	// Receptionist returns the reference to the cluster-aware receptionist.
+	Receptionist() actor.TypedActorRef[any]
 }
 
 // internalSystem is an unexported interface used by ActorRef and ActorSelection
@@ -126,7 +129,14 @@ type internalSystem interface {
 	GetLocalActor(path string) (actor.Actor, bool)
 	SelfPathURI(path string) string
 	LookupDeployment(path string) (core.DeploymentConfig, bool)
-	SpawnActor(path string, a actor.Actor, props actor.Props) ActorRef
+	SpawnActor(path string, a actor.Actor, props actor.Props) actor.Ref // Refined to actor.Ref
+	SubscribeToReceptionist(keyID string, subscriber actor.TypedActorRef[any], callback func([]string))
+}
+
+func (b *actorContextBridge) SubscribeToReceptionist(keyID string, subscriber actor.TypedActorRef[any], callback func([]string)) {
+	if s, ok := b.sys.(internalSystem); ok {
+		s.SubscribeToReceptionist(keyID, subscriber, callback)
+	}
 }
 
 // autoNameCounter is a global counter used to generate unique actor names

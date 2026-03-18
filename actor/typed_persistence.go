@@ -147,6 +147,10 @@ func (c *persistentTypedContext[C, E, S]) Stash() StashBuffer[C] {
 	return c.actor.userStash
 }
 
+func (c *persistentTypedContext[C, E, S]) Sender() Ref {
+	return c.actor.Sender()
+}
+
 func (p *persistentActor[Command, Event, State]) PreStart() {
 	p.timers = newTimerScheduler[Command](p.Self())
 	p.userStash = newStashBuffer[Command](p.Self(), DefaultStashCapacity)

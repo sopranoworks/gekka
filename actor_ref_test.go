@@ -236,23 +236,23 @@ func TestActorSelection_Tell_Local(t *testing.T) {
 	}
 }
 
-// ── selfPathURI ───────────────────────────────────────────────────────────────
+// ── SelfPathURI ───────────────────────────────────────────────────────────────
 
 func TestSelfPathURI_LocalSuffix(t *testing.T) {
 	node := newTestNode(t, "Sys", "127.0.0.1", 2552)
-	got := node.selfPathURI("/user/foo")
+	got := node.SelfPathURI("/user/foo")
 	want := "pekko://Sys@127.0.0.1:2552/user/foo"
 	if got != want {
-		t.Errorf("selfPathURI = %q, want %q", got, want)
+		t.Errorf("SelfPathURI = %q, want %q", got, want)
 	}
 }
 
 func TestSelfPathURI_AlreadyAbsolute(t *testing.T) {
 	node := newTestNode(t, "Sys", "127.0.0.1", 2552)
 	abs := "pekko://Other@10.0.0.1:2552/user/bar"
-	got := node.selfPathURI(abs)
+	got := node.SelfPathURI(abs)
 	if got != abs {
-		t.Errorf("selfPathURI modified absolute path: got %q, want %q", got, abs)
+		t.Errorf("SelfPathURI modified absolute path: got %q, want %q", got, abs)
 	}
 }
 

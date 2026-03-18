@@ -54,6 +54,9 @@ type TypedContext[T any] interface {
 	// Stash returns the StashBuffer for temporarily holding messages that
 	// should not be processed in the actor's current behavior.
 	Stash() StashBuffer[T]
+
+	// Sender returns the sender of the current message.
+	Sender() Ref
 }
 
 // typedContext is the internal implementation of TypedContext[T].
@@ -105,6 +108,10 @@ func (c *typedContext[T]) Timers() TimerScheduler[T] {
 
 func (c *typedContext[T]) Stash() StashBuffer[T] {
 	return c.actor.stash
+}
+
+func (c *typedContext[T]) Sender() Ref {
+	return c.actor.Sender()
 }
 
 // typedActor is the internal bridge between the untyped actor system and typed behaviors.

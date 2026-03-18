@@ -62,6 +62,16 @@ func (s *localActorSystem) Materializer() stream.Materializer {
 	return stream.ActorMaterializer{}
 }
 
+// Receptionist implements ActorSystem.
+func (s *localActorSystem) Receptionist() actor.TypedActorRef[any] {
+	return actor.TypedActorRef[any]{} // Not available in local-only system
+}
+
+// SubscribeToReceptionist implements internalSystem.
+func (s *localActorSystem) SubscribeToReceptionist(keyID string, subscriber actor.TypedActorRef[any], callback func([]string)) {
+	// No-op in local-only system
+}
+
 // ActorOf implements ActorSystem.
 func (s *localActorSystem) ActorOf(props Props, name string) (ActorRef, error) {
 	return s.ActorOfHierarchical(props, name, "/user")
@@ -98,7 +108,7 @@ func (s *localActorSystem) ActorOfHierarchical(props Props, name string, parentP
 		return ActorRef{}, fmt.Errorf("actorOf: Props.New must not be nil")
 	}
 	a := props.New()
-	return s.SpawnActor(path, a, props), nil
+	return s.SpawnActor(path, a, props).(ActorRef), nil
 }
 
 // Context implements ActorSystem.
@@ -283,7 +293,7 @@ func (s *localActorSystem) LookupDeployment(path string) (core.DeploymentConfig,
 }
 
 // SpawnActor implements internalSystem.
-func (s *localActorSystem) SpawnActor(path string, a actor.Actor, props actor.Props) ActorRef {
+func (s *localActorSystem) SpawnActor(path string, a actor.Actor, props actor.Props) actor.Ref {
 	ref := ActorRef{fullPath: s.SelfPathURI(path), sys: s, local: a}
 
 	// Inject the actor's own reference so it can use Self() inside Receive.

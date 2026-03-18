@@ -99,7 +99,7 @@ func Ask[T any, R any](ctx context.Context, target TypedActorRef[T], timeout tim
 	defer cluster.nm.UnregisterPendingReply(tempPath)
 
 	// Create a typed ref for the temporary path
-	fullTempPath := cluster.selfPathURI(tempPath)
+	fullTempPath := cluster.SelfPathURI(tempPath)
 	replyTo := actor.NewTypedActorRef[R](&remoteAskRef{path: fullTempPath})
 
 	msg := msgFactory(replyTo)

@@ -1461,7 +1461,7 @@ func (c *Cluster) ActorOfHierarchical(props Props, name string, parentPath strin
 			if err != nil {
 				return ActorRef{}, fmt.Errorf("actorOf: deployment config for %q: %w", path, err)
 			}
-			return c.SpawnActor(path, group, Props{}), nil
+			return c.SpawnActor(path, group, Props{}).(ActorRef), nil
 		}
 		// Pool router — worker factory is required.
 		if props.New == nil {
@@ -1471,7 +1471,7 @@ func (c *Cluster) ActorOfHierarchical(props Props, name string, parentPath strin
 		if err != nil {
 			return ActorRef{}, fmt.Errorf("actorOf: deployment config for %q: %w", path, err)
 		}
-		return c.SpawnActor(path, pool, Props{}), nil
+		return c.SpawnActor(path, pool, Props{}).(ActorRef), nil
 	}
 
 	// Plain actor — Props.New is required.
@@ -1479,7 +1479,7 @@ func (c *Cluster) ActorOfHierarchical(props Props, name string, parentPath strin
 		return ActorRef{}, fmt.Errorf("actorOf: Props.New must not be nil")
 	}
 	a := props.New()
-	return c.SpawnActor(path, a, props), nil
+	return c.SpawnActor(path, a, props).(ActorRef), nil
 }
 
 // Watch implements ActorSystem.
@@ -1519,6 +1519,11 @@ func (c *Cluster) Materializer() stream.Materializer {
 	return stream.ActorMaterializer{}
 }
 
+// Receptionist implements ActorSystem.
+func (c *Cluster) Receptionist() actor.TypedActorRef[any] {
+	return Receptionist()
+}
+
 // RemoteActorOf implements ActorSystem.
 func (c *Cluster) RemoteActorOf(address actor.Address, path string) ActorRef {
 	fullPath := address.String()
@@ -1549,7 +1554,7 @@ func (c *Cluster) GetLocalActor(path string) (actor.Actor, bool) {
 
 // SelfPathURI implements internalSystem.
 func (c *Cluster) SelfPathURI(path string) string {
-	return c.selfPathURI(path)
+	return c.SelfPathURI(path)
 }
 
 // LookupDeployment implements internalSystem.
@@ -1558,17 +1563,10 @@ func (c *Cluster) LookupDeployment(path string) (core.DeploymentConfig, bool) {
 }
 
 // SpawnActor starts a and registers it at path, then returns an ActorRef for
-// that actor. It is a convenient alternative to the manual three-step sequence
-// of actor.Start / node.RegisterActor / building an ActorRef:
-//
-//	ref := node.SpawnActor("/user/myActor", &MyActor{BaseActor: actor.NewBaseActor()})
-//	ref.Tell("Hello, local actor!")
-//
-// path must be the full path suffix as used in Artery envelopes, e.g.
-// "/user/myActor". Do NOT call actor.Start yourself before SpawnActor — that
-// would launch two receive goroutines.
-func (n *Cluster) SpawnActor(path string, a actor.Actor, props actor.Props) ActorRef {
-	ref := ActorRef{fullPath: n.selfPathURI(path), sys: n, local: a}
+// that actor.
+func (n *Cluster) SpawnActor(path string, a actor.Actor, props actor.Props) actor.Ref {
+	ref := ActorRef{fullPath: n.SelfPathURI(path), sys: n, local: a}
+
 
 	// Inject the actor's own reference so it can use Self() inside Receive.
 	type selfSetter interface{ SetSelf(actor.Ref) }
@@ -1594,7 +1592,7 @@ func (n *Cluster) SpawnActor(path string, a actor.Actor, props actor.Props) Acto
 	// Inject parent reference if this is a child actor.
 	if parentPath != "/user" {
 		if parentActor, found := n.actors[parentPath]; found {
-			if parentRef, err := n.ActorSelection(n.selfPathURI(parentPath)).Resolve(context.TODO()); err == nil {
+			if parentRef, err := n.ActorSelection(n.SelfPathURI(parentPath)).Resolve(context.TODO()); err == nil {
 				actor.InjectParent(a, parentRef)
 				// Also register this child with the parent
 				type childAdder interface {
@@ -1645,14 +1643,18 @@ func (n *Cluster) SpawnActor(path string, a actor.Actor, props actor.Props) Acto
 	return ref
 }
 
-// selfPathURI converts a local path suffix such as "/user/myActor" into the
-// full actor-path URI for this node. If path is already absolute it is
-// returned unchanged.
-func (n *Cluster) selfPathURI(path string) string {
-	if len(path) > 0 && path[0] == '/' {
-		self := n.SelfAddress()
-		return fmt.Sprintf("%s://%s@%s:%d%s",
-			self.Protocol, self.System, self.Host, self.Port, path)
+// SubscribeToReceptionist allows internal components (like GroupRouter) to 
+// subscribe to service updates without direct dependency on the receptionist protocol.
+func (c *Cluster) SubscribeToReceptionist(keyID string, subscriber actor.TypedActorRef[any], callback func([]string)) {
+	recept := Receptionist()
+	if recept.Untyped() == nil {
+		log.Printf("Cluster: Receptionist not initialized")
+		return
 	}
-	return path
+
+	recept.Tell(subscribe{
+		keyID:      keyID,
+		subscriber: subscriber,
+		sendUpdate: callback,
+	})
 }

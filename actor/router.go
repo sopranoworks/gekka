@@ -584,7 +584,7 @@ func (r *GroupRouter) PreStart() {
 	}
 }
 
-// ── Remoting logic ───────────────────────────────────────────────────────────
+// ── Router Factories ─────────────────────────────────────────────────────
 
 // Send resolves the path and delivers the message.
 // It automatically detects the appropriate serializer and manifest based on the message type.

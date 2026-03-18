@@ -175,3 +175,76 @@ func (r *typedAskResponder[R]) Tell(msg any, sender ...Ref) {
 func (r *typedAskResponder[R]) Path() string {
 	return "/temp/typed-ask"
 }
+
+// ── Router Factories ─────────────────────────────────────────────────────
+
+// BroadcastGroup returns props for a GroupRouter using BroadcastRoutingLogic.
+func BroadcastGroup(routees []Ref) Props {
+	return Props{
+		New: func() Actor {
+			return NewGroupRouter(&BroadcastRoutingLogic{}, routees)
+		},
+	}
+}
+
+// BroadcastPool returns props for a PoolRouter using BroadcastRoutingLogic.
+func BroadcastPool(nrOfInstances int, props Props) Props {
+	return Props{
+		New: func() Actor {
+			return NewPoolRouter(&BroadcastRoutingLogic{}, nrOfInstances, props)
+		},
+	}
+}
+
+// ScatterGatherPool returns props for a ScatterGatherPool router.
+func ScatterGatherPool(nrOfInstances int, props Props, within time.Duration) Props {
+	return Props{
+		New: func() Actor {
+			return &scatterGatherPoolActor{
+				nrOfInstances: nrOfInstances,
+				props:         props,
+				within:        within,
+			}
+		},
+	}
+}
+
+// TailChoppingGroup returns props for a GroupRouter using TailChopping logic.
+func TailChoppingGroup(routees []Ref, within time.Duration) Props {
+	return Props{
+		New: func() Actor {
+			return NewTailChoppingFirstCompleted(routees, within)
+		},
+	}
+}
+
+// TailChoppingPool returns props for a PoolRouter using TailChopping logic.
+func TailChoppingPool(nrOfInstances int, props Props, within time.Duration) Props {
+	return Props{
+		New: func() Actor {
+			return &tailChoppingPoolActor{
+				nrOfInstances: nrOfInstances,
+				props:         props,
+				within:        within,
+			}
+		},
+	}
+}
+
+// ConsistentHashingGroup returns props for a GroupRouter using ConsistentHashRoutingLogic.
+func ConsistentHashingGroup(routees []Ref, virtualNodes int) Props {
+	return Props{
+		New: func() Actor {
+			return NewGroupRouter(&ConsistentHashRoutingLogic{VirtualNodesFactor: virtualNodes}, routees)
+		},
+	}
+}
+
+// ConsistentHashingPool returns props for a PoolRouter using ConsistentHashRoutingLogic.
+func ConsistentHashingPool(nrOfInstances int, props Props, virtualNodes int) Props {
+	return Props{
+		New: func() Actor {
+			return NewPoolRouter(&ConsistentHashRoutingLogic{VirtualNodesFactor: virtualNodes}, nrOfInstances, props)
+		},
+	}
+}

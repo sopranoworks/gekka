@@ -101,39 +101,6 @@ func (a *scatterGatherAggregator) Receive(msg any) {
 	a.System().Stop(a.Self())
 }
 
-// ── Router Factories ─────────────────────────────────────────────────────
-
-// BroadcastGroup returns props for a GroupRouter using BroadcastRoutingLogic.
-func BroadcastGroup(routees []Ref) Props {
-	return Props{
-		New: func() Actor {
-			return NewGroupRouter(&BroadcastRoutingLogic{}, routees)
-		},
-	}
-}
-
-// BroadcastPool returns props for a PoolRouter using BroadcastRoutingLogic.
-func BroadcastPool(nrOfInstances int, props Props) Props {
-	return Props{
-		New: func() Actor {
-			return NewPoolRouter(&BroadcastRoutingLogic{}, nrOfInstances, props)
-		},
-	}
-}
-
-// ScatterGatherPool returns props for a ScatterGatherPool router.
-func ScatterGatherPool(nrOfInstances int, props Props, within time.Duration) Props {
-	return Props{
-		New: func() Actor {
-			return &scatterGatherPoolActor{
-				nrOfInstances: nrOfInstances,
-				props:         props,
-				within:        within,
-			}
-		},
-	}
-}
-
 type scatterGatherPoolActor struct {
 	BaseActor
 	nrOfInstances int
@@ -177,4 +144,13 @@ func (a *scatterGatherPoolActor) Receive(msg any) {
 
 type StatusFailure struct {
 	Reason error
+}
+
+// ScatterGatherGroup returns props for a ScatterGatherGroup router.
+func ScatterGatherGroup(routees []Ref, within time.Duration) Props {
+	return Props{
+		New: func() Actor {
+			return NewScatterGatherFirstCompleted(routees, within)
+		},
+	}
 }

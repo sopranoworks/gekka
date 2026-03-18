@@ -56,7 +56,6 @@ func TestRouter_Broadcast(t *testing.T) {
 func TestRouter_ScatterGather(t *testing.T) {
 	received := make(chan string, 10)
 	
-	// Create a mock system that can spawn the aggregator
 	sys := &scatterGatherTestSystem{
 		received: received,
 		t:        t,
@@ -75,8 +74,15 @@ func TestRouter_ScatterGather(t *testing.T) {
 	rActor.SetSelf(&typedMockRef{path: "/user/router"})
 	InjectSystem(rActor, sys)
 
-	// We need to set a sender for the aggregator to reply to
-	sender := &typedMockRef{path: "/user/sender"}
+	sender := &functionalMockRef{
+		path: "/user/sender",
+		handler: func(m any) {
+			t.Logf("Test sender received: %v", m)
+			if s, ok := m.(string); ok {
+				received <- s
+			}
+		},
+	}
 	rActor.currentSender = sender
 
 	t.Log("Sending query to router...")
@@ -86,7 +92,7 @@ func TestRouter_ScatterGather(t *testing.T) {
 	t.Log("Waiting for fast response...")
 	select {
 	case msg := <-received:
-		t.Logf("Received response: %s", msg)
+		t.Logf("Test confirmed receipt: %s", msg)
 		assert.Equal(t, "fast-reply", msg)
 	case <-time.After(2 * time.Second):
 		t.Fatal("No response from ScatterGather")
@@ -99,6 +105,53 @@ func TestRouter_ScatterGather(t *testing.T) {
 		t.Fatalf("Unexpected second response: %s", msg)
 	case <-time.After(500 * time.Millisecond):
 		t.Log("No second response, OK.")
+	}
+}
+
+func TestRouter_TailChopping(t *testing.T) {
+	received := make(chan string, 10)
+	
+	sys := &scatterGatherTestSystem{
+		received: received,
+		t:        t,
+	}
+
+	slowWorker := &scatterGatherTestWorker{reply: "slow-reply", delay: 200 * time.Millisecond, t: t}
+	fastWorker := &scatterGatherTestWorker{reply: "fast-reply", delay: 0, t: t}
+
+	// We order them so slow is first.
+	tc := NewTailChoppingFirstCompleted([]Ref{slowWorker, fastWorker}, 100*time.Millisecond)
+	
+	rActor := &typedActor[any]{
+		BaseActor: NewBaseActor(),
+		behavior:  tc.Behavior(),
+	}
+	rActor.ctx = &typedContext[any]{actor: rActor}
+	rActor.SetSelf(&typedMockRef{path: "/user/router"})
+	InjectSystem(rActor, sys)
+
+	sender := &functionalMockRef{
+		path: "/user/sender",
+		handler: func(m any) {
+			t.Logf("Test sender received: %v", m)
+			if s, ok := m.(string); ok {
+				received <- s
+			}
+		},
+	}
+	rActor.currentSender = sender
+
+	t.Log("Sending query to TailChopping router...")
+	rActor.Receive("query")
+
+	// Even though slowWorker was first, fastWorker (sent after 100ms) should win
+	// because it has 0 delay vs slow's 200ms (total 200ms vs 100ms+0ms).
+	select {
+	case msg := <-received:
+		t.Logf("Test confirmed receipt: %s", msg)
+		assert.Equal(t, "fast-reply", msg)
+	case <-time.After(2 * time.Second):
+		t.Fatal("No response from TailChopping")
 	}
 }
 
@@ -119,7 +172,8 @@ type scatterGatherTestSystem struct {
 
 func (s *scatterGatherTestSystem) ActorOf(props Props, name string) (Ref, error) {
 	s.t.Log("System spawning aggregator...")
-	agg := props.New().(*scatterGatherAggregator)
+	
+	agg := props.New()
 	
 	// Use functionalMockRef for agg so it can receive replies
 	ref := &functionalMockRef{
@@ -129,16 +183,11 @@ func (s *scatterGatherTestSystem) ActorOf(props Props, name string) (Ref, error)
 			agg.Receive(m) 
 		},
 	}
-	agg.SetSelf(ref)
-	InjectSystem(agg, s)
 	
-	// Wrap the original sender to capture the reply
-	originalSender := agg.originalSender
-	agg.originalSender = &scatterGatherTestSender{
-		original: originalSender,
-		received: s.received,
-		t:        s.t,
+	if a, ok := agg.(interface{ SetSelf(Ref) }); ok {
+		a.SetSelf(ref)
 	}
+	InjectSystem(agg, s)
 	
 	Start(agg)
 	return ref, nil
@@ -146,20 +195,6 @@ func (s *scatterGatherTestSystem) ActorOf(props Props, name string) (Ref, error)
 
 func (s *scatterGatherTestSystem) Stop(ref Ref) {
 	// No-op for mock
-}
-
-type scatterGatherTestSender struct {
-	Ref
-	original Ref
-	received chan string
-	t        *testing.T
-}
-
-func (s *scatterGatherTestSender) Tell(msg any, sender ...Ref) {
-	s.t.Logf("Sender received reply: %v", msg)
-	if str, ok := msg.(string); ok {
-		s.received <- str
-	}
 }
 
 type scatterGatherTestWorker struct {

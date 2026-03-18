@@ -117,28 +117,27 @@ func (m dashboardModel) View() string {
 		return "Shutting down dashboard...\n"
 	}
 
-	// Modular Staggered Block Icon
-	mg := lipgloss.Color("#FF00FF") // Magenta
-	wt := lipgloss.Color("#FFFFFF") // White
-	yl := lipgloss.Color("#FFFF00") // Yellow
-
-	mStyle := lipgloss.NewStyle().Foreground(mg)
-	wStyle := lipgloss.NewStyle().Foreground(wt)
-	yStyle := lipgloss.NewStyle().Foreground(yl)
+	// Nebula Parallel-Slash Icon
+	c1 := lipgloss.Color("#6A4CFF")
+	c2 := lipgloss.Color("#8265FF")
+	c3 := lipgloss.Color("#9B7FFF")
+	c4 := lipgloss.Color("#B399FF")
+	c5 := lipgloss.Color("#C678FF")
+	c6 := lipgloss.Color("#DD94FF")
+	c7 := lipgloss.Color("#F2AEFF")
+	c8 := lipgloss.Color("#FFC9FF")
 
 	icon := lipgloss.JoinVertical(lipgloss.Left,
-		mStyle.Render("█"),
-		mStyle.Render("█")+wStyle.Render("█"),
-		" "+wStyle.Render("█")+yStyle.Render("█"),
-		"  "+wStyle.Render("█"),
+		"  "+lipgloss.NewStyle().Foreground(c3).Render("▄")+lipgloss.NewStyle().Foreground(c4).Render("▀")+"  "+lipgloss.NewStyle().Foreground(c7).Render("▄")+lipgloss.NewStyle().Foreground(c8).Render("▀"),
+		lipgloss.NewStyle().Foreground(c1).Render("▄")+lipgloss.NewStyle().Foreground(c2).Render("▀")+"  "+lipgloss.NewStyle().Foreground(c5).Render("▄")+lipgloss.NewStyle().Foreground(c6).Render("▀"),
 	)
 
-	title := lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Bold(true).Render("gekka-cli")
-	version := lipgloss.NewStyle().Foreground(lipgloss.Color("242")).Render(" v0.9.0")
+	title := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Bold(true).Render("gekka-cli")
+	version := lipgloss.NewStyle().Foreground(lipgloss.Color("#808080")).Render(" v0.9.0")
 	headerText := lipgloss.JoinHorizontal(lipgloss.Bottom, title, version)
 
 	header := headerBoxStyle.Render(
-		lipgloss.JoinHorizontal(lipgloss.Center, icon, "  ", headerText),
+		lipgloss.JoinHorizontal(lipgloss.Center, icon, "   ", headerText),
 	)
 
 	// Node List

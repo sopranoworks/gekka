@@ -356,6 +356,27 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		_ = configObj.Unmarshal(&nodeCfg.Discovery.Config.Config)
 	}
 
+	// Support for specific blocks (v0.9.0)
+	apiPrefix := discoveryPrefix + ".kubernetes-api"
+	if v, err := cfg.GetString(apiPrefix + ".namespace"); err == nil {
+		nodeCfg.Discovery.Config.Config["namespace"] = strings.TrimSpace(v)
+	}
+	if v, err := cfg.GetString(apiPrefix + ".label-selector"); err == nil {
+		nodeCfg.Discovery.Config.Config["label-selector"] = strings.TrimSpace(v)
+	}
+	if v, err := cfg.GetInt(apiPrefix + ".port"); err == nil {
+		nodeCfg.Discovery.Config.Config["port"] = v
+	}
+
+	dnsPrefix := discoveryPrefix + ".kubernetes-dns"
+	if v, err := cfg.GetString(dnsPrefix + ".service-name"); err == nil {
+		nodeCfg.Discovery.Config.Config["service-name"] = strings.TrimSpace(v)
+	}
+	if v, err := cfg.GetInt(dnsPrefix + ".port"); err == nil {
+		// Only override if not already set by apiPrefix or config block (though port is usually distinct)
+		nodeCfg.Discovery.Config.Config["port"] = v
+	}
+
 	return nodeCfg, nil
 }
 

@@ -31,14 +31,23 @@ func (r *rootState) resolveURL(flagURL string) string {
 func main() {
 	root := &rootState{}
 
-	// High-fidelity Logo: >_❀ gekka-cli v0.9.0
-	logo := lipgloss.JoinHorizontal(lipgloss.Center,
-		lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Render(">"),
-		lipgloss.NewStyle().Foreground(lipgloss.Color("13")).Render("_"),
-		lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Render("❀"),
-		lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Bold(true).Render(" gekka-cli"),
-		lipgloss.NewStyle().Foreground(lipgloss.Color("242")).Render(" v0.9.0"),
+	// High-fidelity Multi-line Icon (Gekka Bijin motif)
+	m := lipgloss.Color("#FF00FF") // Magenta
+	w := lipgloss.Color("#FFFFFF") // White
+	y := lipgloss.Color("#FFFF00") // Yellow
+
+	icon := lipgloss.JoinVertical(lipgloss.Left,
+		lipgloss.NewStyle().Foreground(m).Render("  ▄▄  "),
+		lipgloss.NewStyle().Foreground(w).Render("▄██")+lipgloss.NewStyle().Foreground(y).Render("▄▄")+lipgloss.NewStyle().Foreground(w).Render("██▄"),
+		lipgloss.NewStyle().Foreground(w).Render("▀██")+lipgloss.NewStyle().Foreground(y).Render("▀▀")+lipgloss.NewStyle().Foreground(w).Render("██▀"),
+		lipgloss.NewStyle().Foreground(m).Render("  ▀▀  "),
 	)
+
+	title := lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Bold(true).Render("gekka-cli")
+	version := lipgloss.NewStyle().Foreground(lipgloss.Color("242")).Render(" v0.9.0")
+	headerText := lipgloss.JoinHorizontal(lipgloss.Bottom, title, version)
+
+	logo := lipgloss.JoinHorizontal(lipgloss.Center, icon, "  ", headerText)
 
 	rootCmd := &cobra.Command{
 		Use:   "gekka-cli",

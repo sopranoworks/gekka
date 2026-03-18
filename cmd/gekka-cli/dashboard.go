@@ -117,15 +117,24 @@ func (m dashboardModel) View() string {
 		return "Shutting down dashboard...\n"
 	}
 
-	// Header: >_❀ gekka-cli v0.9.0
+	// High-fidelity Multi-line Icon (Gekka Bijin motif)
+	mg := lipgloss.Color("#FF00FF") // Magenta
+	wt := lipgloss.Color("#FFFFFF") // White
+	yl := lipgloss.Color("#FFFF00") // Yellow
+
+	icon := lipgloss.JoinVertical(lipgloss.Left,
+		lipgloss.NewStyle().Foreground(mg).Render("  ▄▄  "),
+		lipgloss.NewStyle().Foreground(wt).Render("▄██")+lipgloss.NewStyle().Foreground(yl).Render("▄▄")+lipgloss.NewStyle().Foreground(wt).Render("██▄"),
+		lipgloss.NewStyle().Foreground(wt).Render("▀██")+lipgloss.NewStyle().Foreground(yl).Render("▀▀")+lipgloss.NewStyle().Foreground(wt).Render("██▀"),
+		lipgloss.NewStyle().Foreground(mg).Render("  ▀▀  "),
+	)
+
+	title := lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Bold(true).Render("gekka-cli")
+	version := lipgloss.NewStyle().Foreground(lipgloss.Color("242")).Render(" v0.9.0")
+	headerText := lipgloss.JoinHorizontal(lipgloss.Bottom, title, version)
+
 	header := headerBoxStyle.Render(
-		lipgloss.JoinHorizontal(lipgloss.Center,
-			lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Render(">"),
-			lipgloss.NewStyle().Foreground(lipgloss.Color("13")).Render("_"),
-			lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Render("❀"),
-			lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Bold(true).Render(" gekka-cli"),
-			lipgloss.NewStyle().Foreground(lipgloss.Color("242")).Render(" v0.9.0"),
-		),
+		lipgloss.JoinHorizontal(lipgloss.Center, icon, "  ", headerText),
 	)
 
 	// Node List

@@ -16,6 +16,7 @@ import (
 
 	"github.com/sopranoworks/gekka"
 	"github.com/sopranoworks/gekka/actor/typed"
+	ptyped "github.com/sopranoworks/gekka/persistence/typed"
 	"github.com/sopranoworks/gekka/persistence"
 )
 
@@ -43,16 +44,16 @@ func Counter(persistenceID string, journal persistence.Journal, snaps persistenc
 		Journal:       journal,
 		SnapshotStore: snaps,
 		InitialState:  State{Value: 0},
-		CommandHandler: func(ctx typed.TypedContext[Command], state State, cmd Command) typed.Effect[Event, State] {
+		CommandHandler: func(ctx typed.TypedContext[Command], state State, cmd Command) ptyped.Effect[Event, State] {
 			switch m := cmd.(type) {
 			case Increment:
 				fmt.Println("Counter: persisting increment event")
-				return typed.Persist[Event, State](Event{Delta: 1})
+				return ptyped.Persist[Event, State](Event{Delta: 1})
 			case GetValue:
 				m.ReplyTo.Tell(state.Value)
-				return typed.None[Event, State]()
+				return ptyped.None[Event, State]()
 			}
-			return typed.None[Event, State]()
+			return ptyped.None[Event, State]()
 		},
 		EventHandler: func(state State, event Event) State {
 			state.Value += event.Delta

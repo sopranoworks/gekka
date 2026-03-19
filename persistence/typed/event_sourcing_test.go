@@ -1,5 +1,5 @@
 /*
- * typed_persistence_test.go
+ * event_sourcing_test.go
  * This file is part of the gekka project.
  *
  * Copyright (c) 2026 Sopranoworks, Osamu Takahashi
@@ -12,6 +12,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/actor/typed"
 	"github.com/sopranoworks/gekka/persistence"
 	"github.com/stretchr/testify/assert"
 )
@@ -24,7 +26,7 @@ func TestSpawnPersistent(t *testing.T) {
 	behavior := &EventSourcedBehavior[int, int, counterState]{
 		PersistenceID: "counter-1",
 		InitialState:  counterState{Value: 0},
-		CommandHandler: func(ctx TypedContext[int], state counterState, cmd int) Effect[int, counterState] {
+		CommandHandler: func(ctx typed.TypedContext[int], state counterState, cmd int) Effect[int, counterState] {
 			return Persist[int, counterState](cmd)
 		},
 		EventHandler: func(state counterState, event int) counterState {
@@ -54,7 +56,7 @@ func TestPersistentActor_Recovery(t *testing.T) {
 		PersistenceID: "p1",
 		Journal:       journal,
 		InitialState:  counterState{Value: 0},
-		CommandHandler: func(ctx TypedContext[int], state counterState, cmd int) Effect[int, counterState] {
+		CommandHandler: func(ctx typed.TypedContext[int], state counterState, cmd int) Effect[int, counterState] {
 			return Persist[int, counterState](cmd)
 		},
 		EventHandler: func(state counterState, event int) counterState {
@@ -72,3 +74,28 @@ func TestPersistentActor_Recovery(t *testing.T) {
 	assert.Equal(t, 30, act.state.Value)
 	assert.Equal(t, uint64(2), act.seqNr)
 }
+
+type typedMockContext struct {
+	actor.ActorContext
+	spawnedProps actor.Props
+	spawnedName  string
+	stoppedRef   actor.Ref
+}
+
+func (m *typedMockContext) ActorOf(props actor.Props, name string) (actor.Ref, error) {
+	m.spawnedProps = props
+	m.spawnedName = name
+	return &typedMockRef{path: "/user/" + name}, nil
+}
+
+func (m *typedMockContext) Stop(target actor.Ref) {
+	m.stoppedRef = target
+}
+
+type typedMockRef struct {
+	actor.Ref
+	path string
+}
+
+func (r *typedMockRef) Path() string                      { return r.path }
+func (r *typedMockRef) Tell(msg any, sender ...actor.Ref) {}

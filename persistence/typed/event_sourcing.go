@@ -1,5 +1,5 @@
 /*
- * typed_persistence.go
+ * event_sourcing.go
  * This file is part of the gekka project.
  *
  * Copyright (c) 2026 Sopranoworks, Osamu Takahashi
@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/actor/typed"
 	"github.com/sopranoworks/gekka/persistence"
 )
 
@@ -25,7 +26,7 @@ type EventSourcedBehavior[Command any, Event any, State any] struct {
 	Journal        persistence.Journal
 	SnapshotStore  persistence.SnapshotStore
 	InitialState   State
-	CommandHandler func(TypedContext[Command], State, Command) Effect[Event, State]
+	CommandHandler func(typed.TypedContext[Command], State, Command) Effect[Event, State]
 	EventHandler   func(State, Event) State
 
 	// SnapshotSelectionCriteria for recovery
@@ -81,10 +82,10 @@ type persistentActor[Command any, Event any, State any] struct {
 	seqNr         uint64
 	lastSnapSeqNr uint64
 	recovering    bool
-	tctx          TypedContext[Command]
+	tctx          typed.TypedContext[Command]
 	stash         []Command // internal recovery stash; separate from user StashBuffer
-	timers        *timerScheduler[Command]
-	userStash     *stashBuffer[Command]
+	timers        *actor.TimerSchedulerImpl[Command]
+	userStash     *actor.StashBufferImpl[Command]
 }
 
 func NewPersistentActor[Command any, Event any, State any](b *EventSourcedBehavior[Command, Event, State]) actor.Actor {
@@ -94,7 +95,6 @@ func NewPersistentActor[Command any, Event any, State any](b *EventSourcedBehavi
 		state:      b.InitialState,
 		recovering: true,
 	}
-	// We use a custom typedContext implementation that works with any Actor
 	p.tctx = &persistentTypedContext[Command, Event, State]{actor: p}
 	return p
 }
@@ -103,8 +103,8 @@ type persistentTypedContext[C any, E any, S any] struct {
 	actor *persistentActor[C, E, S]
 }
 
-func (c *persistentTypedContext[C, E, S]) Self() TypedActorRef[C] {
-	return NewTypedActorRef[C](c.actor.Self())
+func (c *persistentTypedContext[C, E, S]) Self() typed.TypedActorRef[C] {
+	return typed.NewTypedActorRef[C](c.actor.Self())
 }
 
 func (c *persistentTypedContext[C, E, S]) System() actor.ActorContext {
@@ -141,17 +141,19 @@ func (c *persistentTypedContext[C, E, S]) Passivate() {
 	}
 }
 
-func (c *persistentTypedContext[C, E, S]) Timers() TimerScheduler[C] {
+func (c *persistentTypedContext[C, E, S]) Timers() typed.TimerScheduler[C] {
 	return c.actor.timers
 }
 
-func (c *persistentTypedContext[C, E, S]) Stash() StashBuffer[C] {
+func (c *persistentTypedContext[C, E, S]) Stash() typed.StashBuffer[C] {
 	return c.actor.userStash
 }
 
 func (c *persistentTypedContext[C, E, S]) Sender() actor.Ref {
 	return c.actor.Sender()
 }
+
+var askCounter atomic.Uint64
 
 func (c *persistentTypedContext[C, E, S]) Ask(target actor.Ref, msgFactory func(actor.Ref) any, transform func(any, error) C) {
 	askID := askCounter.Add(1)
@@ -180,9 +182,29 @@ func (c *persistentTypedContext[C, E, S]) Ask(target actor.Ref, msgFactory func(
 	target.Tell(msg)
 }
 
+type contextAskResponder[T any] struct {
+	self      typed.TypedActorRef[T]
+	transform func(any, error) T
+	timerKey  string
+	timers    typed.TimerScheduler[T]
+	completed *atomic.Bool
+}
+
+func (r *contextAskResponder[T]) Tell(msg any, sender ...actor.Ref) {
+	if r.completed.CompareAndSwap(false, true) {
+		r.timers.Cancel(r.timerKey)
+		transformed := r.transform(msg, nil)
+		r.self.Tell(transformed)
+	}
+}
+
+func (r *contextAskResponder[T]) Path() string {
+	return "/temp/context-ask"
+}
+
 func (p *persistentActor[Command, Event, State]) PreStart() {
-	p.timers = newTimerScheduler[Command](p.Self())
-	p.userStash = newStashBuffer[Command](p.Self(), actor.DefaultStashCapacity)
+	p.timers = actor.NewTimerScheduler[Command](p.Self())
+	p.userStash = actor.NewStashBuffer[Command](p.Self(), actor.DefaultStashCapacity)
 	p.recover()
 }
 
@@ -314,7 +336,7 @@ func (p *persistentActor[Command, Event, State]) persist(events []Event, then fu
 }
 
 // SpawnPersistent creates a new persistent actor.
-func SpawnPersistent[Command any, Event any, State any](ctx actor.ActorContext, behavior *EventSourcedBehavior[Command, Event, State], name string, props ...actor.Props) (TypedActorRef[Command], error) {
+func SpawnPersistent[Command any, Event any, State any](ctx actor.ActorContext, behavior *EventSourcedBehavior[Command, Event, State], name string, props ...actor.Props) (typed.TypedActorRef[Command], error) {
 	p := actor.Props{
 		New: func() actor.Actor { return NewPersistentActor(behavior) },
 	}
@@ -323,7 +345,7 @@ func SpawnPersistent[Command any, Event any, State any](ctx actor.ActorContext, 
 	}
 	ref, err := ctx.ActorOf(p, name)
 	if err != nil {
-		return TypedActorRef[Command]{}, err
+		return typed.TypedActorRef[Command]{}, err
 	}
-	return NewTypedActorRef[Command](ref), nil
+	return typed.NewTypedActorRef[Command](ref), nil
 }

@@ -17,6 +17,7 @@ import (
 
 	"github.com/sopranoworks/gekka"
 	"github.com/sopranoworks/gekka/actor/typed"
+	ptyped "github.com/sopranoworks/gekka/persistence/typed"
 	"github.com/sopranoworks/gekka/persistence"
 	"github.com/sopranoworks/gekka/sharding"
 )
@@ -64,15 +65,15 @@ func ShoppingCartBehavior(journal persistence.Journal) func(id string) *gekka.Ev
 			PersistenceID: "cart-" + id,
 			Journal:       journal,
 			InitialState:  State{Items: []string{}},
-			CommandHandler: func(ctx typed.TypedContext[Command], state State, cmd Command) typed.Effect[Event, State] {
+			CommandHandler: func(ctx typed.TypedContext[Command], state State, cmd Command) ptyped.Effect[Event, State] {
 				switch m := cmd.(type) {
 				case AddItem:
-					return typed.Persist[Event, State](Event{Item: m.Item})
+					return ptyped.Persist[Event, State](Event{Item: m.Item})
 				case GetItems:
 					m.ReplyTo.Tell(state.Items)
-					return typed.None[Event, State]()
+					return ptyped.None[Event, State]()
 				}
-				return typed.None[Event, State]()
+				return ptyped.None[Event, State]()
 			},
 			EventHandler: func(state State, event Event) State {
 				state.Items = append(state.Items, event.Item)

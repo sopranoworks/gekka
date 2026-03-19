@@ -26,8 +26,9 @@ with three generic parameters and two handler functions:
 
 ```go
 import (
-    "github.com/sopranoworks/gekka/actor"
+    "github.com/sopranoworks/gekka"
     "github.com/sopranoworks/gekka/persistence"
+    "github.com/sopranoworks/gekka/persistence/typed"
 )
 
 type (
@@ -36,22 +37,23 @@ type (
     CartState struct{ Items []string }
 )
 
-behavior := actor.NewEventSourcedBehavior[AddItem, ItemAdded, CartState]().
-    WithPersistenceID("cart-user-42").
-    WithJournal(persistence.NewInMemoryJournal()).      // plug in any Journal
-    WithSnapshotStore(persistence.NewInMemorySnapshotStore()). // optional
-    WithCommandHandler(func(
-        ctx   actor.TypedContext[AddItem],
+behavior := &gekka.EventSourcedBehavior[AddItem, ItemAdded, CartState]{
+    PersistenceID: "cart-user-42",
+    Journal:       persistence.NewInMemoryJournal(),      // plug in any Journal
+    SnapshotStore: persistence.NewInMemorySnapshotStore(), // optional
+    CommandHandler: func(
+        ctx   gekka.TypedContext[AddItem],
         state CartState,
         cmd   AddItem,
-    ) actor.Effect[ItemAdded, CartState] {
+    ) typed.Effect[ItemAdded, CartState] {
         // Validate the command, then decide what to persist.
-        return actor.Persist[ItemAdded, CartState](ItemAdded{Item: cmd.Item})
-    }).
-    WithEventHandler(func(state CartState, evt ItemAdded) CartState {
+        return typed.Persist[ItemAdded, CartState](ItemAdded{Item: cmd.Item})
+    },
+    EventHandler: func(state CartState, evt ItemAdded) CartState {
         // Apply the event to compute the next state. Must be pure.
         return CartState{Items: append(state.Items, evt.Item)}
-    })
+    },
+}
 ```
 
 ---
@@ -62,22 +64,22 @@ The command handler returns an `Effect` that instructs the runtime what to do:
 
 | Effect | Description |
 |--------|-------------|
-| `actor.Persist(events...)` | Persist one or more events and apply them to state |
-| `actor.PersistThen(then, events...)` | Persist events, then invoke `then(newState)` |
-| `actor.None[E, S]()` | Acknowledge the command with no side effects |
+| `typed.Persist(events...)` | Persist one or more events and apply them to state |
+| `typed.PersistThen(then, events...)` | Persist events, then invoke `then(newState)` |
+| `typed.None[E, S]()` | Acknowledge the command with no side effects |
 
 ```go
 // Persist a single event.
-return actor.Persist[ItemAdded, CartState](ItemAdded{Item: cmd.Item})
+return typed.Persist[ItemAdded, CartState](ItemAdded{Item: cmd.Item})
 
 // Persist and run a callback after state is updated.
-return actor.PersistThen[ItemAdded, CartState](
+return typed.PersistThen[ItemAdded, CartState](
     func(s CartState) { log.Println("Cart now has", len(s.Items), "items") },
     ItemAdded{Item: cmd.Item},
 )
 
 // No-op — useful for read-only commands or validation failures.
-return actor.None[ItemAdded, CartState]()
+return typed.None[ItemAdded, CartState]()
 ```
 
 ---
@@ -198,7 +200,7 @@ factory to `StartSharding`:
 gekka.StartSharding[AddItem, ItemAdded, CartState](
     cluster.System,
     "ShoppingCart",
-    func(entityId string) *actor.EventSourcedBehavior[AddItem, ItemAdded, CartState] {
+    func(entityId string) *gekka.EventSourcedBehavior[AddItem, ItemAdded, CartState] {
         return behavior.WithPersistenceID("cart-" + entityId)
     },
     extractId,

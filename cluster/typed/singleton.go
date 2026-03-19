@@ -16,11 +16,12 @@ import (
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/actor/typed"
 	"github.com/sopranoworks/gekka/cluster"
+	"github.com/sopranoworks/gekka/cluster/singleton"
 )
 
 // Singleton manages the lifecycle of a typed cluster singleton.
 type Singleton[M any] struct {
-	manager *cluster.ClusterSingletonManager
+	manager cluster.ClusterSingletonManagerInterface
 }
 
 // NewTypedSingleton creates a new type-safe singleton manager factory.
@@ -31,7 +32,7 @@ func NewTypedSingleton[M any](cm *cluster.ClusterManager, behavior typed.Behavio
 		},
 	}
 	return &Singleton[M]{
-		manager: cluster.NewClusterSingletonManager(cm, props, role),
+		manager: singleton.NewClusterSingletonManager(cm, props, role),
 	}
 }
 
@@ -54,13 +55,13 @@ func (s *Singleton[M]) Props() actor.Props {
 
 // TypedSingletonProxy provides type-safe access to a cluster singleton.
 type TypedSingletonProxy[M any] struct {
-	proxy *cluster.ClusterSingletonProxy
+	proxy cluster.ClusterSingletonProxyInterface
 }
 
 // NewTypedSingletonProxy creates a new type-safe proxy for a cluster singleton.
 func NewTypedSingletonProxy[M any](cm *cluster.ClusterManager, router cluster.Router, managerPath, role string) *TypedSingletonProxy[M] {
 	return &TypedSingletonProxy[M]{
-		proxy: cluster.NewClusterSingletonProxy(cm, router, managerPath, role),
+		proxy: singleton.NewClusterSingletonProxy(cm, router, managerPath, role),
 	}
 }
 
@@ -72,11 +73,11 @@ func (p *TypedSingletonProxy[M]) Tell(msg M) {
 
 // Path returns the path of the proxy (not the singleton itself).
 func (p *TypedSingletonProxy[M]) Path() string {
-	return p.proxy.ManagerPath() // Need to check if managerPath is exported or has getter
+	return p.proxy.ManagerPath()
 }
 
 // Untyped returns the underlying untyped proxy.
-func (p *TypedSingletonProxy[M]) Untyped() *cluster.ClusterSingletonProxy {
+func (p *TypedSingletonProxy[M]) Untyped() cluster.ClusterSingletonProxyInterface {
 	return p.proxy
 }
 

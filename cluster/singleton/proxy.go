@@ -6,12 +6,13 @@
  * SPDX-License-Identifier: MIT
  */
 
-package cluster
+package singleton
 
 import (
 	"context"
 	"fmt"
 
+	"github.com/sopranoworks/gekka/cluster"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 )
 
@@ -19,15 +20,15 @@ import (
 // In Pekko, ClusterSingletonManager names the child actor "singleton" by default.
 // So a manager at "/user/singletonManager" hosts the singleton at "/user/singletonManager/singleton".
 type ClusterSingletonProxy struct {
-	cm            *ClusterManager
-	router        Router
+	cm            *cluster.ClusterManager
+	router        cluster.Router
 	managerPath   string // relative actor path of the singleton manager, e.g. "/user/singletonManager"
 	singletonName string // name of the singleton actor, defaults to "singleton"
 	role          string // optional role filter; empty means any node
 	dataCenter    string // optional DC filter; empty means any DC
 }
 
-func NewClusterSingletonProxy(cm *ClusterManager, router Router, managerPath, role string) *ClusterSingletonProxy {
+func NewClusterSingletonProxy(cm *cluster.ClusterManager, router cluster.Router, managerPath, role string) *ClusterSingletonProxy {
 	return &ClusterSingletonProxy{
 		cm:            cm,
 		router:        router,
@@ -38,7 +39,7 @@ func NewClusterSingletonProxy(cm *ClusterManager, router Router, managerPath, ro
 }
 
 // WithDataCenter restricts routing to the oldest node in the given data center.
-func (p *ClusterSingletonProxy) WithDataCenter(dc string) *ClusterSingletonProxy {
+func (p *ClusterSingletonProxy) WithDataCenter(dc string) cluster.ClusterSingletonProxyInterface {
 	p.dataCenter = dc
 	return p
 }
@@ -46,7 +47,7 @@ func (p *ClusterSingletonProxy) WithDataCenter(dc string) *ClusterSingletonProxy
 // WithSingletonName sets the name of the singleton actor.
 // In Pekko, the singleton is typically a child of the manager named "singleton".
 // Set to empty string if the manager itself is the singleton.
-func (p *ClusterSingletonProxy) WithSingletonName(name string) *ClusterSingletonProxy {
+func (p *ClusterSingletonProxy) WithSingletonName(name string) cluster.ClusterSingletonProxyInterface {
 	p.singletonName = name
 	return p
 }

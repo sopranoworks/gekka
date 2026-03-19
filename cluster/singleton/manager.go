@@ -6,12 +6,13 @@
  * SPDX-License-Identifier: MIT
  */
 
-package cluster
+package singleton
 
 import (
 	"log"
 
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/cluster"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 )
 
@@ -34,7 +35,7 @@ import (
 type ClusterSingletonManager struct {
 	actor.BaseActor
 
-	cm             *ClusterManager
+	cm             *cluster.ClusterManager
 	role           string      // optional role filter; empty = any node
 	dataCenter     string      // optional DC filter; empty = any DC
 	singletonProps actor.Props // factory for the singleton actor
@@ -47,7 +48,7 @@ type ClusterSingletonManager struct {
 // cm is the cluster manager used for membership queries and event subscriptions.
 // singletonProps provides the factory for the singleton actor.
 // role restricts the set of eligible nodes; pass "" to consider all Up nodes.
-func NewClusterSingletonManager(cm *ClusterManager, singletonProps actor.Props, role string) *ClusterSingletonManager {
+func NewClusterSingletonManager(cm *cluster.ClusterManager, singletonProps actor.Props, role string) *ClusterSingletonManager {
 	return &ClusterSingletonManager{
 		BaseActor:      actor.NewBaseActor(),
 		cm:             cm,
@@ -58,7 +59,7 @@ func NewClusterSingletonManager(cm *ClusterManager, singletonProps actor.Props, 
 
 // WithDataCenter restricts this manager to host the singleton only when this
 // node is the oldest member of the given data center.
-func (m *ClusterSingletonManager) WithDataCenter(dc string) *ClusterSingletonManager {
+func (m *ClusterSingletonManager) WithDataCenter(dc string) cluster.ClusterSingletonManagerInterface {
 	m.dataCenter = dc
 	return m
 }
@@ -67,10 +68,10 @@ func (m *ClusterSingletonManager) WithDataCenter(dc string) *ClusterSingletonMan
 // is already the oldest at startup time.
 func (m *ClusterSingletonManager) PreStart() {
 	m.cm.Subscribe(m.Self(),
-		EventMemberUp,
-		EventMemberLeft,
-		EventMemberExited,
-		EventMemberRemoved,
+		cluster.EventMemberUp,
+		cluster.EventMemberLeft,
+		cluster.EventMemberExited,
+		cluster.EventMemberRemoved,
 	)
 	m.maybeSpawnOrStop()
 }
@@ -89,7 +90,7 @@ func (m *ClusterSingletonManager) PostStop() {
 // Receive dispatches cluster domain events and monitors singleton lifecycle.
 func (m *ClusterSingletonManager) Receive(msg any) {
 	switch msg.(type) {
-	case MemberUp, MemberLeft, MemberExited, MemberRemoved:
+	case cluster.MemberUp, cluster.MemberLeft, cluster.MemberExited, cluster.MemberRemoved:
 		m.maybeSpawnOrStop()
 	default:
 		// Forward unrecognised messages to the singleton if it is running.

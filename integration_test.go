@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
-	"github.com/sopranoworks/gekka/cluster"
+	"github.com/sopranoworks/gekka/cluster/singleton"
 	"github.com/sopranoworks/gekka/cluster/ddata"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 )

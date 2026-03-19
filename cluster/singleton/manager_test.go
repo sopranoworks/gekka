@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-package cluster
+package singleton
 
 import (
 	"context"
@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/cluster"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 	"google.golang.org/protobuf/proto"
 )
@@ -96,7 +97,7 @@ func (c *singletonTestContext) stopCount() int {
 
 // ── helper: build a ClusterManager with a single local Up node ───────────────
 
-func newSingletonTestCM(host string, port uint32, upNumber int32) *ClusterManager {
+func newSingletonTestCM(host string, port uint32, upNumber int32) *cluster.ClusterManager {
 	local := &gproto_cluster.UniqueAddress{
 		Address: &gproto_cluster.Address{
 			Protocol: proto.String("pekko"),
@@ -107,7 +108,7 @@ func newSingletonTestCM(host string, port uint32, upNumber int32) *ClusterManage
 		Uid: proto.Uint32(1),
 	}
 	router := func(ctx context.Context, path string, msg any) error { return nil }
-	cm := NewClusterManager(local, router)
+	cm := cluster.NewClusterManager(local, router)
 	// Promote the node to Up with the given upNumber.
 	cm.State.Members[0].Status = gproto_cluster.MemberStatus_Up.Enum()
 	cm.State.Members[0].UpNumber = proto.Int32(upNumber)
@@ -115,7 +116,7 @@ func newSingletonTestCM(host string, port uint32, upNumber int32) *ClusterManage
 }
 
 // newWiredManager builds a ClusterSingletonManager with the test context injected.
-func newWiredManager(cm *ClusterManager, ctx *singletonTestContext) *ClusterSingletonManager {
+func newWiredManager(cm *cluster.ClusterManager, ctx *singletonTestContext) *ClusterSingletonManager {
 	props := actor.Props{New: func() actor.Actor { return &noopSingletonActor{} }}
 	mgr := NewClusterSingletonManager(cm, props, "")
 	selfRef := &singletonTestRef{path: "/user/singletonManager"}
@@ -213,7 +214,7 @@ func TestSingletonManager_StopsOnLeadershipLoss(t *testing.T) {
 	cm.Mu.Unlock()
 
 	// Deliver a MemberUp event to trigger re-evaluation.
-	mgr.Receive(MemberUp{Member: MemberAddress{Host: "127.0.0.1", Port: 2552}})
+	mgr.Receive(cluster.MemberUp{Member: cluster.MemberAddress{Host: "127.0.0.1", Port: 2552}})
 
 	if ctx.stopCount() != 1 {
 		t.Fatalf("expected 1 stop after leadership loss, got %d", ctx.stopCount())
@@ -259,7 +260,7 @@ func TestSingletonManager_RespawnsAfterBecomingOldest(t *testing.T) {
 	cm.State.Members[0].UpNumber = proto.Int32(0)
 	cm.Mu.Unlock()
 
-	mgr.Receive(MemberRemoved{Member: MemberAddress{Host: "127.0.0.1", Port: 2552}})
+	mgr.Receive(cluster.MemberRemoved{Member: cluster.MemberAddress{Host: "127.0.0.1", Port: 2552}})
 
 	// maybeSpawnOrStop is synchronous; the singleton should be spawned immediately.
 	deadline := time.Now().Add(time.Second)

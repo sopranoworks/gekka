@@ -28,6 +28,7 @@ import (
 	gcluster "github.com/sopranoworks/gekka/cluster"
 	"github.com/sopranoworks/gekka/cluster/ddata"
 	ddata_typed "github.com/sopranoworks/gekka/cluster/ddata/typed"
+	"github.com/sopranoworks/gekka/cluster/singleton"
 	"github.com/sopranoworks/gekka/discovery"
 	"github.com/sopranoworks/gekka/internal/core"
 	"github.com/sopranoworks/gekka/internal/management"
@@ -300,6 +301,12 @@ type PersistenceConfig struct {
 // SBRConfig is a re-export of cluster.SBRConfig for use in ClusterConfig.
 // Import gekka directly — you do not need to import the cluster sub-package.
 type SBRConfig = gcluster.SBRConfig
+
+// ClusterSingletonManagerInterface is an alias for gcluster.ClusterSingletonManagerInterface.
+type ClusterSingletonManagerInterface = gcluster.ClusterSingletonManagerInterface
+
+// ClusterSingletonProxyInterface is an alias for gcluster.ClusterSingletonProxyInterface.
+type ClusterSingletonProxyInterface = gcluster.ClusterSingletonProxyInterface
 
 // TelemetryConfig controls the built-in OTEL instrumentation hooks.
 type TelemetryConfig struct {
@@ -1278,8 +1285,8 @@ func (c *Cluster) Replicator() *ddata.Replicator {
 //
 //	proxy := node.SingletonProxy("/user/singletonManager", "")
 //	proxy.Send(ctx, []byte("ping"))
-func (c *Cluster) SingletonProxy(managerPath, role string) *gcluster.ClusterSingletonProxy {
-	return gcluster.NewClusterSingletonProxy(c.cm, c.router, managerPath, role)
+func (c *Cluster) SingletonProxy(managerPath, role string) gcluster.ClusterSingletonProxyInterface {
+	return singleton.NewClusterSingletonProxy(c.cm, c.router, managerPath, role)
 }
 
 // Subscribe registers an ActorRef to receive cluster domain events.

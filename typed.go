@@ -22,6 +22,7 @@ import (
 	"github.com/sopranoworks/gekka/persistence"
 	ptyped "github.com/sopranoworks/gekka/persistence/typed"
 	pstate "github.com/sopranoworks/gekka/persistence/typed/state"
+	ctyped "github.com/sopranoworks/gekka/cluster/typed"
 	"github.com/sopranoworks/gekka/internal/core"
 )
 
@@ -35,6 +36,12 @@ type EventSourcedBehavior[Command any, Event any, State any] = ptyped.EventSourc
 
 // DurableStateBehavior defines a behavior for a state-persistent actor.
 type DurableStateBehavior[Command any, State any] = pstate.DurableStateBehavior[Command, State]
+
+// ClusterSingleton is an alias for ctyped.Singleton[M].
+type ClusterSingleton[M any] = ctyped.Singleton[M]
+
+// TypedSingletonProxy is an alias for ctyped.TypedSingletonProxy[M].
+type TypedSingletonProxy[M any] = ctyped.TypedSingletonProxy[M]
 
 // Topic is an alias for pubsub.Topic[M].
 type Topic[M any] = pubsub.Topic[M]
@@ -76,6 +83,16 @@ func DurableState[C any, S any](persistenceID string, emptyState S, stateStore p
 		EmptyState:    emptyState,
 		StateStore:    stateStore,
 	}
+}
+
+// NewTypedSingleton creates a new type-safe singleton manager factory.
+func NewTypedSingleton[M any](cm *Cluster, behavior typed.Behavior[M], role string) *ClusterSingleton[M] {
+	return ctyped.NewTypedSingleton(cm.cm, behavior, role)
+}
+
+// NewTypedSingletonProxy creates a new type-safe proxy for a cluster singleton.
+func NewTypedSingletonProxy[M any](cm *Cluster, managerPath, role string) *TypedSingletonProxy[M] {
+	return ctyped.NewTypedSingletonProxy[M](cm.cm, cm.router, managerPath, role)
 }
 
 // Spawn creates a new typed actor as a top-level actor in the system.

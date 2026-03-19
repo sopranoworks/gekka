@@ -16,6 +16,7 @@ import (
 
 	"github.com/sopranoworks/gekka/actor/typed"
 	"github.com/sopranoworks/gekka/persistence"
+	ptyped "github.com/sopranoworks/gekka/persistence/typed"
 	"github.com/sopranoworks/gekka/sharding"
 )
 
@@ -57,8 +58,8 @@ func TestClusterSharding_Rebalancing(t *testing.T) {
 			PersistenceID: "test-" + id,
 			Journal:       journal,
 			InitialState:  "",
-			CommandHandler: func(ctx typed.TypedContext[string], state string, cmd string) typed.Effect[string, string] {
-				return typed.Persist[string, string](cmd)
+			CommandHandler: func(ctx typed.TypedContext[string], state string, cmd string) ptyped.Effect[string, string] {
+				return ptyped.Persist[string, string](cmd)
 			},
 			EventHandler: func(state string, event string) string {
 				return event

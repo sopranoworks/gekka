@@ -255,7 +255,7 @@ import (
 
 	"github.com/sopranoworks/gekka"
 	"github.com/sopranoworks/gekka/actor"
-	"github.com/sopranoworks/gekka/cluster"
+	"github.com/sopranoworks/gekka/cluster/singleton"
 )
 
 func main() {

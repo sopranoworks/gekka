@@ -13,6 +13,7 @@ import (
 
 	"github.com/sopranoworks/gekka/actor/typed"
 	"github.com/sopranoworks/gekka/cluster"
+	"github.com/sopranoworks/gekka/cluster/singleton"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 	"github.com/stretchr/testify/assert"
 )
@@ -28,14 +29,14 @@ func TestTypedSingleton(t *testing.T) {
 	cm := &cluster.ClusterManager{}
 	cm.LocalAddress = &gproto_cluster.UniqueAddress{}
 	
-	singleton := NewTypedSingleton(cm, behavior, "")
-	props := singleton.Props()
+	s := NewTypedSingleton(cm, behavior, "")
+	props := s.Props()
 	
 	assert.NotNil(t, props.New)
 	
 	// Spawning and message passing would require a full cluster setup which is
 	// typically done in integration tests. Here we verify the structure.
-	mgr := props.New().(*cluster.ClusterSingletonManager)
+	mgr := props.New().(*singleton.ClusterSingletonManager)
 	assert.NotNil(t, mgr)
 }
 

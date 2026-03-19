@@ -19,7 +19,7 @@ import (
 	"github.com/sopranoworks/gekka/actor/typed"
 	ptyped "github.com/sopranoworks/gekka/persistence/typed"
 	"github.com/sopranoworks/gekka/persistence"
-	"github.com/sopranoworks/gekka/sharding"
+	"github.com/sopranoworks/gekka/cluster/sharding"
 )
 
 // --- Messages ---

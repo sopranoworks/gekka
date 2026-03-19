@@ -27,7 +27,7 @@ import (
     "github.com/sopranoworks/gekka"
     "github.com/sopranoworks/gekka/actor"
     "github.com/sopranoworks/gekka/persistence"
-    "github.com/sopranoworks/gekka/sharding/typed"
+    "github.com/sopranoworks/gekka/cluster/sharding/typed"
 )
 
 // 1. Define commands, events, and state for the entity.

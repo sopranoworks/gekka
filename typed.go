@@ -23,7 +23,7 @@ import (
 	ptyped "github.com/sopranoworks/gekka/persistence/typed"
 	pstate "github.com/sopranoworks/gekka/persistence/typed/state"
 	ctyped "github.com/sopranoworks/gekka/cluster/typed"
-	styped "github.com/sopranoworks/gekka/sharding/typed"
+	styped "github.com/sopranoworks/gekka/cluster/sharding/typed"
 	"github.com/sopranoworks/gekka/internal/core"
 )
 

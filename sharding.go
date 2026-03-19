@@ -18,8 +18,8 @@ import (
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/persistence"
 	ptyped "github.com/sopranoworks/gekka/persistence/typed"
-	"github.com/sopranoworks/gekka/sharding"
-	styped "github.com/sopranoworks/gekka/sharding/typed"
+	"github.com/sopranoworks/gekka/cluster/sharding"
+	styped "github.com/sopranoworks/gekka/cluster/sharding/typed"
 )
 
 // ShardingSettings defines configuration for cluster sharding.

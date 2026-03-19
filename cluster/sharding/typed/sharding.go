@@ -13,7 +13,7 @@ import (
 
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/actor/typed"
-	"github.com/sopranoworks/gekka/sharding"
+	"github.com/sopranoworks/gekka/cluster/sharding"
 )
 
 // EntityTypeKey is a type-safe key representing the entity type and its message protocol.

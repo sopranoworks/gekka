@@ -14,7 +14,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/sopranoworks/gekka/sharding"
+	"github.com/sopranoworks/gekka/cluster/sharding"
 )
 
 // loadFixture reads a binary fixture from testdata/.

@@ -16,6 +16,7 @@ import (
 
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/actor/typed"
+	"github.com/sopranoworks/gekka/actor/typed/delivery"
 	"github.com/sopranoworks/gekka/actor/typed/pubsub"
 	"github.com/sopranoworks/gekka/actor/typed/receptionist"
 	"github.com/sopranoworks/gekka/internal/core"
@@ -40,6 +41,27 @@ type TopicSubscribe[M any] = pubsub.Subscribe[M]
 
 // ReceptionistGroup is an alias for receptionist.ReceptionistGroup[T].
 type ReceptionistGroup[T any] = receptionist.ReceptionistGroup[T]
+
+// ─── Reliable Delivery ───────────────────────────────────────────────────
+
+// ProducerControllerSendMessage is an alias for delivery.SendMessage.
+type ProducerControllerSendMessage = delivery.SendMessage
+
+// ConsumerControllerDelivery is an alias for delivery.Delivery.
+type ConsumerControllerDelivery = delivery.Delivery
+
+// ConsumerControllerConfirmed is an alias for delivery.Confirmed.
+type ConsumerControllerConfirmed = delivery.Confirmed
+
+// NewProducerController creates a behavior for a producer controller.
+func NewProducerController(producerID string) typed.Behavior[any] {
+	return delivery.NewProducerController(producerID)
+}
+
+// NewConsumerController creates a behavior for a consumer controller.
+func NewConsumerController(consumerActor actor.Ref, windowSize int) typed.Behavior[any] {
+	return delivery.NewConsumerController(consumerActor, windowSize)
+}
 
 // Spawn creates a new typed actor as a top-level actor in the system.
 func Spawn[T any](sys ActorSystem, behavior typed.Behavior[T], name string, props ...actor.Props) (TypedActorRef[T], error) {

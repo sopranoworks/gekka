@@ -6,7 +6,7 @@
 
 # Reliable Delivery
 
-This document describes the design for a new `actor/delivery` package that implements
+This document describes the design for a new `actor/typed/delivery` package that implements
 the **Reliable Delivery** pattern compatible with Pekko's `ProducerController` /
 `ConsumerController` API (introduced in Pekko 1.0 / Akka 2.6.4).
 
@@ -54,7 +54,7 @@ The `SequencedMessage` envelope wraps the user payload along with:
 
 ## 2. Gekka Design Goals
 
-The `actor/delivery` package will provide:
+The `actor/typed/delivery` package will provide:
 
 1. **`ProducerController[T]`** — wraps a sending actor, assigns sequence numbers,
    tracks demand, and handles retransmission on re-registration.
@@ -71,7 +71,7 @@ The `actor/delivery` package will provide:
 ## 3. Package Layout
 
 ```
-actor/delivery/
+actor/typed/delivery/
   doc.go                   package-level godoc
   producer.go              ProducerController[T] implementation
   consumer.go              ConsumerController[T] implementation
@@ -287,11 +287,11 @@ The package exposes typed actor behaviors for use with `gekka.Spawn`:
 ```go
 // NewProducerBehavior returns a Behavior that drives a ProducerController.
 // Use with Spawn to obtain a TypedActorRef[ProducerMessage[T]].
-func NewProducerBehavior[T any](consumer actor.Ref, cfg ProducerConfig) actor.Behavior[ProducerMessage[T]]
+func NewProducerBehavior[T any](consumer actor.Ref, cfg ProducerConfig) typed.Behavior[ProducerMessage[T]]
 
 // NewConsumerBehavior returns a Behavior that drives a ConsumerController.
 // downstream receives T after dedup + in-order reassembly.
-func NewConsumerBehavior[T any](producer actor.Ref, downstream actor.Ref, cfg ConsumerConfig) actor.Behavior[any]
+func NewConsumerBehavior[T any](producer actor.Ref, downstream actor.Ref, cfg ConsumerConfig) typed.Behavior[any]
 ```
 
 Example:
@@ -318,7 +318,7 @@ producer.Tell(delivery.Send(myMessage))
 
 Per the project MANDATORY RULE, the following must exist before any merge:
 
-- `actor/delivery/delivery_compatibility_test.go` — tagged `//go:build integration`
+- `actor/typed/delivery/delivery_compatibility_test.go` — tagged `//go:build integration`
 - Tests must verify that:
   1. A Go `ProducerController` can deliver 100 messages to a Pekko `ConsumerController`.
   2. A Pekko `ProducerController` can deliver 100 messages to a Go `ConsumerController`.

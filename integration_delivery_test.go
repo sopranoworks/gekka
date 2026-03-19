@@ -34,7 +34,7 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
-	"github.com/sopranoworks/gekka/actor/delivery"
+	"github.com/sopranoworks/gekka/actor/typed/delivery"
 )
 
 // TestDeliveryInterop is the top-level Reliable Delivery E2E test.

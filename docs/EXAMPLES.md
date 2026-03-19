@@ -342,7 +342,7 @@ package main
 import (
 	"github.com/sopranoworks/gekka"
 	"github.com/sopranoworks/gekka/actor"
-	"github.com/sopranoworks/gekka/actor/delivery"
+	"github.com/sopranoworks/gekka/actor/typed/delivery"
 )
 
 // App-level consumer actor that receives Delivery messages.

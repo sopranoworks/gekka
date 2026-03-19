@@ -52,34 +52,24 @@ func (l *TailChoppingRoutingLogic) Route(router *RouterActor, msg any) bool {
 }
 
 // TailChoppingFirstCompleted is a router implementation that sends a message
-// to one routee at a time with a 'within' interval, providing the first 
+// to one routee at a time with a 'Within' interval, providing the first 
 // response received back to the original sender.
 //
 // Deprecated: use NewGroupRouter or NewPoolRouter with TailChoppingRoutingLogic.
 type TailChoppingFirstCompleted struct {
 	RouterActor
-	within time.Duration
+	Within time.Duration
 }
 
 // NewTailChoppingFirstCompleted creates a new TailChoppingFirstCompleted router.
-func NewTailChoppingFirstCompleted(routees []Ref, within time.Duration) *TailChoppingFirstCompleted {
+func NewTailChoppingFirstCompleted(routees []Ref, Within time.Duration) *TailChoppingFirstCompleted {
 	return &TailChoppingFirstCompleted{
 		RouterActor: RouterActor{
 			BaseActor: NewBaseActor(),
-			Logic:     &TailChoppingRoutingLogic{Within: within},
+			Logic:     &TailChoppingRoutingLogic{Within: Within},
 			Routees:   routees,
 		},
-		within: within,
-	}
-}
-
-// Behavior returns a typed actor Behavior that drives the tail-chopping router.
-func (r *TailChoppingFirstCompleted) Behavior() Behavior[any] {
-	return func(ctx TypedContext[any], msg any) Behavior[any] {
-		r.currentSender = ctx.Sender()
-		InjectSystem(r, ctx.System())
-		r.Receive(msg)
-		return Same[any]()
+		Within: Within,
 	}
 }
 

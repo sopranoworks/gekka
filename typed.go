@@ -15,40 +15,28 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/actor/typed"
 	"github.com/sopranoworks/gekka/internal/core"
 )
 
 var askId uint64
 
 // TypedActorRef is a type-safe reference to an actor that accepts messages of type T.
-type TypedActorRef[T any] = actor.TypedActorRef[T]
+type TypedActorRef[T any] = typed.TypedActorRef[T]
 
 // EventSourcedBehavior defines a behavior for a persistent actor.
-type EventSourcedBehavior[Command any, Event any, State any] = actor.EventSourcedBehavior[Command, Event, State]
+type EventSourcedBehavior[Command any, Event any, State any] = typed.EventSourcedBehavior[Command, Event, State]
 
 // Spawn creates a new typed actor as a top-level actor in the system.
-// This is the Go-idiomatic equivalent of Pekko/Akka's ActorSystem.spawn(behavior, name).
-// Because Go does not permit generic methods on interface or non-generic receiver types,
-// the ActorSystem is passed as the first argument rather than used as a receiver.
-func Spawn[T any](sys ActorSystem, behavior actor.Behavior[T], name string, props ...actor.Props) (TypedActorRef[T], error) {
-	p := actor.Props{
-		New: func() actor.Actor { return actor.NewTypedActor(behavior) },
-	}
-	if len(props) > 0 {
-		p.SupervisorStrategy = props[0].SupervisorStrategy
-	}
-	ref, err := sys.ActorOf(p, name)
-	if err != nil {
-		return TypedActorRef[T]{}, err
-	}
-	return actor.NewTypedActorRef[T](ref), nil
+func Spawn[T any](sys ActorSystem, behavior typed.Behavior[T], name string, props ...actor.Props) (TypedActorRef[T], error) {
+	ref, err := typed.Spawn(asActorContext(sys, ""), behavior, name, props...)
+	return ref, err
 }
 
 // SpawnPersistent creates a new persistent typed actor.
-// Like Spawn, this is the Go-idiomatic equivalent of a method on ActorSystem.
 func SpawnPersistent[Command any, Event any, State any](sys ActorSystem, behavior *EventSourcedBehavior[Command, Event, State], name string, props ...actor.Props) (TypedActorRef[Command], error) {
 	p := actor.Props{
-		New: func() actor.Actor { return actor.NewPersistentActor(behavior) },
+		New: func() actor.Actor { return typed.NewPersistentActor(behavior) },
 	}
 	if len(props) > 0 {
 		p.SupervisorStrategy = props[0].SupervisorStrategy
@@ -57,12 +45,10 @@ func SpawnPersistent[Command any, Event any, State any](sys ActorSystem, behavio
 	if err != nil {
 		return TypedActorRef[Command]{}, err
 	}
-	return actor.NewTypedActorRef[Command](ref), nil
+	return typed.NewTypedActorRef[Command](ref), nil
 }
 
 // Ask sends a message to a typed actor and waits for a reply.
-// It follows the Akka Typed 'Ask' pattern where a message factory is provided
-// that takes a 'replyTo' reference and returns the message to be sent.
 func Ask[T any, R any](ctx context.Context, target TypedActorRef[T], timeout time.Duration, msgFactory func(replyTo TypedActorRef[R]) T) (R, error) {
 	if timeout > 0 {
 		var cancel context.CancelFunc
@@ -84,12 +70,12 @@ func Ask[T any, R any](ctx context.Context, target TypedActorRef[T], timeout tim
 
 	// If we can't find the system, fall back to the old behavior (only works locally)
 	if sys == nil {
-		return actor.Ask(ctx, target, timeout, msgFactory)
+		return typed.Ask(ctx, target, timeout, msgFactory)
 	}
 
 	cluster, isCluster := sys.(*Cluster)
 	if !isCluster {
-		return actor.Ask(ctx, target, timeout, msgFactory)
+		return typed.Ask(ctx, target, timeout, msgFactory)
 	}
 
 	// Cluster implementation using NodeManager's pending reply mechanism
@@ -100,7 +86,7 @@ func Ask[T any, R any](ctx context.Context, target TypedActorRef[T], timeout tim
 
 	// Create a typed ref for the temporary path
 	fullTempPath := cluster.SelfPathURI(tempPath)
-	replyTo := actor.NewTypedActorRef[R](&remoteAskRef{path: fullTempPath})
+	replyTo := typed.NewTypedActorRef[R](&remoteAskRef{path: fullTempPath})
 
 	msg := msgFactory(replyTo)
 	target.Tell(msg)
@@ -109,7 +95,6 @@ func Ask[T any, R any](ctx context.Context, target TypedActorRef[T], timeout tim
 	case meta := <-replyCh:
 		payload := meta.DeserializedMessage
 		if payload == nil {
-			// Try to deserialize if possible, though it should already be done by handleUserMessage
 			return zero, fmt.Errorf("sharding: received raw payload in Ask, cannot deserialize")
 		}
 

@@ -95,7 +95,7 @@ func TestCircuitBreaker_AskWrapper(t *testing.T) {
 		ResetTimeout: 100 * time.Millisecond,
 	}
 	cb := NewCircuitBreaker(settings)
-	ref := &functionalMockRef{path: "/user/target"}
+	ref := &FunctionalMockRef{PathURI: "/user/target"}
 
 	mockAsk := func(ctx context.Context, r Ref, msg any) (any, error) {
 		return "pong", nil

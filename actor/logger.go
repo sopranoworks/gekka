@@ -47,7 +47,7 @@ func newActorLogger(h slog.Handler, ref Ref, getRef func() Ref) ActorLogger {
 
 // withSender returns a *slog.Logger with the sender attribute pre-set if
 // a sender is currently set on the actor. This is called lazily at log time.
-func (l ActorLogger) logger() *slog.Logger {
+func (l ActorLogger) Logger() *slog.Logger {
 	if l.getRef == nil {
 		return l.base
 	}
@@ -59,28 +59,28 @@ func (l ActorLogger) logger() *slog.Logger {
 
 // Debug logs at DEBUG level with the actor context.
 func (l ActorLogger) Debug(msg string, args ...any) {
-	l.logger().Debug(msg, args...)
+	l.Logger().Debug(msg, args...)
 }
 
 // Info logs at INFO level with the actor context.
 func (l ActorLogger) Info(msg string, args ...any) {
-	l.logger().Info(msg, args...)
+	l.Logger().Info(msg, args...)
 }
 
 // Warn logs at WARN level with the actor context.
 func (l ActorLogger) Warn(msg string, args ...any) {
-	l.logger().Warn(msg, args...)
+	l.Logger().Warn(msg, args...)
 }
 
 // Error logs at ERROR level with the actor context.
 func (l ActorLogger) Error(msg string, args ...any) {
-	l.logger().Error(msg, args...)
+	l.Logger().Error(msg, args...)
 }
 
 // Log emits a record at the given level with the actor context.
 // Use this when the level is dynamic.
 func (l ActorLogger) Log(ctx context.Context, level slog.Level, msg string, args ...any) {
-	l.logger().Log(ctx, level, msg, args...)
+	l.Logger().Log(ctx, level, msg, args...)
 }
 
 // With returns a new ActorLogger with additional pre-set attributes.
@@ -100,7 +100,7 @@ func (l ActorLogger) With(args ...any) ActorLogger {
 //	    a.Log().Debug("payload", "data", expensiveFormat(payload))
 //	}
 func (l ActorLogger) Enabled(ctx context.Context, level slog.Level) bool {
-	return l.logger().Enabled(ctx, level)
+	return l.Logger().Enabled(ctx, level)
 }
 
 // systemName extracts the actor-system name from a full actor-path URI.

@@ -13,6 +13,7 @@ import (
 	"reflect"
 
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/actor/typed"
 	"github.com/sopranoworks/gekka/crdt"
 )
 
@@ -30,29 +31,29 @@ func (k ServiceKey[T]) String() string {
 
 type Register[T any] struct {
 	Key     ServiceKey[T]
-	Service actor.TypedActorRef[T]
+	Service typed.TypedActorRef[T]
 }
 
 type Find[T any] struct {
 	Key     ServiceKey[T]
-	ReplyTo actor.TypedActorRef[Listing[T]]
+	ReplyTo typed.TypedActorRef[Listing[T]]
 }
 
 type Subscribe[T any] struct {
 	Key        ServiceKey[T]
-	Subscriber actor.TypedActorRef[Listing[T]]
+	Subscriber typed.TypedActorRef[Listing[T]]
 }
 
 type Listing[T any] struct {
 	Key      ServiceKey[T]
-	Services []actor.TypedActorRef[T]
+	Services []typed.TypedActorRef[T]
 }
 
 // ─── Internal/Non-Generic Protocol ───────────────────────────────────────
 
 type subscribe struct {
 	keyID      string
-	subscriber actor.TypedActorRef[any]
+	subscriber typed.TypedActorRef[any]
 	sendUpdate func([]string) // closure to send typed Listing back to subscriber
 }
 
@@ -62,7 +63,7 @@ type replicatorChanged struct {
 
 // ─── Receptionist Actor ───────────────────────────────────────────────────
 
-func receptionistBehavior(replicator *crdt.Replicator) actor.Behavior[any] {
+func receptionistBehavior(replicator *crdt.Replicator) typed.Behavior[any] {
 	type subInfo struct {
 		keyID      string
 		subscriber actor.Ref
@@ -71,7 +72,7 @@ func receptionistBehavior(replicator *crdt.Replicator) actor.Behavior[any] {
 
 	var subscribers []subInfo
 
-	return func(ctx actor.TypedContext[any], msg any) actor.Behavior[any] {
+	return func(ctx typed.TypedContext[any], msg any) typed.Behavior[any] {
 		switch m := msg.(type) {
 		case subscribe:
 			sub := subInfo{
@@ -112,21 +113,21 @@ func receptionistBehavior(replicator *crdt.Replicator) actor.Behavior[any] {
 				}
 			}
 		}
-		return actor.Same[any]()
+		return typed.Same[any]()
 	}
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────
 
-var globalReceptionist actor.TypedActorRef[any]
+var globalReceptionist typed.TypedActorRef[any]
 
 // Receptionist returns the reference to the local Receptionist actor.
-func Receptionist() actor.TypedActorRef[any] {
+func Receptionist() typed.TypedActorRef[any] {
 	return globalReceptionist
 }
 
 // SetReceptionist sets the global receptionist reference.
-func SetReceptionist(ref actor.TypedActorRef[any]) {
+func SetReceptionist(ref typed.TypedActorRef[any]) {
 	globalReceptionist = ref
 }
 

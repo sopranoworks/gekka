@@ -189,15 +189,6 @@ func (r *RouterActor) RouteesSnapshot() []Ref {
 	return cp
 }
 
-// Behavior returns a typed actor Behavior that drives the router.
-func (r *RouterActor) Behavior() Behavior[any] {
-	return func(ctx TypedContext[any], msg any) Behavior[any] {
-		r.currentSender = ctx.Sender()
-		InjectSystem(r, ctx.System())
-		r.Receive(msg)
-		return Same[any]()
-	}
-}
 // AddRoutee appends ref to the routee list. Safe to call from Receive; not
 // safe to call concurrently from outside the actor's goroutine.
 func (r *RouterActor) AddRoutee(ref Ref) {

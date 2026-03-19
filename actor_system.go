@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/actor/typed"
 	"github.com/sopranoworks/gekka/internal/core"
 	"github.com/sopranoworks/gekka/stream"
 )
@@ -116,7 +117,7 @@ type ActorSystem interface {
 	Materializer() stream.Materializer
 
 	// Receptionist returns the reference to the cluster-aware receptionist.
-	Receptionist() actor.TypedActorRef[any]
+	Receptionist() typed.TypedActorRef[any]
 }
 
 // internalSystem is an unexported interface used by ActorRef and ActorSelection
@@ -130,10 +131,10 @@ type internalSystem interface {
 	SelfPathURI(path string) string
 	LookupDeployment(path string) (core.DeploymentConfig, bool)
 	SpawnActor(path string, a actor.Actor, props actor.Props) actor.Ref // Refined to actor.Ref
-	SubscribeToReceptionist(keyID string, subscriber actor.TypedActorRef[any], callback func([]string))
+	SubscribeToReceptionist(keyID string, subscriber typed.TypedActorRef[any], callback func([]string))
 }
 
-func (b *actorContextBridge) SubscribeToReceptionist(keyID string, subscriber actor.TypedActorRef[any], callback func([]string)) {
+func (b *actorContextBridge) SubscribeToReceptionist(keyID string, subscriber typed.TypedActorRef[any], callback func([]string)) {
 	if s, ok := b.sys.(internalSystem); ok {
 		s.SubscribeToReceptionist(keyID, subscriber, callback)
 	}

@@ -14,12 +14,13 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/actor/typed"
 )
 
 func TestSpawn_System(t *testing.T) {
 	sys, _ := NewActorSystem("test")
-	behavior := func(ctx actor.TypedContext[string], msg string) actor.Behavior[string] {
-		return actor.Same[string]()
+	behavior := func(ctx typed.TypedContext[string], msg string) typed.Behavior[string] {
+		return typed.Same[string]()
 	}
 
 	ref, err := Spawn(sys, behavior, "test")
@@ -45,12 +46,12 @@ func TestAsk_Typed(t *testing.T) {
 	sys, _ := NewActorSystem("test")
 
 	type Ping struct {
-		ReplyTo actor.TypedActorRef[string]
+		ReplyTo TypedActorRef[string]
 	}
 
-	behavior := func(ctx actor.TypedContext[Ping], msg Ping) actor.Behavior[Ping] {
+	behavior := func(ctx typed.TypedContext[Ping], msg Ping) typed.Behavior[Ping] {
 		msg.ReplyTo.Tell("pong")
-		return actor.Same[Ping]()
+		return typed.Same[Ping]()
 	}
 
 	ref, err := Spawn(sys, behavior, "pinger")
@@ -61,7 +62,7 @@ func TestAsk_Typed(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
-	reply, err := Ask(ctx, ref, 0, func(replyTo actor.TypedActorRef[string]) Ping {
+	reply, err := Ask(ctx, ref, 0, func(replyTo TypedActorRef[string]) Ping {
 		return Ping{ReplyTo: replyTo}
 	})
 
@@ -80,14 +81,14 @@ func TestToTyped_ToUntyped(t *testing.T) {
 		return &mockActor{BaseActor: actor.NewBaseActor()}
 	}}, "untyped")
 
-	typed := ToTyped[string](ref)
-	if typed.Path() != ref.Path() {
-		t.Errorf("expected path %s, got %s", ref.Path(), typed.Path())
+	tref := ToTyped[string](ref)
+	if tref.Path() != ref.Path() {
+		t.Errorf("expected path %s, got %s", ref.Path(), tref.Path())
 	}
 
-	untyped := ToUntyped(typed)
-	if untyped.Path() != ref.Path() {
-		t.Errorf("expected path %s, got %s", ref.Path(), untyped.Path())
+	unref := ToUntyped(tref)
+	if unref.Path() != ref.Path() {
+		t.Errorf("expected path %s, got %s", ref.Path(), unref.Path())
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/actor/typed"
 )
 
 // Singleton manages the lifecycle of a typed cluster singleton.
@@ -22,10 +23,10 @@ type Singleton[M any] struct {
 }
 
 // NewTypedSingleton creates a new type-safe singleton manager factory.
-func NewTypedSingleton[M any](cm *ClusterManager, behavior actor.Behavior[M], role string) *Singleton[M] {
+func NewTypedSingleton[M any](cm *ClusterManager, behavior typed.Behavior[M], role string) *Singleton[M] {
 	props := actor.Props{
 		New: func() actor.Actor {
-			return actor.NewTypedActor(behavior)
+			return typed.NewTypedActor(behavior)
 		},
 	}
 	return &Singleton[M]{

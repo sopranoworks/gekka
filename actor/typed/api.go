@@ -6,18 +6,20 @@
  * SPDX-License-Identifier: MIT
  */
 
-package actor
+package typed
 
 import (
 	"context"
 	"encoding/json"
 	"time"
+
+	"github.com/sopranoworks/gekka/actor"
 )
 
 // TypedActorRef is a type-safe reference to an actor that accepts messages of type T.
 // It wraps an untyped Ref and provides a type-safe Tell method.
 type TypedActorRef[T any] struct {
-	ref Ref
+	ref actor.Ref
 }
 
 func (r TypedActorRef[T]) MarshalJSON() ([]byte, error) {
@@ -43,10 +45,10 @@ func (r *TypedActorRef[T]) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-var globalMessagingProvider RemoteMessagingProvider
+var globalMessagingProvider actor.RemoteMessagingProvider
 
 // SetGlobalMessagingProvider sets the provider used by deserialized TypedActorRefs.
-func SetGlobalMessagingProvider(p RemoteMessagingProvider) {
+func SetGlobalMessagingProvider(p actor.RemoteMessagingProvider) {
 	globalMessagingProvider = p
 }
 
@@ -54,11 +56,11 @@ type pathOnlyRef struct {
 	path string
 }
 
-func (r *pathOnlyRef) Tell(msg any, sender ...Ref) {
+func (r *pathOnlyRef) Tell(msg any, sender ...actor.Ref) {
 	if globalMessagingProvider == nil {
 		return
 	}
-	router := NewRouter(globalMessagingProvider)
+	router := actor.NewRouter(globalMessagingProvider)
 	var senderPath string
 	if len(sender) > 0 && sender[0] != nil {
 		senderPath = sender[0].Path()
@@ -74,17 +76,17 @@ func (r *pathOnlyRef) Tell(msg any, sender ...Ref) {
 func (r *pathOnlyRef) Path() string { return r.path }
 
 // NewTypedActorRef creates a new TypedActorRef wrapping the given untyped Ref.
-func NewTypedActorRef[T any](ref Ref) TypedActorRef[T] {
+func NewTypedActorRef[T any](ref actor.Ref) TypedActorRef[T] {
 	return TypedActorRef[T]{ref: ref}
 }
 
 // ToTyped converts an untyped Ref to a TypedActorRef[T].
-func ToTyped[T any](ref Ref) TypedActorRef[T] {
+func ToTyped[T any](ref actor.Ref) TypedActorRef[T] {
 	return NewTypedActorRef[T](ref)
 }
 
 // ToUntyped converts a TypedActorRef[T] to an untyped Ref.
-func ToUntyped[T any](ref TypedActorRef[T]) Ref {
+func ToUntyped[T any](ref TypedActorRef[T]) actor.Ref {
 	return ref.Untyped()
 }
 
@@ -109,14 +111,14 @@ func (r TypedActorRef[T]) String() string {
 }
 
 // Untyped returns the underlying untyped Ref.
-func (r TypedActorRef[T]) Untyped() Ref {
+func (r TypedActorRef[T]) Untyped() actor.Ref {
 	return r.ref
 }
 
 // Spawn creates a new typed actor as a child of the given context.
-func Spawn[T any](ctx ActorContext, behavior Behavior[T], name string, props ...Props) (TypedActorRef[T], error) {
-	p := Props{
-		New: func() Actor { return NewTypedActor(behavior) },
+func Spawn[T any](ctx actor.ActorContext, behavior Behavior[T], name string, props ...actor.Props) (TypedActorRef[T], error) {
+	p := actor.Props{
+		New: func() actor.Actor { return NewTypedActor(behavior) },
 	}
 	if len(props) > 0 {
 		p.SupervisorStrategy = props[0].SupervisorStrategy
@@ -129,7 +131,7 @@ func Spawn[T any](ctx ActorContext, behavior Behavior[T], name string, props ...
 }
 
 // SpawnChild creates a new typed actor as a child of the given typed context.
-func SpawnChild[T any, U any](ctx TypedContext[T], behavior Behavior[U], name string, props ...Props) (TypedActorRef[U], error) {
+func SpawnChild[T any, U any](ctx TypedContext[T], behavior Behavior[U], name string, props ...actor.Props) (TypedActorRef[U], error) {
 	return Spawn(ctx.System(), behavior, name, props...)
 }
 
@@ -163,7 +165,7 @@ type typedAskResponder[R any] struct {
 	replyCh chan R
 }
 
-func (r *typedAskResponder[R]) Tell(msg any, sender ...Ref) {
+func (r *typedAskResponder[R]) Tell(msg any, sender ...actor.Ref) {
 	if m, ok := msg.(R); ok {
 		select {
 		case r.replyCh <- m:
@@ -179,64 +181,64 @@ func (r *typedAskResponder[R]) Path() string {
 // ── Router Factories ─────────────────────────────────────────────────────
 
 // BroadcastGroup returns props for a GroupRouter using BroadcastRoutingLogic.
-func BroadcastGroup(routees []Ref) Props {
-	return Props{
-		New: func() Actor {
-			return NewGroupRouter(&BroadcastRoutingLogic{}, routees)
+func BroadcastGroup(routees []actor.Ref) actor.Props {
+	return actor.Props{
+		New: func() actor.Actor {
+			return actor.NewGroupRouter(&actor.BroadcastRoutingLogic{}, routees)
 		},
 	}
 }
 
 // BroadcastPool returns props for a PoolRouter using BroadcastRoutingLogic.
-func BroadcastPool(nrOfInstances int, props Props) Props {
-	return Props{
-		New: func() Actor {
-			return NewPoolRouter(&BroadcastRoutingLogic{}, nrOfInstances, props)
+func BroadcastPool(nrOfInstances int, props actor.Props) actor.Props {
+	return actor.Props{
+		New: func() actor.Actor {
+			return actor.NewPoolRouter(&actor.BroadcastRoutingLogic{}, nrOfInstances, props)
 		},
 	}
 }
 
 // ScatterGatherPool returns props for a ScatterGatherPool router.
-func ScatterGatherPool(nrOfInstances int, props Props, within time.Duration) Props {
-	return Props{
-		New: func() Actor {
-			return NewPoolRouter(&ScatterGatherRoutingLogic{Within: within}, nrOfInstances, props)
+func ScatterGatherPool(nrOfInstances int, props actor.Props, within time.Duration) actor.Props {
+	return actor.Props{
+		New: func() actor.Actor {
+			return actor.NewPoolRouter(&actor.ScatterGatherRoutingLogic{Within: within}, nrOfInstances, props)
 		},
 	}
 }
 
 // TailChoppingGroup returns props for a GroupRouter using TailChopping logic.
-func TailChoppingGroup(routees []Ref, within time.Duration) Props {
-	return Props{
-		New: func() Actor {
-			return NewGroupRouter(&TailChoppingRoutingLogic{Within: within}, routees)
+func TailChoppingGroup(routees []actor.Ref, within time.Duration) actor.Props {
+	return actor.Props{
+		New: func() actor.Actor {
+			return actor.NewGroupRouter(&actor.TailChoppingRoutingLogic{Within: within}, routees)
 		},
 	}
 }
 
 // TailChoppingPool returns props for a PoolRouter using TailChopping logic.
-func TailChoppingPool(nrOfInstances int, props Props, within time.Duration) Props {
-	return Props{
-		New: func() Actor {
-			return NewPoolRouter(&TailChoppingRoutingLogic{Within: within}, nrOfInstances, props)
+func TailChoppingPool(nrOfInstances int, props actor.Props, within time.Duration) actor.Props {
+	return actor.Props{
+		New: func() actor.Actor {
+			return actor.NewPoolRouter(&actor.TailChoppingRoutingLogic{Within: within}, nrOfInstances, props)
 		},
 	}
 }
 
 // ConsistentHashingGroup returns props for a GroupRouter using ConsistentHashRoutingLogic.
-func ConsistentHashingGroup(routees []Ref, virtualNodes int) Props {
-	return Props{
-		New: func() Actor {
-			return NewGroupRouter(&ConsistentHashRoutingLogic{VirtualNodesFactor: virtualNodes}, routees)
+func ConsistentHashingGroup(routees []actor.Ref, virtualNodes int) actor.Props {
+	return actor.Props{
+		New: func() actor.Actor {
+			return actor.NewGroupRouter(&actor.ConsistentHashRoutingLogic{VirtualNodesFactor: virtualNodes}, routees)
 		},
 	}
 }
 
 // ConsistentHashingPool returns props for a PoolRouter using ConsistentHashRoutingLogic.
-func ConsistentHashingPool(nrOfInstances int, props Props, virtualNodes int) Props {
-	return Props{
-		New: func() Actor {
-			return NewPoolRouter(&ConsistentHashRoutingLogic{VirtualNodesFactor: virtualNodes}, nrOfInstances, props)
+func ConsistentHashingPool(nrOfInstances int, props actor.Props, virtualNodes int) actor.Props {
+	return actor.Props{
+		New: func() actor.Actor {
+			return actor.NewPoolRouter(&actor.ConsistentHashRoutingLogic{VirtualNodesFactor: virtualNodes}, nrOfInstances, props)
 		},
 	}
 }
@@ -246,6 +248,6 @@ func ConsistentHashingPool(nrOfInstances int, props Props, virtualNodes int) Pro
 // WithBackoff creates a supervisor behavior that wraps an actor and manages
 // its lifecycle with exponential backoff. It returns a Behavior[any] because
 // it must handle both the user message type M and system signals (Terminated).
-func WithBackoff[M any](options BackoffOptions, childProps Props) Behavior[any] {
+func WithBackoff[M any](options BackoffOptions, childProps actor.Props) Behavior[any] {
 	return NewBackoffSupervisor[M](options, childProps)
 }

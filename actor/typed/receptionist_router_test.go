@@ -6,11 +6,12 @@
  * SPDX-License-Identifier: MIT
  */
 
-package actor
+package typed
 
 import (
 	"testing"
 
+	"github.com/sopranoworks/gekka/actor"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -28,16 +29,13 @@ func TestReceptionistGroupRouter(t *testing.T) {
 		callbacks: make(map[string]func([]string)),
 	}
 
-	router := NewReceptionistGroup[string]("test-service", &RoundRobinRoutingLogic{})
+	router := NewReceptionistGroup[string]("test-service", &actor.RoundRobinRoutingLogic{})
 	
 	// Create router actor
-	rActor := &typedActor[any]{
-		BaseActor: NewBaseActor(),
-		behavior:  router.Behavior(),
-	}
-	rActor.ctx = &typedContext[any]{actor: rActor}
+	rActor := newTypedActor(router.Behavior())
+	rActor.SetSystem(sys) // Bridge interface requirement
 	rActor.SetSelf(&typedMockRef{path: "/user/router"})
-	rActor.setSystem(sys) // Bridge interface requirement
+	rActor.PreStart()
 
 	// 1. Initial state (no routees)
 	rActor.Receive("ping1")
@@ -55,11 +53,11 @@ func TestReceptionistGroupRouter(t *testing.T) {
 	rActor.Receive(listing[string]{paths: []string{"/user/worker1", "/user/worker2"}})
 
 	// 3. Setup mock workers in the bridge
-	w1 := &typedActor[string]{BaseActor: NewBaseActor(), behavior: workerBehavior}
+	w1 := newTypedActor(workerBehavior)
 	w1.SetSelf(&typedMockRef{path: "/user/worker1"})
-	w2 := &typedActor[string]{BaseActor: NewBaseActor(), behavior: workerBehavior}
+	w2 := newTypedActor(workerBehavior)
 	w2.SetSelf(&typedMockRef{path: "/user/worker2"})
-	sys.actors = map[string]Actor{"/user/worker1": w1, "/user/worker2": w2}
+	sys.actors = map[string]actor.Actor{"/user/worker1": w1, "/user/worker2": w2}
 
 	// 4. Route messages
 	rActor.Receive("msg1")
@@ -70,9 +68,9 @@ func TestReceptionistGroupRouter(t *testing.T) {
 }
 
 type receptionistTestBridge struct {
-	ActorContext
+	actor.ActorContext
 	callbacks map[string]func([]string)
-	actors    map[string]Actor
+	actors    map[string]actor.Actor
 }
 
 func (b *receptionistTestBridge) SubscribeToReceptionist(keyID string, subscriber TypedActorRef[any], callback func([]string)) {
@@ -85,7 +83,7 @@ func (b *receptionistTestBridge) notify(keyID string, paths []string) {
 	}
 }
 
-func (b *receptionistTestBridge) Resolve(path string) (Ref, error) {
+func (b *receptionistTestBridge) Resolve(path string) (actor.Ref, error) {
 	if a, ok := b.actors[path]; ok {
 		return a.Self(), nil
 	}

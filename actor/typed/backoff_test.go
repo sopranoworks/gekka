@@ -6,30 +6,31 @@
  * SPDX-License-Identifier: MIT
  */
 
-package actor
+package typed
 
 import (
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/sopranoworks/gekka/actor"
 	"github.com/stretchr/testify/assert"
 )
 
 type backoffTestSystem struct {
-	ActorContext
+	actor.ActorContext
 	t *testing.T
 }
 
-func (s *backoffTestSystem) ActorOf(props Props, name string) (Ref, error) {
+func (s *backoffTestSystem) ActorOf(props actor.Props, name string) (actor.Ref, error) {
 	s.t.Logf("TestSystem spawning %s", name)
 	_ = props.New() // Call the factory to increment spawnCount
 	return &typedMockRef{path: "/temp/child"}, nil
 }
 
-func (s *backoffTestSystem) Stop(ref Ref) {}
+func (s *backoffTestSystem) Stop(ref actor.Ref) {}
 
-func (s *backoffTestSystem) Watch(watcher Ref, target Ref) {
+func (s *backoffTestSystem) Watch(watcher actor.Ref, target actor.Ref) {
 	s.t.Logf("TestSystem watching %s -> %s", watcher.Path(), target.Path())
 }
 
@@ -70,32 +71,32 @@ func TestBackoffSupervisor_Lifecycle(t *testing.T) {
 	}
 
 	var spawnCount atomic.Int32
-	childProps := Props{
-		New: func() Actor {
+	childProps := actor.Props{
+		New: func() actor.Actor {
 			spawnCount.Add(1)
-			return &untypedMockActor{BaseActor: NewBaseActor()}
+			return &untypedMockActor{BaseActor: actor.NewBaseActor()}
 		},
 	}
 
 	supBehavior := NewBackoffSupervisor[string](opts, childProps)
 	sup := newTypedActor(supBehavior)
 	
-	supRef := &functionalMockRef{
-		path: "/user/sup",
-		handler: func(m any) {
+	supRef := &actor.FunctionalMockRef{
+		PathURI: "/user/sup",
+		Handler: func(m any) {
 			sup.Mailbox() <- m
 		},
 	}
 	sup.SetSelf(supRef)
 	
 	sys := &backoffTestSystem{t: t}
-	sup.setSystem(sys)
+	sup.SetSystem(sys)
 	
-	Start(sup)
+	actor.Start(sup)
 	supRef.Tell("trigger-setup")
 
 	// 1. Initial spawn
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(300 * time.Millisecond)
 	assert.Equal(t, int32(1), spawnCount.Load())
 
 	childRef := &typedMockRef{path: "/temp/child"}
@@ -105,14 +106,14 @@ func TestBackoffSupervisor_Lifecycle(t *testing.T) {
 	
 	time.Sleep(50 * time.Millisecond)
 	assert.Equal(t, int32(1), spawnCount.Load())
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(250 * time.Millisecond)
 	assert.Equal(t, int32(2), spawnCount.Load())
 
 	// 3. Simulate another termination (failure 2)
 	supRef.Tell(mockTerminated{actor: childRef})
 	time.Sleep(100 * time.Millisecond)
 	assert.Equal(t, int32(2), spawnCount.Load())
-	time.Sleep(150 * time.Millisecond)
+	time.Sleep(300 * time.Millisecond)
 	assert.Equal(t, int32(3), spawnCount.Load())
 
 	// 4. Test Reset
@@ -120,12 +121,12 @@ func TestBackoffSupervisor_Lifecycle(t *testing.T) {
 	supRef.Tell(mockTerminated{actor: childRef})
 	time.Sleep(50 * time.Millisecond)
 	assert.Equal(t, int32(3), spawnCount.Load())
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(250 * time.Millisecond)
 	assert.Equal(t, int32(4), spawnCount.Load())
 }
 
 type mockTerminated struct {
-	actor Ref
+	actor actor.Ref
 }
 
-func (m mockTerminated) TerminatedActor() Ref { return m.actor }
+func (m mockTerminated) TerminatedActor() actor.Ref { return m.actor }

@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/actor/typed"
 	gcluster "github.com/sopranoworks/gekka/cluster"
 	"github.com/sopranoworks/gekka/crdt"
 	"github.com/sopranoworks/gekka/discovery"
@@ -464,7 +465,7 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	metrics := &core.NodeMetrics{}
 	nm := core.NewNodeManager(localAddr, uid)
 	nm.NodeMetrics = metrics
-	actor.SetGlobalMessagingProvider(nm)
+	typed.SetGlobalMessagingProvider(nm)
 	router := actor.NewRouter(nm)
 	cm := gcluster.NewClusterManager(core.ToClusterUniqueAddress(localUA), func(ctx context.Context, path string, msg any) error {
 		return router.Send(ctx, path, msg)
@@ -1526,7 +1527,7 @@ func (c *Cluster) Materializer() stream.Materializer {
 }
 
 // Receptionist implements ActorSystem.
-func (c *Cluster) Receptionist() actor.TypedActorRef[any] {
+func (c *Cluster) Receptionist() typed.TypedActorRef[any] {
 	return Receptionist()
 }
 
@@ -1651,7 +1652,7 @@ func (n *Cluster) SpawnActor(path string, a actor.Actor, props actor.Props) acto
 
 // SubscribeToReceptionist allows internal components (like GroupRouter) to 
 // subscribe to service updates without direct dependency on the receptionist protocol.
-func (c *Cluster) SubscribeToReceptionist(keyID string, subscriber actor.TypedActorRef[any], callback func([]string)) {
+func (c *Cluster) SubscribeToReceptionist(keyID string, subscriber typed.TypedActorRef[any], callback func([]string)) {
 	recept := Receptionist()
 	if recept.Untyped() == nil {
 		log.Printf("Cluster: Receptionist not initialized")

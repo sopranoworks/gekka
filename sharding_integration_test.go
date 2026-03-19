@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/actor/typed"
 	"github.com/sopranoworks/gekka/persistence"
 	"github.com/sopranoworks/gekka/sharding"
 )
@@ -57,8 +57,8 @@ func TestClusterSharding_Rebalancing(t *testing.T) {
 			PersistenceID: "test-" + id,
 			Journal:       journal,
 			InitialState:  "",
-			CommandHandler: func(ctx actor.TypedContext[string], state string, cmd string) actor.Effect[string, string] {
-				return actor.Persist[string, string](cmd)
+			CommandHandler: func(ctx typed.TypedContext[string], state string, cmd string) typed.Effect[string, string] {
+				return typed.Persist[string, string](cmd)
 			},
 			EventHandler: func(state string, event string) string {
 				return event
@@ -82,7 +82,7 @@ func TestClusterSharding_Rebalancing(t *testing.T) {
 	// 4. Send messages to various entities
 	entities := []string{"apple", "banana", "cherry", "date", "elderberry"}
 	for _, id := range entities {
-		ref, _ := GetEntityRef[string](node1, "TestEntity", id)
+		ref, _ := EntityRefFor[string](node1, "TestEntity", id)
 		ref.Tell("msg-" + id)
 	}
 
@@ -90,7 +90,7 @@ func TestClusterSharding_Rebalancing(t *testing.T) {
 
 	// 5. Verify entities are reachable and state is persisted
 	for _, id := range entities {
-		ref, _ := GetEntityRef[string](node2, "TestEntity", id)
+		ref, _ := EntityRefFor[string](node2, "TestEntity", id)
 		// We don't have a GetState command in this test behavior,
 		// but we can verify it doesn't crash and delivery happens.
 		ref.Tell("verify-" + id)
@@ -119,7 +119,7 @@ func TestClusterSharding_Rebalancing(t *testing.T) {
 
 	// 7. Verify all entities are still reachable from Node 3
 	for _, id := range entities {
-		ref, _ := GetEntityRef[string](node3, "TestEntity", id)
+		ref, _ := EntityRefFor[string](node3, "TestEntity", id)
 		ref.Tell("final-" + id)
 	}
 

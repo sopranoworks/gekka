@@ -59,28 +59,18 @@ func (l *ScatterGatherRoutingLogic) Route(router *RouterActor, msg any) bool {
 // Deprecated: use NewGroupRouter or NewPoolRouter with ScatterGatherRoutingLogic.
 type ScatterGatherFirstCompleted struct {
 	RouterActor
-	within time.Duration
+	Within time.Duration
 }
 
 // NewScatterGatherFirstCompleted creates a new ScatterGatherFirstCompleted router.
-func NewScatterGatherFirstCompleted(routees []Ref, within time.Duration) *ScatterGatherFirstCompleted {
+func NewScatterGatherFirstCompleted(routees []Ref, Within time.Duration) *ScatterGatherFirstCompleted {
 	return &ScatterGatherFirstCompleted{
 		RouterActor: RouterActor{
 			BaseActor: NewBaseActor(),
-			Logic:     &ScatterGatherRoutingLogic{Within: within},
+			Logic:     &ScatterGatherRoutingLogic{Within: Within},
 			Routees:   routees,
 		},
-		within: within,
-	}
-}
-
-// Behavior returns a typed actor Behavior that drives the scatter-gather router.
-func (r *ScatterGatherFirstCompleted) Behavior() Behavior[any] {
-	return func(ctx TypedContext[any], msg any) Behavior[any] {
-		r.currentSender = ctx.Sender()
-		InjectSystem(r, ctx.System())
-		r.Receive(msg)
-		return Same[any]()
+		Within: Within,
 	}
 }
 

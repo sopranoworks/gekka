@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/actor/typed"
 	"github.com/sopranoworks/gekka/telemetry"
 )
 
@@ -319,11 +320,11 @@ func (n *Cluster) ActorSelection(path string) ActorSelection {
 }
 
 // ToTyped converts an untyped Ref to a TypedActorRef[T].
-func ToTyped[T any](ref actor.Ref) actor.TypedActorRef[T] {
-	return actor.ToTyped[T](ref)
+func ToTyped[T any](ref actor.Ref) typed.TypedActorRef[T] {
+	return typed.ToTyped[T](ref)
 }
 
 // ToUntyped converts a TypedActorRef[T] to an untyped Ref.
-func ToUntyped[T any](ref actor.TypedActorRef[T]) actor.Ref {
-	return actor.ToUntyped(ref)
+func ToUntyped[T any](ref typed.TypedActorRef[T]) actor.Ref {
+	return typed.ToUntyped(ref)
 }

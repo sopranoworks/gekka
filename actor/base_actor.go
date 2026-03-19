@@ -123,8 +123,8 @@ func (b *BaseActor) SetSelf(r Ref) { b.selfRef = r }
 //	go doWork(a.System().Context())
 func (b *BaseActor) System() ActorContext { return b.systemRef }
 
-// setSystem is called once by SpawnActor/ActorOf to inject the ActorContext.
-func (b *BaseActor) setSystem(s ActorContext) { b.systemRef = s }
+// SetSystem is called once by SpawnActor/ActorOf to inject the ActorContext.
+func (b *BaseActor) SetSystem(s ActorContext) { b.systemRef = s }
 
 // setSender is called by Start before each Receive invocation.
 func (b *BaseActor) setSender(r Ref) { b.currentSender = r }
@@ -370,6 +370,15 @@ func InjectParent(a Actor, parent Ref) {
 	type parentSetter interface{ setParent(Ref) }
 	if ps, ok := a.(parentSetter); ok {
 		ps.setParent(parent)
+	}
+}
+
+// InjectSender sets the current sender for an actor. This should only be used
+// when manually invoking Receive (e.g. from a typed behavior wrapper).
+func InjectSender(a Actor, sender Ref) {
+	type senderSetter interface{ setSender(Ref) }
+	if ss, ok := a.(senderSetter); ok {
+		ss.setSender(sender)
 	}
 }
 

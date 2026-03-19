@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-package actor
+package typed
 
 import (
 	"context"
@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/persistence"
 )
 
@@ -74,7 +75,7 @@ func None[Event any, State any]() Effect[Event, State] {
 
 // persistentActor is the internal implementation of a persistent actor.
 type persistentActor[Command any, Event any, State any] struct {
-	BaseActor
+	actor.BaseActor
 	behavior      *EventSourcedBehavior[Command, Event, State]
 	state         State
 	seqNr         uint64
@@ -86,9 +87,9 @@ type persistentActor[Command any, Event any, State any] struct {
 	userStash     *stashBuffer[Command]
 }
 
-func NewPersistentActor[Command any, Event any, State any](b *EventSourcedBehavior[Command, Event, State]) Actor {
+func NewPersistentActor[Command any, Event any, State any](b *EventSourcedBehavior[Command, Event, State]) actor.Actor {
 	p := &persistentActor[Command, Event, State]{
-		BaseActor:  NewBaseActor(),
+		BaseActor:  actor.NewBaseActor(),
 		behavior:   b,
 		state:      b.InitialState,
 		recovering: true,
@@ -106,29 +107,29 @@ func (c *persistentTypedContext[C, E, S]) Self() TypedActorRef[C] {
 	return NewTypedActorRef[C](c.actor.Self())
 }
 
-func (c *persistentTypedContext[C, E, S]) System() ActorContext {
+func (c *persistentTypedContext[C, E, S]) System() actor.ActorContext {
 	return c.actor.System()
 }
 
 func (c *persistentTypedContext[C, E, S]) Log() *slog.Logger {
-	return c.actor.Log().logger()
+	return c.actor.Log().Logger()
 }
 
-func (c *persistentTypedContext[C, E, S]) Watch(target Ref) {
+func (c *persistentTypedContext[C, E, S]) Watch(target actor.Ref) {
 	c.actor.System().Watch(c.actor.Self(), target)
 }
 
-func (c *persistentTypedContext[C, E, S]) Unwatch(target Ref) {
+func (c *persistentTypedContext[C, E, S]) Unwatch(target actor.Ref) {
 	if sys, ok := c.actor.System().(interface {
-		Unwatch(watcher Ref, target Ref)
+		Unwatch(watcher actor.Ref, target actor.Ref)
 	}); ok {
 		sys.Unwatch(c.actor.Self(), target)
 	}
 }
 
-func (c *persistentTypedContext[C, E, S]) Stop(target Ref) {
+func (c *persistentTypedContext[C, E, S]) Stop(target actor.Ref) {
 	if sys, ok := c.actor.System().(interface {
-		Stop(target Ref)
+		Stop(target actor.Ref)
 	}); ok {
 		sys.Stop(target)
 	}
@@ -136,7 +137,7 @@ func (c *persistentTypedContext[C, E, S]) Stop(target Ref) {
 
 func (c *persistentTypedContext[C, E, S]) Passivate() {
 	if parent := c.actor.Parent(); parent != nil {
-		parent.Tell(Passivate{Entity: c.actor.Self()}, c.actor.Self())
+		parent.Tell(actor.Passivate{Entity: c.actor.Self()}, c.actor.Self())
 	}
 }
 
@@ -148,11 +149,11 @@ func (c *persistentTypedContext[C, E, S]) Stash() StashBuffer[C] {
 	return c.actor.userStash
 }
 
-func (c *persistentTypedContext[C, E, S]) Sender() Ref {
+func (c *persistentTypedContext[C, E, S]) Sender() actor.Ref {
 	return c.actor.Sender()
 }
 
-func (c *persistentTypedContext[C, E, S]) Ask(target Ref, msgFactory func(Ref) any, transform func(any, error) C) {
+func (c *persistentTypedContext[C, E, S]) Ask(target actor.Ref, msgFactory func(actor.Ref) any, transform func(any, error) C) {
 	askID := askCounter.Add(1)
 	timerKey := fmt.Sprintf("ask-timeout-%d", askID)
 	timeout := 3 * time.Second // Default timeout
@@ -160,7 +161,7 @@ func (c *persistentTypedContext[C, E, S]) Ask(target Ref, msgFactory func(Ref) a
 	completed := &atomic.Bool{}
 
 	// 1. Create transformed message for timeout
-	timeoutMsg := transform(nil, ErrAskTimeout)
+	timeoutMsg := transform(nil, actor.ErrAskTimeout)
 
 	// 2. Schedule timeout using existing TimerScheduler
 	c.Timers().StartSingleTimer(timerKey, timeoutMsg, timeout)
@@ -181,12 +182,12 @@ func (c *persistentTypedContext[C, E, S]) Ask(target Ref, msgFactory func(Ref) a
 
 func (p *persistentActor[Command, Event, State]) PreStart() {
 	p.timers = newTimerScheduler[Command](p.Self())
-	p.userStash = newStashBuffer[Command](p.Self(), DefaultStashCapacity)
+	p.userStash = newStashBuffer[Command](p.Self(), actor.DefaultStashCapacity)
 	p.recover()
 }
 
 func (p *persistentActor[Command, Event, State]) PostStop() {
-	p.timers.cancelAll()
+	p.timers.CancelAll()
 }
 
 func (p *persistentActor[Command, Event, State]) Receive(msg any) {
@@ -214,7 +215,7 @@ func (p *persistentActor[Command, Event, State]) Receive(msg any) {
 	}
 
 	switch msg.(type) {
-	case TerminatedMessage:
+	case actor.TerminatedMessage:
 		// Handle termination
 	}
 }
@@ -244,7 +245,7 @@ func (p *persistentActor[Command, Event, State]) recover() {
 		})
 		if err != nil {
 			p.Log().Error("Recovery failed", "error", err)
-			if s, ok := p.System().(interface{ Stop(Ref) }); ok {
+			if s, ok := p.System().(interface{ Stop(actor.Ref) }); ok {
 				s.Stop(p.Self())
 			}
 			return
@@ -282,7 +283,7 @@ func (p *persistentActor[Command, Event, State]) persist(events []Event, then fu
 	err := p.behavior.Journal.AsyncWriteMessages(ctx, reprs)
 	if err != nil {
 		p.Log().Error("Failed to persist events", "error", err)
-		if s, ok := p.System().(interface{ Stop(Ref) }); ok {
+		if s, ok := p.System().(interface{ Stop(actor.Ref) }); ok {
 			s.Stop(p.Self())
 		}
 		return
@@ -313,9 +314,9 @@ func (p *persistentActor[Command, Event, State]) persist(events []Event, then fu
 }
 
 // SpawnPersistent creates a new persistent actor.
-func SpawnPersistent[Command any, Event any, State any](ctx ActorContext, behavior *EventSourcedBehavior[Command, Event, State], name string, props ...Props) (TypedActorRef[Command], error) {
-	p := Props{
-		New: func() Actor { return NewPersistentActor(behavior) },
+func SpawnPersistent[Command any, Event any, State any](ctx actor.ActorContext, behavior *EventSourcedBehavior[Command, Event, State], name string, props ...actor.Props) (TypedActorRef[Command], error) {
+	p := actor.Props{
+		New: func() actor.Actor { return NewPersistentActor(behavior) },
 	}
 	if len(props) > 0 {
 		p.SupervisorStrategy = props[0].SupervisorStrategy

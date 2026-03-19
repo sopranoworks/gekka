@@ -6,39 +6,41 @@
  * SPDX-License-Identifier: MIT
  */
 
-package actor
+package typed
 
 import (
 	"context"
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/sopranoworks/gekka/actor"
 )
 
 type typedMockContext struct {
-	ActorContext
-	spawnedProps Props
+	actor.ActorContext
+	spawnedProps actor.Props
 	spawnedName  string
-	stoppedRef   Ref
+	stoppedRef   actor.Ref
 }
 
-func (m *typedMockContext) ActorOf(props Props, name string) (Ref, error) {
+func (m *typedMockContext) ActorOf(props actor.Props, name string) (actor.Ref, error) {
 	m.spawnedProps = props
 	m.spawnedName = name
 	return &typedMockRef{path: "/user/" + name}, nil
 }
 
-func (m *typedMockContext) Stop(target Ref) {
+func (m *typedMockContext) Stop(target actor.Ref) {
 	m.stoppedRef = target
 }
 
 type typedMockRef struct {
-	Ref
+	actor.Ref
 	path string
 }
 
-func (r *typedMockRef) Path() string                { return r.path }
-func (r *typedMockRef) Tell(msg any, sender ...Ref) {}
+func (r *typedMockRef) Path() string                      { return r.path }
+func (r *typedMockRef) Tell(msg any, sender ...actor.Ref) {}
 
 func TestSpawn(t *testing.T) {
 	ctx := &typedMockContext{}
@@ -63,9 +65,9 @@ func TestSpawn(t *testing.T) {
 		t.Error("expected Props.New to be set")
 	}
 
-	actor := ctx.spawnedProps.New()
-	if _, ok := actor.(*typedActor[string]); !ok {
-		t.Errorf("expected *typedActor[string], got %T", actor)
+	act := ctx.spawnedProps.New()
+	if _, ok := act.(*typedActor[string]); !ok {
+		t.Errorf("expected *typedActor[string], got %T", act)
 	}
 }
 
@@ -86,7 +88,7 @@ func TestSpawnChild(t *testing.T) {
 	parentTypedCtx := &typedContext[string]{actor: parentActor}
 
 	// We need to set the system of the parent actor
-	parentActor.setSystem(parentCtx)
+	parentActor.SetSystem(parentCtx)
 
 	_, err := SpawnChild(parentTypedCtx, func(ctx TypedContext[int], msg int) Behavior[int] {
 		return Same[int]()
@@ -113,10 +115,10 @@ func TestBehaviorTransition(t *testing.T) {
 		return Same[string]()
 	}
 
-	actor := newTypedActor(behavior1)
-	actor.Receive("one")   // count = 1, next = behavior2
-	actor.Receive("two")   // count = 11, next = Same (behavior2)
-	actor.Receive("three") // count = 21
+	act := newTypedActor(behavior1)
+	act.Receive("one")   // count = 1, next = behavior2
+	act.Receive("two")   // count = 11, next = Same (behavior2)
+	act.Receive("three") // count = 21
 
 	if count != 21 {
 		t.Errorf("expected count 21, got %d", count)
@@ -132,12 +134,12 @@ func TestSetupBehavior(t *testing.T) {
 		}
 	})
 
-	actor := newTypedActor(behavior)
+	act := newTypedActor(behavior)
 	if setupCalled {
 		t.Error("Setup called too early")
 	}
 
-	actor.Receive("start")
+	act.Receive("start")
 	if !setupCalled {
 		t.Error("Setup not called after first message")
 	}
@@ -146,8 +148,6 @@ func TestSetupBehavior(t *testing.T) {
 func TestIsStopped(t *testing.T) {
 	s1 := Stopped[string]()
 	s2 := Stopped[string]()
-	t.Logf("s1 pointer: %v", reflect.ValueOf(s1).Pointer())
-	t.Logf("s2 pointer: %v", reflect.ValueOf(s2).Pointer())
 	if reflect.ValueOf(s1).Pointer() != reflect.ValueOf(s2).Pointer() {
 		t.Errorf("Stopped[string]() should return the same pointer")
 	}
@@ -160,9 +160,9 @@ func TestSameSentinel(t *testing.T) {
 		return Same[string]()
 	}
 
-	actor := newTypedActor(behavior)
-	actor.Receive("one")
-	actor.Receive("two")
+	act := newTypedActor(behavior)
+	act.Receive("one")
+	act.Receive("two")
 
 	if count != 2 {
 		t.Errorf("expected count 2, got %d", count)
@@ -202,12 +202,12 @@ func TestAsk(t *testing.T) {
 }
 
 type mockTypedRef[T any] struct {
-	Ref
+	actor.Ref
 	behavior Behavior[T]
 	ctx      TypedContext[T]
 }
 
-func (m *mockTypedRef[T]) Tell(msg any, sender ...Ref) {
+func (m *mockTypedRef[T]) Tell(msg any, sender ...actor.Ref) {
 	if mmsg, ok := msg.(T); ok {
 		m.behavior(m.ctx, mmsg)
 	}
@@ -217,11 +217,11 @@ func (m *mockTypedRef[T]) Path() string { return "/test/target" }
 // Benchmarks
 
 func BenchmarkUntypedReceive(b *testing.B) {
-	actor := &untypedMockActor{BaseActor: NewBaseActor()}
+	act := &untypedMockActor{BaseActor: actor.NewBaseActor()}
 	msg := "test"
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		actor.Receive(msg)
+		act.Receive(msg)
 	}
 }
 
@@ -229,16 +229,16 @@ func BenchmarkTypedReceive(b *testing.B) {
 	behavior := func(ctx TypedContext[string], msg string) Behavior[string] {
 		return Same[string]()
 	}
-	actor := newTypedActor(behavior)
+	act := newTypedActor(behavior)
 	msg := "test"
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		actor.Receive(msg)
+		act.Receive(msg)
 	}
 }
 
 type untypedMockActor struct {
-	BaseActor
+	actor.BaseActor
 }
 
 func (a *untypedMockActor) Receive(msg any) {}
@@ -275,17 +275,17 @@ func BenchmarkTypedAsk(b *testing.B) {
 }
 
 type untypedReplyingActor struct {
-	Ref
+	actor.Ref
 }
 
-func (a *untypedReplyingActor) Tell(msg any, sender ...Ref) {
+func (a *untypedReplyingActor) Tell(msg any, sender ...actor.Ref) {
 	if len(sender) > 0 && sender[0] != nil {
 		sender[0].Tell("pong")
 	}
 }
 func (a *untypedReplyingActor) Path() string { return "" }
 
-func untypedAsk(ctx context.Context, target Ref, msg any) (any, error) {
+func untypedAsk(ctx context.Context, target actor.Ref, msg any) (any, error) {
 	replyCh := make(chan any, 1)
 	responder := &untypedAskResponder{replyCh: replyCh}
 	target.Tell(msg, responder)
@@ -298,11 +298,11 @@ func untypedAsk(ctx context.Context, target Ref, msg any) (any, error) {
 }
 
 type untypedAskResponder struct {
-	Ref
+	actor.Ref
 	replyCh chan any
 }
 
-func (r *untypedAskResponder) Tell(msg any, sender ...Ref) {
+func (r *untypedAskResponder) Tell(msg any, sender ...actor.Ref) {
 	r.replyCh <- msg
 }
 func (r *untypedAskResponder) Path() string { return "" }
@@ -331,7 +331,7 @@ func daveBehavior(hal TypedActorRef[halRequest], probe chan string) Behavior[any
 	return func(ctx TypedContext[any], msg any) Behavior[any] {
 		switch m := msg.(type) {
 		case daveCommand:
-			ctx.Ask(hal.Untyped(), func(replyTo Ref) any {
+			ctx.Ask(hal.Untyped(), func(replyTo actor.Ref) any {
 				return halRequest{replyTo: ToTyped[halResponse](replyTo)}
 			}, func(res any, err error) any {
 				if err != nil {
@@ -351,34 +351,34 @@ func daveBehavior(hal TypedActorRef[halRequest], probe chan string) Behavior[any
 }
 
 func TestContextAsk_HALandDave(t *testing.T) {
-	sys := &scatterGatherTestSystem{t: t}
+	sys := &actor.ScatterGatherTestSystem{T: t}
 	probe := make(chan string, 1)
 
 	// Spawn HAL
 	hal := newTypedActor(halBehavior())
-	hal.setSystem(sys)
-	halRef_mock := &functionalMockRef{
-		path: "/user/hal",
-		handler: func(m any) {
+	hal.SetSystem(sys)
+	halRef_mock := &actor.FunctionalMockRef{
+		PathURI: "/user/hal",
+		Handler: func(m any) {
 			hal.Receive(m)
 		},
 	}
 	hal.SetSelf(halRef_mock)
-	Start(hal)
+	actor.Start(hal)
 	halRef := ToTyped[halRequest](halRef_mock)
 
 	// Spawn Dave
 	dave := newTypedActor(daveBehavior(halRef, probe))
-	dave.setSystem(sys)
-	daveRef_mock := &functionalMockRef{
-		path: "/user/dave",
-		handler: func(m any) {
+	dave.SetSystem(sys)
+	daveRef_mock := &actor.FunctionalMockRef{
+		PathURI: "/user/dave",
+		Handler: func(m any) {
 			dave.Receive(m)
 		},
 	}
 	dave.SetSelf(daveRef_mock)
 	dave.PreStart() // Initialize timers
-	Start(dave)
+	actor.Start(dave)
 
 	// Send command to Dave via mock ref to ensure goroutine safety
 	daveRef_mock.Tell(daveCommand{})

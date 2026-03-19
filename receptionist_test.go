@@ -11,7 +11,7 @@ package gekka
 import (
 	"testing"
 
-	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/actor/typed"
 	"github.com/sopranoworks/gekka/crdt"
 	"github.com/stretchr/testify/assert"
 )
@@ -21,13 +21,13 @@ func TestReceptionist_Register(t *testing.T) {
 	behavior := receptionistBehavior(replicator)
 	
 	// Create typed actor manually for test
-	a := actor.NewTypedActor(behavior)
+	a := typed.NewTypedActor(behavior)
 	
 	key := NewServiceKey[string]("test-service")
 	
 	// Mock ref
 	mref := &mockTypedRef{path: "/user/service1"}
-	typedServiceRef := actor.NewTypedActorRef[string](mref)
+	typedServiceRef := typed.NewTypedActorRef[string](mref)
 
 	msg := Register[string]{
 		Key:     key,

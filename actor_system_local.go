@@ -18,6 +18,7 @@ import (
 
 	hocon "github.com/sopranoworks/gekka-config"
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/actor/typed"
 	"github.com/sopranoworks/gekka/internal/core"
 	"github.com/sopranoworks/gekka/stream"
 )
@@ -63,12 +64,12 @@ func (s *localActorSystem) Materializer() stream.Materializer {
 }
 
 // Receptionist implements ActorSystem.
-func (s *localActorSystem) Receptionist() actor.TypedActorRef[any] {
-	return actor.TypedActorRef[any]{} // Not available in local-only system
+func (s *localActorSystem) Receptionist() typed.TypedActorRef[any] {
+	return typed.TypedActorRef[any]{} // Not available in local-only system
 }
 
 // SubscribeToReceptionist implements internalSystem.
-func (s *localActorSystem) SubscribeToReceptionist(keyID string, subscriber actor.TypedActorRef[any], callback func([]string)) {
+func (s *localActorSystem) SubscribeToReceptionist(keyID string, subscriber typed.TypedActorRef[any], callback func([]string)) {
 	// No-op in local-only system
 }
 

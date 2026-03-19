@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka"
-	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/actor/typed"
 )
 
 // --- Messages ---
@@ -23,7 +23,7 @@ import (
 // Greet is the message sent to the Greeter actor.
 type Greet struct {
 	Whom    string
-	ReplyTo actor.TypedActorRef[Greeting]
+	ReplyTo typed.TypedActorRef[Greeting]
 }
 
 // Greeting is the reply message from the Greeter actor.
@@ -34,21 +34,21 @@ type Greeting struct {
 // --- Greeter Actor ---
 
 // Greeter behavior handles Greet messages and replies with a Greeting.
-func Greeter() actor.Behavior[Greet] {
-	return func(ctx actor.TypedContext[Greet], msg Greet) actor.Behavior[Greet] {
+func Greeter() typed.Behavior[Greet] {
+	return func(ctx typed.TypedContext[Greet], msg Greet) typed.Behavior[Greet] {
 		ctx.Log().Info("Greeter received Greet", "whom", msg.Whom)
 		msg.ReplyTo.Tell(Greeting{
 			Message: fmt.Sprintf("Hello %s!", msg.Whom),
 		})
-		return actor.Same[Greet]()
+		return typed.Same[Greet]()
 	}
 }
 
 // --- GreeterBot Actor ---
 
 // GreeterBot behavior initiates greetings and receives replies.
-func GreeterBot(max int, greeter actor.TypedActorRef[Greet]) actor.Behavior[Greeting] {
-	return actor.Setup(func(ctx actor.TypedContext[Greeting]) actor.Behavior[Greeting] {
+func GreeterBot(max int, greeter typed.TypedActorRef[Greet]) typed.Behavior[Greeting] {
+	return typed.Setup(func(ctx typed.TypedContext[Greeting]) typed.Behavior[Greeting] {
 		// Start the first greeting
 		ctx.Log().Info("GreeterBot starting", "max", max)
 		greeter.Tell(Greet{Whom: "Gekka", ReplyTo: ctx.Self()})
@@ -56,13 +56,13 @@ func GreeterBot(max int, greeter actor.TypedActorRef[Greet]) actor.Behavior[Gree
 	})
 }
 
-func bot(greetingCount, max int, greeter actor.TypedActorRef[Greet]) actor.Behavior[Greeting] {
-	return func(ctx actor.TypedContext[Greeting], msg Greeting) actor.Behavior[Greeting] {
+func bot(greetingCount, max int, greeter typed.TypedActorRef[Greet]) typed.Behavior[Greeting] {
+	return func(ctx typed.TypedContext[Greeting], msg Greeting) typed.Behavior[Greeting] {
 		n := greetingCount + 1
 		ctx.Log().Info("GreeterBot received Greeting", "count", n, "message", msg.Message)
 		if n >= max {
 			ctx.Log().Info("GreeterBot reached max greetings, stopping")
-			return actor.Stopped[Greeting]()
+			return typed.Stopped[Greeting]()
 		} else {
 			greeter.Tell(Greet{Whom: "Gekka", ReplyTo: ctx.Self()})
 			return bot(n, max, greeter)
@@ -88,7 +88,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	reply, err := gekka.Ask(ctx, greeter, 3*time.Second, func(replyTo actor.TypedActorRef[Greeting]) Greet {
+	reply, err := gekka.Ask(ctx, greeter, 3*time.Second, func(replyTo typed.TypedActorRef[Greeting]) Greet {
 		return Greet{Whom: "Typed Ask", ReplyTo: replyTo}
 	})
 	if err != nil {

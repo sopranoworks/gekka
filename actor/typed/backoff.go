@@ -6,15 +6,17 @@
  * SPDX-License-Identifier: MIT
  */
 
-package actor
+package typed
 
 import (
 	"fmt"
 	"time"
+
+	"github.com/sopranoworks/gekka/actor"
 )
 
 type backoffState struct {
-	child    Ref
+	child    actor.Ref
 	failures int
 }
 
@@ -23,7 +25,7 @@ type startChild struct{}
 // NewBackoffSupervisor wraps an actor and manages its lifecycle with exponential backoff.
 // It handles messages of type M and forwards them to the child actor.
 // If the child fails or stops, it restarts the child after a delay.
-func NewBackoffSupervisor[M any](options BackoffOptions, childProps Props) Behavior[any] {
+func NewBackoffSupervisor[M any](options BackoffOptions, childProps actor.Props) Behavior[any] {
 	state := &backoffState{}
 	var lastRestart time.Time
 
@@ -51,7 +53,7 @@ func NewBackoffSupervisor[M any](options BackoffOptions, childProps Props) Behav
 				lastRestart = time.Now()
 				return Same[any]()
 
-			case TerminatedMessage:
+			case actor.TerminatedMessage:
 				if state.child != nil && m.TerminatedActor().Path() == state.child.Path() {
 					state.child = nil
 					

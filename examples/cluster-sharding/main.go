@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka"
-	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/actor/typed"
 	"github.com/sopranoworks/gekka/persistence"
 	"github.com/sopranoworks/gekka/sharding"
 )
@@ -30,7 +30,7 @@ type AddItem struct {
 }
 type GetItems struct {
 	CartId  string
-	ReplyTo actor.TypedActorRef[[]string]
+	ReplyTo typed.TypedActorRef[[]string]
 }
 
 type Event struct {
@@ -64,15 +64,15 @@ func ShoppingCartBehavior(journal persistence.Journal) func(id string) *gekka.Ev
 			PersistenceID: "cart-" + id,
 			Journal:       journal,
 			InitialState:  State{Items: []string{}},
-			CommandHandler: func(ctx actor.TypedContext[Command], state State, cmd Command) actor.Effect[Event, State] {
+			CommandHandler: func(ctx typed.TypedContext[Command], state State, cmd Command) typed.Effect[Event, State] {
 				switch m := cmd.(type) {
 				case AddItem:
-					return actor.Persist[Event, State](Event{Item: m.Item})
+					return typed.Persist[Event, State](Event{Item: m.Item})
 				case GetItems:
 					m.ReplyTo.Tell(state.Items)
-					return actor.None[Event, State]()
+					return typed.None[Event, State]()
 				}
-				return actor.None[Event, State]()
+				return typed.None[Event, State]()
 			},
 			EventHandler: func(state State, event Event) State {
 				state.Items = append(state.Items, event.Item)
@@ -144,7 +144,7 @@ func main() {
 	defer cancel()
 
 	fmt.Println("--- Querying cartA ---")
-	itemsA, err := gekka.Ask(ctx, gekka.ToTyped[Command](cartRegion1.Region), 3*time.Second, func(replyTo actor.TypedActorRef[[]string]) Command {
+	itemsA, err := gekka.Ask(ctx, gekka.ToTyped[Command](cartRegion1.Region), 3*time.Second, func(replyTo typed.TypedActorRef[[]string]) Command {
 		return GetItems{CartId: "cartA", ReplyTo: replyTo}
 	})
 	if err != nil {
@@ -154,7 +154,7 @@ func main() {
 	}
 
 	fmt.Println("--- Querying cartB ---")
-	itemsB, err := gekka.Ask(ctx, gekka.ToTyped[Command](cartRegion1.Region), 3*time.Second, func(replyTo actor.TypedActorRef[[]string]) Command {
+	itemsB, err := gekka.Ask(ctx, gekka.ToTyped[Command](cartRegion1.Region), 3*time.Second, func(replyTo typed.TypedActorRef[[]string]) Command {
 		return GetItems{CartId: "cartB", ReplyTo: replyTo}
 	})
 	if err != nil {

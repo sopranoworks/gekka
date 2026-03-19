@@ -12,6 +12,7 @@ import (
 	"log"
 
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/actor/typed"
 )
 
 // consumerState holds the mutable state of the ConsumerController.
@@ -31,7 +32,7 @@ type consumerState struct {
 	chunkStart  int64 // SeqNr of the first chunk
 }
 
-// NewConsumerController returns an actor.Behavior[any] that implements the
+// NewConsumerController returns an typed.Behavior[any] that implements the
 // ConsumerController side of Pekko's Reliable Delivery protocol.
 //
 //   - consumerActor is where Delivery messages are forwarded.  The consumer
@@ -45,9 +46,9 @@ type consumerState struct {
 //
 //	cc := delivery.NewConsumerController(myActor, delivery.DefaultWindowSize)
 //	ref, _ := node.System.ActorOf(actor.Props{New: func() actor.Actor {
-//	    return actor.NewTypedActor[any](cc)
+//	    return typed.NewTypedActor[any](cc)
 //	}}, "consumer")
-func NewConsumerController(consumerActor actor.Ref, windowSize int) actor.Behavior[any] {
+func NewConsumerController(consumerActor actor.Ref, windowSize int) typed.Behavior[any] {
 	if windowSize <= 0 {
 		windowSize = DefaultWindowSize
 	}
@@ -61,7 +62,7 @@ func NewConsumerController(consumerActor actor.Ref, windowSize int) actor.Behavi
 }
 
 // handleCommand dispatches on message type.
-func (c *consumerState) handleCommand(ctx actor.TypedContext[any], msg any) actor.Behavior[any] {
+func (c *consumerState) handleCommand(ctx typed.TypedContext[any], msg any) typed.Behavior[any] {
 	if c.selfRef == nil {
 		c.selfRef = ctx.Self().Untyped()
 		// Register with the producer by resolving its path (done reactively on first message).
@@ -77,11 +78,11 @@ func (c *consumerState) handleCommand(ctx actor.TypedContext[any], msg any) acto
 	default:
 		log.Printf("ConsumerController: unhandled message %T", msg)
 	}
-	return actor.Same[any]()
+	return typed.Same[any]()
 }
 
 // onConsumerStart handles a ConsumerStart command: registers with the given producer.
-func (c *consumerState) onConsumerStart(ctx actor.TypedContext[any], m ConsumerStart) {
+func (c *consumerState) onConsumerStart(ctx typed.TypedContext[any], m ConsumerStart) {
 	log.Printf("ConsumerController: registering with producer at %s", m.ProducerPath)
 	ref, err := ctx.System().Resolve(m.ProducerPath)
 	if err != nil {
@@ -97,7 +98,7 @@ func (c *consumerState) onConsumerStart(ctx actor.TypedContext[any], m ConsumerS
 }
 
 // onSequencedMessage processes an incoming SequencedMessage from the producer.
-func (c *consumerState) onSequencedMessage(ctx actor.TypedContext[any], m *SequencedMessage) {
+func (c *consumerState) onSequencedMessage(ctx typed.TypedContext[any], m *SequencedMessage) {
 	// Resolve producer ref on first message.
 	if c.producerRef == nil && m.ProducerRef != "" && m.ProducerRef != c.producerPath {
 		c.producerPath = m.ProducerRef
@@ -155,7 +156,7 @@ func (c *consumerState) onSequencedMessage(ctx actor.TypedContext[any], m *Seque
 }
 
 // deliverMessage handles chunked and regular messages.
-func (c *consumerState) deliverMessage(ctx actor.TypedContext[any], m *SequencedMessage) {
+func (c *consumerState) deliverMessage(ctx typed.TypedContext[any], m *SequencedMessage) {
 	if m.HasChunk {
 		if m.FirstChunk {
 			c.chunkBuffer = append([]byte(nil), m.Message.EnclosedMessage...)
@@ -180,7 +181,7 @@ func (c *consumerState) deliverMessage(ctx actor.TypedContext[any], m *Sequenced
 }
 
 // deliverToConsumer forwards a complete message to the application consumer actor.
-func (c *consumerState) deliverToConsumer(_ actor.TypedContext[any], seqNr int64, payload Payload) {
+func (c *consumerState) deliverToConsumer(_ typed.TypedContext[any], seqNr int64, payload Payload) {
 	d := Delivery{
 		SeqNr:     seqNr,
 		Msg:       payload,
@@ -190,7 +191,7 @@ func (c *consumerState) deliverToConsumer(_ actor.TypedContext[any], seqNr int64
 }
 
 // onConfirmed handles a Confirmed reply from the consumer actor.
-func (c *consumerState) onConfirmed(_ actor.TypedContext[any], m Confirmed) {
+func (c *consumerState) onConfirmed(_ typed.TypedContext[any], m Confirmed) {
 	if m.SeqNr > c.confirmedSeqNr {
 		c.confirmedSeqNr = m.SeqNr
 	}
@@ -206,7 +207,7 @@ func (c *consumerState) sendAck() {
 }
 
 // sendRequest sends a Request to the producer controller to open/advance the window.
-func (c *consumerState) sendRequest(_ actor.TypedContext[any], viaTimeout bool) {
+func (c *consumerState) sendRequest(_ typed.TypedContext[any], viaTimeout bool) {
 	if c.producerRef == nil {
 		return
 	}

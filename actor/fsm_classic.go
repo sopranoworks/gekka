@@ -19,7 +19,7 @@ type BaseFSM[S any, D any] struct {
 	BaseActor
 	currentState S
 	stateData    D
-	timers       *timerScheduler[any]
+	timers       *TimerSchedulerImpl[any]
 
 	handlers           map[any]func(Event[D]) State[S, D]
 	unhandledHandler   func(Event[D]) State[S, D]
@@ -67,22 +67,22 @@ func (f *BaseFSM[S, D]) OnTermination(handler func(StopEvent[S, D])) {
 
 // Goto transitions the FSM to a new state.
 func (f *BaseFSM[S, D]) Goto(nextState S) *StateBuilder[S, D] {
-	return &StateBuilder[S, D]{nextState: nextState, data: f.stateData}
+	return &StateBuilder[S, D]{NextState: nextState, Data: f.stateData}
 }
 
 // Stay remains in the current state.
 func (f *BaseFSM[S, D]) Stay() *StateBuilder[S, D] {
-	return &StateBuilder[S, D]{nextState: f.currentState, data: f.stateData}
+	return &StateBuilder[S, D]{NextState: f.currentState, Data: f.stateData}
 }
 
 // Unhandled indicates that the current event was not handled.
 func (f *BaseFSM[S, D]) Unhandled() *StateBuilder[S, D] {
-	return &StateBuilder[S, D]{nextState: f.currentState, data: f.stateData, unhandled: true}
+	return &StateBuilder[S, D]{NextState: f.currentState, Data: f.stateData, Unhandled: true}
 }
 
 // Stop terminates the FSM.
 func (f *BaseFSM[S, D]) Stop() *StateBuilder[S, D] {
-	return &StateBuilder[S, D]{nextState: f.currentState, data: f.stateData, stop: true, reason: Normal}
+	return &StateBuilder[S, D]{NextState: f.currentState, Data: f.stateData, Stop: true, Reason: Normal}
 }
 
 // PreStart initializes the FSM.
@@ -90,7 +90,7 @@ func (f *BaseFSM[S, D]) PreStart() {
 	if !f.startCalled {
 		panic("FSM: StartWith must be called before actor starts")
 	}
-	f.timers = newTimerScheduler[any](f.Self())
+	f.timers = NewTimerScheduler[any](f.Self())
 	f.initialized = true
 	f.Log().Info("FSM: started", "state", f.currentState)
 }
@@ -98,7 +98,7 @@ func (f *BaseFSM[S, D]) PreStart() {
 // PostStop cleans up FSM resources.
 func (f *BaseFSM[S, D]) PostStop() {
 	if f.timers != nil {
-		f.timers.cancelAll()
+		f.timers.CancelAll()
 	}
 }
 

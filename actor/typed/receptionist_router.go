@@ -6,17 +6,21 @@
  * SPDX-License-Identifier: MIT
  */
 
-package actor
+package typed
+
+import (
+	"github.com/sopranoworks/gekka/actor"
+)
 
 // ReceptionistGroup is a router that dynamically discovers its routees
 // by subscribing to a ServiceKey via the Receptionist.
 type ReceptionistGroup[T any] struct {
 	keyID string
-	logic RoutingLogic
+	logic actor.RoutingLogic
 }
 
 // NewReceptionistGroup creates a new ReceptionistGroup router.
-func NewReceptionistGroup[T any](keyID string, logic RoutingLogic) *ReceptionistGroup[T] {
+func NewReceptionistGroup[T any](keyID string, logic actor.RoutingLogic) *ReceptionistGroup[T] {
 	return &ReceptionistGroup[T]{
 		keyID: keyID,
 		logic: logic,
@@ -31,7 +35,7 @@ type listing[T any] struct {
 // ─── Router Behavior ─────────────────────────────────────────────────────
 
 func (g *ReceptionistGroup[T]) Behavior() Behavior[any] {
-	var routees []Ref
+	var routees []actor.Ref
 
 	return Setup(func(ctx TypedContext[any]) Behavior[any] {
 		// Attempt to subscribe to the Receptionist.
@@ -48,7 +52,7 @@ func (g *ReceptionistGroup[T]) Behavior() Behavior[any] {
 		return func(ctx TypedContext[any], msg any) Behavior[any] {
 			switch m := msg.(type) {
 			case listing[T]:
-				newRoutees := make([]Ref, 0, len(m.paths))
+				newRoutees := make([]actor.Ref, 0, len(m.paths))
 				for _, p := range m.paths {
 					if ref, err := ctx.System().Resolve(p); err == nil {
 						newRoutees = append(newRoutees, ref)

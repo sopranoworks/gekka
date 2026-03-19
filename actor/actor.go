@@ -130,6 +130,13 @@ type Passivate struct {
 	Entity Ref
 }
 
+// StateTimeout is a message sent when an FSM state duration expires.
+type StateTimeout struct{}
+
+func (StateTimeout) String() string {
+	return "FSM.StateTimeout"
+}
+
 // ActorContext is the subset of the ActorSystem API that is safe to use from
 // within actor code (i.e. from the actor package) without introducing an import
 // cycle.

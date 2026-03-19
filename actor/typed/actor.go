@@ -6,14 +6,17 @@
  * SPDX-License-Identifier: MIT
  */
 
-package actor
+package typed
 
 import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/sopranoworks/gekka/actor"
 )
 
 // Behavior is the definition of how an actor reacts to a message.
@@ -33,19 +36,19 @@ type TypedContext[T any] interface {
 
 	// System returns the untyped actor context, providing access to
 	// system-level operations like spawning children or watching other actors.
-	System() ActorContext
+	System() actor.ActorContext
 
 	// Log returns the structured logger for this actor.
 	Log() *slog.Logger
 
 	// Watch registers this actor to receive a TerminatedMessage when target stops.
-	Watch(target Ref)
+	Watch(target actor.Ref)
 
 	// Unwatch removes a previously established watch.
-	Unwatch(target Ref)
+	Unwatch(target actor.Ref)
 
 	// Stop gracefully terminates the target actor.
-	Stop(target Ref)
+	Stop(target actor.Ref)
 
 	// Passivate requests the parent actor to stop this actor.
 	Passivate()
@@ -59,13 +62,13 @@ type TypedContext[T any] interface {
 	Stash() StashBuffer[T]
 
 	// Sender returns the sender of the current message.
-	Sender() Ref
+	Sender() actor.Ref
 
 	// Ask sends a message to another actor and adapts the response.
 	// target is the recipient of the message.
 	// msgFactory creates the message to be sent, providing a temporary reply-to reference.
 	// transform converts the response (or error) into a message of type T for this actor.
-	Ask(target Ref, msgFactory func(replyTo Ref) any, transform func(res any, err error) T)
+	Ask(target actor.Ref, msgFactory func(replyTo actor.Ref) any, transform func(res any, err error) T)
 }
 
 // typedContext is the internal implementation of TypedContext[T].
@@ -75,7 +78,57 @@ type typedContext[T any] struct {
 
 var askCounter atomic.Uint64
 
-func (c *typedContext[T]) Ask(target Ref, msgFactory func(Ref) any, transform func(any, error) T) {
+func (c *typedContext[T]) Self() TypedActorRef[T] {
+	return NewTypedActorRef[T](c.actor.Self())
+}
+
+func (c *typedContext[T]) System() actor.ActorContext {
+	return c.actor.System()
+}
+
+func (c *typedContext[T]) Log() *slog.Logger {
+	return c.actor.Log().Logger()
+}
+
+func (c *typedContext[T]) Watch(target actor.Ref) {
+	c.actor.System().Watch(c.actor.Self(), target)
+}
+
+func (c *typedContext[T]) Unwatch(target actor.Ref) {
+	if sys, ok := c.actor.System().(interface {
+		Unwatch(watcher actor.Ref, target actor.Ref)
+	}); ok {
+		sys.Unwatch(c.actor.Self(), target)
+	}
+}
+
+func (c *typedContext[T]) Stop(target actor.Ref) {
+	if sys, ok := c.actor.System().(interface {
+		Stop(target actor.Ref)
+	}); ok {
+		sys.Stop(target)
+	}
+}
+
+func (c *typedContext[T]) Passivate() {
+	if parent := c.actor.Parent(); parent != nil {
+		parent.Tell(actor.Passivate{Entity: c.actor.Self()}, c.actor.Self())
+	}
+}
+
+func (c *typedContext[T]) Timers() TimerScheduler[T] {
+	return c.actor.timers
+}
+
+func (c *typedContext[T]) Stash() StashBuffer[T] {
+	return c.actor.stash
+}
+
+func (c *typedContext[T]) Sender() actor.Ref {
+	return c.actor.Sender()
+}
+
+func (c *typedContext[T]) Ask(target actor.Ref, msgFactory func(actor.Ref) any, transform func(any, error) T) {
 	askID := askCounter.Add(1)
 	timerKey := fmt.Sprintf("ask-timeout-%d", askID)
 	timeout := 3 * time.Second // Default timeout
@@ -83,7 +136,7 @@ func (c *typedContext[T]) Ask(target Ref, msgFactory func(Ref) any, transform fu
 	completed := &atomic.Bool{}
 
 	// 1. Create transformed message for timeout
-	timeoutMsg := transform(nil, ErrAskTimeout)
+	timeoutMsg := transform(nil, actor.ErrAskTimeout)
 
 	// 2. Schedule timeout using existing TimerScheduler
 	c.Timers().StartSingleTimer(timerKey, timeoutMsg, timeout)
@@ -110,7 +163,7 @@ type contextAskResponder[T any] struct {
 	completed *atomic.Bool
 }
 
-func (r *contextAskResponder[T]) Tell(msg any, sender ...Ref) {
+func (r *contextAskResponder[T]) Tell(msg any, sender ...actor.Ref) {
 	if r.completed.CompareAndSwap(false, true) {
 		r.timers.Cancel(r.timerKey)
 		transformed := r.transform(msg, nil)
@@ -122,59 +175,9 @@ func (r *contextAskResponder[T]) Path() string {
 	return "/temp/context-ask"
 }
 
-func (c *typedContext[T]) Self() TypedActorRef[T] {
-	return NewTypedActorRef[T](c.actor.Self())
-}
-
-func (c *typedContext[T]) System() ActorContext {
-	return c.actor.System()
-}
-
-func (c *typedContext[T]) Log() *slog.Logger {
-	return c.actor.Log().logger()
-}
-
-func (c *typedContext[T]) Watch(target Ref) {
-	c.actor.System().Watch(c.actor.Self(), target)
-}
-
-func (c *typedContext[T]) Unwatch(target Ref) {
-	if sys, ok := c.actor.System().(interface {
-		Unwatch(watcher Ref, target Ref)
-	}); ok {
-		sys.Unwatch(c.actor.Self(), target)
-	}
-}
-
-func (c *typedContext[T]) Stop(target Ref) {
-	if sys, ok := c.actor.System().(interface {
-		Stop(target Ref)
-	}); ok {
-		sys.Stop(target)
-	}
-}
-
-func (c *typedContext[T]) Passivate() {
-	if parent := c.actor.Parent(); parent != nil {
-		parent.Tell(Passivate{Entity: c.actor.Self()}, c.actor.Self())
-	}
-}
-
-func (c *typedContext[T]) Timers() TimerScheduler[T] {
-	return c.actor.timers
-}
-
-func (c *typedContext[T]) Stash() StashBuffer[T] {
-	return c.actor.stash
-}
-
-func (c *typedContext[T]) Sender() Ref {
-	return c.actor.Sender()
-}
-
 // typedActor is the internal bridge between the untyped actor system and typed behaviors.
 type typedActor[T any] struct {
-	BaseActor
+	actor.BaseActor
 	behavior Behavior[T]
 	ctx      *typedContext[T]
 	timers   *timerScheduler[T]
@@ -185,7 +188,7 @@ type typedActor[T any] struct {
 // newTypedActor creates a new typedActor instance with the given initial behavior.
 func newTypedActor[T any](behavior Behavior[T]) *typedActor[T] {
 	a := &typedActor[T]{
-		BaseActor: NewBaseActor(),
+		BaseActor: actor.NewBaseActor(),
 		behavior:  behavior,
 	}
 	a.ctx = &typedContext[T]{actor: a}
@@ -196,16 +199,16 @@ func newTypedActor[T any](behavior Behavior[T]) *typedActor[T] {
 // self reference has been injected by the actor system.
 func (a *typedActor[T]) PreStart() {
 	a.timers = newTimerScheduler[T](a.Self())
-	a.stash = newStashBuffer[T](a.Self(), DefaultStashCapacity)
+	a.stash = newStashBuffer[T](a.Self(), actor.DefaultStashCapacity)
 }
 
 // PostStop cancels all active timers so their goroutines exit cleanly.
 func (a *typedActor[T]) PostStop() {
-	a.timers.cancelAll()
+	a.timers.CancelAll()
 }
 
 // NewTypedActor creates a new Actor that handles messages of type T using the given behavior.
-func NewTypedActor[T any](behavior Behavior[T]) Actor {
+func NewTypedActor[T any](behavior Behavior[T]) actor.Actor {
 	return newTypedActor(behavior)
 }
 
@@ -228,22 +231,29 @@ func (a *typedActor[T]) Receive(msg any) {
 	}
 }
 
+var stoppedSentinels sync.Map
+
 // isStopped returns true if the behavior is the Stopped sentinel.
 func isStopped[T any](b Behavior[T]) bool {
 	if b == nil {
 		return false
 	}
-	// We use a specific function pointer comparison for Stopped sentinel.
 	return reflect.ValueOf(b).Pointer() == reflect.ValueOf(Stopped[T]()).Pointer()
 }
 
 // Stopped returns a sentinel behavior indicating that the actor should stop.
 func Stopped[T any]() Behavior[T] {
-	return stoppedSentinel[T]
-}
-
-func stoppedSentinel[T any](ctx TypedContext[T], msg T) Behavior[T] {
-	return stoppedSentinel[T]
+	t := reflect.TypeFor[T]()
+	if s, ok := stoppedSentinels.Load(t); ok {
+		return s.(Behavior[T])
+	}
+	// Stable pointer for each type T
+	var s Behavior[T]
+	s = func(ctx TypedContext[T], msg T) Behavior[T] {
+		return s
+	}
+	stoppedSentinels.Store(t, s)
+	return s
 }
 
 // Same returns a sentinel behavior indicating that the actor should keep its current behavior.

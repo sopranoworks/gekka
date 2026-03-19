@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/actor/typed"
 	"github.com/sopranoworks/gekka/persistence"
 	"github.com/sopranoworks/gekka/sharding"
 )
@@ -69,7 +70,7 @@ type ShardingSettings struct {
 func StartSharding[Command any, Event any, State any](
 	sys ActorSystem,
 	typeName string,
-	behaviorFactory func(entityId string) *EventSourcedBehavior[Command, Event, State],
+	behaviorFactory func(entityId string) *typed.EventSourcedBehavior[Command, Event, State],
 	extract sharding.ExtractEntityId,
 	settings ShardingSettings,
 ) (sharding.ClusterEntityRef[Command], error) {
@@ -122,7 +123,7 @@ func StartSharding[Command any, Event any, State any](
 	entityCreator := func(ctx actor.ActorContext, entityId sharding.EntityId) (actor.Ref, error) {
 		p := actor.Props{
 			New: func() actor.Actor {
-				return actor.NewPersistentActor(behaviorFactory(entityId))
+				return typed.NewPersistentActor(behaviorFactory(entityId))
 			},
 		}
 		return ctx.ActorOf(p, entityId)
@@ -196,7 +197,7 @@ func EntityRefFor[M any](sys ActorSystem, typeName string, entityID string) (*sh
 func StartTyped[M any, Event any, State any](
 	sys ActorSystem,
 	typeName string,
-	behaviorFactory func(entityId string) *EventSourcedBehavior[M, Event, State],
+	behaviorFactory func(entityId string) *typed.EventSourcedBehavior[M, Event, State],
 	extract sharding.ExtractEntityId,
 	settings ShardingSettings,
 ) (actor.Ref, error) {

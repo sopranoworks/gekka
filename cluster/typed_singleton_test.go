@@ -11,16 +11,16 @@ package cluster
 import (
 	"testing"
 
-	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/actor/typed"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestTypedSingleton(t *testing.T) {
 	received := make(chan string, 10)
-	behavior := func(ctx actor.TypedContext[string], msg string) actor.Behavior[string] {
+	behavior := func(ctx typed.TypedContext[string], msg string) typed.Behavior[string] {
 		received <- msg
-		return actor.Same[string]()
+		return typed.Same[string]()
 	}
 
 	// Mock environment

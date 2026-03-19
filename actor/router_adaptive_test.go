@@ -24,8 +24,8 @@ func (m *mockClusterMetricsProvider) GetClusterPressure() map[string]float64 {
 
 func TestRouter_Adaptive(t *testing.T) {
 	// Setup mock routees
-	w1 := &functionalMockRef{path: "pekko://Sys@node1:2552/user/w1", handler: func(any) {}}
-	w2 := &functionalMockRef{path: "pekko://Sys@node2:2552/user/w2", handler: func(any) {}}
+	w1 := &FunctionalMockRef{PathURI: "pekko://Sys@node1:2552/user/w1", Handler: func(any) {}}
+	w2 := &FunctionalMockRef{PathURI: "pekko://Sys@node2:2552/user/w2", Handler: func(any) {}}
 
 	routees := []Ref{w1, w2}
 
@@ -72,8 +72,8 @@ func TestRouter_Adaptive(t *testing.T) {
 func TestRouter_AdaptiveFallback(t *testing.T) {
 	SetClusterMetricsProvider(nil) // Ensure no provider
 
-	w1 := &functionalMockRef{path: "/user/w1", handler: func(any) {}}
-	w2 := &functionalMockRef{path: "/user/w2", handler: func(any) {}}
+	w1 := &FunctionalMockRef{PathURI: "/user/w1", Handler: func(any) {}}
+	w2 := &FunctionalMockRef{PathURI: "/user/w2", Handler: func(any) {}}
 	routees := []Ref{w1, w2}
 
 	logic := &AdaptiveLoadBalancingRoutingLogic{}

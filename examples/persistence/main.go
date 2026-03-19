@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka"
-	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/actor/typed"
 	"github.com/sopranoworks/gekka/persistence"
 )
 
@@ -24,7 +24,7 @@ import (
 type Command interface{}
 type Increment struct{}
 type GetValue struct {
-	ReplyTo actor.TypedActorRef[int]
+	ReplyTo typed.TypedActorRef[int]
 }
 
 type Event struct {
@@ -43,16 +43,16 @@ func Counter(persistenceID string, journal persistence.Journal, snaps persistenc
 		Journal:       journal,
 		SnapshotStore: snaps,
 		InitialState:  State{Value: 0},
-		CommandHandler: func(ctx actor.TypedContext[Command], state State, cmd Command) actor.Effect[Event, State] {
+		CommandHandler: func(ctx typed.TypedContext[Command], state State, cmd Command) typed.Effect[Event, State] {
 			switch m := cmd.(type) {
 			case Increment:
 				fmt.Println("Counter: persisting increment event")
-				return actor.Persist[Event, State](Event{Delta: 1})
+				return typed.Persist[Event, State](Event{Delta: 1})
 			case GetValue:
 				m.ReplyTo.Tell(state.Value)
-				return actor.None[Event, State]()
+				return typed.None[Event, State]()
 			}
-			return actor.None[Event, State]()
+			return typed.None[Event, State]()
 		},
 		EventHandler: func(state State, event Event) State {
 			state.Value += event.Delta
@@ -93,7 +93,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	val, _ := gekka.Ask(ctx, counter, 3*time.Second, func(replyTo actor.TypedActorRef[int]) Command {
+	val, _ := gekka.Ask(ctx, counter, 3*time.Second, func(replyTo typed.TypedActorRef[int]) Command {
 		return GetValue{ReplyTo: replyTo}
 	})
 	fmt.Printf("Current value: %d\n", val)
@@ -109,7 +109,7 @@ func main() {
 	counter2.Tell(Increment{})
 	time.Sleep(100 * time.Millisecond)
 
-	val2, _ := gekka.Ask(ctx, counter2, 3*time.Second, func(replyTo actor.TypedActorRef[int]) Command {
+	val2, _ := gekka.Ask(ctx, counter2, 3*time.Second, func(replyTo typed.TypedActorRef[int]) Command {
 		return GetValue{ReplyTo: replyTo}
 	})
 	fmt.Printf("Value after recovery and increment: %d\n", val2)

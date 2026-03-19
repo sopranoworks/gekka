@@ -19,7 +19,9 @@ import (
 	"github.com/sopranoworks/gekka/actor/typed/delivery"
 	"github.com/sopranoworks/gekka/actor/typed/pubsub"
 	"github.com/sopranoworks/gekka/actor/typed/receptionist"
+	"github.com/sopranoworks/gekka/persistence"
 	ptyped "github.com/sopranoworks/gekka/persistence/typed"
+	pstate "github.com/sopranoworks/gekka/persistence/typed/state"
 	"github.com/sopranoworks/gekka/internal/core"
 )
 
@@ -30,6 +32,9 @@ type TypedActorRef[T any] = typed.TypedActorRef[T]
 
 // EventSourcedBehavior defines a behavior for a persistent actor.
 type EventSourcedBehavior[Command any, Event any, State any] = ptyped.EventSourcedBehavior[Command, Event, State]
+
+// DurableStateBehavior defines a behavior for a state-persistent actor.
+type DurableStateBehavior[Command any, State any] = pstate.DurableStateBehavior[Command, State]
 
 // Topic is an alias for pubsub.Topic[M].
 type Topic[M any] = pubsub.Topic[M]
@@ -64,6 +69,15 @@ func NewConsumerController(consumerActor actor.Ref, windowSize int) typed.Behavi
 	return delivery.NewConsumerController(consumerActor, windowSize)
 }
 
+// DurableState creates a behavior for a state-persistent actor.
+func DurableState[C any, S any](persistenceID string, emptyState S, stateStore persistence.DurableStateStore) *DurableStateBehavior[C, S] {
+	return &DurableStateBehavior[C, S]{
+		PersistenceID: persistenceID,
+		EmptyState:    emptyState,
+		StateStore:    stateStore,
+	}
+}
+
 // Spawn creates a new typed actor as a top-level actor in the system.
 func Spawn[T any](sys ActorSystem, behavior typed.Behavior[T], name string, props ...actor.Props) (TypedActorRef[T], error) {
 	ref, err := typed.Spawn(asActorContext(sys, ""), behavior, name, props...)
@@ -74,6 +88,21 @@ func Spawn[T any](sys ActorSystem, behavior typed.Behavior[T], name string, prop
 func SpawnPersistent[Command any, Event any, State any](sys ActorSystem, behavior *EventSourcedBehavior[Command, Event, State], name string, props ...actor.Props) (TypedActorRef[Command], error) {
 	ref, err := ptyped.SpawnPersistent(asActorContext(sys, ""), behavior, name, props...)
 	return ref, err
+}
+
+// SpawnDurableState creates a new state-persistent typed actor.
+func SpawnDurableState[Command any, State any](sys ActorSystem, behavior *DurableStateBehavior[Command, State], name string, props ...actor.Props) (TypedActorRef[Command], error) {
+	p := actor.Props{
+		New: func() actor.Actor { return pstate.NewDurableStateActor(behavior) },
+	}
+	if len(props) > 0 {
+		p.SupervisorStrategy = props[0].SupervisorStrategy
+	}
+	ref, err := sys.ActorOf(p, name)
+	if err != nil {
+		return TypedActorRef[Command]{}, err
+	}
+	return typed.NewTypedActorRef[Command](ref), nil
 }
 
 // Ask sends a message to a typed actor and waits for a reply.

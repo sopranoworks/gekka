@@ -71,6 +71,22 @@ type Dialect interface {
 	// Bind order: persistence_id, min_seqnr, max_seqnr,
 	//             min_timestamp, max_timestamp.
 	SnapshotDeleteRangeSQL(table string) string
+
+	// CreateStateTableSQL returns a CREATE TABLE IF NOT EXISTS statement
+	// for the durable state store.
+	CreateStateTableSQL(table string) string
+
+	// StateUpsertSQL returns the INSERT/UPSERT statement for durable state.
+	// Bind order: persistence_id, revision, state_payload, state_manifest, tag, created_at.
+	StateUpsertSQL(table string) string
+
+	// StateSelectSQL returns the SELECT statement for loading the latest state.
+	// Bind order: persistence_id.
+	StateSelectSQL(table string) string
+
+	// StateDeleteSQL returns the DELETE statement for a persistence ID.
+	// Bind order: persistence_id.
+	StateDeleteSQL(table string) string
 }
 
 // ── PostgresDialect ───────────────────────────────────────────────────────────
@@ -177,6 +193,42 @@ WHERE persistence_id = $1
   AND created_at  BETWEEN $4 AND $5`
 }
 
+func (PostgresDialect) CreateStateTableSQL(table string) string {
+	return `CREATE TABLE IF NOT EXISTS ` + table + ` (
+    persistence_id  VARCHAR(255) NOT NULL,
+    revision        BIGINT       NOT NULL,
+    state_payload   BYTEA        NOT NULL,
+    state_manifest  VARCHAR(512) NOT NULL DEFAULT '',
+    tag             VARCHAR(512) NOT NULL DEFAULT '',
+    created_at      BIGINT       NOT NULL,
+    PRIMARY KEY (persistence_id)
+);
+CREATE INDEX IF NOT EXISTS ` + table + `_tag ON ` + table + ` (tag);`
+}
+
+func (PostgresDialect) StateUpsertSQL(table string) string {
+	return `INSERT INTO ` + table + `
+    (persistence_id, revision, state_payload, state_manifest, tag, created_at)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (persistence_id) DO UPDATE
+    SET revision       = EXCLUDED.revision,
+        state_payload  = EXCLUDED.state_payload,
+        state_manifest = EXCLUDED.state_manifest,
+        tag            = EXCLUDED.tag,
+        created_at     = EXCLUDED.created_at`
+}
+
+func (PostgresDialect) StateSelectSQL(table string) string {
+	return `SELECT revision, state_payload, state_manifest
+FROM ` + table + `
+WHERE persistence_id = $1`
+}
+
+func (PostgresDialect) StateDeleteSQL(table string) string {
+	return `DELETE FROM ` + table + `
+WHERE persistence_id = $1`
+}
+
 // ── MySQLDialect ──────────────────────────────────────────────────────────────
 
 type MySQLDialect struct{}
@@ -278,4 +330,40 @@ func (MySQLDialect) SnapshotDeleteRangeSQL(table string) string {
 WHERE persistence_id = ?
   AND sequence_nr BETWEEN ? AND ?
   AND created_at  BETWEEN ? AND ?`
+}
+
+func (MySQLDialect) CreateStateTableSQL(table string) string {
+	return `CREATE TABLE IF NOT EXISTS ` + table + ` (
+    persistence_id  VARCHAR(255) NOT NULL,
+    revision        BIGINT       NOT NULL,
+    state_payload   BLOB         NOT NULL,
+    state_manifest  VARCHAR(512) NOT NULL DEFAULT '',
+    tag             VARCHAR(512) NOT NULL DEFAULT '',
+    created_at      BIGINT       NOT NULL,
+    PRIMARY KEY (persistence_id),
+    INDEX ` + table + `_tag (tag)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+}
+
+func (MySQLDialect) StateUpsertSQL(table string) string {
+	return `INSERT INTO ` + table + `
+    (persistence_id, revision, state_payload, state_manifest, tag, created_at)
+VALUES (?, ?, ?, ?, ?, ?)
+ON DUPLICATE KEY UPDATE
+    revision       = VALUES(revision),
+    state_payload  = VALUES(state_payload),
+    state_manifest = VALUES(state_manifest),
+    tag            = VALUES(tag),
+    created_at     = VALUES(created_at)`
+}
+
+func (MySQLDialect) StateSelectSQL(table string) string {
+	return `SELECT revision, state_payload, state_manifest
+FROM ` + table + `
+WHERE persistence_id = ?`
+}
+
+func (MySQLDialect) StateDeleteSQL(table string) string {
+	return `DELETE FROM ` + table + `
+WHERE persistence_id = ?`
 }

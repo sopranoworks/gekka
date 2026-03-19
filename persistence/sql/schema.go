@@ -37,6 +37,9 @@ func CreateSchema(ctx context.Context, db *sql.DB, dialect Dialect, config Confi
 	if _, err := db.ExecContext(ctx, dialect.CreateSnapshotTableSQL(config.snapshotTable())); err != nil {
 		return fmt.Errorf("sqlstore: create snapshot table %q: %w", config.snapshotTable(), err)
 	}
+	if _, err := db.ExecContext(ctx, dialect.CreateStateTableSQL(config.stateTable())); err != nil {
+		return fmt.Errorf("sqlstore: create state table %q: %w", config.stateTable(), err)
+	}
 	return nil
 }
 
@@ -62,6 +65,9 @@ func RegisterPostgresBackend(name string, codec PayloadCodec, config Config) {
 	persistence.RegisterSnapshotStore(name, func(db *sql.DB) persistence.SnapshotStore {
 		return NewSQLSnapshotStore(db, PostgresDialect{}, codec, config)
 	})
+	persistence.RegisterDurableStateStore(name, func(db *sql.DB) persistence.DurableStateStore {
+		return NewSQLDurableStateStore(db, PostgresDialect{}, codec, config)
+	})
 }
 
 // RegisterMySQLBackend registers MySQL-backed Journal and SnapshotStore
@@ -72,5 +78,8 @@ func RegisterMySQLBackend(name string, codec PayloadCodec, config Config) {
 	})
 	persistence.RegisterSnapshotStore(name, func(db *sql.DB) persistence.SnapshotStore {
 		return NewSQLSnapshotStore(db, MySQLDialect{}, codec, config)
+	})
+	persistence.RegisterDurableStateStore(name, func(db *sql.DB) persistence.DurableStateStore {
+		return NewSQLDurableStateStore(db, MySQLDialect{}, codec, config)
 	})
 }

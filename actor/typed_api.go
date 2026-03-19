@@ -240,3 +240,12 @@ func ConsistentHashingPool(nrOfInstances int, props Props, virtualNodes int) Pro
 		},
 	}
 }
+
+// ── Supervisor Factories ──────────────────────────────────────────────────
+
+// WithBackoff creates a supervisor behavior that wraps an actor and manages
+// its lifecycle with exponential backoff. It returns a Behavior[any] because
+// it must handle both the user message type M and system signals (Terminated).
+func WithBackoff[M any](options BackoffOptions, childProps Props) Behavior[any] {
+	return NewBackoffSupervisor[M](options, childProps)
+}

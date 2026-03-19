@@ -67,6 +67,28 @@ func Foreach[T any](fn func(T)) Sink[T, NotUsed] {
 	}
 }
 
+// ForeachErr creates a Sink that calls fn for each incoming element.
+// If fn returns an error, the stream fails with that error.
+func ForeachErr[T any](fn func(T) error) Sink[T, NotUsed] {
+	return Sink[T, NotUsed]{
+		runWith: func(upstream iterator[T]) (NotUsed, error) {
+			for {
+				elem, ok, err := upstream.next()
+				if err != nil {
+					return NotUsed{}, err
+				}
+				if !ok {
+					break
+				}
+				if err := fn(elem); err != nil {
+					return NotUsed{}, err
+				}
+			}
+			return NotUsed{}, nil
+		},
+	}
+}
+
 // Ignore creates a Sink that discards all elements.
 // Equivalent to Foreach with a no-op function.
 func Ignore[T any]() Sink[T, NotUsed] {

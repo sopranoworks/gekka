@@ -306,3 +306,91 @@ func (r *untypedAskResponder) Tell(msg any, sender ...Ref) {
 	r.replyCh <- msg
 }
 func (r *untypedAskResponder) Path() string { return "" }
+
+type halRequest struct {
+	replyTo TypedActorRef[halResponse]
+}
+type halResponse struct {
+	answer string
+}
+
+func halBehavior() Behavior[halRequest] {
+	return func(ctx TypedContext[halRequest], msg halRequest) Behavior[halRequest] {
+		msg.replyTo.Tell(halResponse{answer: "I'm sorry, Dave. I'm afraid I can't do that."})
+		return Same[halRequest]()
+	}
+}
+
+type daveCommand struct{}
+type daveInternalMsg struct {
+	answer string
+	err    error
+}
+
+func daveBehavior(hal TypedActorRef[halRequest], probe chan string) Behavior[any] {
+	return func(ctx TypedContext[any], msg any) Behavior[any] {
+		switch m := msg.(type) {
+		case daveCommand:
+			ctx.Ask(hal.Untyped(), func(replyTo Ref) any {
+				return halRequest{replyTo: ToTyped[halResponse](replyTo)}
+			}, func(res any, err error) any {
+				if err != nil {
+					return daveInternalMsg{err: err}
+				}
+				return daveInternalMsg{answer: res.(halResponse).answer}
+			})
+		case daveInternalMsg:
+			if m.err != nil {
+				probe <- "Error: " + m.err.Error()
+			} else {
+				probe <- m.answer
+			}
+		}
+		return Same[any]()
+	}
+}
+
+func TestContextAsk_HALandDave(t *testing.T) {
+	sys := &scatterGatherTestSystem{t: t}
+	probe := make(chan string, 1)
+
+	// Spawn HAL
+	hal := newTypedActor(halBehavior())
+	hal.setSystem(sys)
+	halRef_mock := &functionalMockRef{
+		path: "/user/hal",
+		handler: func(m any) {
+			hal.Receive(m)
+		},
+	}
+	hal.SetSelf(halRef_mock)
+	Start(hal)
+	halRef := ToTyped[halRequest](halRef_mock)
+
+	// Spawn Dave
+	dave := newTypedActor(daveBehavior(halRef, probe))
+	dave.setSystem(sys)
+	daveRef_mock := &functionalMockRef{
+		path: "/user/dave",
+		handler: func(m any) {
+			dave.Receive(m)
+		},
+	}
+	dave.SetSelf(daveRef_mock)
+	dave.PreStart() // Initialize timers
+	Start(dave)
+
+	// Send command to Dave via mock ref to ensure goroutine safety
+	daveRef_mock.Tell(daveCommand{})
+
+	// Assert probe received HAL's answer
+	select {
+	case result := <-probe:
+		expected := "I'm sorry, Dave. I'm afraid I can't do that."
+		if result != expected {
+			t.Errorf("expected %q, got %q", expected, result)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Timeout waiting for Dave's adapted message")
+	}
+}

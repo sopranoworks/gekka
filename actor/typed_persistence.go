@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/sopranoworks/gekka/persistence"
@@ -149,6 +150,33 @@ func (c *persistentTypedContext[C, E, S]) Stash() StashBuffer[C] {
 
 func (c *persistentTypedContext[C, E, S]) Sender() Ref {
 	return c.actor.Sender()
+}
+
+func (c *persistentTypedContext[C, E, S]) Ask(target Ref, msgFactory func(Ref) any, transform func(any, error) C) {
+	askID := askCounter.Add(1)
+	timerKey := fmt.Sprintf("ask-timeout-%d", askID)
+	timeout := 3 * time.Second // Default timeout
+
+	completed := &atomic.Bool{}
+
+	// 1. Create transformed message for timeout
+	timeoutMsg := transform(nil, ErrAskTimeout)
+
+	// 2. Schedule timeout using existing TimerScheduler
+	c.Timers().StartSingleTimer(timerKey, timeoutMsg, timeout)
+
+	// 3. Create temporary responder
+	responder := &contextAskResponder[C]{
+		self:      c.Self(),
+		transform: transform,
+		timerKey:  timerKey,
+		timers:    c.Timers(),
+		completed: completed,
+	}
+
+	// 4. Send the message
+	msg := msgFactory(responder)
+	target.Tell(msg)
 }
 
 func (p *persistentActor[Command, Event, State]) PreStart() {

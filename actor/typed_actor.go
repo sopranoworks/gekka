@@ -9,8 +9,11 @@
 package actor
 
 import (
+	"fmt"
 	"log/slog"
 	"reflect"
+	"sync/atomic"
+	"time"
 )
 
 // Behavior is the definition of how an actor reacts to a message.
@@ -57,11 +60,66 @@ type TypedContext[T any] interface {
 
 	// Sender returns the sender of the current message.
 	Sender() Ref
+
+	// Ask sends a message to another actor and adapts the response.
+	// target is the recipient of the message.
+	// msgFactory creates the message to be sent, providing a temporary reply-to reference.
+	// transform converts the response (or error) into a message of type T for this actor.
+	Ask(target Ref, msgFactory func(replyTo Ref) any, transform func(res any, err error) T)
 }
 
 // typedContext is the internal implementation of TypedContext[T].
 type typedContext[T any] struct {
 	actor *typedActor[T]
+}
+
+var askCounter atomic.Uint64
+
+func (c *typedContext[T]) Ask(target Ref, msgFactory func(Ref) any, transform func(any, error) T) {
+	askID := askCounter.Add(1)
+	timerKey := fmt.Sprintf("ask-timeout-%d", askID)
+	timeout := 3 * time.Second // Default timeout
+
+	completed := &atomic.Bool{}
+
+	// 1. Create transformed message for timeout
+	timeoutMsg := transform(nil, ErrAskTimeout)
+
+	// 2. Schedule timeout using existing TimerScheduler
+	c.Timers().StartSingleTimer(timerKey, timeoutMsg, timeout)
+
+	// 3. Create temporary responder
+	responder := &contextAskResponder[T]{
+		self:      c.Self(),
+		transform: transform,
+		timerKey:  timerKey,
+		timers:    c.Timers(),
+		completed: completed,
+	}
+
+	// 4. Send the message
+	msg := msgFactory(responder)
+	target.Tell(msg)
+}
+
+type contextAskResponder[T any] struct {
+	self      TypedActorRef[T]
+	transform func(any, error) T
+	timerKey  string
+	timers    TimerScheduler[T]
+	completed *atomic.Bool
+}
+
+func (r *contextAskResponder[T]) Tell(msg any, sender ...Ref) {
+	if r.completed.CompareAndSwap(false, true) {
+		r.timers.Cancel(r.timerKey)
+		transformed := r.transform(msg, nil)
+		r.self.Tell(transformed)
+	}
+}
+
+func (r *contextAskResponder[T]) Path() string {
+	return "/temp/context-ask"
 }
 
 func (c *typedContext[T]) Self() TypedActorRef[T] {

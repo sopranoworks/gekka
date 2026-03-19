@@ -59,6 +59,12 @@ const (
 	Escalate
 )
 
+var (
+	// ErrAskTimeout is returned by Ask operations when the response does not
+	// arrive within the expected duration.
+	ErrAskTimeout = fmt.Errorf("ask timed out")
+)
+
 // SupervisorStrategy defines how to handle failures in child actors.
 type SupervisorStrategy interface {
 	// Decide returns the Directive for a given error.

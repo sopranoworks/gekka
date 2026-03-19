@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-package sharding
+package typed
 
 import (
 	"context"
@@ -34,6 +34,14 @@ func NewEntityRef[M any](typeName string, entityID string, region actor.Ref) *En
 	}
 }
 
+// ShardingEnvelope matches the structure in parent sharding package exactly.
+type ShardingEnvelope struct {
+	EntityId        string          `json:"entityId"`
+	ShardId         string          `json:"shardId"`
+	Message         json.RawMessage `json:"message"`
+	MessageManifest string          `json:"manifest"`
+}
+
 // Tell sends a message to the sharded entity.
 func (r *EntityRef[M]) Tell(msg M) {
 	data, _ := json.Marshal(msg)
@@ -47,13 +55,6 @@ func (r *EntityRef[M]) Tell(msg M) {
 // Ask sends a message to the sharded entity and waits for a reply.
 // It follows the Akka Typed 'Ask' pattern.
 func (r *EntityRef[M]) Ask(ctx context.Context, timeout time.Duration, msg any) (any, error) {
-	// For now, implement a basic Ask using the root actor.Ask pattern logic
-	// but adapted for sharding envelopes.
-	
-	// Implementation note: In a real system, we would use the actor.Ask
-	// with a custom msgFactory that produces the ShardingEnvelope.
-	// Since we are inside the sharding package, we'll use a simplified version.
-	
 	return nil, fmt.Errorf("EntityRef.Ask: not fully implemented (requires system-wide Ask integration)")
 }
 

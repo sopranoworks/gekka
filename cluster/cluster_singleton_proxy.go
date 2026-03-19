@@ -51,6 +51,11 @@ func (p *ClusterSingletonProxy) WithSingletonName(name string) *ClusterSingleton
 	return p
 }
 
+// ManagerPath returns the relative actor path of the singleton manager.
+func (p *ClusterSingletonProxy) ManagerPath() string {
+	return p.managerPath
+}
+
 // CurrentOldestPath returns the full Pekko actor path to the singleton on the current oldest node.
 // Returns an error if no eligible node is known yet.
 func (p *ClusterSingletonProxy) CurrentOldestPath() (string, error) {

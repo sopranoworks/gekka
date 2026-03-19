@@ -19,6 +19,7 @@ import (
 	"github.com/sopranoworks/gekka/actor/typed"
 	"github.com/sopranoworks/gekka/persistence"
 	"github.com/sopranoworks/gekka/sharding"
+	styped "github.com/sopranoworks/gekka/sharding/typed"
 )
 
 // ShardingSettings defines configuration for cluster sharding.
@@ -183,13 +184,13 @@ func StartSharding[Command any, Event any, State any](
 }
 
 // EntityRefFor returns a type-safe EntityRef for a specific entity.
-func EntityRefFor[M any](sys ActorSystem, typeName string, entityID string) (*sharding.EntityRef[M], error) {
+func EntityRefFor[M any](sys ActorSystem, typeName string, entityID string) (*styped.EntityRef[M], error) {
 	regionPath := "/user/" + typeName + "Region"
 	ref, err := sys.ActorSelection(regionPath).Resolve(context.TODO())
 	if err != nil {
 		return nil, fmt.Errorf("sharding: failed to resolve region %q: %w", regionPath, err)
 	}
-	return sharding.NewEntityRef[M](typeName, entityID, ref), nil
+	return styped.NewEntityRef[M](typeName, entityID, ref), nil
 }
 
 // StartTyped starts cluster sharding for a given typed entity.

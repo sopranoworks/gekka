@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-package cluster
+package typed
 
 import (
 	"context"
@@ -15,22 +15,23 @@ import (
 
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/actor/typed"
+	"github.com/sopranoworks/gekka/cluster"
 )
 
 // Singleton manages the lifecycle of a typed cluster singleton.
 type Singleton[M any] struct {
-	manager *ClusterSingletonManager
+	manager *cluster.ClusterSingletonManager
 }
 
 // NewTypedSingleton creates a new type-safe singleton manager factory.
-func NewTypedSingleton[M any](cm *ClusterManager, behavior typed.Behavior[M], role string) *Singleton[M] {
+func NewTypedSingleton[M any](cm *cluster.ClusterManager, behavior typed.Behavior[M], role string) *Singleton[M] {
 	props := actor.Props{
 		New: func() actor.Actor {
 			return typed.NewTypedActor(behavior)
 		},
 	}
 	return &Singleton[M]{
-		manager: NewClusterSingletonManager(cm, props, role),
+		manager: cluster.NewClusterSingletonManager(cm, props, role),
 	}
 }
 
@@ -53,13 +54,13 @@ func (s *Singleton[M]) Props() actor.Props {
 
 // TypedSingletonProxy provides type-safe access to a cluster singleton.
 type TypedSingletonProxy[M any] struct {
-	proxy *ClusterSingletonProxy
+	proxy *cluster.ClusterSingletonProxy
 }
 
 // NewTypedSingletonProxy creates a new type-safe proxy for a cluster singleton.
-func NewTypedSingletonProxy[M any](cm *ClusterManager, router Router, managerPath, role string) *TypedSingletonProxy[M] {
+func NewTypedSingletonProxy[M any](cm *cluster.ClusterManager, router cluster.Router, managerPath, role string) *TypedSingletonProxy[M] {
 	return &TypedSingletonProxy[M]{
-		proxy: NewClusterSingletonProxy(cm, router, managerPath, role),
+		proxy: cluster.NewClusterSingletonProxy(cm, router, managerPath, role),
 	}
 }
 
@@ -71,11 +72,11 @@ func (p *TypedSingletonProxy[M]) Tell(msg M) {
 
 // Path returns the path of the proxy (not the singleton itself).
 func (p *TypedSingletonProxy[M]) Path() string {
-	return p.proxy.managerPath
+	return p.proxy.ManagerPath() // Need to check if managerPath is exported or has getter
 }
 
 // Untyped returns the underlying untyped proxy.
-func (p *TypedSingletonProxy[M]) Untyped() *ClusterSingletonProxy {
+func (p *TypedSingletonProxy[M]) Untyped() *cluster.ClusterSingletonProxy {
 	return p.proxy
 }
 

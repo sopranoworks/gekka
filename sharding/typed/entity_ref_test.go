@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-package sharding
+package typed_test
 
 import (
 	"context"
@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/sharding/typed"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -22,18 +23,20 @@ type counterMsg struct {
 }
 
 func TestEntityRef_Tell(t *testing.T) {
-	region := &mockRegion{
-		received: make(chan ShardingEnvelope, 10),
+	region := &MockRegion{
+		Received: make(chan typed.ShardingEnvelope, 10),
 	}
 
-	ref := NewEntityRef[counterMsg]("Counter", "entity-1", region)
+	ref := typed.NewEntityRef[counterMsg]("Counter", "entity-1", region)
 	
 	ref.Tell(counterMsg{Value: 42})
 
 	select {
-	case env := <-region.received:
+	case env := <-region.Received:
 		assert.Equal(t, "entity-1", env.EntityId)
-		assert.Equal(t, "sharding.counterMsg", env.MessageManifest)
+		// manifest is derived from reflect.TypeOf(msg).String()
+		// which includes package name.
+		assert.Equal(t, "typed_test.counterMsg", env.MessageManifest)
 		// Note: message is JSON encoded in current implementation
 		assert.Contains(t, string(env.Message), `"Value":42`)
 	case <-time.After(500 * time.Millisecond):
@@ -43,25 +46,25 @@ func TestEntityRef_Tell(t *testing.T) {
 
 func TestEntityRef_Ask(t *testing.T) {
 	// Ask is currently a stub in entity_ref.go
-	region := &mockRegion{}
-	ref := NewEntityRef[string]("TestType", "entity-1", region)
+	region := &MockRegion{}
+	ref := typed.NewEntityRef[string]("TestType", "entity-1", region)
 	
 	_, err := ref.Ask(context.Background(), 100*time.Millisecond, "ping")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not fully implemented")
 }
 
-type mockRegion struct {
+type MockRegion struct {
 	actor.Ref
-	received chan ShardingEnvelope
+	Received chan typed.ShardingEnvelope
 }
 
-func (m *mockRegion) Tell(msg any, _ ...actor.Ref) {
-	if env, ok := msg.(ShardingEnvelope); ok {
-		if m.received != nil {
-			m.received <- env
+func (m *MockRegion) Tell(msg any, _ ...actor.Ref) {
+	if env, ok := msg.(typed.ShardingEnvelope); ok {
+		if m.Received != nil {
+			m.Received <- env
 		}
 	}
 }
 
-func (m *mockRegion) Path() string { return "/user/test-region" }
+func (m *MockRegion) Path() string { return "/user/test-region" }

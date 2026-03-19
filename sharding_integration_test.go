@@ -17,7 +17,7 @@ import (
 	"github.com/sopranoworks/gekka/actor/typed"
 	"github.com/sopranoworks/gekka/persistence"
 	ptyped "github.com/sopranoworks/gekka/persistence/typed"
-	"github.com/sopranoworks/gekka/sharding"
+	"github.com/sopranoworks/gekka/sharding/typed"
 )
 
 func TestClusterSharding_Rebalancing(t *testing.T) {

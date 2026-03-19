@@ -34,8 +34,8 @@ func NewEntityRef[M any](typeName string, entityID string, region actor.Ref) *En
 	}
 }
 
-// ShardingEnvelope matches the structure in parent sharding package exactly.
-type ShardingEnvelope struct {
+// shardingEnvelope mirrors the structure in parent sharding package to avoid cycle.
+type shardingEnvelope struct {
 	EntityId        string          `json:"entityId"`
 	ShardId         string          `json:"shardId"`
 	Message         json.RawMessage `json:"message"`
@@ -45,7 +45,7 @@ type ShardingEnvelope struct {
 // Tell sends a message to the sharded entity.
 func (r *EntityRef[M]) Tell(msg M) {
 	data, _ := json.Marshal(msg)
-	r.region.Tell(ShardingEnvelope{
+	r.region.Tell(shardingEnvelope{
 		EntityId:        r.entityID,
 		Message:         data,
 		MessageManifest: reflect.TypeOf(msg).String(),

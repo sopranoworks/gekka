@@ -23,6 +23,7 @@ import (
 	ptyped "github.com/sopranoworks/gekka/persistence/typed"
 	pstate "github.com/sopranoworks/gekka/persistence/typed/state"
 	ctyped "github.com/sopranoworks/gekka/cluster/typed"
+	styped "github.com/sopranoworks/gekka/sharding/typed"
 	"github.com/sopranoworks/gekka/internal/core"
 )
 
@@ -36,6 +37,12 @@ type EventSourcedBehavior[Command any, Event any, State any] = ptyped.EventSourc
 
 // DurableStateBehavior defines a behavior for a state-persistent actor.
 type DurableStateBehavior[Command any, State any] = pstate.DurableStateBehavior[Command, State]
+
+// EntityTypeKey is an alias for styped.EntityTypeKey[M].
+type EntityTypeKey[M any] = styped.EntityTypeKey[M]
+
+// EntityRef is an alias for styped.EntityRef[M].
+type EntityRef[M any] = styped.EntityRef[M]
 
 // ClusterSingleton is an alias for ctyped.Singleton[M].
 type ClusterSingleton[M any] = ctyped.Singleton[M]
@@ -93,6 +100,11 @@ func NewTypedSingleton[M any](cm *Cluster, behavior typed.Behavior[M], role stri
 // NewTypedSingletonProxy creates a new type-safe proxy for a cluster singleton.
 func NewTypedSingletonProxy[M any](cm *Cluster, managerPath, role string) *TypedSingletonProxy[M] {
 	return ctyped.NewTypedSingletonProxy[M](cm.cm, cm.router, managerPath, role)
+}
+
+// NewEntityTypeKey creates a new EntityTypeKey.
+func NewEntityTypeKey[M any](name string) EntityTypeKey[M] {
+	return styped.NewEntityTypeKey[M](name)
 }
 
 // Spawn creates a new typed actor as a top-level actor in the system.

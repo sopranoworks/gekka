@@ -13,7 +13,6 @@ import (
 	"reflect"
 
 	"github.com/sopranoworks/gekka/actor"
-	"github.com/sopranoworks/gekka/sharding/typed"
 )
 
 type EntityId = string
@@ -92,11 +91,6 @@ func StartTyped[M any](
 	}, unmarshaler, extract, coordinator, settings)
 
 	return region, nil
-}
-
-// EntityRefFor returns a type-safe EntityRef for a specific entity.
-func EntityRefFor[M any](typeName string, entityID string, region actor.Ref) *typed.EntityRef[M] {
-	return typed.NewEntityRef[M](typeName, entityID, region)
 }
 
 // Internal messages for sharding coordinator and regions.

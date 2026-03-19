@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-package typed_test
+package typed
 
 import (
 	"context"
@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
-	"github.com/sopranoworks/gekka/sharding/typed"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -24,10 +23,10 @@ type counterMsg struct {
 
 func TestEntityRef_Tell(t *testing.T) {
 	region := &MockRegion{
-		Received: make(chan typed.ShardingEnvelope, 10),
+		Received: make(chan shardingEnvelope, 10),
 	}
 
-	ref := typed.NewEntityRef[counterMsg]("Counter", "entity-1", region)
+	ref := NewEntityRef[counterMsg]("Counter", "entity-1", region)
 	
 	ref.Tell(counterMsg{Value: 42})
 
@@ -35,9 +34,8 @@ func TestEntityRef_Tell(t *testing.T) {
 	case env := <-region.Received:
 		assert.Equal(t, "entity-1", env.EntityId)
 		// manifest is derived from reflect.TypeOf(msg).String()
-		// which includes package name.
-		assert.Equal(t, "typed_test.counterMsg", env.MessageManifest)
-		// Note: message is JSON encoded in current implementation
+		assert.Equal(t, "typed.counterMsg", env.MessageManifest)
+		// Note: message is JSON encoded
 		assert.Contains(t, string(env.Message), `"Value":42`)
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("Message not received by region")
@@ -47,7 +45,7 @@ func TestEntityRef_Tell(t *testing.T) {
 func TestEntityRef_Ask(t *testing.T) {
 	// Ask is currently a stub in entity_ref.go
 	region := &MockRegion{}
-	ref := typed.NewEntityRef[string]("TestType", "entity-1", region)
+	ref := NewEntityRef[string]("TestType", "entity-1", region)
 	
 	_, err := ref.Ask(context.Background(), 100*time.Millisecond, "ping")
 	assert.Error(t, err)
@@ -56,11 +54,11 @@ func TestEntityRef_Ask(t *testing.T) {
 
 type MockRegion struct {
 	actor.Ref
-	Received chan typed.ShardingEnvelope
+	Received chan shardingEnvelope
 }
 
 func (m *MockRegion) Tell(msg any, _ ...actor.Ref) {
-	if env, ok := msg.(typed.ShardingEnvelope); ok {
+	if env, ok := msg.(shardingEnvelope); ok {
 		if m.Received != nil {
 			m.Received <- env
 		}

@@ -24,15 +24,15 @@ func TestRouter_Broadcast(t *testing.T) {
 		return Same[string]()
 	}
 
-	w1 := newTypedActor(workerBehavior)
+	w1 := NewTypedActorInternal(workerBehavior)
 	w1.SetSelf(&actor.FunctionalMockRef{Handler: func(m any) { w1.Receive(m) }, PathURI: "/user/w1"})
 	
-	w2 := newTypedActor(workerBehavior)
+	w2 := NewTypedActorInternal(workerBehavior)
 	w2.SetSelf(&actor.FunctionalMockRef{Handler: func(m any) { w2.Receive(m) }, PathURI: "/user/w2"})
 
 	group := actor.NewGroupRouter(&actor.BroadcastRoutingLogic{}, []actor.Ref{w1.Self(), w2.Self()})
 	
-	rActor := newTypedActor(func(ctx TypedContext[any], msg any) Behavior[any] {
+	rActor := NewTypedActorInternal(func(ctx TypedContext[any], msg any) Behavior[any] {
 		group.Receive(msg)
 		return Same[any]()
 	})
@@ -62,12 +62,12 @@ func TestRouter_ScatterGather(t *testing.T) {
 	fastWorker := &scatterGatherTestWorker{reply: "fast-reply", delay: 0, t: t}
 	slowWorker := &scatterGatherTestWorker{reply: "slow-reply", delay: 200 * time.Millisecond, t: t}
 
-	sg := &ScatterGatherFirstCompleted{actor.ScatterGatherFirstCompleted{
+	sg := &ScatterGatherFirstCompleted{&actor.ScatterGatherFirstCompleted{
 		RouterActor: *actor.NewRouterActor(&actor.ScatterGatherRoutingLogic{Within: 500 * time.Millisecond}, []actor.Ref{fastWorker, slowWorker}),
 		Within:      500 * time.Millisecond,
 	}}
 	
-	rActor := newTypedActor(sg.Behavior())
+	rActor := NewTypedActorInternal(sg.Behavior())
 	rActor.SetSelf(&typedMockRef{path: "/user/router"})
 	rActor.SetSystem(sys)
 
@@ -105,12 +105,12 @@ func TestRouter_TailChopping(t *testing.T) {
 	slowWorker := &scatterGatherTestWorker{reply: "slow-reply", delay: 200 * time.Millisecond, t: t}
 	fastWorker := &scatterGatherTestWorker{reply: "fast-reply", delay: 0, t: t}
 
-	tc := &TailChoppingFirstCompleted{actor.TailChoppingFirstCompleted{
+	tc := &TailChoppingFirstCompleted{&actor.TailChoppingFirstCompleted{
 		RouterActor: *actor.NewRouterActor(&actor.TailChoppingRoutingLogic{Within: 100 * time.Millisecond}, []actor.Ref{slowWorker, fastWorker}),
 		Within:      100 * time.Millisecond,
 	}}
 	
-	rActor := newTypedActor(tc.Behavior())
+	rActor := NewTypedActorInternal(tc.Behavior())
 	rActor.SetSelf(&typedMockRef{path: "/user/router"})
 	rActor.SetSystem(sys)
 

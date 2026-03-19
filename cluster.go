@@ -24,6 +24,7 @@ import (
 
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/actor/typed"
+	"github.com/sopranoworks/gekka/actor/typed/receptionist"
 	gcluster "github.com/sopranoworks/gekka/cluster"
 	"github.com/sopranoworks/gekka/crdt"
 	"github.com/sopranoworks/gekka/discovery"
@@ -629,6 +630,13 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	// Joining -> Up) happen as soon as possible.
 	go cluster.cm.StartGossipLoop(cluster.ctx)
 	cluster.mg.Start(cluster.ctx)
+
+	// ── Receptionist ────────────────────────────────────────────────────────
+	// Spawn the local receptionist actor. It uses the CRDT replicator to
+	// propagate service registrations cluster-wide.
+	if _, err := spawnReceptionist(cluster, repl); err != nil {
+		log.Printf("gekka: failed to spawn receptionist: %v", err)
+	}
 
 	// ── Coordinated Shutdown ────────────────────────────────────────────────
 	// Wire the built-in graceful exit sequence so that Shutdown() drives the
@@ -1561,7 +1569,12 @@ func (c *Cluster) GetLocalActor(path string) (actor.Actor, bool) {
 
 // SelfPathURI implements internalSystem.
 func (c *Cluster) SelfPathURI(path string) string {
-	return c.SelfPathURI(path)
+	if len(path) > 0 && path[0] == '/' {
+		self := c.SelfAddress()
+		return fmt.Sprintf("%s://%s@%s:%d%s",
+			self.Protocol, self.System, self.Host, self.Port, path)
+	}
+	return path
 }
 
 // LookupDeployment implements internalSystem.
@@ -1659,11 +1672,7 @@ func (c *Cluster) SubscribeToReceptionist(keyID string, subscriber typed.TypedAc
 		return
 	}
 
-	recept.Tell(subscribe{
-		keyID:      keyID,
-		subscriber: subscriber,
-		sendUpdate: callback,
-	})
+	recept.Tell(receptionist.BridgeInternal(keyID, subscriber, callback))
 }
 
 // GetMailboxLengths implements actor.MailboxLengthProvider.

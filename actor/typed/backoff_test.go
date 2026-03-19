@@ -79,7 +79,7 @@ func TestBackoffSupervisor_Lifecycle(t *testing.T) {
 	}
 
 	supBehavior := NewBackoffSupervisor[string](opts, childProps)
-	sup := newTypedActor(supBehavior)
+	sup := NewTypedActorInternal(supBehavior)
 	
 	supRef := &actor.FunctionalMockRef{
 		PathURI: "/user/sup",

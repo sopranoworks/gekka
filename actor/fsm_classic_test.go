@@ -45,7 +45,7 @@ func TestClassicFSM_Lifecycle(t *testing.T) {
 	
 	// Mock environment
 	f.SetSelf(&FunctionalMockRef{PathURI: "/user/fsm", Handler: func(m any) { f.Receive(m) }})
-	InjectSystem(f, &ScatterGatherTestSystem{t: t})
+	InjectSystem(f, &ScatterGatherTestSystem{T: t})
 	f.PreStart() // Manual call for mock test
 	Start(f)
 
@@ -92,7 +92,7 @@ func TestClassicFSM_Timeout(t *testing.T) {
 	f.SetSelf(&FunctionalMockRef{PathURI: "/user/fsm", Handler: func(m any) { 
 		f.Receive(m) 
 	}})
-	InjectSystem(f, &ScatterGatherTestSystem{t: t})
+	InjectSystem(f, &ScatterGatherTestSystem{T: t})
 	f.PreStart() // Manual call for mock test
 	Start(f)
 

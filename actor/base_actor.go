@@ -341,9 +341,9 @@ func (b *BaseActor) Children() map[string]Ref {
 // unexported setSystem method (defined in this package) is reachable regardless
 // of the calling package.
 func InjectSystem(a Actor, ctx ActorContext) {
-	type setter interface{ setSystem(ActorContext) }
+	type setter interface{ SetSystem(ActorContext) }
 	if s, ok := a.(setter); ok {
-		s.setSystem(ctx)
+		s.SetSystem(ctx)
 	}
 }
 

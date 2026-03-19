@@ -73,7 +73,7 @@ type TypedContext[T any] interface {
 
 // typedContext is the internal implementation of TypedContext[T].
 type typedContext[T any] struct {
-	actor *typedActor[T]
+	actor *TypedActor[T]
 }
 
 var askCounter atomic.Uint64
@@ -175,8 +175,8 @@ func (r *contextAskResponder[T]) Path() string {
 	return "/temp/context-ask"
 }
 
-// typedActor is the internal bridge between the untyped actor system and typed behaviors.
-type typedActor[T any] struct {
+// TypedActor is the internal bridge between the untyped actor system and typed behaviors.
+type TypedActor[T any] struct {
 	actor.BaseActor
 	behavior Behavior[T]
 	ctx      *typedContext[T]
@@ -185,9 +185,9 @@ type typedActor[T any] struct {
 	stopped  bool
 }
 
-// newTypedActor creates a new typedActor instance with the given initial behavior.
-func newTypedActor[T any](behavior Behavior[T]) *typedActor[T] {
-	a := &typedActor[T]{
+// NewTypedActorInternal creates a new TypedActor instance with the given initial behavior.
+func NewTypedActorInternal[T any](behavior Behavior[T]) *TypedActor[T] {
+	a := &TypedActor[T]{
 		BaseActor: actor.NewBaseActor(),
 		behavior:  behavior,
 	}
@@ -197,23 +197,23 @@ func newTypedActor[T any](behavior Behavior[T]) *typedActor[T] {
 
 // PreStart initialises the timer scheduler and stash buffer once the actor's
 // self reference has been injected by the actor system.
-func (a *typedActor[T]) PreStart() {
+func (a *TypedActor[T]) PreStart() {
 	a.timers = newTimerScheduler[T](a.Self())
 	a.stash = newStashBuffer[T](a.Self(), actor.DefaultStashCapacity)
 }
 
 // PostStop cancels all active timers so their goroutines exit cleanly.
-func (a *typedActor[T]) PostStop() {
+func (a *TypedActor[T]) PostStop() {
 	a.timers.CancelAll()
 }
 
 // NewTypedActor creates a new Actor that handles messages of type T using the given behavior.
 func NewTypedActor[T any](behavior Behavior[T]) actor.Actor {
-	return newTypedActor(behavior)
+	return NewTypedActorInternal(behavior)
 }
 
 // Receive implements the Actor interface.
-func (a *typedActor[T]) Receive(msg any) {
+func (a *TypedActor[T]) Receive(msg any) {
 	if a.stopped {
 		return
 	}

@@ -150,7 +150,7 @@ func TestActorSelection_Resolve_LocalPath(t *testing.T) {
 	if ref.Path() != wantPath {
 		t.Errorf("path = %q, want %q", ref.Path(), wantPath)
 	}
-	if ref.(ActorRef).local != a {
+	if ref.local != a {
 		t.Error("Resolve returned wrong local actor")
 	}
 }
@@ -175,7 +175,7 @@ func TestActorSelection_Resolve_RemoteURI(t *testing.T) {
 	if ref.Path() != remoteURI {
 		t.Errorf("path = %q, want %q", ref.Path(), remoteURI)
 	}
-	if ref.(ActorRef).local != nil {
+	if ref.local != nil {
 		t.Error("remote ActorRef should have nil local")
 	}
 }
@@ -192,7 +192,7 @@ func TestActorSelection_Resolve_SelfAbsoluteURI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve failed: %v", err)
 	}
-	if ref.(ActorRef).local != a {
+	if ref.local != a {
 		t.Error("self-URI should resolve to a local actor ref")
 	}
 }
@@ -216,7 +216,7 @@ func TestActorSelection_Resolve_NilContext(t *testing.T) {
 	if ref.Path() != wantPath {
 		t.Errorf("path = %q, want %q", ref.Path(), wantPath)
 	}
-	if ref.(ActorRef).local != a {
+	if ref.local != a {
 		t.Error("Resolve(nil) returned wrong local actor")
 	}
 }

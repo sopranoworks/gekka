@@ -66,8 +66,8 @@ func TestSpawn(t *testing.T) {
 	}
 
 	act := ctx.spawnedProps.New()
-	if _, ok := act.(*typedActor[string]); !ok {
-		t.Errorf("expected *typedActor[string], got %T", act)
+	if _, ok := act.(*TypedActor[string]); !ok {
+		t.Errorf("expected *TypedActor[string], got %T", act)
 	}
 }
 
@@ -84,7 +84,7 @@ func TestSpawnChild(t *testing.T) {
 	}
 
 	// Manually create the parent typed actor and its context
-	parentActor := newTypedActor(parentBehavior)
+	parentActor := NewTypedActorInternal(parentBehavior)
 	parentTypedCtx := &typedContext[string]{actor: parentActor}
 
 	// We need to set the system of the parent actor
@@ -115,7 +115,7 @@ func TestBehaviorTransition(t *testing.T) {
 		return Same[string]()
 	}
 
-	act := newTypedActor(behavior1)
+	act := NewTypedActorInternal(behavior1)
 	act.Receive("one")   // count = 1, next = behavior2
 	act.Receive("two")   // count = 11, next = Same (behavior2)
 	act.Receive("three") // count = 21
@@ -134,7 +134,7 @@ func TestSetupBehavior(t *testing.T) {
 		}
 	})
 
-	act := newTypedActor(behavior)
+	act := NewTypedActorInternal(behavior)
 	if setupCalled {
 		t.Error("Setup called too early")
 	}
@@ -160,7 +160,7 @@ func TestSameSentinel(t *testing.T) {
 		return Same[string]()
 	}
 
-	act := newTypedActor(behavior)
+	act := NewTypedActorInternal(behavior)
 	act.Receive("one")
 	act.Receive("two")
 
@@ -184,7 +184,7 @@ func TestAsk(t *testing.T) {
 	target := &mockTypedRef[pingMsg]{
 		behavior: behavior,
 	}
-	target.ctx = &typedContext[pingMsg]{actor: &typedActor[pingMsg]{}}
+	target.ctx = &typedContext[pingMsg]{actor: &TypedActor[pingMsg]{}}
 
 	tref := NewTypedActorRef[pingMsg](target)
 
@@ -229,7 +229,7 @@ func BenchmarkTypedReceive(b *testing.B) {
 	behavior := func(ctx TypedContext[string], msg string) Behavior[string] {
 		return Same[string]()
 	}
-	act := newTypedActor(behavior)
+	act := NewTypedActorInternal(behavior)
 	msg := "test"
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -263,7 +263,7 @@ func BenchmarkTypedAsk(b *testing.B) {
 	target := &mockTypedRef[pingMsg]{
 		behavior: behavior,
 	}
-	target.ctx = &typedContext[pingMsg]{actor: &typedActor[pingMsg]{}}
+	target.ctx = &typedContext[pingMsg]{actor: &TypedActor[pingMsg]{}}
 	tref := NewTypedActorRef[pingMsg](target)
 
 	b.ResetTimer()
@@ -355,7 +355,7 @@ func TestContextAsk_HALandDave(t *testing.T) {
 	probe := make(chan string, 1)
 
 	// Spawn HAL
-	hal := newTypedActor(halBehavior())
+	hal := NewTypedActorInternal(halBehavior())
 	hal.SetSystem(sys)
 	halRef_mock := &actor.FunctionalMockRef{
 		PathURI: "/user/hal",
@@ -368,7 +368,7 @@ func TestContextAsk_HALandDave(t *testing.T) {
 	halRef := ToTyped[halRequest](halRef_mock)
 
 	// Spawn Dave
-	dave := newTypedActor(daveBehavior(halRef, probe))
+	dave := NewTypedActorInternal(daveBehavior(halRef, probe))
 	dave.SetSystem(sys)
 	daveRef_mock := &actor.FunctionalMockRef{
 		PathURI: "/user/dave",

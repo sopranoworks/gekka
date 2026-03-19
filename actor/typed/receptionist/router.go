@@ -6,10 +6,11 @@
  * SPDX-License-Identifier: MIT
  */
 
-package typed
+package receptionist
 
 import (
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/actor/typed"
 )
 
 // ReceptionistGroup is a router that dynamically discovers its routees
@@ -34,13 +35,13 @@ type listing[T any] struct {
 
 // ─── Router Behavior ─────────────────────────────────────────────────────
 
-func (g *ReceptionistGroup[T]) Behavior() Behavior[any] {
+func (g *ReceptionistGroup[T]) Behavior() typed.Behavior[any] {
 	var routees []actor.Ref
 
-	return Setup(func(ctx TypedContext[any]) Behavior[any] {
+	return typed.Setup(func(ctx typed.TypedContext[any]) typed.Behavior[any] {
 		// Attempt to subscribe to the Receptionist.
 		type receptionistBridge interface {
-			SubscribeToReceptionist(keyID string, subscriber TypedActorRef[any], callback func([]string))
+			SubscribeToReceptionist(keyID string, subscriber typed.TypedActorRef[any], callback func([]string))
 		}
 
 		if bridge, ok := ctx.System().(receptionistBridge); ok {
@@ -49,7 +50,7 @@ func (g *ReceptionistGroup[T]) Behavior() Behavior[any] {
 			})
 		}
 
-		return func(ctx TypedContext[any], msg any) Behavior[any] {
+		return func(ctx typed.TypedContext[any], msg any) typed.Behavior[any] {
 			switch m := msg.(type) {
 			case listing[T]:
 				newRoutees := make([]actor.Ref, 0, len(m.paths))
@@ -60,12 +61,12 @@ func (g *ReceptionistGroup[T]) Behavior() Behavior[any] {
 				}
 				routees = newRoutees
 				ctx.Log().Info("ReceptionistGroup: updated routees", "count", len(routees))
-				return Same[any]()
+				return typed.Same[any]()
 
 			default:
 				if len(routees) == 0 {
 					ctx.Log().Warn("ReceptionistGroup: no routees available, dropping message")
-					return Same[any]()
+					return typed.Same[any]()
 				}
 
 				target := g.logic.Select(msg, routees)
@@ -73,7 +74,7 @@ func (g *ReceptionistGroup[T]) Behavior() Behavior[any] {
 					target.Tell(msg, ctx.Sender())
 				}
 			}
-			return Same[any]()
+			return typed.Same[any]()
 		}
 	})
 }

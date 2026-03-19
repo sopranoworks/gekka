@@ -64,7 +64,7 @@ func TestFSM_Lifecycle(t *testing.T) {
 	})
 
 	behavior := fsm.Behavior()
-	act := newTypedActor(behavior)
+	act := NewTypedActorInternal(behavior)
 	
 	// Mock context for testing
 	ctx := &typedMockContext{}

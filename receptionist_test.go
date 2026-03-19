@@ -11,17 +11,19 @@ package gekka
 import (
 	"testing"
 
+	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/actor/typed"
+	"github.com/sopranoworks/gekka/actor/typed/receptionist"
 	"github.com/sopranoworks/gekka/crdt"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestReceptionist_Register(t *testing.T) {
 	replicator := crdt.NewReplicator("node1", nil)
-	behavior := receptionistBehavior(replicator)
+	behavior := receptionist.Behavior(replicator)
 	
 	// Create typed actor manually for test
-	a := typed.NewTypedActor(behavior)
+	a := typed.NewTypedActor(behavior).(*typed.TypedActor[any])
 	
 	key := NewServiceKey[string]("test-service")
 	
@@ -29,7 +31,7 @@ func TestReceptionist_Register(t *testing.T) {
 	mref := &mockTypedRef{path: "/user/service1"}
 	typedServiceRef := typed.NewTypedActorRef[string](mref)
 
-	msg := Register[string]{
+	msg := receptionist.Register[string]{
 		Key:     key,
 		Service: typedServiceRef,
 	}
@@ -47,3 +49,4 @@ type mockTypedRef struct {
 }
 
 func (r *mockTypedRef) Path() string { return r.path }
+func (r *mockTypedRef) Tell(msg any, sender ...actor.Ref) {}

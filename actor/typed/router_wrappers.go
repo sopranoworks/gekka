@@ -15,7 +15,7 @@ import (
 // ScatterGatherFirstCompleted is a typed wrapper for the scatter-gather router.
 // Deprecated: use NewGroupRouter or NewPoolRouter with ScatterGatherRoutingLogic.
 type ScatterGatherFirstCompleted struct {
-	actor.ScatterGatherFirstCompleted
+	*actor.ScatterGatherFirstCompleted
 }
 
 func (r *ScatterGatherFirstCompleted) Behavior() Behavior[any] {
@@ -28,7 +28,7 @@ func (r *ScatterGatherFirstCompleted) Behavior() Behavior[any] {
 // TailChoppingFirstCompleted is a typed wrapper for the tail-chopping router.
 // Deprecated: use NewGroupRouter or NewPoolRouter with TailChoppingRoutingLogic.
 type TailChoppingFirstCompleted struct {
-	actor.TailChoppingFirstCompleted
+	*actor.TailChoppingFirstCompleted
 }
 
 func (r *TailChoppingFirstCompleted) Behavior() Behavior[any] {

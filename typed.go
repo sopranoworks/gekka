@@ -16,6 +16,8 @@ import (
 
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/actor/typed"
+	"github.com/sopranoworks/gekka/actor/typed/pubsub"
+	"github.com/sopranoworks/gekka/actor/typed/receptionist"
 	"github.com/sopranoworks/gekka/internal/core"
 )
 
@@ -26,6 +28,18 @@ type TypedActorRef[T any] = typed.TypedActorRef[T]
 
 // EventSourcedBehavior defines a behavior for a persistent actor.
 type EventSourcedBehavior[Command any, Event any, State any] = typed.EventSourcedBehavior[Command, Event, State]
+
+// Topic is an alias for pubsub.Topic[M].
+type Topic[M any] = pubsub.Topic[M]
+
+// TopicPublish is an alias for pubsub.Publish[M].
+type TopicPublish[M any] = pubsub.Publish[M]
+
+// TopicSubscribe is an alias for pubsub.Subscribe[M].
+type TopicSubscribe[M any] = pubsub.Subscribe[M]
+
+// ReceptionistGroup is an alias for receptionist.ReceptionistGroup[T].
+type ReceptionistGroup[T any] = receptionist.ReceptionistGroup[T]
 
 // Spawn creates a new typed actor as a top-level actor in the system.
 func Spawn[T any](sys ActorSystem, behavior typed.Behavior[T], name string, props ...actor.Props) (TypedActorRef[T], error) {

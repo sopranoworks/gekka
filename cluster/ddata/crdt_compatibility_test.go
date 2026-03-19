@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-package crdt_test
+package ddata_test
 
 import (
 	"bytes"
@@ -17,7 +17,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/sopranoworks/gekka/crdt"
+	"github.com/sopranoworks/gekka/cluster/ddata"
 )
 
 // loadFixtureCRDT reads a binary fixture from testdata/.
@@ -56,19 +56,19 @@ func decompressGzipBytes(t *testing.T, data []byte) []byte {
 // ---------------------------------------------------------------------------
 
 func TestDDataSerializerIDs(t *testing.T) {
-	if crdt.DDataReplicatedSerializerID != 11 {
-		t.Errorf("DDataReplicatedSerializerID = %d, want 11", crdt.DDataReplicatedSerializerID)
+	if ddata.DDataReplicatedSerializerID != 11 {
+		t.Errorf("DDataReplicatedSerializerID = %d, want 11", ddata.DDataReplicatedSerializerID)
 	}
-	if crdt.DDataReplicatorMsgSerializerID != 12 {
-		t.Errorf("DDataReplicatorMsgSerializerID = %d, want 12", crdt.DDataReplicatorMsgSerializerID)
+	if ddata.DDataReplicatorMsgSerializerID != 12 {
+		t.Errorf("DDataReplicatorMsgSerializerID = %d, want 12", ddata.DDataReplicatorMsgSerializerID)
 	}
 }
 
 func TestDDataManifests(t *testing.T) {
 	cases := []struct{ name, got, want string }{
-		{"GCounter", crdt.GCounterManifest, "F"},
-		{"ORSet", crdt.ORSetManifest, "C"},
-		{"DeltaPropagation", crdt.DeltaPropagationManifest, "Q"},
+		{"GCounter", ddata.GCounterManifest, "F"},
+		{"ORSet", ddata.ORSetManifest, "C"},
+		{"DeltaPropagation", ddata.DeltaPropagationManifest, "Q"},
 	}
 	for _, c := range cases {
 		if c.got != c.want {
@@ -85,7 +85,7 @@ func TestDDataManifests(t *testing.T) {
 // verifies the two entries: node1@port2551/uid11111=42, node2@port2552/uid22222=7.
 func TestGCounter_ScalaDecode(t *testing.T) {
 	data := loadFixtureCRDT(t, "ddata_gcounter.bin")
-	ser := &crdt.DDataSerializer{}
+	ser := &ddata.DDataSerializer{}
 	entries, err := ser.DecodeGCounter(data)
 	if err != nil {
 		t.Fatalf("DecodeGCounter: %v", err)
@@ -128,7 +128,7 @@ func TestGCounter_ScalaDecode(t *testing.T) {
 // verifies byte-identical output to the Scala fixture.
 func TestGCounter_GoMatchesScala(t *testing.T) {
 	scala := loadFixtureCRDT(t, "ddata_gcounter.bin")
-	ser := &crdt.DDataSerializer{}
+	ser := &ddata.DDataSerializer{}
 	entries, err := ser.DecodeGCounter(scala)
 	if err != nil {
 		t.Fatalf("DecodeGCounter: %v", err)
@@ -140,14 +140,14 @@ func TestGCounter_GoMatchesScala(t *testing.T) {
 }
 
 func TestGCounter_RoundTrip(t *testing.T) {
-	ser := &crdt.DDataSerializer{}
-	entries := []crdt.DDGCounterEntry{
+	ser := &ddata.DDataSerializer{}
+	entries := []ddata.DDGCounterEntry{
 		{
-			Node:  crdt.DDUniqueAddress{Address: crdt.DDAddress{Hostname: "10.0.0.1", Port: 2551}, UIDLow: 99},
+			Node:  ddata.DDUniqueAddress{Address: ddata.DDAddress{Hostname: "10.0.0.1", Port: 2551}, UIDLow: 99},
 			Value: 100,
 		},
 		{
-			Node:  crdt.DDUniqueAddress{Address: crdt.DDAddress{Hostname: "10.0.0.2", Port: 2552}, UIDLow: 200},
+			Node:  ddata.DDUniqueAddress{Address: ddata.DDAddress{Hostname: "10.0.0.2", Port: 2552}, UIDLow: 200},
 			Value: 50,
 		},
 	}
@@ -173,9 +173,9 @@ func TestGCounter_RoundTrip(t *testing.T) {
 
 // TestGCounter_BigIntEncoding verifies value 42 encodes as bytes 0x12 0x01 0x2a.
 func TestGCounter_BigIntEncoding(t *testing.T) {
-	ser := &crdt.DDataSerializer{}
-	entries := []crdt.DDGCounterEntry{
-		{Node: crdt.DDUniqueAddress{Address: crdt.DDAddress{Hostname: "127.0.0.1", Port: 2551}, UIDLow: 11111}, Value: 42},
+	ser := &ddata.DDataSerializer{}
+	entries := []ddata.DDGCounterEntry{
+		{Node: ddata.DDUniqueAddress{Address: ddata.DDAddress{Hostname: "127.0.0.1", Port: 2551}, UIDLow: 11111}, Value: 42},
 	}
 	got := ser.EncodeGCounter(entries)
 	// Field 2 (value bytes), length=1, value=42 → 0x12 0x01 0x2a
@@ -212,7 +212,7 @@ func TestORSet_IsGzipCompressed(t *testing.T) {
 // TestORSet_ScalaDecode decompresses and decodes the Scala ORSet fixture.
 func TestORSet_ScalaDecode(t *testing.T) {
 	data := loadFixtureCRDT(t, "ddata_orset.bin")
-	ser := &crdt.DDataSerializer{}
+	ser := &ddata.DDataSerializer{}
 	orset, err := ser.DecodeORSet(data)
 	if err != nil {
 		t.Fatalf("DecodeORSet: %v", err)
@@ -247,7 +247,7 @@ func TestORSet_GoMatchesScalaInner(t *testing.T) {
 	scala := loadFixtureCRDT(t, "ddata_orset.bin")
 	scalaInner := decompressGzipBytes(t, scala)
 
-	ser := &crdt.DDataSerializer{}
+	ser := &ddata.DDataSerializer{}
 	orset, err := ser.DecodeORSet(scala)
 	if err != nil {
 		t.Fatalf("DecodeORSet: %v", err)
@@ -264,12 +264,12 @@ func TestORSet_GoMatchesScalaInner(t *testing.T) {
 }
 
 func TestORSet_RoundTrip(t *testing.T) {
-	ser := &crdt.DDataSerializer{}
-	node1 := crdt.DDUniqueAddress{Address: crdt.DDAddress{Hostname: "10.0.0.1", Port: 2551}, UIDLow: 1}
-	node2 := crdt.DDUniqueAddress{Address: crdt.DDAddress{Hostname: "10.0.0.2", Port: 2552}, UIDLow: 2}
-	orset := &crdt.DDORSet{
-		VVector:    []crdt.DDORSetDotEntry{{Node: node1, Counter: 1}, {Node: node2, Counter: 1}},
-		DotVectors: [][]crdt.DDORSetDotEntry{{{Node: node1, Counter: 1}}, {{Node: node2, Counter: 1}}},
+	ser := &ddata.DDataSerializer{}
+	node1 := ddata.DDUniqueAddress{Address: ddata.DDAddress{Hostname: "10.0.0.1", Port: 2551}, UIDLow: 1}
+	node2 := ddata.DDUniqueAddress{Address: ddata.DDAddress{Hostname: "10.0.0.2", Port: 2552}, UIDLow: 2}
+	orset := &ddata.DDORSet{
+		VVector:    []ddata.DDORSetDotEntry{{Node: node1, Counter: 1}, {Node: node2, Counter: 1}},
+		DotVectors: [][]ddata.DDORSetDotEntry{{{Node: node1, Counter: 1}}, {{Node: node2, Counter: 1}}},
 		Elements:   []string{"alpha", "beta"},
 	}
 	compressed, err := ser.EncodeORSet(orset)
@@ -296,7 +296,7 @@ func TestORSet_RoundTrip(t *testing.T) {
 // TestDeltaPropagation_ScalaDecode decodes the Scala DeltaPropagation fixture.
 func TestDeltaPropagation_ScalaDecode(t *testing.T) {
 	data := loadFixtureCRDT(t, "ddata_deltapropagation.bin")
-	ser := &crdt.DDataSerializer{}
+	ser := &ddata.DDataSerializer{}
 	dp, err := ser.DecodeDeltaPropagation(data)
 	if err != nil {
 		t.Fatalf("DecodeDeltaPropagation: %v", err)
@@ -353,7 +353,7 @@ func TestDeltaPropagation_NotGzip(t *testing.T) {
 // TestUniqueAddress_UIDSplit verifies UID is correctly split into low/high uint32.
 func TestUniqueAddress_UIDSplit(t *testing.T) {
 	uid := uint64(0x0000000100000002)
-	ua := crdt.DDUniqueAddress{
+	ua := ddata.DDUniqueAddress{
 		UIDLow:  uint32(uid & 0xFFFFFFFF),
 		UIDHigh: uint32(uid >> 32),
 	}

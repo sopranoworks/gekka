@@ -13,21 +13,21 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
-	"github.com/sopranoworks/gekka/crdt"
+	"github.com/sopranoworks/gekka/cluster/ddata"
 )
 
 const MetricsMapKey = "_cluster_metrics"
 
 // MetricsGossip handles periodic collection and distribution of node pressure metrics.
 type MetricsGossip struct {
-	repl      *crdt.Replicator
+	repl      *ddata.Replicator
 	collector *actor.MetricsCollector
 	nodeID    string
 	interval  time.Duration
 }
 
 // NewMetricsGossip creates a new MetricsGossip instance.
-func NewMetricsGossip(nodeID string, repl *crdt.Replicator, interval time.Duration) *MetricsGossip {
+func NewMetricsGossip(nodeID string, repl *ddata.Replicator, interval time.Duration) *MetricsGossip {
 	return &MetricsGossip{
 		repl:      repl,
 		collector: actor.NewMetricsCollector(),
@@ -47,7 +47,7 @@ func (g *MetricsGossip) Start(ctx context.Context) {
 				return
 			case <-ticker.C:
 				pressure := g.collector.Collect()
-				g.repl.PutInMap(MetricsMapKey, g.nodeID, pressure.Score, crdt.WriteLocal)
+				g.repl.PutInMap(MetricsMapKey, g.nodeID, pressure.Score, ddata.WriteLocal)
 			}
 		}
 	}()

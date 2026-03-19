@@ -356,6 +356,18 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		_ = configObj.Unmarshal(&nodeCfg.Discovery.Config.Config)
 	}
 
+	// ── Distributed Data ─────────────────────────────────────────────────────
+	ddataPrefix := "gekka.cluster.distributed-data"
+	if v, err := cfg.GetString(ddataPrefix + ".enabled"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		nodeCfg.DistributedData.Enabled = v == "true" || v == "on"
+	}
+	if v, err := cfg.GetString(ddataPrefix + ".gossip-interval"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.DistributedData.GossipInterval = d
+		}
+	}
+
 	// Support for specific blocks (v0.9.0)
 	apiPrefix := discoveryPrefix + ".kubernetes-api"
 	if v, err := cfg.GetString(apiPrefix + ".namespace"); err == nil {

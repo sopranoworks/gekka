@@ -31,7 +31,7 @@
 //	"F"  GCounter               (serializerId=11)
 //	"C"  ORSet (GZIP)           (serializerId=11)
 //	"Q"  DeltaPropagation       (serializerId=12)
-package crdt
+package ddata
 
 import (
 	"bytes"

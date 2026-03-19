@@ -13,7 +13,7 @@ import (
 
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/actor/typed"
-	"github.com/sopranoworks/gekka/crdt"
+	"github.com/sopranoworks/gekka/cluster/ddata"
 )
 
 // ServiceKey is a type-safe identifier for a service.
@@ -34,7 +34,7 @@ func NewServiceKey[T any](id string) ServiceKey[T] {
 // ─── Receptionist Protocol ───────────────────────────────────────────────
 
 type Command interface {
-	handle(ctx typed.TypedContext[any], replicator *crdt.Replicator, subscribers *[]subInfo)
+	handle(ctx typed.TypedContext[any], replicator *ddata.Replicator, subscribers *[]subInfo)
 }
 
 type Register[T any] struct {
@@ -42,10 +42,10 @@ type Register[T any] struct {
 	Service typed.TypedActorRef[T]
 }
 
-func (r Register[T]) handle(ctx typed.TypedContext[any], replicator *crdt.Replicator, subscribers *[]subInfo) {
+func (r Register[T]) handle(ctx typed.TypedContext[any], replicator *ddata.Replicator, subscribers *[]subInfo) {
 	id := r.Key.ID
 	path := r.Service.Path()
-	replicator.AddToSet(id, path, crdt.WriteAll)
+	replicator.AddToSet(id, path, ddata.WriteAll)
 	ctx.Log().Info("Receptionist: registered service", "key", id, "path", path)
 
 	// Notify subscribers
@@ -62,7 +62,7 @@ type Find[T any] struct {
 	ReplyTo typed.TypedActorRef[Listing[T]]
 }
 
-func (f Find[T]) handle(ctx typed.TypedContext[any], replicator *crdt.Replicator, _ *[]subInfo) {
+func (f Find[T]) handle(ctx typed.TypedContext[any], replicator *ddata.Replicator, _ *[]subInfo) {
 	id := f.Key.ID
 	paths := replicator.ORSet(id).Elements()
 	f.ReplyTo.Tell(constructListing(ctx, f.Key, paths))
@@ -73,7 +73,7 @@ type Subscribe[T any] struct {
 	Subscriber typed.TypedActorRef[Listing[T]]
 }
 
-func (s Subscribe[T]) handle(ctx typed.TypedContext[any], replicator *crdt.Replicator, subscribers *[]subInfo) {
+func (s Subscribe[T]) handle(ctx typed.TypedContext[any], replicator *ddata.Replicator, subscribers *[]subInfo) {
 	id := s.Key.ID
 	sub := subInfo{
 		keyID:      id,
@@ -140,7 +140,7 @@ type replicatorChanged struct {
 
 // ─── Receptionist Actor ───────────────────────────────────────────────────
 
-func Behavior(replicator *crdt.Replicator) typed.Behavior[any] {
+func Behavior(replicator *ddata.Replicator) typed.Behavior[any] {
 	var subscribers []subInfo
 
 	return func(ctx typed.TypedContext[any], msg any) typed.Behavior[any] {

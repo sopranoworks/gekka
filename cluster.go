@@ -26,7 +26,8 @@ import (
 	"github.com/sopranoworks/gekka/actor/typed"
 	"github.com/sopranoworks/gekka/actor/typed/receptionist"
 	gcluster "github.com/sopranoworks/gekka/cluster"
-	"github.com/sopranoworks/gekka/crdt"
+	"github.com/sopranoworks/gekka/cluster/ddata"
+	ddata_typed "github.com/sopranoworks/gekka/cluster/ddata/typed"
 	"github.com/sopranoworks/gekka/discovery"
 	"github.com/sopranoworks/gekka/internal/core"
 	"github.com/sopranoworks/gekka/internal/management"
@@ -250,6 +251,9 @@ type ClusterConfig struct {
 	//	    }
 	//	}
 	Discovery DiscoveryConfig
+
+	// DistributedData configures the Distributed Data Replicator (v0.10.0).
+	DistributedData DistributedDataConfig
 }
 
 // DiscoveryConfig holds dynamic seed discovery settings.
@@ -262,6 +266,17 @@ type DiscoveryConfig struct {
 
 	// Config holds provider-specific configuration.
 	Config discovery.DiscoveryConfig
+}
+
+// DistributedDataConfig holds settings for the CRDT replicator.
+type DistributedDataConfig struct {
+	// Enabled enables the replicator when true.
+	// Corresponds to HOCON: gekka.cluster.distributed-data.enabled
+	Enabled bool
+
+	// GossipInterval is the duration between gossip rounds.
+	// Corresponds to HOCON: gekka.cluster.distributed-data.gossip-interval
+	GossipInterval time.Duration
 }
 
 // PersistenceConfig holds persistence-plugin settings parsed from HOCON.
@@ -376,7 +391,7 @@ type Cluster struct {
 	nm         *core.NodeManager
 	cm         *gcluster.ClusterManager
 	router     *actor.Router
-	repl       *crdt.Replicator
+	repl       *ddata.Replicator
 	mg         *gcluster.MetricsGossip
 	server     *core.TcpServer
 	ctx        context.Context
@@ -535,7 +550,7 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	}
 
 	nodeID := fmt.Sprintf("%s:%d", host, actualPort)
-	repl := crdt.NewReplicator(nodeID, router)
+	repl := ddata.NewReplicator(nodeID, router)
 	mg := gcluster.NewMetricsGossip(nodeID, repl, 5*time.Second)
 
 	cluster := &Cluster{
@@ -630,6 +645,23 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	// Joining -> Up) happen as soon as possible.
 	go cluster.cm.StartGossipLoop(cluster.ctx)
 	cluster.mg.Start(cluster.ctx)
+
+	// ── Distributed Data ─────────────────────────────────────────────────────
+	if cfg.DistributedData.Enabled {
+		if cfg.DistributedData.GossipInterval > 0 {
+			repl.GossipInterval = cfg.DistributedData.GossipInterval
+		}
+		repl.Start(cluster.ctx)
+
+		// Spawn typed replicator and register with receptionist
+		typedRepl := ddata_typed.Replicator{}
+		ref, err := Spawn(cluster, typedRepl.Behavior(repl), "ddataReplicator")
+		if err == nil {
+			cluster.Receptionist().Tell(Register[any]{Key: ddata_typed.ReplicatorServiceKey, Service: ref})
+		} else {
+			log.Printf("gekka: failed to spawn typed ddata replicator: %v", err)
+		}
+	}
 
 	// ── Receptionist ────────────────────────────────────────────────────────
 	// Spawn the local receptionist actor. It uses the CRDT replicator to
@@ -1237,7 +1269,7 @@ func (c *Cluster) WaitForHandshake(ctx context.Context, host string, port uint32
 // Replicator returns the node's CRDT Replicator. Register peers with
 // AddPeer before calling Start, then use IncrementCounter / AddToSet / RemoveFromSet
 // to mutate state that propagates to all peers via periodic gossip.
-func (c *Cluster) Replicator() *crdt.Replicator {
+func (c *Cluster) Replicator() *ddata.Replicator {
 	return c.repl
 }
 

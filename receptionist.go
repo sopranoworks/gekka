@@ -11,7 +11,7 @@ package gekka
 import (
 	"github.com/sopranoworks/gekka/actor/typed"
 	"github.com/sopranoworks/gekka/actor/typed/receptionist"
-	"github.com/sopranoworks/gekka/crdt"
+	"github.com/sopranoworks/gekka/cluster/ddata"
 )
 
 // ServiceKey is an alias for receptionist.ServiceKey[T].
@@ -46,7 +46,7 @@ func NewServiceKey[T any](id string) ServiceKey[T] {
 
 // ─── Internal Factory ────────────────────────────────────────────────────
 
-func spawnReceptionist(sys ActorSystem, replicator *crdt.Replicator) (typed.TypedActorRef[any], error) {
+func spawnReceptionist(sys ActorSystem, replicator *ddata.Replicator) (typed.TypedActorRef[any], error) {
 	behavior := receptionist.Behavior(replicator)
 	ref, err := Spawn(sys, behavior, "receptionist")
 	if err != nil {

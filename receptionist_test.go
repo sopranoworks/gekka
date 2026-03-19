@@ -14,12 +14,12 @@ import (
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/actor/typed"
 	"github.com/sopranoworks/gekka/actor/typed/receptionist"
-	"github.com/sopranoworks/gekka/crdt"
+	"github.com/sopranoworks/gekka/cluster/ddata"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestReceptionist_Register(t *testing.T) {
-	replicator := crdt.NewReplicator("node1", nil)
+	replicator := ddata.NewReplicator("node1", nil)
 	behavior := receptionist.Behavior(replicator)
 	
 	// Create typed actor manually for test

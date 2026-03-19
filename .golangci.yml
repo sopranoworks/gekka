@@ -1,5 +1,3 @@
-version: "2"
-
 linters:
   disable:
     - errcheck
@@ -11,7 +9,4 @@ linters:
         - "SA*"
 
 output:
-  formats:
-    text:
-      path: stdout
-      print-linter-name: true
+  format: colored-line-number

@@ -1,12 +1,24 @@
+# [AI GUARDRAIL] NEVER add a top-level version field. NEVER use output.format; use output.formats list.
+run:
+  timeout: 5m
+  issues-exit-code: 1
+  tests: true
+
 linters:
   disable:
     - errcheck
-  settings:
-    staticcheck:
-      # Enable only correctness checks (SA*); skip style/quickfix rules (QF*, ST*, S1*)
-      checks:
-        - "-all"
-        - "SA*"
+  enable:
+    - staticcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - unused
+
+linters-settings:
+  staticcheck:
+    # Enable only correctness checks (SA*); skip style/quickfix rules (QF*, ST*, S1*)
+    checks: ["SA*"]
 
 output:
-  format: colored-line-number
+  formats:
+    - name: colored-line-number

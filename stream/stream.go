@@ -88,3 +88,20 @@ type iterator[T any] interface {
 type sinkConnector[T any] interface {
 	connect(upstream iterator[T]) error
 }
+
+// ─── Shared types ─────────────────────────────────────────────────────────
+
+// Pair holds one element from each of two zipped sources.
+// It is the element type emitted by [Zip].
+type Pair[A, B any] struct {
+	First  A
+	Second B
+}
+
+// SubStream represents a keyed sub-stream produced by [GroupBy].
+// Key is the grouping key; Source emits all elements that share that key in
+// their original upstream order.
+type SubStream[T any] struct {
+	Key    string
+	Source Source[T, NotUsed]
+}

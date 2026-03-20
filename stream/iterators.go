@@ -8,7 +8,10 @@
 
 package stream
 
-import "time"
+import (
+	"log"
+	"time"
+)
 
 // ─── funcIterator ─────────────────────────────────────────────────────────
 
@@ -295,4 +298,80 @@ type errorIterator[T any] struct {
 func (e *errorIterator[T]) next() (T, bool, error) {
 	var zero T
 	return zero, false, e.err
+}
+
+// ─── zipIterator ──────────────────────────────────────────────────────────
+
+// zipIterator pairs elements from two upstream iterators element-by-element.
+// It completes when either upstream is exhausted and propagates errors from
+// either side immediately.
+type zipIterator[T1, T2, Out any] struct {
+	left    iterator[T1]
+	right   iterator[T2]
+	combine func(T1, T2) Out
+}
+
+func (z *zipIterator[T1, T2, Out]) next() (Out, bool, error) {
+	l, ok, err := z.left.next()
+	if !ok || err != nil {
+		var zero Out
+		return zero, ok, err
+	}
+	r, ok, err := z.right.next()
+	if !ok || err != nil {
+		var zero Out
+		return zero, ok, err
+	}
+	return z.combine(l, r), true, nil
+}
+
+// ─── logIterator ──────────────────────────────────────────────────────────
+
+// logIterator logs each element that passes through using the standard logger.
+type logIterator[T any] struct {
+	upstream iterator[T]
+	name     string
+}
+
+func (l *logIterator[T]) next() (T, bool, error) {
+	elem, ok, err := l.upstream.next()
+	if ok && err == nil {
+		log.Printf("[stream] %s: %v", l.name, elem)
+	}
+	return elem, ok, err
+}
+
+// ─── groupBy helpers ──────────────────────────────────────────────────────
+
+// newGroupByIterator pre-collects all elements from upstream, groups them by
+// key, and returns an iterator that emits one SubStream per distinct key in
+// insertion order.  If upstream fails or maxSubstreams is exceeded the
+// returned iterator immediately propagates the error.
+func newGroupByIterator[T any](upstream iterator[T], maxSubstreams int, key func(T) string) iterator[SubStream[T]] {
+	groups := make(map[string][]T)
+	var order []string
+
+	for {
+		elem, ok, err := upstream.next()
+		if err != nil {
+			return &errorIterator[SubStream[T]]{err: err}
+		}
+		if !ok {
+			break
+		}
+		k := key(elem)
+		if _, exists := groups[k]; !exists {
+			if len(groups) >= maxSubstreams {
+				return &errorIterator[SubStream[T]]{err: ErrTooManySubstreams}
+			}
+			order = append(order, k)
+		}
+		groups[k] = append(groups[k], elem)
+	}
+
+	substreams := make([]SubStream[T], len(order))
+	for i, k := range order {
+		substreams[i] = SubStream[T]{Key: k, Source: FromSlice(groups[k])}
+	}
+	return &sliceIterator[SubStream[T]]{elems: substreams}
 }

@@ -17,6 +17,140 @@ import (
 	"github.com/sopranoworks/gekka/stream"
 )
 
+// ─── Zip / ZipWith ────────────────────────────────────────────────────────
+
+// TestZip_EqualLength verifies that Zip emits N pairs when both sources have N
+// elements, and that pairing is positional (first with first, etc.).
+func TestZip_EqualLength(t *testing.T) {
+	result, err := stream.RunWith(
+		stream.Zip(
+			stream.FromSlice([]int{1, 2, 3}),
+			stream.FromSlice([]int{10, 20, 30}),
+		),
+		stream.Collect[stream.Pair[int, int]](),
+		stream.ActorMaterializer{},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []stream.Pair[int, int]{{1, 10}, {2, 20}, {3, 30}}
+	if len(result) != len(want) {
+		t.Fatalf("got %d pairs, want %d", len(result), len(want))
+	}
+	for i, p := range result {
+		if p != want[i] {
+			t.Fatalf("index %d: got %v, want %v", i, p, want[i])
+		}
+	}
+}
+
+// TestZip_LeftShorter verifies that Zip stops when the left source is
+// exhausted, even though the right source has more elements.
+func TestZip_LeftShorter(t *testing.T) {
+	result, err := stream.RunWith(
+		stream.Zip(
+			stream.FromSlice([]int{1, 2}),      // shorter
+			stream.FromSlice([]int{10, 20, 30}), // longer
+		),
+		stream.Collect[stream.Pair[int, int]](),
+		stream.ActorMaterializer{},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("got %d pairs, want 2", len(result))
+	}
+}
+
+// TestZip_RightShorter verifies that Zip stops when the right source is
+// exhausted, even though the left source has more elements.
+func TestZip_RightShorter(t *testing.T) {
+	result, err := stream.RunWith(
+		stream.Zip(
+			stream.FromSlice([]int{1, 2, 3, 4}), // longer
+			stream.FromSlice([]int{10}),           // shorter
+		),
+		stream.Collect[stream.Pair[int, int]](),
+		stream.ActorMaterializer{},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("got %d pairs, want 1", len(result))
+	}
+	if result[0].First != 1 || result[0].Second != 10 {
+		t.Fatalf("got %v, want {1 10}", result[0])
+	}
+}
+
+// TestZip_EmptyLeft verifies that Zip emits nothing when the left source is
+// empty, regardless of the right source's length.
+func TestZip_EmptyLeft(t *testing.T) {
+	result, err := stream.RunWith(
+		stream.Zip(
+			stream.FromSlice([]int{}),
+			stream.FromSlice([]int{1, 2, 3}),
+		),
+		stream.Collect[stream.Pair[int, int]](),
+		stream.ActorMaterializer{},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 0 {
+		t.Fatalf("got %d pairs, want 0", len(result))
+	}
+}
+
+// TestZip_ErrorPropagates verifies that an error from either source terminates
+// the zipped stream with that error.
+func TestZip_ErrorPropagates(t *testing.T) {
+	sentinelErr := errors.New("zip source failure")
+
+	_, err := stream.RunWith(
+		stream.Zip(
+			stream.Failed[int](sentinelErr),
+			stream.FromSlice([]int{1, 2, 3}),
+		),
+		stream.Collect[stream.Pair[int, int]](),
+		stream.ActorMaterializer{},
+	)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, sentinelErr) {
+		t.Fatalf("expected sentinelErr, got %v", err)
+	}
+}
+
+// TestZipWith_Combine verifies that ZipWith applies the combiner function to
+// each pair of elements.
+func TestZipWith_Combine(t *testing.T) {
+	result, err := stream.RunWith(
+		stream.ZipWith(
+			stream.FromSlice([]int{1, 2, 3}),
+			stream.FromSlice([]int{10, 20, 30}),
+			func(a, b int) int { return a + b },
+		),
+		stream.Collect[int](),
+		stream.ActorMaterializer{},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []int{11, 22, 33}
+	if len(result) != len(want) {
+		t.Fatalf("got %v, want %v", result, want)
+	}
+	for i, v := range result {
+		if v != want[i] {
+			t.Fatalf("index %d: got %d, want %d", i, v, want[i])
+		}
+	}
+}
+
 // ─── Merge ────────────────────────────────────────────────────────────────
 
 // TestMerge_AllElementsDelivered verifies that every element from every source

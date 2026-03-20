@@ -9,9 +9,14 @@
 package stream
 
 import (
+	"errors"
 	"sync"
 	"sync/atomic"
 )
+
+// ErrTooManySubstreams is returned by [GroupBy] when the number of distinct
+// keys exceeds the configured maxSubstreams limit.
+var ErrTooManySubstreams = errors.New("stream: groupBy exceeded maxSubstreams limit")
 
 // ─── sharedError ──────────────────────────────────────────────────────────
 
@@ -283,4 +288,55 @@ func Balance[T any](src Source[T, NotUsed], fanOut int, bufferSize int) []Source
 		}
 	}
 	return sources
+}
+
+// ─── Zip / ZipWith ────────────────────────────────────────────────────────
+
+// ZipWith pulls one element at a time from each source and emits the result of
+// combine(left, right).  It completes as soon as EITHER upstream completes,
+// and propagates errors from either side immediately.
+//
+// Back-pressure is applied equally to both upstreams: the next pair is only
+// pulled after the downstream has consumed the previous one.
+//
+// Example — compute element-wise sums of two slices:
+//
+//	src := stream.ZipWith(
+//	    stream.FromSlice([]int{1, 2, 3}),
+//	    stream.FromSlice([]int{10, 20, 30}),
+//	    func(a, b int) int { return a + b },
+//	)
+//	// emits 11, 22, 33
+func ZipWith[T1, T2, Out any](
+	s1 Source[T1, NotUsed],
+	s2 Source[T2, NotUsed],
+	combine func(T1, T2) Out,
+) Source[Out, NotUsed] {
+	return Source[Out, NotUsed]{
+		factory: func() (iterator[Out], NotUsed) {
+			left, _ := s1.factory()
+			right, _ := s2.factory()
+			return &zipIterator[T1, T2, Out]{
+				left:    left,
+				right:   right,
+				combine: combine,
+			}, NotUsed{}
+		},
+	}
+}
+
+// Zip pairs elements from two sources into [Pair] values.
+// It is equivalent to [ZipWith] with combine = func(a, b) Pair{a, b}.
+//
+// Example:
+//
+//	pairs := stream.Zip(
+//	    stream.FromSlice([]string{"a", "b", "c"}),
+//	    stream.FromSlice([]int{1, 2}),
+//	)
+//	// emits Pair{"a",1}, Pair{"b",2}  — stops when the shorter source ends
+func Zip[T1, T2 any](s1 Source[T1, NotUsed], s2 Source[T2, NotUsed]) Source[Pair[T1, T2], NotUsed] {
+	return ZipWith(s1, s2, func(a T1, b T2) Pair[T1, T2] {
+		return Pair[T1, T2]{First: a, Second: b}
+	})
 }

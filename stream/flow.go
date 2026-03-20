@@ -222,3 +222,59 @@ func (f Flow[In, Out, Mat]) Delay(d time.Duration) Flow[In, Out, Mat] {
 		},
 	}
 }
+
+// ─── GroupBy ──────────────────────────────────────────────────────────────
+
+// GroupBy distributes elements from src to keyed sub-streams.  The key
+// function is called for each element; elements that share the same key are
+// collected into the same [SubStream].  The returned Source emits one
+// SubStream per distinct key in the order the key is first observed.
+//
+// maxSubstreams caps the number of distinct keys; the stream fails with
+// [ErrTooManySubstreams] if more keys are observed.
+//
+// Note: GroupBy pre-collects all elements from src before emitting any
+// SubStream.  For large inputs consider bounding the source first (e.g.
+// with Take or a sliding window).
+//
+// GroupBy is a package-level function rather than a method on [Flow] because
+// Go's generics system does not allow a method to return a type that
+// instantiates the receiver's own generic with a different type argument.
+//
+// Example — group integers by odd/even:
+//
+//	src := stream.FromSlice([]int{1, 2, 3, 4, 5})
+//	grouped, _ := stream.RunWith(
+//	    stream.GroupBy(src, 2, func(n int) string {
+//	        if n%2 == 0 { return "even" }
+//	        return "odd"
+//	    }),
+//	    stream.Collect[stream.SubStream[int]](),
+//	    stream.ActorMaterializer{},
+//	)
+func GroupBy[T any](src Source[T, NotUsed], maxSubstreams int, key func(T) string) Source[SubStream[T], NotUsed] {
+	return Source[SubStream[T], NotUsed]{
+		factory: func() (iterator[SubStream[T]], NotUsed) {
+			upstream, _ := src.factory()
+			return newGroupByIterator(upstream, maxSubstreams, key), NotUsed{}
+		},
+	}
+}
+
+// ─── Log ──────────────────────────────────────────────────────────────────
+
+// Log inserts a logging stage after this Flow's output port.  Each element
+// that passes through is printed to the standard logger as:
+//
+//	[stream] <name>: <element>
+//
+// Elements are forwarded unchanged; both the element type and the materialized
+// value are preserved.
+func (f Flow[In, Out, Mat]) Log(name string) Flow[In, Out, Mat] {
+	return Flow[In, Out, Mat]{
+		attach: func(upstream iterator[In]) (iterator[Out], Mat) {
+			inner, mat := f.attach(upstream)
+			return &logIterator[Out]{upstream: inner, name: name}, mat
+		},
+	}
+}

@@ -62,6 +62,9 @@ type GekkaAssociation struct {
 	localUid  uint64
 	outbox    chan []byte
 	streamId  int32
+
+	lastHeartbeatSentAt time.Time
+	lastRTT             time.Duration
 }
 
 var _ actor.RemoteAssociation = (*GekkaAssociation)(nil)
@@ -436,6 +439,25 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 			if err := assoc.initiateHandshake(remote); err != nil {
 				log.Printf("Association %p: initiateHandshake error: %v", assoc, err)
 			}
+
+			// Start heartbeat loop
+			ticker := time.NewTicker(1 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					assoc.mu.RLock()
+					isAssociated := assoc.state == ASSOCIATED
+					assoc.mu.RUnlock()
+					if isAssociated {
+						if err := SendArteryHeartbeat(assoc); err != nil {
+							log.Printf("Association %p: failed to send heartbeat: %v", assoc, err)
+						}
+					}
+				}
+			}
 		}()
 	}
 
@@ -638,6 +660,12 @@ func (assoc *GekkaAssociation) GetState() AssociationState {
 	return assoc.state
 }
 
+func (assoc *GekkaAssociation) GetRTT() time.Duration {
+	assoc.mu.RLock()
+	defer assoc.mu.RUnlock()
+	return assoc.lastRTT
+}
+
 func (assoc *GekkaAssociation) NextSeq() uint64 {
 	assoc.mu.Lock()
 	defer assoc.mu.Unlock()
@@ -743,7 +771,14 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 		if err := proto.Unmarshal(meta.Payload, hb); err != nil {
 			return err
 		}
-		log.Printf("Association %p: ArteryHeartbeatRsp received (uid=%d)", assoc, hb.GetUid())
+		assoc.mu.Lock()
+		if !assoc.lastHeartbeatSentAt.IsZero() {
+			assoc.lastRTT = time.Since(assoc.lastHeartbeatSentAt)
+			log.Printf("Association %p: ArteryHeartbeatRsp received (uid=%d) RTT=%v", assoc, hb.GetUid(), assoc.lastRTT)
+		} else {
+			log.Printf("Association %p: ArteryHeartbeatRsp received (uid=%d)", assoc, hb.GetUid())
+		}
+		assoc.mu.Unlock()
 		return nil
 
 	case "ActorRefCompressionAdvertisement", "ClassManifestCompressionAdvertisement":

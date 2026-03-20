@@ -81,6 +81,7 @@ type MemberInfo struct {
 	DataCenter string   `json:"dc"`
 	UpNumber   int32    `json:"upNumber"`
 	Reachable  bool     `json:"reachable"`
+	LatencyMs  int64    `json:"latency_ms"`
 }
 
 // ManagementServer hosts the Cluster HTTP Management API.
@@ -382,6 +383,7 @@ func isNotFound(err error) bool {
 // read lock and returns one MemberInfo per member.
 func (ms *ManagementServer) buildMemberList() []MemberInfo {
 	cm := ms.provider.ClusterManager()
+	nm := ms.provider.NodeManager()
 	cm.Mu.RLock()
 	defer cm.Mu.RUnlock()
 
@@ -394,7 +396,7 @@ func (ms *ManagementServer) buildMemberList() []MemberInfo {
 
 	result := make([]MemberInfo, 0, len(gossip.GetMembers()))
 	for _, m := range gossip.GetMembers() {
-		result = append(result, memberInfoFromProto(gossip, m, unreachable))
+		result = append(result, memberInfoFromProto(gossip, m, unreachable, nm))
 	}
 	return result
 }
@@ -425,13 +427,18 @@ func memberInfoFromProto(
 	gossip *gproto_cluster.Gossip,
 	m *gproto_cluster.Member,
 	unreachable map[int32]struct{},
+	nm *core.NodeManager,
 ) MemberInfo {
 	addrIdx := m.GetAddressIndex()
 
 	address := ""
+	var host string
+	var port uint32
 	if int(addrIdx) < len(gossip.GetAllAddresses()) {
 		ua := gossip.GetAllAddresses()[addrIdx]
 		if a := ua.GetAddress(); a != nil {
+			host = a.GetHostname()
+			port = a.GetPort()
 			scheme := strings.TrimSuffix(a.GetProtocol(), "://")
 			if scheme == "" {
 				scheme = "pekko"
@@ -439,8 +446,8 @@ func memberInfoFromProto(
 			address = fmt.Sprintf("%s://%s@%s:%d",
 				scheme,
 				a.GetSystem(),
-				a.GetHostname(),
-				a.GetPort(),
+				host,
+				port,
 			)
 		}
 	}
@@ -460,6 +467,15 @@ func memberInfoFromProto(
 
 	_, isUnreachable := unreachable[addrIdx]
 
+	var latencyMs int64 = 0
+	if nm != nil && host != "" {
+		if assoc, ok := nm.GetAssociationByHost(host, port); ok {
+			if ga, ok := assoc.(*core.GekkaAssociation); ok {
+				latencyMs = ga.GetRTT().Milliseconds()
+			}
+		}
+	}
+
 	return MemberInfo{
 		Address:    address,
 		Status:     m.GetStatus().String(),
@@ -467,5 +483,6 @@ func memberInfoFromProto(
 		DataCenter: dc,
 		UpNumber:   m.GetUpNumber(),
 		Reachable:  !isUnreachable,
+		LatencyMs:  latencyMs,
 	}
 }

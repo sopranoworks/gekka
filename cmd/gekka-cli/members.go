@@ -73,8 +73,8 @@ func runMembers(baseURL string, jsonOut bool) error {
 	border := cli.BorderStyle.Render
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", header("ADDRESS"), header("STATUS"), header("DC"), header("ROLES"), header("REACHABLE"))
-	fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", border("-------"), border("------"), border("--"), border("-----"), border("---------"))
+	fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", header("ADDRESS"), header("STATUS"), header("DC"), header("ROLES"), header("REACHABLE"), header("RTT"))
+	fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", border("-------"), border("------"), border("--"), border("-----"), border("---------"), border("---"))
 	for _, m := range members {
 		roles := "-"
 		if len(m.Roles) > 0 {
@@ -99,8 +99,24 @@ func runMembers(baseURL string, jsonOut bool) error {
 			reachable = cli.SuccessStyle.Render("yes")
 		}
 
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
-			m.Address, status, m.DataCenter, roles, reachable)
+		rttStr := fmt.Sprintf("%dms", m.LatencyMs)
+		var rttRendered string
+		if !m.Reachable {
+			rttRendered = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("timeout")
+		} else {
+			if m.LatencyMs >= 500 {
+				rttRendered = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Render(rttStr)
+			} else if m.LatencyMs >= 200 {
+				rttRendered = lipgloss.NewStyle().Foreground(lipgloss.Color("208")).Render(rttStr)
+			} else if m.LatencyMs >= 50 {
+				rttRendered = lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(rttStr)
+			} else {
+				rttRendered = cli.SuccessStyle.Render(rttStr)
+			}
+		}
+
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			m.Address, status, m.DataCenter, roles, reachable, rttRendered)
 	}
 	return w.Flush()
 }

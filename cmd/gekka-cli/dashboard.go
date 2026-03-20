@@ -10,13 +10,14 @@ package main
 
 import (
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/sopranoworks/gekka"
-	"github.com/sopranoworks/gekka/discovery"
 	_ "github.com/sopranoworks/gekka/discovery/kubernetes"
+	"github.com/sopranoworks/gekka/internal/management/client"
 	"github.com/spf13/cobra"
 )
 
@@ -39,21 +40,33 @@ var (
 
 	infoStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("14"))
+
+	rttRedStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("1")) // Red
+
+	rttOrangeStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("208")) // Orange
+
+	rttYellowStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("11")) // Yellow
+
+	rttGreenStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("10")) // Green
 )
 
 // ── Model ───────────────────────────────────────────────────────────────────
 
 type tickMsg time.Time
 
-type discoveryMsg struct {
-	seeds []string
-	err   error
+type membersMsg struct {
+	members []client.MemberInfo
+	err     error
 }
 
 type dashboardModel struct {
-	cfg        gekka.ClusterConfig
-	provider   discovery.SeedProvider
-	seeds      []string
+	mgmtURL    string
+	mgmtClient *client.Client
+	members    []client.MemberInfo
 	lastUpdate time.Time
 	err        error
 	quitting   bool
@@ -61,20 +74,20 @@ type dashboardModel struct {
 
 func (m dashboardModel) Init() tea.Cmd {
 	return tea.Batch(
-		m.fetchSeeds(),
+		m.fetchMembers(),
 		m.tick(),
 	)
 }
 
-func (m dashboardModel) fetchSeeds() tea.Cmd {
+func (m dashboardModel) fetchMembers() tea.Cmd {
 	return func() tea.Msg {
-		seeds, err := m.provider.FetchSeedNodes()
-		return discoveryMsg{seeds: seeds, err: err}
+		members, err := m.mgmtClient.Members()
+		return membersMsg{members: members, err: err}
 	}
 }
 
 func (m dashboardModel) tick() tea.Cmd {
-	return tea.Every(5*time.Second, func(t time.Time) tea.Msg {
+	return tea.Every(2*time.Second, func(t time.Time) tea.Msg {
 		return tickMsg(t)
 	})
 }
@@ -88,11 +101,23 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tickMsg:
-		return m, m.fetchSeeds()
+		return m, m.fetchMembers()
 
-	case discoveryMsg:
-		m.seeds = msg.seeds
+	case membersMsg:
+		m.members = msg.members
 		m.err = msg.err
+		if m.err == nil {
+			// Sorting logic:
+			// 1. Unreachable nodes at top.
+			// 2. Then descending RTT.
+			sort.Slice(m.members, func(i, j int) bool {
+				mi, mj := m.members[i], m.members[j]
+				if mi.Reachable != mj.Reachable {
+					return !mi.Reachable // false (unreachable) comes first
+				}
+				return mi.LatencyMs > mj.LatencyMs
+			})
+		}
 		m.lastUpdate = time.Now()
 		return m, m.tick()
 	}
@@ -131,23 +156,59 @@ func (m dashboardModel) View() string {
 		lipgloss.JoinVertical(lipgloss.Left, topLine, bottomLine),
 	)
 
-	// Node List
+	// Member List
 	var nodes string
 	if m.err != nil {
 		nodes = nodeDownStyle.Render(fmt.Sprintf("Error: %v", m.err))
-	} else if len(m.seeds) == 0 {
-		nodes = infoStyle.Render("No nodes discovered yet...")
+	} else if len(m.members) == 0 {
+		nodes = infoStyle.Render("No members found in cluster...")
 	} else {
-		nodes = "Discovered Nodes:\n"
-		for _, s := range m.seeds {
-			nodes += nodeUpStyle.Render(fmt.Sprintf(" • %s", s)) + "\n"
+		headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("7"))
+		nodes = fmt.Sprintf("%-45s  %-10s  %-10s  %s\n", 
+			headerStyle.Render("ADDRESS"), 
+			headerStyle.Render("STATUS"), 
+			headerStyle.Render("REACHABLE"), 
+			headerStyle.Render("RTT"))
+		nodes += lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(fmt.Sprintf("%s\n", 
+			"---------------------------------------------  ----------  ----------  ------"))
+		
+		for _, m := range m.members {
+			status := m.Status
+			if m.Status == "Up" {
+				status = nodeUpStyle.Render(m.Status)
+			}
+
+			reachable := "yes"
+			if !m.Reachable {
+				reachable = nodeDownStyle.Render("NO")
+			}
+
+			rttStr := fmt.Sprintf("%dms", m.LatencyMs)
+			var rttRendered string
+			if !m.Reachable {
+				rttRendered = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("timeout")
+			} else {
+				// Color logic: Red (>=500ms), Orange (>=200ms), Yellow (>=50ms)
+				if m.LatencyMs >= 500 {
+					rttRendered = rttRedStyle.Render(rttStr)
+				} else if m.LatencyMs >= 200 {
+					rttRendered = rttOrangeStyle.Render(rttStr)
+				} else if m.LatencyMs >= 50 {
+					rttRendered = rttYellowStyle.Render(rttStr)
+				} else {
+					rttRendered = rttGreenStyle.Render(rttStr)
+				}
+			}
+
+			nodes += fmt.Sprintf("%-45s  %-10s  %-10s  %s\n", 
+				m.Address, status, reachable, rttRendered)
 		}
 	}
 
 	// Status Bar
 	status := statusBarStyle.Render(
-		fmt.Sprintf("Provider: %s | Last Update: %s",
-			m.cfg.Discovery.Type,
+		fmt.Sprintf("Management: %s | Last Update: %s",
+			m.mgmtURL,
 			m.lastUpdate.Format("15:04:05")),
 	)
 
@@ -162,45 +223,34 @@ func (m dashboardModel) View() string {
 // ── CLI Integration ─────────────────────────────────────────────────────────
 
 func newDashboardCmd(root *rootState) *cobra.Command {
-	var hoconPath string
+	var flagURL string
 
 	cmd := &cobra.Command{
 		Use:   "dashboard",
 		Short: "Launch interactive cluster monitoring dashboard",
 		Long: `Starts a full-screen terminal UI for monitoring Gekka cluster status,
-including discovery metrics and node health.`,
+including member reachability and heartbeat RTT latency.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDashboard(hoconPath)
+			mgmtURL := root.resolveURL(flagURL)
+			return runDashboard(mgmtURL)
 		},
 	}
 
-	cmd.Flags().StringVar(&hoconPath, "hocon", "application.conf",
-		"Path to the HOCON configuration file")
+	cmd.Flags().StringVar(&flagURL, "url", "",
+		"Base URL of the management API (overrides config file)")
 
 	return cmd
 }
 
-func runDashboard(path string) error {
-	cfg, err := gekka.LoadConfig(path)
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
-
-	if !cfg.Discovery.Enabled {
-		return fmt.Errorf("discovery is not enabled in configuration")
-	}
-
-	provider, err := discovery.Get(cfg.Discovery.Type, cfg.Discovery.Config)
-	if err != nil {
-		return fmt.Errorf("initialize provider: %w", err)
-	}
+func runDashboard(mgmtURL string) error {
+	mgmtClient := client.New(mgmtURL)
 
 	m := dashboardModel{
-		cfg:      cfg,
-		provider: provider,
+		mgmtURL:    mgmtURL,
+		mgmtClient: mgmtClient,
 	}
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
-	_, err = p.Run()
+	_, err := p.Run()
 	return err
 }

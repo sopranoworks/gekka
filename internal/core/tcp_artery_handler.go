@@ -15,7 +15,9 @@ import (
 	"io"
 	"log"
 	"net"
+	"time"
 
+	"github.com/sopranoworks/gekka/actor"
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 	"google.golang.org/protobuf/proto"
 )
@@ -164,6 +166,28 @@ func SendArteryMessageWithAck(conn net.Conn, localUid int64, serializerId int32,
 	log.Printf("OUT: len=%d serializerId=%d manifest=%q payload=%x", len(frame), serializerId, manifest, msgPayload)
 
 	return WriteFrame(conn, frame)
+}
+
+// SendArteryHeartbeat sends a transport-level heartbeat and records the sent time.
+// It uses the association's outbox to ensure thread-safety with other outbound frames.
+func SendArteryHeartbeat(assoc *GekkaAssociation) error {
+	assoc.mu.Lock()
+	assoc.lastHeartbeatSentAt = time.Now()
+	uid := assoc.localUid
+	assoc.mu.Unlock()
+
+	// ArteryHeartbeat (manifest "m") is an empty payload message.
+	frame, err := BuildArteryFrame(int64(uid), actor.ArteryInternalSerializerID, "", "", "m", nil, true)
+	if err != nil {
+		return err
+	}
+
+	select {
+	case assoc.outbox <- frame:
+		return nil
+	default:
+		return fmt.Errorf("association outbox full")
+	}
 }
 
 // BuildRemoteEnvelope constructs a 3-layer remote envelope for actor messages.

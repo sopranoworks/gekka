@@ -14,15 +14,16 @@ import (
 	"sync/atomic"
 	"time"
 
+	hocon "github.com/sopranoworks/gekka-config"
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/actor/typed"
 	"github.com/sopranoworks/gekka/actor/typed/delivery"
 	"github.com/sopranoworks/gekka/actor/typed/pubsub"
 	"github.com/sopranoworks/gekka/actor/typed/receptionist"
+	ctyped "github.com/sopranoworks/gekka/cluster/typed"
 	"github.com/sopranoworks/gekka/persistence"
 	ptyped "github.com/sopranoworks/gekka/persistence/typed"
 	pstate "github.com/sopranoworks/gekka/persistence/typed/state"
-	ctyped "github.com/sopranoworks/gekka/cluster/typed"
 	styped "github.com/sopranoworks/gekka/cluster/sharding/typed"
 	"github.com/sopranoworks/gekka/internal/core"
 )
@@ -151,10 +152,90 @@ func NewEntityTypeKey[M any](name string) EntityTypeKey[M] {
 	return styped.NewEntityTypeKey[M](name)
 }
 
-// Spawn creates a new typed actor as a top-level actor in the system.
-func Spawn[T any](sys ActorSystem, behavior typed.Behavior[T], name string, props ...actor.Props) (TypedActorRef[T], error) {
-	ref, err := typed.Spawn(asActorContext(sys, ""), behavior, name, props...)
-	return ref, err
+// ─── Spawner API ──────────────────────────────────────────────────────────
+
+// Spawner is the common interface for spawning actors from either an
+// ActorSystem or an ActorContext (TypedContext).
+type Spawner interface {
+	Spawn(behavior any, name string) (ActorRef, error)
+	SpawnAnonymous(behavior any) (ActorRef, error)
+	SystemActorOf(behavior any, name string) (ActorRef, error)
+}
+
+// NewActorSystemWithBehavior creates a new local actor system and spawns a
+// root actor with the given behavior.
+func NewActorSystemWithBehavior[T any](behavior Behavior[T], name string, config ...*hocon.Config) (ActorSystem, error) {
+	sys, err := NewActorSystem(name, config...)
+	if err != nil {
+		return nil, err
+	}
+	_, err = Spawn(sys, behavior, "root")
+	return sys, err
+}
+
+// actorOfProvider is satisfied by ActorSystem and Cluster.
+// It allows the type-safe Spawn wrappers to use ActorOf with a proper
+// typed.NewTypedActor[T] factory, bypassing the untyped NewTypedActorGeneric path.
+type actorOfProvider interface {
+	ActorOf(props Props, name string) (ActorRef, error)
+}
+
+// actorOfHierarchicalProvider is satisfied by localActorSystem and Cluster.
+type actorOfHierarchicalProvider interface {
+	ActorOfHierarchical(props Props, name string, parentPath string) (ActorRef, error)
+}
+
+// Spawn creates a new typed actor with the given behavior and name,
+// registering it under the /user guardian.
+func Spawn[T any, S Spawner](spawner S, behavior Behavior[T], name string) (TypedActorRef[T], error) {
+	props := Props{New: func() actor.Actor { return typed.NewTypedActor[T](behavior) }}
+	if s, ok := any(spawner).(actorOfProvider); ok {
+		ref, err := s.ActorOf(props, name)
+		if err != nil {
+			return TypedActorRef[T]{}, err
+		}
+		return typed.NewTypedActorRef[T](ref), nil
+	}
+	// Fallback: use the untyped spawner (actor.ActorContext path)
+	ref, err := spawner.Spawn(behavior, name)
+	if err != nil {
+		return TypedActorRef[T]{}, err
+	}
+	return typed.NewTypedActorRef[T](ref), nil
+}
+
+// SpawnAnonymous creates a new typed actor with an automatically generated name.
+func SpawnAnonymous[T any, S Spawner](spawner S, behavior Behavior[T]) (TypedActorRef[T], error) {
+	props := Props{New: func() actor.Actor { return typed.NewTypedActor[T](behavior) }}
+	if s, ok := any(spawner).(actorOfProvider); ok {
+		ref, err := s.ActorOf(props, "")
+		if err != nil {
+			return TypedActorRef[T]{}, err
+		}
+		return typed.NewTypedActorRef[T](ref), nil
+	}
+	ref, err := spawner.SpawnAnonymous(behavior)
+	if err != nil {
+		return TypedActorRef[T]{}, err
+	}
+	return typed.NewTypedActorRef[T](ref), nil
+}
+
+// SystemActorOf creates a new typed actor under the /system guardian.
+func SystemActorOf[T any, S Spawner](spawner S, behavior Behavior[T], name string) (TypedActorRef[T], error) {
+	props := Props{New: func() actor.Actor { return typed.NewTypedActor[T](behavior) }}
+	if s, ok := any(spawner).(actorOfHierarchicalProvider); ok {
+		ref, err := s.ActorOfHierarchical(props, name, "/system")
+		if err != nil {
+			return TypedActorRef[T]{}, err
+		}
+		return typed.NewTypedActorRef[T](ref), nil
+	}
+	ref, err := spawner.SystemActorOf(behavior, name)
+	if err != nil {
+		return TypedActorRef[T]{}, err
+	}
+	return typed.NewTypedActorRef[T](ref), nil
 }
 
 // SpawnPersistent creates a new persistent typed actor.

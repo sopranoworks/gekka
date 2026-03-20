@@ -62,6 +62,16 @@ type ActorSystem interface {
 	//   - an actor is already registered at /user/<name>
 	ActorOf(props Props, name string) (ActorRef, error)
 
+	// Spawn creates a new typed actor with the given behavior and name.
+	// behavior must be a typed.Behavior[T].
+	Spawn(behavior any, name string) (ActorRef, error)
+
+	// SpawnAnonymous creates a new typed actor with an automatically generated name.
+	SpawnAnonymous(behavior any) (ActorRef, error)
+
+	// SystemActorOf creates a new actor under the /system guardian.
+	SystemActorOf(behavior any, name string) (ActorRef, error)
+
 	// Context returns the root context of the node that owns this system.
 	// It is cancelled when the node shuts down.
 	//
@@ -170,6 +180,18 @@ func (b *actorContextBridge) ActorOf(props actor.Props, name string) (actor.Ref,
 		return h.ActorOfHierarchical(props, name, b.parentPath)
 	}
 	return b.sys.ActorOf(props, name)
+}
+
+func (b *actorContextBridge) Spawn(behavior any, name string) (actor.Ref, error) {
+	return b.sys.Spawn(behavior, name)
+}
+
+func (b *actorContextBridge) SpawnAnonymous(behavior any) (actor.Ref, error) {
+	return b.sys.SpawnAnonymous(behavior)
+}
+
+func (b *actorContextBridge) SystemActorOf(behavior any, name string) (actor.Ref, error) {
+	return b.sys.SystemActorOf(behavior, name)
 }
 
 func (b *actorContextBridge) Context() context.Context {

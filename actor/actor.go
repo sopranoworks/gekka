@@ -162,6 +162,16 @@ type ActorContext interface {
 	// receive goroutine, and returns a location-transparent Ref.
 	ActorOf(props Props, name string) (Ref, error)
 
+	// Spawn creates a new typed actor with the given behavior and name.
+	// behavior must be a typed.Behavior[T].
+	Spawn(behavior any, name string) (Ref, error)
+
+	// SpawnAnonymous creates a new typed actor with an automatically generated name.
+	SpawnAnonymous(behavior any) (Ref, error)
+
+	// SystemActorOf creates a new actor under the /system guardian.
+	SystemActorOf(behavior any, name string) (Ref, error)
+
 	// Context returns the root context of the node that owns this system.
 	// It is cancelled when the node shuts down, making it suitable as the
 	// parent context for background goroutines started by actors.

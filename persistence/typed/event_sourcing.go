@@ -182,6 +182,18 @@ func (c *persistentTypedContext[C, E, S]) Ask(target actor.Ref, msgFactory func(
 	target.Tell(msg)
 }
 
+func (c *persistentTypedContext[C, E, S]) Spawn(behavior any, name string) (actor.Ref, error) {
+	return c.actor.System().Spawn(behavior, name)
+}
+
+func (c *persistentTypedContext[C, E, S]) SpawnAnonymous(behavior any) (actor.Ref, error) {
+	return c.actor.System().SpawnAnonymous(behavior)
+}
+
+func (c *persistentTypedContext[C, E, S]) SystemActorOf(behavior any, name string) (actor.Ref, error) {
+	return c.actor.System().SystemActorOf(behavior, name)
+}
+
 type contextAskResponder[T any] struct {
 	self      typed.TypedActorRef[T]
 	transform func(any, error) T

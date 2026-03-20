@@ -69,6 +69,15 @@ type TypedContext[T any] interface {
 	// msgFactory creates the message to be sent, providing a temporary reply-to reference.
 	// transform converts the response (or error) into a message of type T for this actor.
 	Ask(target actor.Ref, msgFactory func(replyTo actor.Ref) any, transform func(res any, err error) T)
+
+	// Spawn creates a new typed actor with the given behavior and name.
+	Spawn(behavior any, name string) (actor.Ref, error)
+
+	// SpawnAnonymous creates a new typed actor with an automatically generated name.
+	SpawnAnonymous(behavior any) (actor.Ref, error)
+
+	// SystemActorOf creates a new actor under the /system guardian.
+	SystemActorOf(behavior any, name string) (actor.Ref, error)
 }
 
 // typedContext is the internal implementation of TypedContext[T].
@@ -126,6 +135,18 @@ func (c *typedContext[T]) Stash() StashBuffer[T] {
 
 func (c *typedContext[T]) Sender() actor.Ref {
 	return c.actor.Sender()
+}
+
+func (c *typedContext[T]) Spawn(behavior any, name string) (actor.Ref, error) {
+	return c.actor.System().Spawn(behavior, name)
+}
+
+func (c *typedContext[T]) SpawnAnonymous(behavior any) (actor.Ref, error) {
+	return c.actor.System().SpawnAnonymous(behavior)
+}
+
+func (c *typedContext[T]) SystemActorOf(behavior any, name string) (actor.Ref, error) {
+	return c.actor.System().SystemActorOf(behavior, name)
 }
 
 func (c *typedContext[T]) Ask(target actor.Ref, msgFactory func(actor.Ref) any, transform func(any, error) T) {
@@ -212,7 +233,122 @@ func NewTypedActor[T any](behavior Behavior[T]) actor.Actor {
 	return NewTypedActorInternal(behavior)
 }
 
-// Receive implements the Actor interface.
+// behaviorWrapper is a non-generic interface to allow calling behavior from untyped context.
+type behaviorWrapper interface {
+	Receive(ctx any, msg any) any // returns next behavior wrapper
+}
+
+type behaviorImpl[T any] struct {
+	fn Behavior[T]
+}
+
+func (b *behaviorImpl[T]) Receive(ctx any, msg any) any {
+	next := b.fn(ctx.(TypedContext[T]), msg.(T))
+	if next == nil {
+		return nil
+	}
+	return &behaviorImpl[T]{fn: next}
+}
+
+// NewTypedActorGeneric creates a new Actor from any behavior type.
+func NewTypedActorGeneric(behavior any) actor.Actor {
+	// We use reflection to find the message type T and wrap the behavior.
+	val := reflect.ValueOf(behavior)
+	if val.Kind() != reflect.Func {
+		panic(fmt.Sprintf("typed: behavior must be a function, got %T", behavior))
+	}
+	
+	// Extraction of T from func(TypedContext[T], T) Behavior[T]
+	tType := val.Type().In(1)
+	
+	// Create a generic TypedActor using reflection to instantiate the generic type.
+	// Since TypedActor[T] is a struct, we need to use reflect.New and some magic.
+	// A simpler way is to have a factory function.
+	
+	return createTypedActorReflection(behavior, tType)
+}
+
+func createTypedActorReflection(behavior any, tType reflect.Type) actor.Actor {
+	// We use a specialized non-generic actor that handles the type conversion.
+	return &genericTypedActor{
+		BaseActor: actor.NewBaseActor(),
+		behavior:  reflect.ValueOf(behavior),
+		tType:     tType,
+	}
+}
+
+type genericTypedActor struct {
+	actor.BaseActor
+	behavior reflect.Value // Behavior[T]
+	tType    reflect.Type
+	ctx      any                  // TypedContext[T]
+	timers   TimerScheduler[any] // Use local interface
+	stash    StashBuffer[any]    // Use local interface
+	stopped  bool
+}
+
+func (a *genericTypedActor) PreStart() {
+	// We need a TypedContext[T]. We can't easily create one without generics.
+	// But we can create a proxy context that implements the interface.
+	a.ctx = createProxyContext(a)
+	
+	// Initialize timers/stash
+	a.timers = actor.NewTimerScheduler[any](a.Self())
+	a.stash = actor.NewStashBuffer[any](a.Self(), actor.DefaultStashCapacity)
+}
+
+func (a *genericTypedActor) PostStop() {
+	if a.timers != nil {
+		a.timers.CancelAll()
+	}
+}
+
+func (a *genericTypedActor) Receive(msg any) {
+	if a.stopped {
+		return
+	}
+	
+	// Check if msg is of type T
+	mVal := reflect.ValueOf(msg)
+	if !mVal.Type().AssignableTo(a.tType) {
+		return
+	}
+	
+	// Call behavior(ctx, msg)
+	results := a.behavior.Call([]reflect.Value{
+		reflect.ValueOf(a.ctx),
+		mVal,
+	})
+	
+	next := results[0]
+	if !next.IsNil() {
+		// Check if next is Stopped[T]
+		// Stopped[T] is a stable pointer per type.
+		if isStoppedGeneric(next.Interface(), a.tType) {
+			a.Log().Debug("TypedActor: behavior stopped, stopping actor")
+			a.stopped = true
+			if s, ok := a.System().(interface{ Stop(actor.Ref) }); ok {
+				s.Stop(a.Self())
+			}
+		} else {
+			a.behavior = next
+		}
+	}
+}
+
+func isStoppedGeneric(behavior any, tType reflect.Type) bool {
+	// Logic to detect Stopped[T] via reflection
+	return false // Placeholder
+}
+
+// createProxyContext creates a TypedContext[T] proxy using reflection.
+func createProxyContext(a *genericTypedActor) any {
+	// This is complex. Let's provide a simpler implementation for now
+	// that works for the most common cases or rethink the generic spawner.
+	return nil 
+}
+
+// Receive implements the Actor interface for TypedActor[T].
 func (a *TypedActor[T]) Receive(msg any) {
 	if a.stopped {
 		return

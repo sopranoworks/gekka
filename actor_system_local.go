@@ -78,6 +78,27 @@ func (s *localActorSystem) ActorOf(props Props, name string) (ActorRef, error) {
 	return s.ActorOfHierarchical(props, name, "/user")
 }
 
+// Spawn implements ActorSystem.
+func (s *localActorSystem) Spawn(behavior any, name string) (ActorRef, error) {
+	props := Props{
+		New: func() actor.Actor { return typed.NewTypedActorGeneric(behavior) },
+	}
+	return s.ActorOf(props, name)
+}
+
+// SpawnAnonymous implements ActorSystem.
+func (s *localActorSystem) SpawnAnonymous(behavior any) (ActorRef, error) {
+	return s.Spawn(behavior, "")
+}
+
+// SystemActorOf implements ActorSystem.
+func (s *localActorSystem) SystemActorOf(behavior any, name string) (ActorRef, error) {
+	props := Props{
+		New: func() actor.Actor { return typed.NewTypedActorGeneric(behavior) },
+	}
+	return s.ActorOfHierarchical(props, name, "/system")
+}
+
 // ActorOfHierarchical creates a new actor as a child of parentPath.
 func (s *localActorSystem) ActorOfHierarchical(props Props, name string, parentPath string) (ActorRef, error) {
 	// Generate a unique name when none is supplied.

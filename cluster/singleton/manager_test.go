@@ -83,6 +83,18 @@ func (c *singletonTestContext) Context() context.Context {
 	return context.Background()
 }
 
+func (c *singletonTestContext) Spawn(behavior any, name string) (actor.Ref, error) {
+	return nil, nil
+}
+
+func (c *singletonTestContext) SpawnAnonymous(behavior any) (actor.Ref, error) {
+	return nil, nil
+}
+
+func (c *singletonTestContext) SystemActorOf(behavior any, name string) (actor.Ref, error) {
+	return nil, nil
+}
+
 func (c *singletonTestContext) spawnCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()

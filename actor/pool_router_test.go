@@ -71,6 +71,18 @@ func (c *testActorContext) Stop(ref Ref) {
 	// no-op in test context
 }
 
+func (c *testActorContext) Spawn(behavior any, name string) (Ref, error) {
+	return nil, nil
+}
+
+func (c *testActorContext) SpawnAnonymous(behavior any) (Ref, error) {
+	return nil, nil
+}
+
+func (c *testActorContext) SystemActorOf(behavior any, name string) (Ref, error) {
+	return nil, nil
+}
+
 func (c *testActorContext) watchCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()

@@ -1480,6 +1480,27 @@ func (c *Cluster) ActorOf(props Props, name string) (ActorRef, error) {
 	return c.ActorOfHierarchical(props, name, "/user")
 }
 
+// Spawn implements ActorSystem.
+func (c *Cluster) Spawn(behavior any, name string) (ActorRef, error) {
+	props := Props{
+		New: func() actor.Actor { return typed.NewTypedActorGeneric(behavior) },
+	}
+	return c.ActorOf(props, name)
+}
+
+// SpawnAnonymous implements ActorSystem.
+func (c *Cluster) SpawnAnonymous(behavior any) (ActorRef, error) {
+	return c.Spawn(behavior, "")
+}
+
+// SystemActorOf implements ActorSystem.
+func (c *Cluster) SystemActorOf(behavior any, name string) (ActorRef, error) {
+	props := Props{
+		New: func() actor.Actor { return typed.NewTypedActorGeneric(behavior) },
+	}
+	return c.ActorOfHierarchical(props, name, "/system")
+}
+
 // ActorOfHierarchical creates a new actor as a child of parentPath.
 func (c *Cluster) ActorOfHierarchical(props Props, name string, parentPath string) (ActorRef, error) {
 	// Generate a unique name when none is supplied.

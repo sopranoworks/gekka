@@ -62,12 +62,9 @@ func TestRouter_ScatterGather(t *testing.T) {
 	fastWorker := &scatterGatherTestWorker{reply: "fast-reply", delay: 0, t: t}
 	slowWorker := &scatterGatherTestWorker{reply: "slow-reply", delay: 200 * time.Millisecond, t: t}
 
-	sg := &ScatterGatherFirstCompleted{&actor.ScatterGatherFirstCompleted{
-		RouterActor: *actor.NewRouterActor(&actor.ScatterGatherRoutingLogic{Within: 500 * time.Millisecond}, []actor.Ref{fastWorker, slowWorker}),
-		Within:      500 * time.Millisecond,
-	}}
+	sg := actor.NewGroupRouter(&actor.ScatterGatherRoutingLogic{Within: 500 * time.Millisecond}, []actor.Ref{fastWorker, slowWorker})
 	
-	rActor := NewTypedActorInternal(sg.Behavior())
+	rActor := NewTypedActorInternal(RouterBehavior(&sg.RouterActor))
 	rActor.SetSelf(&typedMockRef{path: "/user/router"})
 	rActor.SetSystem(sys)
 
@@ -105,12 +102,9 @@ func TestRouter_TailChopping(t *testing.T) {
 	slowWorker := &scatterGatherTestWorker{reply: "slow-reply", delay: 200 * time.Millisecond, t: t}
 	fastWorker := &scatterGatherTestWorker{reply: "fast-reply", delay: 0, t: t}
 
-	tc := &TailChoppingFirstCompleted{&actor.TailChoppingFirstCompleted{
-		RouterActor: *actor.NewRouterActor(&actor.TailChoppingRoutingLogic{Within: 100 * time.Millisecond}, []actor.Ref{slowWorker, fastWorker}),
-		Within:      100 * time.Millisecond,
-	}}
+	tc := actor.NewGroupRouter(&actor.TailChoppingRoutingLogic{Within: 100 * time.Millisecond}, []actor.Ref{slowWorker, fastWorker})
 	
-	rActor := NewTypedActorInternal(tc.Behavior())
+	rActor := NewTypedActorInternal(RouterBehavior(&tc.RouterActor))
 	rActor.SetSelf(&typedMockRef{path: "/user/router"})
 	rActor.SetSystem(sys)
 

@@ -21,4 +21,4 @@ linters-settings:
 
 output:
   formats:
-    - name: colored-line-number
+    - format: colored-line-number

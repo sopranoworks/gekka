@@ -1,9 +1,9 @@
-# DO NOT HARDCODE GO VERSION. USE go-version-file: 'go.mod'
+# PREVENT REGRESSION: Never hardcode version. setup-go reads from go.mod.
 name: Go CI
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, debug/ci-fix-clean ]
   pull_request:
     branches: [ main, master ]
 
@@ -55,6 +55,6 @@ jobs:
           go-version-file: 'go.mod'
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v7
+        uses: golangci/golangci-lint-action@v6
         with:
-          version: v1.64.5
+          install-mode: goinstall

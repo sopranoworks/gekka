@@ -42,7 +42,6 @@ type NodePressure struct {
 
 // MetricsCollector gathers local node metrics and calculates a pressure score.
 type MetricsCollector struct {
-	lastCPUTime int64
 	lastSample  time.Time
 }
 

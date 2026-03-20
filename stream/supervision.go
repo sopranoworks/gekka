@@ -90,3 +90,89 @@ func (s *supervisedIterator[T]) next() (T, bool, error) {
 		return elem, ok, err
 	}
 }
+
+// ─── recoverIterator ──────────────────────────────────────────────────────
+
+// recoverIterator catches the first error from upstream, emits the value
+// returned by fn, then signals normal stream completion.
+type recoverIterator[T any] struct {
+	upstream  iterator[T]
+	fn        func(error) T
+	recovered bool // true once the recovery element has been emitted
+}
+
+func (r *recoverIterator[T]) next() (T, bool, error) {
+	if r.recovered {
+		var zero T
+		return zero, false, nil
+	}
+	elem, ok, err := r.upstream.next()
+	if err != nil {
+		r.recovered = true
+		return r.fn(err), true, nil
+	}
+	return elem, ok, nil
+}
+
+// ─── recoverWithIterator ──────────────────────────────────────────────────
+
+// recoverWithIterator catches the first error from upstream and seamlessly
+// switches to a backup source produced by fn.  The backup is drained to
+// completion as if it were the original source.
+type recoverWithIterator[T any] struct {
+	upstream iterator[T]
+	fn       func(error) Source[T, NotUsed]
+	backup   iterator[T] // non-nil after the first error
+}
+
+func (r *recoverWithIterator[T]) next() (T, bool, error) {
+	if r.backup != nil {
+		return r.backup.next()
+	}
+	elem, ok, err := r.upstream.next()
+	if err != nil {
+		src := r.fn(err)
+		r.backup, _ = src.factory()
+		return r.backup.next()
+	}
+	return elem, ok, nil
+}
+
+// ─── Recover / RecoverWith on Flow ────────────────────────────────────────
+
+// Recover intercepts the first error produced by this Flow.  fn is called with
+// the error and must return a single fallback element that is emitted before
+// the stream completes normally.
+//
+// Subsequent errors (if any) are forwarded without interception because the
+// stream terminates after the fallback element.
+//
+// Example — emit -1 on any error:
+//
+//	stream.MapE(riskyFn).Recover(func(error) int { return -1 })
+func (f Flow[In, Out, Mat]) Recover(fn func(error) Out) Flow[In, Out, Mat] {
+	return Flow[In, Out, Mat]{
+		attach: func(upstream iterator[In]) (iterator[Out], Mat) {
+			inner, mat := f.attach(upstream)
+			return &recoverIterator[Out]{upstream: inner, fn: fn}, mat
+		},
+	}
+}
+
+// RecoverWith intercepts the first error produced by this Flow and switches to
+// the backup [Source] returned by fn.  The backup is drained to completion as
+// if it were the original source.
+//
+// Example — failover to a cached source on error:
+//
+//	stream.MapE(fetchRemote).RecoverWith(func(error) stream.Source[Data, stream.NotUsed] {
+//	    return cachedSource
+//	})
+func (f Flow[In, Out, Mat]) RecoverWith(fn func(error) Source[Out, NotUsed]) Flow[In, Out, Mat] {
+	return Flow[In, Out, Mat]{
+		attach: func(upstream iterator[In]) (iterator[Out], Mat) {
+			inner, mat := f.attach(upstream)
+			return &recoverWithIterator[Out]{upstream: inner, fn: fn}, mat
+		},
+	}
+}

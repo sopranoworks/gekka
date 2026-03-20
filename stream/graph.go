@@ -340,3 +340,25 @@ func Zip[T1, T2 any](s1 Source[T1, NotUsed], s2 Source[T2, NotUsed]) Source[Pair
 		return Pair[T1, T2]{First: a, Second: b}
 	})
 }
+
+// ─── Concat ───────────────────────────────────────────────────────────────
+
+// Concat returns a Source that drains s1 to completion and then drains s2.
+// If s1 fails the error is propagated and s2 is never started.
+//
+// Example — prepend a header element before the main stream:
+//
+//	stream.Concat(
+//	    stream.FromSlice([]string{"HEADER"}),
+//	    stream.FromSlice([]string{"row1", "row2"}),
+//	)
+//	// emits "HEADER", "row1", "row2"
+func Concat[T any](s1, s2 Source[T, NotUsed]) Source[T, NotUsed] {
+	return Source[T, NotUsed]{
+		factory: func() (iterator[T], NotUsed) {
+			left, _ := s1.factory()
+			right, _ := s2.factory()
+			return &concatIterator[T]{left: left, right: right}, NotUsed{}
+		},
+	}
+}

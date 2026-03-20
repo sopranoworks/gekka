@@ -300,6 +300,179 @@ func (e *errorIterator[T]) next() (T, bool, error) {
 	return zero, false, e.err
 }
 
+// ─── groupedIterator ──────────────────────────────────────────────────────
+
+// groupedIterator batches upstream elements into slices of exactly n elements.
+// The last batch may be smaller if the upstream is exhausted before n elements
+// are accumulated.  An empty upstream produces no batches.
+type groupedIterator[T any] struct {
+	upstream iterator[T]
+	n        int
+	done     bool
+}
+
+func (g *groupedIterator[T]) next() ([]T, bool, error) {
+	if g.done {
+		return nil, false, nil
+	}
+	batch := make([]T, 0, g.n)
+	for len(batch) < g.n {
+		elem, ok, err := g.upstream.next()
+		if err != nil {
+			return nil, false, err
+		}
+		if !ok {
+			g.done = true
+			break
+		}
+		batch = append(batch, elem)
+	}
+	if len(batch) == 0 {
+		return nil, false, nil
+	}
+	return batch, true, nil
+}
+
+// ─── groupedWithinIterator ────────────────────────────────────────────────
+
+// groupedWithinIterator emits a batch whenever the batch size reaches n OR the
+// wall-clock timeout d expires, whichever comes first.  An empty batch at
+// timer expiry is suppressed — no zero-length slice is ever emitted.
+//
+// Two goroutines are used internally:
+//   - reader: pulls elements from the (blocking) upstream iterator and
+//     forwards them on elemCh.
+//   - batcher: selects on elemCh and the timer; builds and emits batches.
+type groupedWithinIterator[T any] struct {
+	ch    <-chan []T
+	errCh <-chan error
+}
+
+func newGroupedWithinIterator[T any](upstream iterator[T], n int, d time.Duration) *groupedWithinIterator[T] {
+	outCh := make(chan []T, 8)
+	errCh := make(chan error, 1)
+
+	go func() {
+		defer close(outCh)
+
+		// elemCh bridges the blocking upstream.next() to the batcher's select.
+		elemCh := make(chan T, n)
+
+		// Reader goroutine: pulls elements and puts them on elemCh.
+		go func() {
+			defer close(elemCh)
+			for {
+				elem, ok, err := upstream.next()
+				if err != nil {
+					select {
+					case errCh <- err:
+					default:
+					}
+					return
+				}
+				if !ok {
+					return
+				}
+				elemCh <- elem
+			}
+		}()
+
+		// Batcher: collect elements until count or time window is reached.
+		timer := time.NewTimer(d)
+		defer timer.Stop()
+		batch := make([]T, 0, n)
+
+		flush := func() {
+			if len(batch) == 0 {
+				return
+			}
+			cp := make([]T, len(batch))
+			copy(cp, batch)
+			outCh <- cp
+			batch = batch[:0]
+		}
+
+		resetTimer := func() {
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(d)
+		}
+
+		for {
+			select {
+			case elem, ok := <-elemCh:
+				if !ok {
+					// Reader exited (upstream done or error).
+					flush()
+					return
+				}
+				batch = append(batch, elem)
+				if len(batch) >= n {
+					flush()
+					resetTimer()
+				}
+			case <-timer.C:
+				flush() // no-op if batch is empty
+				timer.Reset(d)
+			}
+		}
+	}()
+
+	return &groupedWithinIterator[T]{ch: outCh, errCh: errCh}
+}
+
+func (g *groupedWithinIterator[T]) next() ([]T, bool, error) {
+	// Fast path: surface a pending error before blocking.
+	select {
+	case err := <-g.errCh:
+		return nil, false, err
+	default:
+	}
+	select {
+	case err := <-g.errCh:
+		return nil, false, err
+	case batch, ok := <-g.ch:
+		if !ok {
+			// Channel closed — check for a final error.
+			select {
+			case err := <-g.errCh:
+				return nil, false, err
+			default:
+				return nil, false, nil
+			}
+		}
+		return batch, true, nil
+	}
+}
+
+// ─── concatIterator ───────────────────────────────────────────────────────
+
+// concatIterator drains left completely before starting right.
+type concatIterator[T any] struct {
+	left    iterator[T]
+	right   iterator[T]
+	onRight bool
+}
+
+func (c *concatIterator[T]) next() (T, bool, error) {
+	if !c.onRight {
+		elem, ok, err := c.left.next()
+		if err != nil {
+			return elem, false, err
+		}
+		if ok {
+			return elem, true, nil
+		}
+		// Left exhausted — switch to right.
+		c.onRight = true
+	}
+	return c.right.next()
+}
+
 // ─── zipIterator ──────────────────────────────────────────────────────────
 
 // zipIterator pairs elements from two upstream iterators element-by-element.

@@ -331,6 +331,51 @@ func FilterMap[In, Out any](src Source[In, NotUsed], pf func(In) (Out, bool)) So
 	}
 }
 
+// ─── Grouped / GroupedWithin ──────────────────────────────────────────────
+
+// Grouped batches elements from src into slices of exactly n elements.
+// The last batch may contain fewer than n elements if the source is exhausted
+// before a full batch accumulates.  An empty source produces no batches.
+//
+// Grouped is a package-level function rather than a method on [Flow] because
+// the return type Flow[In,[]Out,NotUsed] creates an instantiation cycle in Go's
+// generic type system when expressed as a method.
+//
+// Example:
+//
+//	stream.Grouped(stream.FromSlice([]int{1,2,3,4,5}), 2)
+//	// emits [1 2], [3 4], [5]
+func Grouped[T any](src Source[T, NotUsed], n int) Source[[]T, NotUsed] {
+	return Source[[]T, NotUsed]{
+		factory: func() (iterator[[]T], NotUsed) {
+			upstream, _ := src.factory()
+			return &groupedIterator[T]{upstream: upstream, n: n}, NotUsed{}
+		},
+	}
+}
+
+// GroupedWithin batches elements from src into slices emitted when either n
+// elements have accumulated OR the duration d has elapsed since the batch was
+// started, whichever occurs first.
+//
+// Empty batches at timer expiry are suppressed — no zero-length slice is ever
+// emitted.  An upstream error terminates the stream after any partial batch
+// already in-flight has been emitted.
+//
+// GroupedWithin is a package-level function for the same reason as [Grouped].
+//
+// Example — collect up to 10 events or flush every 500 ms:
+//
+//	stream.GroupedWithin(eventSrc, 10, 500*time.Millisecond)
+func GroupedWithin[T any](src Source[T, NotUsed], n int, d time.Duration) Source[[]T, NotUsed] {
+	return Source[[]T, NotUsed]{
+		factory: func() (iterator[[]T], NotUsed) {
+			upstream, _ := src.factory()
+			return newGroupedWithinIterator(upstream, n, d), NotUsed{}
+		},
+	}
+}
+
 // ─── GroupBy ──────────────────────────────────────────────────────────────
 
 // GroupBy distributes elements from src to keyed sub-streams.  The key

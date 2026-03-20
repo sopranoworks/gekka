@@ -306,7 +306,7 @@ func (r EntityRef[T]) Tell(msg T)
 To get a reference to a specific entity from anywhere in the application:
 
 ```go
-ref, err := gekka.GetEntityRef[AddItem](cluster, "ShoppingCart", "cart-42")
+ref, err := gekka.EntityRefFor[AddItem](cluster, "ShoppingCart", "cart-42")
 ref.Tell(AddItem{Item: "pen"})
 ```
 

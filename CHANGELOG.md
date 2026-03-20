@@ -4,7 +4,72 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
--
+
+## [0.10.0] - 2026-03-20
+
+### Added
+- 🚀 **Integrated Typed Spawner API**: Unified spawning logic via the `Spawner` interface, now shared by both `ActorSystem` and `ActorContext`. Added `Spawn`, `SpawnAnonymous`, and `SystemActorOf` as global generic functions in the root package.
+- 📦 **Structural Parity with Pekko**: Completed the full separation of core modules. Sharding, Cluster Singleton, Distributed Data, and Reliable Delivery now reside in their own specialized subpackages (e.g., `cluster/sharding`, `cluster/singleton`).
+- 💾 **Durable State Persistence**: Introduced `DurableStateBehavior` as a state-based alternative to Event Sourcing, complete with a SQL-backed `DurableStateStore`.
+- 🔗 **Message Adaptation (Ask)**: Implemented the `TypedContext.Ask` pattern for asynchronous response handling with type-safe transformations and timeout support.
+- 📊 **Gekka Projection**: New infrastructure for resilient event stream processing and SQL-based offset management.
+- 🛡️ **Circuit Breaker**: Added the `actor.CircuitBreaker` pattern to protect actor communications from cascading failures.
+- 🔄 **Classic/Typed Parity**: Achieved full parity for Finite State Machines (`BaseFSM`) and advanced routers across both Classic and Typed APIs.
+- ⚖️ **Adaptive Load Balancing**: New routing logic that biases traffic toward nodes with lower pressure scores (CPU, Heap, Mailbox).
+
+### Changed
+- 🛠️ **Refactored Typed API**: Moved `Behavior`, `TypedContext`, and `TypedActorRef` into the `gekka` root package via type aliases for a cleaner developer experience.
+- 🏗️ **Package Reorganization**: 
+  - `actor/delivery/` → `actor/typed/delivery/`
+  - `sharding/` → `cluster/sharding/`
+  - `crdt/` → `cluster/ddata/`
+  - `actor/typed/persistence.go` → `persistence/typed/event_sourcing.go`
+- ⚙️ **Go Version Sync**: Standardized the entire project and CI pipelines on **Go 1.26.1**.
+
+### Fixed
+- 🐛 **Recursion Bug**: Fixed a critical infinite recursion in `(*Cluster).SelfPathURI` that caused stack overflows in remote messaging.
+- 🔒 **Interface Decoupling**: Resolved circular dependencies between `cluster` and its subpackages using interface-based injection.
+- 🧪 **Test Stability**: Fixed data races and timing issues in `TestRouter_Broadcast` and `TestReceptionist_Register`.
+
+---
+
+## [0.9.0] - 2026-03-18
+
+### Added
+- 🌊 **Gekka Streams**: Initial release of Reactive Streams implementation. Supports `Source`, `Flow`, `Sink`, and `StreamRef` for cross-node back-pressured streaming over Artery TCP.
+- ☸️ **Rolling Update Support**:
+  - **Readiness Drain Gate**: `/health/ready` now returns 503 during coordinated shutdown to signal Kubernetes to stop routing traffic.
+  - **Shard Handoff**: Automated shard rebalancing during graceful departure.
+- 🖥️ **Interactive TUI Dashboard**: New `gekka-cli dashboard` for real-time cluster monitoring with minimalist flower-motif branding.
+- ⚡ **Zero-Copy Serialization**: Optimized Artery framing achieving 8.5x faster throughput for large payloads.
+- 🧪 **Scheduler API**: Global task management via `ActorSystem.Scheduler()`.
+- 🏷️ **Event Tagging**: Support for `Tags` in `PersistentRepr` and SQL journals for efficient CQRS filtering.
+
+### Changed
+- 🎨 **Branding Refresh**: Unified **NEBULA/FOREST** motif across CLI, TUI, and documentation.
+- 🧩 **Discovery Decoupling**: Refactored cluster discovery into a plugin-based registry to minimize core dependencies.
+
+---
+
+## [0.8.0] - 2026-03-16
+
+### Added
+- 🛠️ **Operational Tooling**: 
+  - `gekka-cli`: Management tool for cluster membership and diagnostics.
+  - `gekka-metrics`: Standalone cluster node for native OTLP/HTTP metric exportation.
+- 🔌 **Kubernetes Discovery**: Added `SeedProvider` registry and implementations for Kubernetes API and DNS-based peer discovery.
+- ⏱️ **Configurable Handoff**: Added HOCON support for `gekka.cluster.sharding.handoff-timeout`.
+
+### Changed
+- 🏗️ **Package Migration**: Reorganized `internal/core` to house the central serialization registry and Artery transport handler.
+- 📥 **Typed Spawn Refactor**: Moved `Spawn` from a global function to a method on `ActorSystem` (pre-v0.10 integration).
+
+### Improved
+- 🏁 **Handshake Stability**: Verified binary wire compatibility between Akka 2.6.21 and Pekko 1.1.2.
+- 🧹 **Concurrency**: Resolved pre-existing data races in actor lifecycle transitions using `atomic` operations and mutex guards.
+
+---
+
 ## [0.7.0] - 2026-03-16
 
 ### Added
@@ -114,6 +179,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Message Dispatch**: Fixed a critical bug where messages were not correctly routed to registered actors by default when incoming envelopes contained full URIs.
 
 
+[0.10.0]: https://github.com/sopranoworks/gekka/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/sopranoworks/gekka/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/sopranoworks/gekka/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/sopranoworks/gekka/releases/tag/v0.7.0
 [0.6.0]: https://github.com/sopranoworks/gekka/releases/tag/v0.6.0
 [0.5.0]: https://github.com/sopranoworks/gekka/releases/tag/v0.5.0

@@ -86,6 +86,7 @@ group := actor.NewGroupRouter(
 )
 
 // 2. Spawn it as a typed actor using RouterBehavior
+// Works with both ActorSystem and TypedContext (Integrated Spawner API)
 ref, err := gekka.Spawn(system, gekka.RouterBehavior(&group.RouterActor), "myRouter")
 ```
 

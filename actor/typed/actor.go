@@ -233,23 +233,6 @@ func NewTypedActor[T any](behavior Behavior[T]) actor.Actor {
 	return NewTypedActorInternal(behavior)
 }
 
-// behaviorWrapper is a non-generic interface to allow calling behavior from untyped context.
-type behaviorWrapper interface {
-	Receive(ctx any, msg any) any // returns next behavior wrapper
-}
-
-type behaviorImpl[T any] struct {
-	fn Behavior[T]
-}
-
-func (b *behaviorImpl[T]) Receive(ctx any, msg any) any {
-	next := b.fn(ctx.(TypedContext[T]), msg.(T))
-	if next == nil {
-		return nil
-	}
-	return &behaviorImpl[T]{fn: next}
-}
-
 // NewTypedActorGeneric creates a new Actor from any behavior type.
 func NewTypedActorGeneric(behavior any) actor.Actor {
 	// We use reflection to find the message type T and wrap the behavior.

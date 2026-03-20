@@ -222,9 +222,8 @@ func main() {
 
 The **Typed Actor API** uses Go Generics to enforce message types at compile time.
 
-`gekka.Spawn` is the Go-idiomatic equivalent of Pekko/Akka's `system.spawn(behavior, name)`.
-Because Go does not permit generic methods on interfaces, the `ActorSystem` is passed as the
-first argument — the semantics are identical.
+`gekka.Spawn` is the versatile entry point for spawning actors. It accepts both an `ActorSystem`
+and a `TypedContext` (ActorContext), making it easy to build dynamic actor hierarchies.
 
 ```go
 package main
@@ -240,14 +239,19 @@ type Greet struct{ Name string }
 func Greeter() gekka.Behavior[Greet] {
 	return func(ctx gekka.TypedContext[Greet], msg Greet) gekka.Behavior[Greet] {
 		fmt.Printf("Hello, %s!\n", msg.Name)
+		
+		// 3. Spawn a child actor using the same Spawn function (passing 'ctx' as spawner)
+		// child, _ := gekka.Spawn(ctx, ChildBehavior(), "child")
+		
 		return gekka.Same[Greet]()
 	}
 }
 
 func main() {
-	system, _ := gekka.NewActorSystem("TypedSystem")
+	// 1. Initialize system with a root behavior
+	system, _ := gekka.NewActorSystemWithBehavior(Greeter(), "root")
 
-	// Spawn a typed actor — equivalent to system.spawn(Greeter(), "greeter") in Pekko
+	// 2. Or spawn a top-level actor from an existing system
 	ref, _ := gekka.Spawn(system, Greeter(), "greeter")
 
 	// Send a type-safe message
@@ -286,6 +290,7 @@ Mutual TLS (mTLS) is supported; nodes must present a valid certificate to connec
 ## Documentation
 
 - [**Examples**](docs/EXAMPLES.md) — Extended code examples for all major features.
+- [**Porting Guide**](docs/PORTING_GUIDE.md) — Migration tips and conceptual mapping from Apache Pekko / Lightbend Akka.
 - [**API Reference**](docs/API.md) — Detailed function and method signatures.
 - [**Protocol Notes**](docs/PROTOCOL.md) — Artery TCP framing, serialization IDs, and CRDTs.
 - [**Routing Features**](docs/ROUTING.md) — Pool/Group routers and HOCON deployment.

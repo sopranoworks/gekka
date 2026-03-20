@@ -9,10 +9,9 @@ This document provides a comprehensive reference for the Gekka public API.
 | Function | Description |
 |----------|-------------|
 | `NewCluster(cfg ClusterConfig) (*Cluster, error)` | Create and start a node from a `ClusterConfig` |
-| `NewClusterFromConfig(path string, fallbacks ...string) (*Cluster, error)` | Load HOCON file and start a node |
-| `LoadConfig(path string, fallbacks ...string) (ClusterConfig, error)` | Parse HOCON into `ClusterConfig` without spawning |
-| `ParseHOCONString(text string) (ClusterConfig, error)` | Parse an in-memory HOCON string |
-| `Spawn[T](sys, behavior, name, props...) (TypedActorRef[T], error)` | Spawn a type-safe actor |
+| `NewClusterFromConfig(path string, fallbacks ...string)` | Load HOCON file and start a node |
+| `NewActorSystemWithBehavior[T](behavior, name, config)` | Create system with a root behavior |
+| `Spawn[T, S Spawner](spawner, behavior, name)` | Spawn a type-safe actor (integrated API) |
 | `SpawnPersistent[C,E,S](sys, behavior, name, props...) (TypedActorRef[C], error)` | Spawn a persistent (event-sourced) actor |
 | `SpawnDurableState[C,S](sys, behavior, name, props...) (TypedActorRef[C], error)` | Spawn a state-persistent actor |
 | `Ask[T,R](ctx, target, timeout, msgFactory)` | Type-safe request-response |
@@ -55,6 +54,9 @@ type Props = actor.Props // New func() actor.Actor
 
 type ActorSystem interface {
     ActorOf(props Props, name string) (ActorRef, error)
+    Spawn(behavior any, name string) (ActorRef, error)
+    SpawnAnonymous(behavior any) (ActorRef, error)
+    SystemActorOf(behavior any, name string) (ActorRef, error)
     Context() context.Context // root context of the node
     Watch(watcher, target ActorRef)
     Unwatch(watcher, target ActorRef)
@@ -63,6 +65,21 @@ type ActorSystem interface {
     RegisterType(manifest string, typ reflect.Type)
     GetTypeByManifest(manifest string) (reflect.Type, bool)
     ActorSelection(path string) ActorSelection
+    Receptionist() TypedActorRef[any]
+}
+
+type ActorContext interface {
+    ActorOf(props Props, name string) (Ref, error)
+    Spawn(behavior any, name string) (Ref, error)
+    SpawnAnonymous(behavior any) (Ref, error)
+    SystemActorOf(behavior any, name string) (Ref, error)
+    Context() context.Context
+    Watch(watcher, target Ref)
+    Unwatch(watcher, target Ref)
+    Stop(target Ref)
+    Self() Ref
+    Parent() Ref
+    Sender() Ref
 }
 ```
 
@@ -116,6 +133,9 @@ and returns the *next* behavior (which may be itself via `actor.Same[T]()`).
 type TypedContext[T any] interface {
     Self() TypedActorRef[T]
     System() ActorContext
+    Spawn(behavior any, name string) (actor.Ref, error)
+    SpawnAnonymous(behavior any) (actor.Ref, error)
+    SystemActorOf(behavior any, name string) (actor.Ref, error)
     Log() *slog.Logger
     Watch(target Ref)
     Unwatch(target Ref)

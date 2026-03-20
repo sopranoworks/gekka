@@ -9,6 +9,7 @@
 package stream
 
 import (
+	"crypto/tls"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -82,6 +83,107 @@ func readFrame(r io.Reader) (manifest byte, payload []byte, err error) {
 	manifest = data[0]
 	payload = data[1:]
 	return
+}
+
+// ─── TLS helpers ──────────────────────────────────────────────────────────
+
+// NewTcpListenerWithTLS creates a TLS-wrapped TcpListener bound to addr.
+// cfg must be a valid server-side *tls.Config (with at least one certificate).
+func NewTcpListenerWithTLS[T any](addr string, decode Decoder[T], cfg *tls.Config) (*TcpListener[T], error) {
+	ln, err := tls.Listen("tcp", addr, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("stream/tcp: tls listen %q: %w", addr, err)
+	}
+	host, portStr, _ := net.SplitHostPort(ln.Addr().String())
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	var port int
+	fmt.Sscanf(portStr, "%d", &port) //nolint:errcheck
+	ref := SinkRef{
+		TargetPath: fmt.Sprintf("tcp://go@%s:%d/stream/sink", host, port),
+		Host:       host,
+		Port:       port,
+	}
+	return &TcpListener[T]{ln: ln, decode: decode, ref: ref}, nil
+}
+
+// TcpOutWithTLS returns a TLS-wrapped Sink that connects to ref and pushes
+// upstream elements over an encrypted TCP connection.
+// cfg must be a valid client-side *tls.Config.
+func TcpOutWithTLS[T any](ref SinkRef, encode Encoder[T], cfg *tls.Config) Sink[T, NotUsed] {
+	return Sink[T, NotUsed]{
+		runWith: func(upstream iterator[T]) (NotUsed, error) {
+			dialer := &tls.Dialer{Config: cfg}
+			conn, err := dialer.Dial("tcp", fmt.Sprintf("%s:%d", ref.Host, ref.Port))
+			if err != nil {
+				return NotUsed{}, fmt.Errorf("stream/tcp: tls dial %s:%d: %w", ref.Host, ref.Port, err)
+			}
+			defer conn.Close()
+
+			path := fmt.Sprintf("tcp://go@%s:%d/stream/out", ref.Host, ref.Port)
+			if err = writeFrame(conn, ManifestOnSubscribeHandshake, encodeOnSubscribeHandshake(path)); err != nil {
+				return NotUsed{}, fmt.Errorf("stream/tcp: send handshake: %w", err)
+			}
+
+			manifest, payload, err := readFrame(conn)
+			if err != nil {
+				return NotUsed{}, fmt.Errorf("stream/tcp: read initial demand: %w", err)
+			}
+			if manifest != ManifestCumulativeDemand {
+				return NotUsed{}, fmt.Errorf("stream/tcp: expected CumulativeDemand (B), got %q",
+					string([]byte{manifest}))
+			}
+			demand, err := decodeCumulativeDemand(payload)
+			if err != nil {
+				return NotUsed{}, fmt.Errorf("stream/tcp: decode initial demand: %w", err)
+			}
+
+			seqNr := int64(0)
+			for {
+				for seqNr >= demand {
+					manifest, payload, err = readFrame(conn)
+					if err != nil {
+						return NotUsed{}, fmt.Errorf("stream/tcp: read demand: %w", err)
+					}
+					if manifest != ManifestCumulativeDemand {
+						return NotUsed{}, fmt.Errorf("stream/tcp: unexpected frame while waiting for demand: %q",
+							string([]byte{manifest}))
+					}
+					newDemand, err := decodeCumulativeDemand(payload)
+					if err != nil {
+						return NotUsed{}, fmt.Errorf("stream/tcp: decode demand: %w", err)
+					}
+					if newDemand > demand {
+						demand = newDemand
+					}
+				}
+
+				elem, ok, pullErr := upstream.next()
+				if pullErr != nil {
+					_ = writeFrame(conn, ManifestRemoteStreamFailure,
+						encodeRemoteStreamFailure(pullErr.Error()))
+					return NotUsed{}, pullErr
+				}
+				if !ok {
+					return NotUsed{}, writeFrame(conn,
+						ManifestRemoteStreamCompleted, encodeRemoteStreamCompleted(seqNr))
+				}
+
+				msgBytes, serID, msgManifest, encErr := encode(elem)
+				if encErr != nil {
+					_ = writeFrame(conn, ManifestRemoteStreamFailure,
+						encodeRemoteStreamFailure(encErr.Error()))
+					return NotUsed{}, fmt.Errorf("stream/tcp: encode element %d: %w", seqNr, encErr)
+				}
+				frame := encodeSequencedOnNext(seqNr, msgBytes, serID, msgManifest)
+				if err = writeFrame(conn, ManifestSequencedOnNext, frame); err != nil {
+					return NotUsed{}, fmt.Errorf("stream/tcp: send element %d: %w", seqNr, err)
+				}
+				seqNr++
+			}
+		},
+	}
 }
 
 // ─── TcpListener ──────────────────────────────────────────────────────────

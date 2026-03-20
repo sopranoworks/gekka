@@ -28,6 +28,13 @@ type sliceIterator[T any] struct {
 	pos   int
 }
 
+// ─── repeatIterator ───────────────────────────────────────────────────────
+
+// repeatIterator emits elem on every pull, never completing.
+type repeatIterator[T any] struct{ elem T }
+
+func (r *repeatIterator[T]) next() (T, bool, error) { return r.elem, true, nil }
+
 func (s *sliceIterator[T]) next() (T, bool, error) {
 	if s.pos >= len(s.elems) {
 		var zero T

@@ -59,6 +59,18 @@ func Failed[T any](err error) Source[T, NotUsed] {
 	}
 }
 
+// Repeat creates an infinite Source that emits elem forever.
+// Combine with [Source.Take] to bound the output:
+//
+//	stream.Repeat(42).Take(5) // emits 42 five times
+func Repeat[T any](elem T) Source[T, NotUsed] {
+	return Source[T, NotUsed]{
+		factory: func() (iterator[T], NotUsed) {
+			return &repeatIterator[T]{elem: elem}, NotUsed{}
+		},
+	}
+}
+
 // ─── Stage methods (element type preserved) ───────────────────────────────
 
 // Filter returns a Source that only emits elements for which pred returns true.

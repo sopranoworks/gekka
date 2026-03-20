@@ -346,6 +346,139 @@ func TestSourceRef_GoToGo_PipelinedTransformation(t *testing.T) {
 	}
 }
 
+// ─── SinkRef tests ────────────────────────────────────────────────────────
+
+// makeSinkRefCapture creates a ToSinkRef stage backed by a Foreach that
+// collects N elements into a slice and sends it on resultCh when done.
+// This design is race-free: the send on resultCh happens-before the receive,
+// and no further writes to the slice occur after the send.
+func makeSinkRefCapture(t *testing.T, n int, resultCh chan<- []int) *stream.TypedSinkRef[int] {
+	t.Helper()
+	var received []int
+	count := 0
+	sinkRef, _, err := stream.ToSinkRef[int](
+		stream.Foreach(func(v int) {
+			received = append(received, v)
+			count++
+			if count == n {
+				cp := make([]int, n)
+				copy(cp, received)
+				resultCh <- cp
+			}
+		}),
+		intDecode, intEncode,
+	)
+	if err != nil {
+		t.Fatalf("ToSinkRef: %v", err)
+	}
+	return sinkRef
+}
+
+// TestSinkRef_GoToGo_AllElementsDelivered verifies the core SinkRef round-trip:
+// a remote producer pushes N integers and the local consumer receives them all
+// in FIFO order without any loss.
+func TestSinkRef_GoToGo_AllElementsDelivered(t *testing.T) {
+	const N = 120
+
+	resultCh := make(chan []int, 1)
+	sinkRef := makeSinkRefCapture(t, N, resultCh)
+
+	// Producer: push N integers via FromSinkRef.
+	_, err := stream.RunWith(
+		stream.FromSlice(makeInts(N)),
+		stream.FromSinkRef(sinkRef),
+		stream.ActorMaterializer{},
+	)
+	if err != nil {
+		t.Fatalf("producer: %v", err)
+	}
+
+	var result []int
+	select {
+	case result = <-resultCh:
+	case <-time.After(10 * time.Second):
+		t.Fatal("consumer timed out")
+	}
+	if len(result) != N {
+		t.Fatalf("got %d elements, want %d", len(result), N)
+	}
+	for i, v := range result {
+		if v != i {
+			t.Fatalf("index %d: got %d, want %d", i, v, i)
+		}
+	}
+}
+
+// TestSinkRef_GoToGo_SlowProducer_NoDrops verifies that back-pressure holds
+// when the producer pauses between elements: all N values arrive correctly.
+func TestSinkRef_GoToGo_SlowProducer_NoDrops(t *testing.T) {
+	const N = 30
+
+	resultCh := make(chan []int, 1)
+	sinkRef := makeSinkRefCapture(t, N, resultCh)
+
+	// Slow producer: 2 ms delay per element.
+	slowSrc := stream.Via(
+		stream.FromSlice(makeInts(N)),
+		stream.Map(func(n int) int {
+			time.Sleep(2 * time.Millisecond)
+			return n
+		}),
+	)
+	_, err := stream.RunWith(slowSrc, stream.FromSinkRef(sinkRef), stream.ActorMaterializer{})
+	if err != nil {
+		t.Fatalf("producer: %v", err)
+	}
+
+	var result []int
+	select {
+	case result = <-resultCh:
+	case <-time.After(10 * time.Second):
+		t.Fatal("consumer timed out")
+	}
+	if len(result) != N {
+		t.Fatalf("got %d elements, want %d", len(result), N)
+	}
+	for i, v := range result {
+		if v != i {
+			t.Fatalf("index %d: got %d, want %d", i, v, i)
+		}
+	}
+}
+
+// TestSinkRef_GoToGo_EmptySource verifies that a producer with an empty source
+// closes the SinkRef stage cleanly: no elements are delivered and no error is
+// returned by either side.
+func TestSinkRef_GoToGo_EmptySource(t *testing.T) {
+	// Use a count-based resultCh that fires after 0 elements — since the
+	// producer sends zero elements, we cannot use makeSinkRefCapture (which
+	// needs at least one element to close the channel).  Instead, verify by
+	// checking that the producer's RunWith returns without error, which implies
+	// RemoteStreamCompleted was sent and the stage exited cleanly.
+	var delivered int
+	sinkRef, _, err := stream.ToSinkRef[int](
+		stream.Foreach(func(int) { delivered++ }),
+		intDecode, intEncode,
+	)
+	if err != nil {
+		t.Fatalf("ToSinkRef: %v", err)
+	}
+
+	_, err = stream.RunWith(
+		stream.FromSlice([]int{}),
+		stream.FromSinkRef(sinkRef),
+		stream.ActorMaterializer{},
+	)
+	if err != nil {
+		t.Fatalf("producer: unexpected error: %v", err)
+	}
+	// Brief pause to let the stage actor's goroutine finish its sink loop.
+	time.Sleep(50 * time.Millisecond)
+	if delivered != 0 {
+		t.Fatalf("expected 0 elements delivered, got %d", delivered)
+	}
+}
+
 // ─── JSON codec helpers (shared with stream_tcp_test.go) ──────────────────
 
 // These are defined in stream_tcp_test.go in the same package; we re-declare

@@ -5,6 +5,8 @@ A Go implementation of the Pekko/Akka actor protocol, with wire-level interopera
 
 Configuration is loaded via [`gekka-config`](https://github.com/sopranoworks/gekka-config), a HOCON engine that supports both automatic cluster formation and direct node-to-node communication using the standard `pekko://` and `akka://` URI schemes.
 
+**Requirement**: Go 1.26.1 or later.
+
 ---
 
 ## Features
@@ -231,15 +233,14 @@ import (
 	"fmt"
 
 	"github.com/sopranoworks/gekka"
-	"github.com/sopranoworks/gekka/actor"
 )
 
 type Greet struct{ Name string }
 
-func Greeter() actor.Behavior[Greet] {
-	return func(ctx actor.TypedContext[Greet], msg Greet) actor.Behavior[Greet] {
+func Greeter() gekka.Behavior[Greet] {
+	return func(ctx gekka.TypedContext[Greet], msg Greet) gekka.Behavior[Greet] {
 		fmt.Printf("Hello, %s!\n", msg.Name)
-		return actor.Same[Greet]()
+		return gekka.Same[Greet]()
 	}
 }
 

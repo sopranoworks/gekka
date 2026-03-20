@@ -14,9 +14,12 @@ This document provides a comprehensive reference for the Gekka public API.
 | `ParseHOCONString(text string) (ClusterConfig, error)` | Parse an in-memory HOCON string |
 | `Spawn[T](sys, behavior, name, props...) (TypedActorRef[T], error)` | Spawn a type-safe actor |
 | `SpawnPersistent[C,E,S](sys, behavior, name, props...) (TypedActorRef[C], error)` | Spawn a persistent (event-sourced) actor |
+| `SpawnDurableState[C,S](sys, behavior, name, props...) (TypedActorRef[C], error)` | Spawn a state-persistent actor |
 | `Ask[T,R](ctx, target, timeout, msgFactory)` | Type-safe request-response |
 | `StartSharding[C,E,S](sys, typeName, behaviorFactory, extract, settings)` | Start cluster sharding for an entity type |
-| `GetEntityRef[T](sys, typeName, entityId)` | Obtain a typed ref to a specific sharded entity |
+| `EntityRefFor[T](sys, typeName, entityId)` | Obtain a typed ref to a specific sharded entity |
+| `NewTypedSingleton[M](cm, behavior, role)` | Create a typed cluster singleton |
+| `NewTypedSingletonProxy[M](cm, managerPath, role)` | Create a typed singleton proxy |
 
 ---
 
@@ -101,7 +104,7 @@ ref.Tell(Greet{Name: "world"})  // only Greet accepted — compile-time checked
 ### Behavior[T]
 
 ```go
-type Behavior[T any] func(ctx TypedContext[T], msg T) Behavior[T]
+type Behavior[T any] = typed.Behavior[T]
 ```
 
 A `Behavior` is a pure function: it receives the current context and a message
@@ -118,6 +121,9 @@ type TypedContext[T any] interface {
     Unwatch(target Ref)
     Stop(target Ref)
     Passivate() // request graceful shutdown from sharding
+    Timers() TimerScheduler[T]
+    Stash() StashBuffer[T]
+    Ask(target Ref, msgFactory func(Ref) any, transform func(any, error) T)
 }
 ```
 
@@ -172,6 +178,36 @@ ref, err := node.ActorSelection("/user/greeter").Resolve(nil)
 
 // Resolve by absolute remote URI (no network call; connection is lazy)
 ref, err := node.ActorSelection("pekko://Sys@10.0.0.1:2552/user/greeter").Resolve(nil)
+```
+
+---
+
+## Cluster Sharding (Typed)
+
+```go
+type EntityTypeKey[M any] struct { Name string }
+
+type EntityRef[M any] struct {
+    // ...
+}
+
+func (r *EntityRef[M]) Tell(msg M)
+```
+
+Use `gekka.EntityRefFor[M](sys, typeName, entityId)` to obtain a reference.
+
+---
+
+## Cluster Singleton (Typed)
+
+```go
+// Create a singleton manager
+singleton := gekka.NewTypedSingleton(cluster, myBehavior, "worker-role")
+cluster.System.ActorOf(singleton.Props(), "mySingleton")
+
+// Access via proxy
+proxy := gekka.NewTypedSingletonProxy[MyMsg](cluster, "/user/mySingleton", "worker-role")
+proxy.Tell(MyMsg{})
 ```
 
 ---

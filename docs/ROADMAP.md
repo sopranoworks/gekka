@@ -37,23 +37,17 @@
 - Cluster Singleton Manager & Proxy (Failover support)
 - Coordinated Shutdown (Phased node exit sequence)
 
-### v0.5.0 (2026-03-13)
+### v0.10.0 — Finite State Machines & Structural Alignment (2026-03-19)
+- **Typed FSM DSL**: Integrated behavior-based FSM for Typed Actors with full lifecycle and timer support.
+- **Classic FSM Parity**: Ported the FSM DSL to Classic Actors (`BaseFSM`) for managing complex state transitions.
+- **Structural Refactoring**: Relocated Sharding, Cluster Singleton, Distributed Data, and Reliable Delivery into specialized subpackages (`cluster/sharding`, `cluster/singleton`, etc.) for architectural parity with Pekko/Akka.
+- **Durable State Persistence**: Added state-based persistence (`DurableStateBehavior`) as an alternative to event sourcing.
+- **Advanced Routing**: Implemented Scatter-Gather, Tail-Chopping, and Consistent Hashing routing logics for both classic and typed systems.
+- **Message Adaptation (Ask)**: Implemented the `TypedContext.Ask` pattern for asynchronous response handling.
 
 ---
 
 ## Upcoming
-
-### v0.10.0 — Finite State Machines & Cluster Resilience
-
-**Target:** Q4 2026
-
-#### 1. (Classic) FSM API
-Implementation of the Finite State Machine DSL for managing complex actor state transitions with:
-- `StartWith(state, data)`
-- `When(state, partialFunction)`
-- `OnTransition(handler)`
-- `Goto(nextState).Using(nextData)` / `Stay()`
-- Integrated state-based timers
 
 ### v1.0.0 — Production Readiness & Stability
 

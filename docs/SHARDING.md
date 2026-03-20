@@ -27,7 +27,7 @@ import (
     "github.com/sopranoworks/gekka"
     "github.com/sopranoworks/gekka/actor"
     "github.com/sopranoworks/gekka/persistence"
-    "github.com/sopranoworks/gekka/cluster/sharding/typed"
+    "github.com/sopranoworks/gekka/cluster/sharding"
 )
 
 // 1. Define commands, events, and state for the entity.
@@ -38,13 +38,13 @@ type (
 )
 
 // 2. Define the entity behavior using EventSourcedBehavior.
-func cartBehavior(entityId string) *actor.EventSourcedBehavior[AddItem, ItemAdded, CartState] {
-    return &actor.EventSourcedBehavior[AddItem, ItemAdded, CartState]{
+func cartBehavior(entityId string) *gekka.EventSourcedBehavior[AddItem, ItemAdded, CartState] {
+    return &gekka.EventSourcedBehavior[AddItem, ItemAdded, CartState]{
         PersistenceID: "cart-" + entityId,
         Journal:       myJournal, // persistence.Journal implementation
         InitialState:  CartState{},
-        CommandHandler: func(ctx actor.TypedContext[AddItem], state CartState, cmd AddItem) actor.Effect[ItemAdded, CartState] {
-            return actor.Persist[ItemAdded, CartState](ItemAdded{Item: cmd.Item})
+        CommandHandler: func(ctx gekka.TypedContext[AddItem], state CartState, cmd AddItem) gekka.Effect[ItemAdded, CartState] {
+            return gekka.Persist[ItemAdded, CartState](ItemAdded{Item: cmd.Item})
         },
         EventHandler: func(state CartState, evt ItemAdded) CartState {
             return CartState{Items: append(state.Items, evt.Item)}

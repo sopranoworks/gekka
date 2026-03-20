@@ -64,3 +64,58 @@ gekka.actor.deployment {
 
 - **`actor.Broadcast{Message: msg}`**: Delivers the inner message to *all* routees.
 - **`actor.AdjustPoolSize{Delta: n}`**: (Pool only) Increases or decreases the number of routees.
+
+---
+
+## Typed Actor Routers (v0.10.0)
+
+Typed Actors use classic routers via the `RouterBehavior` bridge. This allows you to leverage the full suite of routing logic while maintaining type safety for your messages.
+
+### Using a Group Router
+
+```go
+import (
+    "github.com/sopranoworks/gekka"
+    "github.com/sopranoworks/gekka/actor"
+)
+
+// 1. Create the classic router
+group := actor.NewGroupRouter(
+    &actor.RoundRobinRoutingLogic{},
+    []actor.Ref{worker1, worker2},
+)
+
+// 2. Spawn it as a typed actor using RouterBehavior
+ref, err := gekka.Spawn(system, gekka.RouterBehavior(&group.RouterActor), "myRouter")
+```
+
+### Advanced Routing Logic
+
+Gekka supports advanced patterns compatible with Pekko/Akka:
+
+| Logic | Description |
+|-------|-------------|
+| **Broadcast** | Sends every message to all routees. |
+| **Scatter-Gather** | Sends a message to all routees and returns the first response within a timeout. |
+| **Tail-Chopping** | Sends a message to one routee, then another if no response is received within a delay. |
+| **Consistent Hashing** | Routes messages based on a hash of the message or a specific key. |
+
+#### Scatter-Gather First Completed
+
+```go
+sg := actor.NewGroupRouter(
+    &actor.ScatterGatherRoutingLogic{Within: 2 * time.Second},
+    routees,
+)
+ref, _ := gekka.Spawn(system, gekka.RouterBehavior(&sg.RouterActor), "sgRouter")
+```
+
+#### Tail-Chopping First Completed
+
+```go
+tc := actor.NewGroupRouter(
+    &actor.TailChoppingRoutingLogic{Within: 500 * time.Millisecond},
+    routees,
+)
+ref, _ := gekka.Spawn(system, gekka.RouterBehavior(&tc.RouterActor), "tcRouter")
+```

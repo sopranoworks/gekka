@@ -162,15 +162,14 @@ import (
 	"fmt"
 
 	"github.com/sopranoworks/gekka"
-	"github.com/sopranoworks/gekka/actor"
 )
 
 type Greet struct{ Name string }
 
-func Greeter() actor.Behavior[Greet] {
-	return func(ctx actor.TypedContext[Greet], msg Greet) actor.Behavior[Greet] {
+func Greeter() gekka.Behavior[Greet] {
+	return func(ctx gekka.TypedContext[Greet], msg Greet) gekka.Behavior[Greet] {
 		fmt.Printf("Hello, %s!\n", msg.Name)
-		return actor.Same[Greet]()
+		return gekka.Same[Greet]()
 	}
 }
 
@@ -182,18 +181,6 @@ func main() {
 
 	// Send a type-safe message — compiler rejects any non-Greet message
 	ref.Tell(Greet{Name: "Gopher"})
-}
-```
-
-Child typed actors can be spawned from within a parent's behavior using `actor.SpawnChild`:
-
-```go
-func Parent() actor.Behavior[string] {
-	return func(ctx actor.TypedContext[string], msg string) actor.Behavior[string] {
-		child, _ := actor.SpawnChild(ctx, Greeter(), "child")
-		child.Tell(Greet{Name: msg})
-		return actor.Same[string]()
-	}
 }
 ```
 
@@ -209,7 +196,6 @@ package main
 
 import (
 	"github.com/sopranoworks/gekka"
-	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/persistence"
 )
 
@@ -218,8 +204,8 @@ func Counter(id string, journal persistence.Journal) *gekka.EventSourcedBehavior
 		PersistenceID: id,
 		Journal:       journal,
 		InitialState:  0,
-		CommandHandler: func(ctx actor.TypedContext[any], state int, cmd any) actor.Effect[int, int] {
-			return actor.Persist[int, int](1)
+		CommandHandler: func(ctx gekka.TypedContext[any], state int, cmd any) gekka.Effect[int, int] {
+			return gekka.Persist[int, int](1)
 		},
 		EventHandler: func(state int, event int) int {
 			return state + event
@@ -247,6 +233,8 @@ implementation including snapshots and recovery demonstration.
 Gekka ensures that exactly one instance of a singleton actor is alive in the
 cluster, typically on the oldest node.
 
+### Classic Singleton
+
 ```go
 package main
 
@@ -262,20 +250,29 @@ func main() {
 	node, _ := gekka.NewCluster(...)
 
 	// 1. Define the singleton manager
-	mgr := cluster.NewClusterSingletonManager(node.ClusterManager(), actor.Props{
+	mgr := singleton.NewClusterSingletonManager(node.ClusterManager(), actor.Props{
 		New: func() actor.Actor { return &MySingleton{} },
 	}, "")
 
 	// 2. Start the manager (which spawns the singleton on the oldest node)
-	node.System.ActorOf(gekka.Props{New: func() actor.Actor { return mgr }}, "singletonManager")
+	node.System.ActorOf(actor.Props{New: func() actor.Actor { return mgr }}, "singletonManager")
 
 	// 3. Access the singleton via a proxy from any node
-	proxy := cluster.NewClusterSingletonProxy(
-		node.ClusterManager(), node.Router(),
-		"/user/singletonManager", "",
-	)
+	proxy := node.SingletonProxy("/user/singletonManager", "")
 	proxy.Send(context.Background(), "Hello Singleton!")
 }
+```
+
+### Typed Singleton
+
+```go
+// 1. Create a singleton manager
+singleton := gekka.NewTypedSingleton(cluster, myBehavior, "worker-role")
+cluster.System.ActorOf(singleton.Props(), "mySingleton")
+
+// 2. Access via proxy
+proxy := gekka.NewTypedSingletonProxy[MyMsg](cluster, "/user/mySingleton", "worker-role")
+proxy.Tell(MyMsg{})
 ```
 
 ---

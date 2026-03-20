@@ -101,7 +101,9 @@ Scope a `ClusterSingletonManager` to a specific data center so the singleton
 only runs on the oldest node **within that DC**:
 
 ```go
-mgr := cluster.NewClusterSingletonManager(cm, actor.Props{
+import "github.com/sopranoworks/gekka/cluster/singleton"
+
+mgr := singleton.NewClusterSingletonManager(cm, actor.Props{
     New: func() actor.Actor { return &MySingleton{} },
 }, "") // role filter (empty = any)
 mgr.WithDataCenter("us-east")  // restrict to us-east DC
@@ -110,7 +112,7 @@ mgr.WithDataCenter("us-east")  // restrict to us-east DC
 Similarly, scope a `ClusterSingletonProxy`:
 
 ```go
-proxy := cluster.NewClusterSingletonProxy(cm, router, "/user/mySingletonManager", "")
+proxy := singleton.NewClusterSingletonProxy(cm, router, "/user/mySingletonManager", "")
 proxy.WithDataCenter("us-east")
 ```
 

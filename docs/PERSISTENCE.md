@@ -28,7 +28,6 @@ with three generic parameters and two handler functions:
 import (
     "github.com/sopranoworks/gekka"
     "github.com/sopranoworks/gekka/persistence"
-    "github.com/sopranoworks/gekka/persistence/typed"
 )
 
 type (
@@ -45,9 +44,9 @@ behavior := &gekka.EventSourcedBehavior[AddItem, ItemAdded, CartState]{
         ctx   gekka.TypedContext[AddItem],
         state CartState,
         cmd   AddItem,
-    ) typed.Effect[ItemAdded, CartState] {
+    ) gekka.Effect[ItemAdded, CartState] {
         // Validate the command, then decide what to persist.
-        return typed.Persist[ItemAdded, CartState](ItemAdded{Item: cmd.Item})
+        return gekka.Persist[ItemAdded, CartState](ItemAdded{Item: cmd.Item})
     },
     EventHandler: func(state CartState, evt ItemAdded) CartState {
         // Apply the event to compute the next state. Must be pure.
@@ -59,28 +58,28 @@ behavior := &gekka.EventSourcedBehavior[AddItem, ItemAdded, CartState]{
 ---
 
 ## Effects
-
 The command handler returns an `Effect` that instructs the runtime what to do:
 
 | Effect | Description |
 |--------|-------------|
-| `typed.Persist(events...)` | Persist one or more events and apply them to state |
-| `typed.PersistThen(then, events...)` | Persist events, then invoke `then(newState)` |
-| `typed.None[E, S]()` | Acknowledge the command with no side effects |
+| `gekka.Persist(events...)` | Persist one or more events and apply them to state |
+| `gekka.PersistThen(then, events...)` | Persist events, then invoke `then(newState)` |
+| `gekka.None[E, S]()` | Acknowledge the command with no side effects |
 
 ```go
 // Persist a single event.
-return typed.Persist[ItemAdded, CartState](ItemAdded{Item: cmd.Item})
+return gekka.Persist[ItemAdded, CartState](ItemAdded{Item: cmd.Item})
 
 // Persist and run a callback after state is updated.
-return typed.PersistThen[ItemAdded, CartState](
+return gekka.PersistThen[ItemAdded, CartState](
     func(s CartState) { log.Println("Cart now has", len(s.Items), "items") },
     ItemAdded{Item: cmd.Item},
 )
 
 // No-op — useful for read-only commands or validation failures.
-return typed.None[ItemAdded, CartState]()
+return gekka.None[ItemAdded, CartState]()
 ```
+
 
 ---
 
@@ -186,6 +185,51 @@ criteria := persistence.SnapshotSelectionCriteria{MaxSequenceNr: 1000}
 
 ```go
 store := persistence.NewInMemorySnapshotStore()
+```
+
+---
+
+## Durable State
+
+Durable State allows an actor to persist its *entire state* instead of a sequence of events. This is simpler for some use cases where the full history is not required.
+
+### DurableStateBehavior
+
+```go
+import (
+    "github.com/sopranoworks/gekka"
+    "github.com/sopranoworks/gekka/persistence/typed/state"
+)
+
+type (
+    Command interface{}
+    Increment struct{}
+    CounterState struct{ Value int }
+)
+
+behavior := gekka.DurableState[Command, CounterState](
+    "counter-1",
+    CounterState{Value: 0},
+    myStateStore, // persistence.DurableStateStore implementation
+)
+
+behavior.OnCommand = func(
+    ctx   gekka.TypedContext[Command],
+    state CounterState,
+    cmd   Command,
+) state.Effect[CounterState] {
+    switch cmd.(type) {
+    case Increment:
+        return state.Persist(CounterState{Value: state.Value + 1})
+    }
+    return state.None()
+}
+```
+
+### Spawning a Durable State Actor
+
+```go
+ref, err := gekka.SpawnDurableState(cluster.System, behavior, "counter-1")
 ```
 
 ---

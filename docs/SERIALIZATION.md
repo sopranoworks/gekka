@@ -18,7 +18,10 @@ message exchange works without configuration.
 | **4** | `ByteArraySerializer` | Raw `[]byte`; manifest is always empty |
 | **5** | `ClusterMessageSerializer` | Cluster-internal protocol messages; short manifests (`"IJ"`, `"W"`, `"GE"`, …) |
 | **9** | `JSONSerializer` | Jackson-compatible JSON; manifest is the fully-qualified type name |
+| **11** | `DDataReplicatedSerializer` | Distributed Data replicated state (GCounter, ORSet, etc.) |
+| **12** | `DDataReplicatorMsgSerializer` | Distributed Data internal replicator messages |
 | **17** | `ArteryMessageSerializer` | Artery control frames (handshake `"d"`/`"e"`, remote-watcher `"Heartbeat"`/`"HeartbeatRsp"`); handled by the transport layer |
+| **36** | `ReliableDeliverySerializer` | Reliable Delivery protocol messages |
 
 > **IDs 5 and 17** are handled at the TCP transport layer and are **not**
 > present in the general-purpose `SerializationRegistry`. Registering a custom

@@ -32,8 +32,47 @@ var askId uint64
 // TypedActorRef is a type-safe reference to an actor that accepts messages of type T.
 type TypedActorRef[T any] = typed.TypedActorRef[T]
 
+// Behavior is a function that defines how a typed actor handles messages.
+type Behavior[T any] = typed.Behavior[T]
+
+// TypedContext provides the execution context for a typed actor.
+type TypedContext[T any] = typed.TypedContext[T]
+
+// Same returns a behavior that stays in the current state.
+func Same[T any]() Behavior[T] {
+	return typed.Same[T]()
+}
+
+// Stopped returns a behavior that stops the actor.
+func Stopped[T any]() Behavior[T] {
+	return typed.Stopped[T]()
+}
+
+// Setup creates a behavior that runs a factory function before the first message.
+func Setup[T any](factory func(TypedContext[T]) Behavior[T]) Behavior[T] {
+	return typed.Setup[T](factory)
+}
+
 // EventSourcedBehavior defines a behavior for a persistent actor.
 type EventSourcedBehavior[Command any, Event any, State any] = ptyped.EventSourcedBehavior[Command, Event, State]
+
+// Effect represents the result of processing a command in persistence.
+type Effect[Event any, State any] = ptyped.Effect[Event, State]
+
+// Persist creates an effect that persists one or more events.
+func Persist[Event any, State any](events ...Event) Effect[Event, State] {
+	return ptyped.Persist[Event, State](events...)
+}
+
+// PersistThen creates an effect that persists events and then runs a callback.
+func PersistThen[Event any, State any](then func(State), events ...Event) Effect[Event, State] {
+	return ptyped.PersistThen[Event, State](then, events...)
+}
+
+// None represents an effect that does nothing.
+func None[Event any, State any]() Effect[Event, State] {
+	return ptyped.None[Event, State]()
+}
 
 // DurableStateBehavior defines a behavior for a state-persistent actor.
 type DurableStateBehavior[Command any, State any] = pstate.DurableStateBehavior[Command, State]
@@ -81,6 +120,11 @@ func NewProducerController(producerID string) typed.Behavior[any] {
 // NewConsumerController creates a behavior for a consumer controller.
 func NewConsumerController(consumerActor actor.Ref, windowSize int) typed.Behavior[any] {
 	return delivery.NewConsumerController(consumerActor, windowSize)
+}
+
+// RouterBehavior returns a behavior that drives a classic RouterActor.
+func RouterBehavior(r *actor.RouterActor) Behavior[any] {
+	return typed.RouterBehavior(r)
 }
 
 // DurableState creates a behavior for a state-persistent actor.

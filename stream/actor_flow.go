@@ -126,6 +126,11 @@ const (
 
 	// OverflowFail fails the stream with [ErrBufferFull] on the first overflow.
 	OverflowFail
+
+	// OverflowBackpressure blocks the producer until the consumer catches up.
+	// This is meaningful for [Buffer]; in [ActorSource] Tell is fire-and-forget
+	// so this strategy falls back to [OverflowDropTail] behaviour.
+	OverflowBackpressure
 )
 
 // ErrBufferFull is returned by an [ActorSource] stream when the buffer is full

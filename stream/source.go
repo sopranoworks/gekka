@@ -8,6 +8,8 @@
 
 package stream
 
+import "time"
+
 // Source[T, Mat] is a stream stage with exactly one output port that emits
 // elements of type T and materializes to a value of type Mat.
 //
@@ -115,6 +117,41 @@ func (s Source[T, Mat]) Async() Source[T, Mat] {
 		factory: func() (iterator[T], Mat) {
 			up, mat := s.factory()
 			return newAsyncBoundary[T](up, DefaultAsyncBufSize), mat
+		},
+	}
+}
+
+// ─── Flow-control helpers ─────────────────────────────────────────────────
+
+// Buffer appends a [Buffer] stage after this Source.
+// See the package-level [Buffer] function for parameter semantics.
+func (s Source[T, Mat]) Buffer(size int, strategy OverflowStrategy) Source[T, Mat] {
+	return Source[T, Mat]{
+		factory: func() (iterator[T], Mat) {
+			inner, mat := s.factory()
+			return newBufferIterator(inner, size, strategy), mat
+		},
+	}
+}
+
+// Throttle appends a [Throttle] stage after this Source.
+// See the package-level [Throttle] function for parameter semantics.
+func (s Source[T, Mat]) Throttle(elements int, per time.Duration, burst int) Source[T, Mat] {
+	return Source[T, Mat]{
+		factory: func() (iterator[T], Mat) {
+			inner, mat := s.factory()
+			return newThrottleIterator(inner, elements, per, burst), mat
+		},
+	}
+}
+
+// Delay appends a [Delay] stage after this Source.
+// See the package-level [Delay] function for parameter semantics.
+func (s Source[T, Mat]) Delay(d time.Duration) Source[T, Mat] {
+	return Source[T, Mat]{
+		factory: func() (iterator[T], Mat) {
+			inner, mat := s.factory()
+			return &delayIterator[T]{upstream: inner, delay: d}, mat
 		},
 	}
 }

@@ -8,6 +8,8 @@
 
 package stream
 
+import "time"
+
 // Flow[In, Out, Mat] is a stream stage with exactly one input port and one
 // output port.  It transforms elements of type In into elements of type Out
 // and materializes to Mat.
@@ -123,6 +125,100 @@ func ViaFlow[In, Mid, Out, Mat1, Mat2 any](f1 Flow[In, Mid, Mat1], f2 Flow[Mid, 
 			mid, mat1 := f1.attach(up)
 			out, _ := f2.attach(mid)
 			return out, mat1
+		},
+	}
+}
+
+// ─── Buffer ───────────────────────────────────────────────────────────────
+
+// Buffer creates a [Flow] that asynchronously buffers up to size elements
+// using the given overflow strategy.
+//
+// The upstream runs in a dedicated goroutine that fills the buffer ahead of
+// the downstream consumer:
+//
+//   - [OverflowBackpressure]: the goroutine blocks when the buffer is full,
+//     applying demand-driven back-pressure to the upstream.
+//   - [OverflowDropTail]: incoming elements are silently dropped when full.
+//   - [OverflowDropHead]: the oldest buffered element is evicted to make room.
+//   - [OverflowFail]: the stream fails with [ErrBufferFull] on overflow.
+//
+// Use [OverflowBackpressure] (or the equivalent [Source.Async] / [Flow.Async])
+// when correctness requires that no elements are lost.
+func Buffer[T any](size int, strategy OverflowStrategy) Flow[T, T, NotUsed] {
+	return Flow[T, T, NotUsed]{
+		attach: func(up iterator[T]) (iterator[T], NotUsed) {
+			return newBufferIterator(up, size, strategy), NotUsed{}
+		},
+	}
+}
+
+// Buffer wraps this Flow with a [Buffer] stage appended after its output port.
+// See the package-level [Buffer] function for parameter semantics.
+func (f Flow[In, Out, Mat]) Buffer(size int, strategy OverflowStrategy) Flow[In, Out, Mat] {
+	return Flow[In, Out, Mat]{
+		attach: func(up iterator[In]) (iterator[Out], Mat) {
+			inner, mat := f.attach(up)
+			return newBufferIterator(inner, size, strategy), mat
+		},
+	}
+}
+
+// ─── Throttle ─────────────────────────────────────────────────────────────
+
+// Throttle creates a [Flow] that limits throughput to at most elements per per
+// duration, using a token-bucket algorithm.
+//
+//   - elements — number of elements to emit within each per interval.
+//   - per      — the measurement window (e.g. time.Second).
+//   - burst    — maximum number of tokens that can accumulate, allowing short
+//     bursts above the steady-state rate.  Pass 0 to use elements as the
+//     burst size (i.e. allow one full interval's worth of burst).
+//
+// Example — limit to 100 elements/second with a burst of 10:
+//
+//	stream.Via(src, stream.Throttle[int](100, time.Second, 10))
+func Throttle[T any](elements int, per time.Duration, burst int) Flow[T, T, NotUsed] {
+	return Flow[T, T, NotUsed]{
+		attach: func(up iterator[T]) (iterator[T], NotUsed) {
+			return newThrottleIterator(up, elements, per, burst), NotUsed{}
+		},
+	}
+}
+
+// Throttle wraps this Flow with a [Throttle] stage appended after its output
+// port.  See the package-level [Throttle] function for parameter semantics.
+func (f Flow[In, Out, Mat]) Throttle(elements int, per time.Duration, burst int) Flow[In, Out, Mat] {
+	return Flow[In, Out, Mat]{
+		attach: func(up iterator[In]) (iterator[Out], Mat) {
+			inner, mat := f.attach(up)
+			return newThrottleIterator(inner, elements, per, burst), mat
+		},
+	}
+}
+
+// ─── Delay ────────────────────────────────────────────────────────────────
+
+// Delay creates a [Flow] that introduces a fixed pause of d after receiving
+// each element before forwarding it downstream.
+//
+// This is distinct from back-pressure: the delay is applied regardless of
+// downstream demand and increases end-to-end latency by d per element.
+func Delay[T any](d time.Duration) Flow[T, T, NotUsed] {
+	return Flow[T, T, NotUsed]{
+		attach: func(up iterator[T]) (iterator[T], NotUsed) {
+			return &delayIterator[T]{upstream: up, delay: d}, NotUsed{}
+		},
+	}
+}
+
+// Delay wraps this Flow with a [Delay] stage appended after its output port.
+// See the package-level [Delay] function for parameter semantics.
+func (f Flow[In, Out, Mat]) Delay(d time.Duration) Flow[In, Out, Mat] {
+	return Flow[In, Out, Mat]{
+		attach: func(up iterator[In]) (iterator[Out], Mat) {
+			inner, mat := f.attach(up)
+			return &delayIterator[Out]{upstream: inner, delay: d}, mat
 		},
 	}
 }

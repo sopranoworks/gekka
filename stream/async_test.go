@@ -234,6 +234,153 @@ func TestAsync_SinkAsync_DeliversAll(t *testing.T) {
 	}
 }
 
+// ─── MapAsync ─────────────────────────────────────────────────────────────
+
+// TestMapAsync_OrderPreserved verifies that even when later elements complete
+// their async work faster, results arrive in the original input order.
+// Element i sleeps (N-i)*step ms so the last element finishes first.
+func TestMapAsync_OrderPreserved(t *testing.T) {
+	const (
+		N           = 8
+		parallelism = N // allow all in-flight simultaneously
+		step        = 5 * time.Millisecond
+	)
+
+	result, err := stream.RunWith(
+		stream.MapAsync(stream.FromSlice(makeRange(N)), parallelism, func(n int) <-chan int {
+			ch := make(chan int, 1)
+			go func() {
+				time.Sleep(time.Duration(N-n) * step) // later elements finish first
+				ch <- n
+				close(ch)
+			}()
+			return ch
+		}),
+		stream.Collect[int](),
+		stream.ActorMaterializer{},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != N {
+		t.Fatalf("got %d elements, want %d", len(result), N)
+	}
+	for i, v := range result {
+		if v != i {
+			t.Fatalf("index %d: got %d, want %d — ORDER NOT PRESERVED", i, v, i)
+		}
+	}
+}
+
+// TestMapAsync_AllElementsDelivered verifies that every upstream element
+// results in exactly one downstream emission when parallelism < N.
+func TestMapAsync_AllElementsDelivered(t *testing.T) {
+	const (
+		N           = 20
+		parallelism = 4
+	)
+
+	result, err := stream.RunWith(
+		stream.MapAsync(stream.FromSlice(makeRange(N)), parallelism, func(n int) <-chan int {
+			ch := make(chan int, 1)
+			go func() { ch <- n * 2; close(ch) }()
+			return ch
+		}),
+		stream.Collect[int](),
+		stream.ActorMaterializer{},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != N {
+		t.Fatalf("got %d elements, want %d", len(result), N)
+	}
+	for i, v := range result {
+		if v != i*2 {
+			t.Fatalf("index %d: got %d, want %d", i, v, i*2)
+		}
+	}
+}
+
+// TestMapAsync_DropOnClosedChannel verifies that an element whose channel is
+// closed without sending is silently dropped so the stream continues.
+func TestMapAsync_DropOnClosedChannel(t *testing.T) {
+	src := stream.FromSlice([]int{0, 1, 2, 3, 4})
+
+	result, err := stream.RunWith(
+		stream.MapAsync(src, 3, func(n int) <-chan int {
+			ch := make(chan int, 1)
+			go func() {
+				if n%2 == 0 {
+					ch <- n
+				}
+				close(ch) // close without send for odd elements → drop
+			}()
+			return ch
+		}),
+		stream.Collect[int](),
+		stream.ActorMaterializer{},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []int{0, 2, 4}
+	if len(result) != len(want) {
+		t.Fatalf("got %v, want %v", result, want)
+	}
+	for i, v := range result {
+		if v != want[i] {
+			t.Fatalf("index %d: got %d, want %d", i, v, want[i])
+		}
+	}
+}
+
+// TestMapAsync_UpstreamErrorPropagates verifies that an error from the source
+// terminates the MapAsync stream with that error.
+func TestMapAsync_UpstreamErrorPropagates(t *testing.T) {
+	sentinelErr := errors.New("mapasync upstream failure")
+
+	_, err := stream.RunWith(
+		stream.MapAsync(stream.Failed[int](sentinelErr), 4, func(n int) <-chan int {
+			ch := make(chan int, 1)
+			go func() { ch <- n; close(ch) }()
+			return ch
+		}),
+		stream.Collect[int](),
+		stream.ActorMaterializer{},
+	)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, sentinelErr) {
+		t.Fatalf("expected sentinelErr, got %v", err)
+	}
+}
+
+// TestMapAsync_ParallelismOne verifies that parallelism=1 degenerates to a
+// sequential map delivering all elements in order.
+func TestMapAsync_ParallelismOne(t *testing.T) {
+	const N = 10
+
+	result, err := stream.RunWith(
+		stream.MapAsync(stream.FromSlice(makeRange(N)), 1, func(n int) <-chan int {
+			ch := make(chan int, 1)
+			go func() { ch <- n + 100; close(ch) }()
+			return ch
+		}),
+		stream.Collect[int](),
+		stream.ActorMaterializer{},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for i, v := range result {
+		if v != i+100 {
+			t.Fatalf("index %d: got %d, want %d", i, v, i+100)
+		}
+	}
+}
+
 // TestGraphInterpreter_Go verifies that goroutines registered with a
 // GraphInterpreter are fully awaited by Wait.
 func TestGraphInterpreter_Go(t *testing.T) {

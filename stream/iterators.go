@@ -341,6 +341,116 @@ func (l *logIterator[T]) next() (T, bool, error) {
 	return elem, ok, err
 }
 
+// ─── mapAsyncIterator ─────────────────────────────────────────────────────
+
+// mapAsyncIterator runs fn concurrently on up to parallelism upstream elements
+// and emits results in the original input order.
+//
+// On each pull it eagerly refills the in-flight queue up to capacity, then
+// blocks on the oldest pending channel (head of queue).  If the head channel
+// is closed without sending a value the element is silently dropped and the
+// next pending result is awaited.
+type mapAsyncIterator[In, Out any] struct {
+	upstream    iterator[In]
+	fn          func(In) <-chan Out
+	parallelism int
+	pending     []<-chan Out // ordered queue of in-flight result channels
+	done        bool
+}
+
+func (m *mapAsyncIterator[In, Out]) next() (Out, bool, error) {
+	for {
+		// Eagerly fill the in-flight queue up to capacity.
+		for !m.done && len(m.pending) < m.parallelism {
+			elem, ok, err := m.upstream.next()
+			if err != nil {
+				var zero Out
+				return zero, false, err
+			}
+			if !ok {
+				m.done = true
+				break
+			}
+			m.pending = append(m.pending, m.fn(elem))
+		}
+
+		if len(m.pending) == 0 {
+			// All upstream elements consumed and all results delivered.
+			var zero Out
+			return zero, false, nil
+		}
+
+		// Wait for the oldest in-flight operation (preserves order).
+		ch := m.pending[0]
+		m.pending = m.pending[1:]
+
+		val, ok := <-ch
+		if ok {
+			return val, true, nil
+		}
+		// Channel closed without a value — drop this element and try next.
+	}
+}
+
+// ─── statefulMapConcatIterator ────────────────────────────────────────────
+
+// statefulMapConcatIterator applies a state-bearing function to each upstream
+// element.  The function may return zero or more output elements; they are
+// buffered internally and emitted one by one before the next upstream element
+// is pulled.
+type statefulMapConcatIterator[In, S, Out any] struct {
+	upstream iterator[In]
+	state    S
+	fn       func(S, In) (S, []Out)
+	buf      []Out
+}
+
+func (s *statefulMapConcatIterator[In, S, Out]) next() (Out, bool, error) {
+	for {
+		// Drain any buffered outputs before pulling from upstream.
+		if len(s.buf) > 0 {
+			v := s.buf[0]
+			s.buf = s.buf[1:]
+			return v, true, nil
+		}
+
+		elem, ok, err := s.upstream.next()
+		if !ok || err != nil {
+			var zero Out
+			return zero, ok, err
+		}
+
+		newState, outputs := s.fn(s.state, elem)
+		s.state = newState
+		s.buf = outputs
+		// Loop: drain buf on the next iteration.
+	}
+}
+
+// ─── filterMapIterator ────────────────────────────────────────────────────
+
+// filterMapIterator applies a partial function to each upstream element.
+// Elements for which the function returns false are silently dropped.
+type filterMapIterator[In, Out any] struct {
+	upstream iterator[In]
+	pf       func(In) (Out, bool)
+}
+
+func (f *filterMapIterator[In, Out]) next() (Out, bool, error) {
+	for {
+		elem, ok, err := f.upstream.next()
+		if !ok || err != nil {
+			var zero Out
+			return zero, ok, err
+		}
+		out, keep := f.pf(elem)
+		if keep {
+			return out, true, nil
+		}
+		// Drop and pull the next element.
+	}
+}
+
 // ─── groupBy helpers ──────────────────────────────────────────────────────
 
 // newGroupByIterator pre-collects all elements from upstream, groups them by

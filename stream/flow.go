@@ -223,6 +223,114 @@ func (f Flow[In, Out, Mat]) Delay(d time.Duration) Flow[In, Out, Mat] {
 	}
 }
 
+// ─── MapAsync ─────────────────────────────────────────────────────────────
+
+// MapAsync applies fn to each element of src concurrently (up to parallelism
+// goroutines in-flight) and emits results in the original input order.
+//
+// fn must return a channel that will deliver exactly one value (the result)
+// and then close.  If fn closes the channel without sending a value the
+// corresponding element is silently dropped.
+//
+// The parallelism parameter controls how many calls to fn may be outstanding
+// simultaneously.  When the in-flight queue is full MapAsync blocks on the
+// oldest pending result before pulling the next upstream element, so
+// back-pressure is preserved.
+//
+// MapAsync is a package-level function rather than a method on [Flow] because
+// Go generics do not allow methods to introduce additional type parameters.
+// Use [Via] to compose it with an existing flow:
+//
+//	result, err := stream.RunWith(
+//	    stream.MapAsync(stream.Via(src, preprocess), 4, asyncFn),
+//	    stream.Collect[Out](),
+//	    stream.ActorMaterializer{},
+//	)
+func MapAsync[In, Out any](src Source[In, NotUsed], parallelism int, fn func(In) <-chan Out) Source[Out, NotUsed] {
+	return Source[Out, NotUsed]{
+		factory: func() (iterator[Out], NotUsed) {
+			upstream, _ := src.factory()
+			return &mapAsyncIterator[In, Out]{
+				upstream:    upstream,
+				fn:          fn,
+				parallelism: parallelism,
+				pending:     make([]<-chan Out, 0, parallelism),
+			}, NotUsed{}
+		},
+	}
+}
+
+// ─── StatefulMapConcat ────────────────────────────────────────────────────
+
+// StatefulMapConcat threads explicit state through a flat-map transformation.
+//
+//   - create is called once per materialization to initialise state S.
+//   - fn is called for each upstream element with the current state and the
+//     element.  It returns the next state and a (possibly empty) slice of
+//     output elements.
+//   - Output elements are emitted one by one before the next upstream element
+//     is pulled.
+//
+// This operator subsumes both stateful Map (return a singleton slice) and
+// stateful Filter (return an empty or singleton slice).
+//
+// StatefulMapConcat is a package-level function rather than a method on [Flow]
+// because Go generics do not allow methods to introduce additional type
+// parameters.
+//
+// Example — emit a running sum after each element:
+//
+//	src := stream.FromSlice([]int{1, 2, 3, 4})
+//	out := stream.StatefulMapConcat(src,
+//	    func() int { return 0 },
+//	    func(sum, n int) (int, []int) { return sum + n, []int{sum + n} },
+//	)
+//	// emits 1, 3, 6, 10
+func StatefulMapConcat[In, S, Out any](
+	src Source[In, NotUsed],
+	create func() S,
+	fn func(S, In) (S, []Out),
+) Source[Out, NotUsed] {
+	return Source[Out, NotUsed]{
+		factory: func() (iterator[Out], NotUsed) {
+			upstream, _ := src.factory()
+			return &statefulMapConcatIterator[In, S, Out]{
+				upstream: upstream,
+				state:    create(),
+				fn:       fn,
+			}, NotUsed{}
+		},
+	}
+}
+
+// ─── FilterMap ────────────────────────────────────────────────────────────
+
+// FilterMap applies a partial function to each element of src.  Elements for
+// which pf returns false are dropped; elements for which it returns true are
+// emitted with the transformed value.
+//
+// This operator is analogous to Scala's collect on a stream: it combines
+// type-safe filtering and transformation in a single pass.
+//
+// FilterMap is named to avoid shadowing the [Collect] sink constructor.
+//
+// Example — keep only even numbers and halve them:
+//
+//	src := stream.FromSlice([]int{1, 2, 3, 4, 5, 6})
+//	out := stream.FilterMap(src, func(n int) (int, bool) {
+//	    if n%2 == 0 { return n / 2, true }
+//	    return 0, false
+//	})
+//	// emits 1, 2, 3
+func FilterMap[In, Out any](src Source[In, NotUsed], pf func(In) (Out, bool)) Source[Out, NotUsed] {
+	return Source[Out, NotUsed]{
+		factory: func() (iterator[Out], NotUsed) {
+			upstream, _ := src.factory()
+			return &filterMapIterator[In, Out]{upstream: upstream, pf: pf}, NotUsed{}
+		},
+	}
+}
+
 // ─── GroupBy ──────────────────────────────────────────────────────────────
 
 // GroupBy distributes elements from src to keyed sub-streams.  The key

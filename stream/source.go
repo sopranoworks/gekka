@@ -80,6 +80,28 @@ func (s Source[T, Mat]) Take(n int) Source[T, Mat] {
 	}
 }
 
+// ─── Supervision ──────────────────────────────────────────────────────────
+
+// WithSupervisionStrategy wraps this Source with a [supervisedIterator] that
+// applies decider to every error emitted by the Source's iterator.
+// See [Flow.WithSupervisionStrategy] for directive semantics.
+func (s Source[T, Mat]) WithSupervisionStrategy(decider Decider) Source[T, Mat] {
+	return Source[T, Mat]{
+		factory: func() (iterator[T], Mat) {
+			inner, mat := s.factory()
+			remake := func() iterator[T] {
+				newInner, _ := s.factory()
+				return newInner
+			}
+			return &supervisedIterator[T]{
+				inner:   inner,
+				decider: decider,
+				remake:  remake,
+			}, mat
+		},
+	}
+}
+
 // ─── Async boundary ───────────────────────────────────────────────────────
 
 // Async inserts an asynchronous boundary after this Source.  Elements are

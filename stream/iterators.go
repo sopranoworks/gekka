@@ -88,6 +88,30 @@ func (t *takeIterator[T]) next() (T, bool, error) {
 	return elem, ok, err
 }
 
+// ─── mapEIterator ─────────────────────────────────────────────────────────
+
+// mapEIterator applies an error-returning function to each upstream element.
+// If fn returns an error the iterator propagates it so that an enclosing
+// [supervisedIterator] can apply the configured [Decider].
+type mapEIterator[In, Out any] struct {
+	upstream iterator[In]
+	fn       func(In) (Out, error)
+}
+
+func (m *mapEIterator[In, Out]) next() (Out, bool, error) {
+	in, ok, err := m.upstream.next()
+	if !ok || err != nil {
+		var zero Out
+		return zero, ok, err
+	}
+	out, err := m.fn(in)
+	if err != nil {
+		var zero Out
+		return zero, false, err
+	}
+	return out, true, nil
+}
+
 // ─── errorIterator ────────────────────────────────────────────────────────
 
 // errorIterator immediately fails with an error on the first pull.

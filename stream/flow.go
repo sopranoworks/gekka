@@ -32,6 +32,20 @@ func Map[In, Out any](fn func(In) Out) Flow[In, Out, NotUsed] {
 	}
 }
 
+// MapE creates a Flow that transforms each element using fn, where fn may
+// return an error.  On error the default behaviour is to fail the stream
+// ([Stop]).  Attach a supervision strategy with
+// [Flow.WithSupervisionStrategy] to change this:
+//
+//	flow := stream.MapE(fn).WithSupervisionStrategy(stream.ResumeDecider)
+func MapE[In, Out any](fn func(In) (Out, error)) Flow[In, Out, NotUsed] {
+	return Flow[In, Out, NotUsed]{
+		attach: func(up iterator[In]) (iterator[Out], NotUsed) {
+			return &mapEIterator[In, Out]{upstream: up, fn: fn}, NotUsed{}
+		},
+	}
+}
+
 // Filter creates a Flow that only passes elements satisfying pred.
 // The element type is unchanged and the materialized value is NotUsed.
 func Filter[T any](pred func(T) bool) Flow[T, T, NotUsed] {
@@ -47,6 +61,35 @@ func Take[T any](n int) Flow[T, T, NotUsed] {
 	return Flow[T, T, NotUsed]{
 		attach: func(up iterator[T]) (iterator[T], NotUsed) {
 			return &takeIterator[T]{upstream: up, n: n}, NotUsed{}
+		},
+	}
+}
+
+// ─── Supervision ──────────────────────────────────────────────────────────
+
+// WithSupervisionStrategy wraps this Flow with a [supervisedIterator] that
+// applies decider to every error emitted by the Flow's output iterator.
+//
+//   - [Stop]    — propagate the error (default, equivalent to no strategy).
+//   - [Resume]  — swallow the error and continue with the next upstream element.
+//   - [Restart] — recreate the Flow's inner stage from scratch and continue.
+//
+// WithSupervisionStrategy composes with [Async]:
+//
+//	stream.MapE(fn).WithSupervisionStrategy(stream.ResumeDecider).Async()
+func (f Flow[In, Out, Mat]) WithSupervisionStrategy(decider Decider) Flow[In, Out, Mat] {
+	return Flow[In, Out, Mat]{
+		attach: func(upstream iterator[In]) (iterator[Out], Mat) {
+			inner, mat := f.attach(upstream)
+			remake := func() iterator[Out] {
+				newInner, _ := f.attach(upstream)
+				return newInner
+			}
+			return &supervisedIterator[Out]{
+				inner:   inner,
+				decider: decider,
+				remake:  remake,
+			}, mat
 		},
 	}
 }

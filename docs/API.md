@@ -1,4 +1,4 @@
-# Gekka API Reference (v0.7.0)
+# Gekka API Reference (v0.11.0)
 
 This document provides a comprehensive reference for the Gekka public API.
 
@@ -301,3 +301,105 @@ started on `MonitoringPort`:
 | `GET /healthz` | `200 {"status":"ok"}` when associated and cluster-joined; `503` otherwise |
 | `GET /metrics` | JSON snapshot of internal counters |
 | `GET /metrics?fmt=prom` | Prometheus text exposition format |
+
+---
+
+## Stream Package (`stream`)
+
+For a full narrative guide see [docs/STREAMS.md](STREAMS.md).
+
+### Source constructors
+
+| Function | Returns | Description |
+|----------|---------|-------------|
+| `FromSlice[T](s []T)` | `Source[T, NotUsed]` | Emit all elements from a slice |
+| `FromIteratorFunc[T](fn)` | `Source[T, NotUsed]` | Custom pull function |
+| `Repeat[T](elem T)` | `Source[T, NotUsed]` | Infinite; combine with `.Take(n)` |
+| `Failed[T](err)` | `Source[T, NotUsed]` | Immediately fails |
+| `ActorSource[T](bufSize)` | `(Source, TypedActorRef[T], func())` | Push-fed source |
+
+### Flow operators (type-preserving methods)
+
+| Method | Description |
+|--------|-------------|
+| `Map(fn)` | Transform each element |
+| `MapE(fn)` | Transform; may return error |
+| `Filter(pred)` | Keep elements matching pred |
+| `Take(n)` / `Drop(n)` | Limit / skip elements |
+| `Delay(d)` / `Throttle(n, per, burst)` | Flow control |
+| `Buffer(size, strategy)` | Bounded buffer |
+| `Async()` | Insert async goroutine boundary |
+| `Log(name)` | Debug logging of each element |
+| `WithSupervisionStrategy(decider)` | Error handling policy |
+| `Recover(fn)` | Emit fallback element on error |
+| `RecoverWith(fn)` | Failover to backup source on error |
+
+### Package-level Flow functions (type-changing)
+
+| Function | Description |
+|----------|-------------|
+| `MapAsync[In,Out](src, n, fn)` | Ordered parallel mapping |
+| `FilterMap[In,Out](src, pf)` | Filter and transform in one step |
+| `StatefulMapConcat[In,S,Out](src, init, fn)` | Stateful flat-map |
+| `Grouped[T](src, n)` | Batch into `[]T` slices of size n |
+| `GroupedWithin[T](src, n, d)` | Batch by count or time |
+| `GroupBy[T](src, max, key)` | Split into keyed sub-streams |
+
+### Graph operators
+
+| Function | Description |
+|----------|-------------|
+| `Merge[T](sources...)` | Fan-in; non-deterministic order |
+| `Broadcast[T](src, fanOut, buf)` | Fan-out; every branch gets all elements |
+| `Balance[T](src, fanOut, buf)` | Fan-out; work-stealing distribution |
+| `Zip[T1,T2](s1, s2)` | Pair elements; completes on shorter |
+| `ZipWith[T1,T2,Out](s1, s2, fn)` | Zip with combine function |
+| `Concat[T](s1, s2)` | Sequential: drain s1 then s2 |
+
+### Sink constructors
+
+| Function | Returns | Description |
+|----------|---------|-------------|
+| `Collect[T]()` | `Sink[T, []T]` | Accumulate all into a slice |
+| `Foreach[T](fn)` | `Sink[T, NotUsed]` | Call fn per element |
+| `ForeachErr[T](fn)` | `Sink[T, NotUsed]` | Like Foreach; fn may fail stream |
+| `Ignore[T]()` | `Sink[T, NotUsed]` | Discard all |
+| `Head[T]()` | `Sink[T, *T]` | First element only |
+| `SinkToFile(path)` | `Sink[[]byte, *Future[int64]]` | Write chunks to file |
+
+### Resilience
+
+| Function | Description |
+|----------|-------------|
+| `RestartSource(settings, factory)` | Restart source on failure with backoff |
+| `RestartFlow(settings, factory)` | Restart flow on failure with backoff |
+
+### KillSwitch
+
+| Function / Method | Description |
+|----------|-------------|
+| `NewKillSwitch[T]()` | Returns `(Flow[T,T,NotUsed], KillSwitch)` |
+| `KillSwitch.Shutdown()` | Complete stream cleanly |
+| `KillSwitch.Abort(err)` | Fail stream with err |
+| `NewSharedKillSwitch()` | Controls multiple streams |
+| `SharedKillSwitchFlow[T](ks)` | Attach to a stream |
+
+### File IO
+
+| Function | Returns | Description |
+|----------|---------|-------------|
+| `SourceFromFile(path, chunkSize)` | `(Source[[]byte, NotUsed], *Future[int64])` | Read file in chunks |
+| `SinkToFile(path)` | `Sink[[]byte, *Future[int64]]` | Write chunks to file |
+
+### Remote Streaming (StreamRefs)
+
+| Function | Returns | Description |
+|----------|---------|-------------|
+| `ToSourceRef[T](src, encode, decode)` | `(*TypedSourceRef[T], func(), error)` | Materialize source as stage actor |
+| `FromSourceRef[T](ref)` | `Source[T, NotUsed]` | Subscribe to remote source |
+| `ToSinkRef[T](sink, decode, encode)` | `(*TypedSinkRef[T], func(), error)` | Materialize sink as stage actor |
+| `FromSinkRef[T](ref)` | `Sink[T, NotUsed]` | Push to remote sink |
+| `NewTcpListener[T](addr, decode)` | `(*TcpListener[T], error)` | Raw TCP receive server |
+| `TcpOut[T](ref, encode)` | `Sink[T, NotUsed]` | Raw TCP send client |
+| `NewTcpListenerWithTLS[T](addr, decode, cfg)` | `(*TcpListener[T], error)` | TLS TCP receive server |
+| `TcpOutWithTLS[T](ref, encode, cfg)` | `Sink[T, NotUsed]` | TLS TCP send client |

@@ -24,7 +24,8 @@ Configuration is loaded via [`gekka-config`](https://github.com/sopranoworks/gek
 - **Reliable Delivery** — At-least-once delivery (Serializer ID 36) compatible with Pekko.
 - **Typed Actors (Go Generics)** — Compile-time message type safety with **Timers** and **Stash** support.
 - **Actor Persistence** — State recovery via event journaling and snapshotting.
-- **Gekka Streams** — Reactive streams implementation with backpressure-aware async stages.
+- **Gekka Streams** — Full reactive-streams DSL: Source/Flow/Sink, async boundaries, graph operators (Merge, Broadcast, Balance, Zip, GroupBy), resilience (Restart, Recover), and File IO. See [docs/STREAMS.md](docs/STREAMS.md).
+- **Distributed Streams (StreamRefs)** — Share a `Source` or `Sink` across network nodes with end-to-end back-pressure via `TypedSourceRef` / `TypedSinkRef`. TLS-encrypted TCP transport supported.
 - **Kubernetes-native Discovery** — Automatic cluster formation via K8s API or DNS SRV.
 - **Zero-copy Serialization** — High-performance transport framing with 8.5x faster throughput.
 - **Distributed Pub/Sub** — Decentralized messaging with GZIP-compressed gossip (Serializer ID 9).

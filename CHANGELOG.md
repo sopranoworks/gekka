@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-03-21
+
+### Added
+
+- 🌊 **Complete Reactive Streams DSL** (`stream` package): Full Source/Flow/Sink pipeline model with pull-based back-pressure. New operators in this release:
+  - **Basic**: `Repeat`, `MapAsync` (ordered parallel), `StatefulMapConcat`, `FilterMap`
+  - **Batching**: `Grouped`, `GroupedWithin` (count or time flush)
+  - **Graph**: `Merge`, `Broadcast`, `Balance`, `Zip`, `ZipWith`, `Concat`, `GroupBy`
+  - **Resilience**: `Recover`, `RecoverWith`, `RestartSource`, `RestartFlow` (backoff with jitter)
+  - **Flow control**: `KillSwitch`, `SharedKillSwitch`, `Buffer`, `Throttle`, `Delay`
+  - **File IO**: `SourceFromFile`, `SinkToFile`, `Future[T]` promise type
+  - **Actor integration**: `Ask` flow, `ActorSource` with overflow strategies, `FromTypedActorRef` sink
+  - **Supervision**: `WithSupervisionStrategy` + `Decider` (Stop / Resume / Restart)
+- 🌐 **Distributed Streams — StreamRefs**: Share a `Source` or `Sink` across network nodes with end-to-end demand-driven back-pressure.
+  - `TypedSourceRef[T]` / `ToSourceRef` / `FromSourceRef` — materialize a local source as a remote-subscribable stage actor (TCP server)
+  - `TypedSinkRef[T]` / `ToSinkRef` / `FromSinkRef` — materialize a local sink as a remote-pushable stage actor
+  - `NewTcpListenerWithTLS` / `TcpOutWithTLS` — TLS-encrypted TCP streaming via `crypto/tls`
+  - Wire protocol compatible with Pekko's `StreamRefSerializer` (ID 36)
+- 📡 **Internal Heartbeat RTT Monitoring**: Measure round-trip latency between cluster nodes via the internal heartbeat channel; exposed via `gekka-cli`.
+- 📖 **Stream Developer Guide**: Comprehensive reference at `docs/STREAMS.md` covering all operators, codecs, and remote streaming patterns.
+
+### Changed
+
+- `stream.SinkRef` and `stream.SourceRef` structs promoted to typed wrappers (`TypedSinkRef[T]`, `TypedSourceRef[T]`) with bundled codecs for simpler API usage.
+
+---
+
 ## [0.10.0] - 2026-03-20
 
 ### Added

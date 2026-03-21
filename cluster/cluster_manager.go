@@ -1627,7 +1627,7 @@ func (cm *ClusterManager) CheckReachability() {
 		phi := cm.Fd.Phi(key)
 
 		// Pekko Cluster logic: update ObserverReachability
-		if phi > cm.Fd.threshold {
+		if !cm.Fd.IsAvailable(key) {
 			// Mark as UNREACHABLE
 			log.Printf("FailureDetector: node %s is UNREACHABLE (phi=%.2f)", key, phi)
 			cm.Mu.Lock()

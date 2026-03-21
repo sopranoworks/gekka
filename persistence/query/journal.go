@@ -44,12 +44,18 @@ type NoOffset struct{}
 func (o NoOffset) IsAfter(other Offset) bool { return false }
 
 // EventEnvelope wraps a persistent event with metadata.
+//
+// TraceContext carries the W3C TraceContext headers that were stored with the
+// original PersistentRepr when the event was written.  Projections should
+// extract this context to create child spans linked to the write-side trace,
+// enabling a single TraceID to span the entire command-to-projection pipeline.
 type EventEnvelope struct {
 	Offset        Offset
 	PersistenceID string
 	SequenceNr    uint64
 	Event         any
 	Timestamp     int64
+	TraceContext  map[string]string // W3C TraceContext headers propagated from the write side
 }
 
 // ReadJournal is the interface for querying events from a persistence journal.

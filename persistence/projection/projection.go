@@ -16,6 +16,8 @@ import (
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/persistence/query"
 	"github.com/sopranoworks/gekka/stream"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 )
 
 // Projection represents a component that processes an event stream and maintains
@@ -32,6 +34,8 @@ type SourceProvider interface {
 
 // Handler is a functional interface for processing a single event envelope.
 type Handler func(envelope query.EventEnvelope) error
+
+const projectionTracingScope = "github.com/sopranoworks/gekka/persistence/projection"
 
 // projectionRunner is the default implementation of Projection.
 type projectionRunner struct {
@@ -105,9 +109,23 @@ func (r *projectionRunner) Run(ctx context.Context) error {
 func (r *projectionRunner) runManual(ctx context.Context, src stream.Source[query.EventEnvelope, stream.NotUsed]) error {
 	// Use SyncMaterializer for synchronous execution.
 	m := stream.SyncMaterializer{}
-	
+
+	tracer := otel.Tracer(projectionTracingScope)
+	propagator := otel.GetTextMapPropagator()
+
 	_, err := stream.RunWith(src, stream.ForeachErr(func(env query.EventEnvelope) error {
-		if err := r.handler(env); err != nil {
+		// Extract the write-side trace context stored in the event envelope and
+		// start a child span so the projection handling is linked to the original
+		// command's trace.
+		eventCtx := ctx
+		if len(env.TraceContext) > 0 {
+			eventCtx = propagator.Extract(ctx, propagation.MapCarrier(env.TraceContext))
+		}
+		_, span := tracer.Start(eventCtx, "Projection.Handle")
+
+		err := r.handler(env)
+		span.End()
+		if err != nil {
 			return err
 		}
 		// Save offset after successful processing.
@@ -116,6 +134,6 @@ func (r *projectionRunner) runManual(ctx context.Context, src stream.Source[quer
 		}
 		return nil
 	}), m)
-	
+
 	return err
 }

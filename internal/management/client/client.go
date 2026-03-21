@@ -12,6 +12,7 @@
 package client
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -69,4 +70,51 @@ func (c *Client) Members() ([]MemberInfo, error) {
 		return nil, fmt.Errorf("client: parse response: %w", err)
 	}
 	return members, nil
+}
+
+// ShardDistribution calls GET /cluster/sharding/{typeName} and returns the
+// shard→region allocation map.  Returns an error when the server responds 404
+// (no coordinator registered) or any other non-200 status.
+func (c *Client) ShardDistribution(typeName string) (map[string]string, error) {
+	endpoint := c.baseURL + "/cluster/sharding/" + typeName
+	resp, err := c.httpClient.Get(endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("client: GET %s: %w", endpoint, err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("client: read response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("client: server returned %s: %s", resp.Status, body)
+	}
+	var dist map[string]string
+	if err := json.Unmarshal(body, &dist); err != nil {
+		return nil, fmt.Errorf("client: parse response: %w", err)
+	}
+	return dist, nil
+}
+
+// RebalanceShard calls POST /cluster/sharding/{typeName}/rebalance and
+// requests that shardID be moved to targetRegion.
+func (c *Client) RebalanceShard(typeName, shardID, targetRegion string) error {
+	payload, _ := json.Marshal(map[string]string{
+		"shard_id":      shardID,
+		"target_region": targetRegion,
+	})
+	endpoint := c.baseURL + "/cluster/sharding/" + typeName + "/rebalance"
+	resp, err := c.httpClient.Post(endpoint, "application/json", bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("client: POST %s: %w", endpoint, err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("client: read response: %w", err)
+	}
+	if resp.StatusCode != http.StatusAccepted {
+		return fmt.Errorf("client: server returned %s: %s", resp.Status, body)
+	}
+	return nil
 }

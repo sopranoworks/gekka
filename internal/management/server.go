@@ -8,6 +8,28 @@
 
 // Package management implements the Cluster HTTP Management API.
 //
+// Additional endpoints added in Phase 13:
+//
+//	GET /cluster/services
+//	    Returns a JSON object mapping service names to their registered address
+//	    slices, sourced from the Distributed Data ServiceDiscovery ORSets.
+//
+//	GET /cluster/config
+//	    Returns the current cluster-wide key/value configuration as a JSON
+//	    object, sourced from the Distributed Data ConfigRegistry LWWMap.
+//
+//	POST /cluster/config
+//	    Updates a single configuration key.  Body: {"key":"<k>","value":<v>}.
+//
+//	GET /cluster/sharding/{typeName}
+//	    Returns the current shard→region allocation map for the given entity
+//	    type, sourced from the registered ShardCoordinator snapshot.
+//	    Responds 404 when no coordinator has been registered for typeName.
+//
+//	GET /dashboard
+//	    A minimal browser dashboard that renders all of the above in real time.
+// Package management implements the Cluster HTTP Management API.
+//
 // It exposes REST endpoints that allow operators and tools to inspect and
 // manage the live cluster state without having to connect over the Artery
 // protocol.  The endpoints follow Pekko Management HTTP API conventions.
@@ -36,6 +58,7 @@ package management
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -49,6 +72,9 @@ import (
 	"github.com/sopranoworks/gekka/internal/core"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 )
+
+//go:embed dashboard.html
+var dashboardHTML []byte
 
 // ClusterStateProvider is the subset of the Cluster that the ManagementServer
 // needs.  Keeping this narrow allows the server to be tested with a lightweight
@@ -70,6 +96,23 @@ type ClusterStateProvider interface {
 	// QUARANTINED state — a sign of a UID conflict caused by a node restart
 	// or network split.  Used by the /health/ready probe.
 	HasQuarantinedAssociation() bool
+
+	// Services returns all currently registered service names and their
+	// address slices, sourced from the Distributed Data ORSets.
+	Services() map[string][]string
+
+	// ConfigEntries returns the current cluster-wide key/value configuration
+	// sourced from the Distributed Data LWWMap.
+	ConfigEntries() map[string]any
+
+	// UpdateConfigEntry sets configKey to value in the cluster configuration.
+	UpdateConfigEntry(configKey string, value any)
+
+	// ShardDistribution returns the shard→region allocation map for the given
+	// entity type.  Returns nil, false when no coordinator is registered for
+	// typeName (i.e. this node is not the coordinator for that type, or
+	// StartSharding has not been called).
+	ShardDistribution(typeName string) (map[string]string, bool)
 }
 
 // MemberInfo is the JSON representation of a single cluster member returned by
@@ -132,6 +175,10 @@ func NewManagementServer(provider ClusterStateProvider, hostname string, port in
 	// the list endpoint and any sub-path (address lookup / write operations).
 	mux.HandleFunc("/cluster/members/", ms.handleMemberByAddress)
 	mux.HandleFunc("/cluster/members", ms.handleMembers)
+	mux.HandleFunc("/cluster/services", ms.handleServices)
+	mux.HandleFunc("/cluster/config", ms.handleConfig)
+	mux.HandleFunc("/cluster/sharding/", ms.handleSharding)
+	mux.HandleFunc("/dashboard", ms.handleDashboard)
 
 	if enableHealth {
 		mux.HandleFunc("/health/alive", ms.handleAlive)
@@ -279,6 +326,99 @@ func (ms *ManagementServer) handleDownMember(w http.ResponseWriter, address stri
 		return
 	}
 	writeOK(w, fmt.Sprintf("member %s marked as Down", address))
+}
+
+// ── Service-discovery handler ─────────────────────────────────────────────────
+
+// handleServices serves GET /cluster/services — returns all registered service
+// names and their address lists from the Distributed Data ORSets.
+func (ms *ManagementServer) handleServices(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	svc := ms.provider.Services()
+	w.Header().Set("Content-Type", "application/json")
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	enc.Encode(svc) //nolint:errcheck
+}
+
+// ── Config handler ────────────────────────────────────────────────────────────
+
+// handleConfig serves GET and POST /cluster/config.
+//
+//   - GET  — returns the full cluster configuration map.
+//   - POST — updates a single key; body must be {"key":"<k>","value":<v>}.
+func (ms *ManagementServer) handleConfig(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		entries := ms.provider.ConfigEntries()
+		w.Header().Set("Content-Type", "application/json")
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		enc.Encode(entries) //nolint:errcheck
+
+	case http.MethodPost:
+		var body struct {
+			Key   string `json:"key"`
+			Value any    `json:"value"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if body.Key == "" {
+			http.Error(w, `bad request: "key" is required`, http.StatusBadRequest)
+			return
+		}
+		ms.provider.UpdateConfigEntry(body.Key, body.Value)
+		writeOK(w, fmt.Sprintf("config[%s] updated", body.Key))
+
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// ── Sharding handler ──────────────────────────────────────────────────────────
+
+// handleSharding serves GET /cluster/sharding/{typeName} — returns the
+// shard→region allocation map for the given entity type.
+// Responds 404 when no coordinator is registered for typeName.
+func (ms *ManagementServer) handleSharding(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	typeName := strings.TrimPrefix(r.URL.Path, "/cluster/sharding/")
+	if typeName == "" {
+		http.Error(w, `bad request: typeName is required`, http.StatusBadRequest)
+		return
+	}
+	dist, ok := ms.provider.ShardDistribution(typeName)
+	if !ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprintf(w, `{"error":"no coordinator registered for type %q"}`+"\n", typeName) //nolint:errcheck
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	enc.Encode(dist) //nolint:errcheck
+}
+
+// ── Dashboard handler ─────────────────────────────────────────────────────────
+
+// handleDashboard serves GET /dashboard — returns the embedded HTML dashboard.
+func (ms *ManagementServer) handleDashboard(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write(dashboardHTML) //nolint:errcheck
 }
 
 // ── Health-check handlers ─────────────────────────────────────────────────────

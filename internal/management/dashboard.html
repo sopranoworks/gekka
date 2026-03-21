@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gekka Cluster Dashboard</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0f1117; color: #e2e8f0; min-height: 100vh; }
+  header { background: #1a1f2e; border-bottom: 1px solid #2d3748; padding: 14px 24px; display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 1.2rem; font-weight: 600; letter-spacing: .02em; }
+  .badge { font-size: .7rem; background: #2d3748; border-radius: 4px; padding: 2px 7px; color: #90cdf4; }
+  .refresh-btn { margin-left: auto; background: #2b6cb0; border: none; color: #fff; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: .85rem; }
+  .refresh-btn:hover { background: #2c5282; }
+  main { padding: 24px; display: grid; gap: 24px; }
+  section { background: #1a1f2e; border: 1px solid #2d3748; border-radius: 10px; overflow: hidden; }
+  section h2 { padding: 12px 18px; font-size: .9rem; font-weight: 600; background: #141824; border-bottom: 1px solid #2d3748; text-transform: uppercase; letter-spacing: .06em; color: #90cdf4; }
+  table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+  th { padding: 8px 14px; text-align: left; color: #718096; font-weight: 500; background: #141824; border-bottom: 1px solid #2d3748; }
+  td { padding: 8px 14px; border-bottom: 1px solid #1e2535; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: #1e2535; }
+  .status-up    { color: #68d391; font-weight: 600; }
+  .status-down  { color: #fc8181; font-weight: 600; }
+  .status-other { color: #f6ad55; font-weight: 600; }
+  .reach-yes { color: #68d391; }
+  .reach-no  { color: #fc8181; }
+  .empty { color: #4a5568; padding: 14px 18px; font-size: .85rem; font-style: italic; }
+  .config-form { padding: 14px 18px; display: flex; gap: 8px; flex-wrap: wrap; border-top: 1px solid #2d3748; }
+  .config-form input { background: #0f1117; border: 1px solid #2d3748; color: #e2e8f0; padding: 6px 10px; border-radius: 5px; font-size: .85rem; flex: 1; min-width: 120px; }
+  .config-form input::placeholder { color: #4a5568; }
+  .config-form button { background: #276749; border: none; color: #fff; padding: 6px 14px; border-radius: 5px; cursor: pointer; font-size: .85rem; }
+  .config-form button:hover { background: #2f855a; }
+  .toast { position: fixed; bottom: 20px; right: 20px; background: #2d3748; color: #e2e8f0; padding: 10px 18px; border-radius: 8px; font-size: .85rem; opacity: 0; transition: opacity .3s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+  .shard-form { padding: 10px 18px; display: flex; gap: 8px; border-bottom: 1px solid #2d3748; }
+  .shard-form input { background: #0f1117; border: 1px solid #2d3748; color: #e2e8f0; padding: 5px 10px; border-radius: 5px; font-size: .85rem; flex: 1; }
+  .shard-form input::placeholder { color: #4a5568; }
+  .shard-form button { background: #44337a; border: none; color: #fff; padding: 5px 12px; border-radius: 5px; cursor: pointer; font-size: .85rem; }
+  .shard-form button:hover { background: #553c9a; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Gekka Cluster Dashboard</h1>
+  <span class="badge">Management API</span>
+  <button class="refresh-btn" onclick="loadAll()">↺ Refresh</button>
+</header>
+
+<main>
+
+  <!-- Members -->
+  <section>
+    <h2>Cluster Members</h2>
+    <table>
+      <thead><tr><th>Address</th><th>Status</th><th>DC</th><th>Roles</th><th>Reachable</th><th>Latency</th></tr></thead>
+      <tbody id="members-body"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </section>
+
+  <!-- Services -->
+  <section>
+    <h2>Service Discovery</h2>
+    <table>
+      <thead><tr><th>Service</th><th>Addresses</th></tr></thead>
+      <tbody id="services-body"><tr><td colspan="2" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </section>
+
+  <!-- Config -->
+  <section>
+    <h2>Cluster Config</h2>
+    <table>
+      <thead><tr><th>Key</th><th>Value</th></tr></thead>
+      <tbody id="config-body"><tr><td colspan="2" class="empty">Loading…</td></tr></tbody>
+    </table>
+    <div class="config-form">
+      <input id="cfg-key"   placeholder="key" />
+      <input id="cfg-value" placeholder="value" />
+      <button onclick="updateConfig()">Set</button>
+    </div>
+  </section>
+
+  <!-- Sharding -->
+  <section>
+    <h2>Shard Distribution</h2>
+    <div class="shard-form">
+      <input id="shard-type" placeholder="entity typeName (e.g. Cart)" />
+      <button onclick="loadShards()">Load</button>
+    </div>
+    <table>
+      <thead><tr><th>Shard ID</th><th>Region Path</th></tr></thead>
+      <tbody id="shards-body"><tr><td colspan="2" class="empty">Enter a typeName above and click Load.</td></tr></tbody>
+    </table>
+  </section>
+
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const BASE = '';
+
+function statusClass(s) {
+  if (s === 'Up') return 'status-up';
+  if (s === 'Down' || s === 'Removed') return 'status-down';
+  return 'status-other';
+}
+
+async function loadMembers() {
+  const tbody = document.getElementById('members-body');
+  try {
+    const r = await fetch(BASE + '/cluster/members');
+    const data = await r.json();
+    if (!data.length) { tbody.innerHTML = '<tr><td colspan="6" class="empty">No members.</td></tr>'; return; }
+    tbody.innerHTML = data.map(m => `
+      <tr>
+        <td><code>${m.address}</code></td>
+        <td class="${statusClass(m.status)}">${m.status}</td>
+        <td>${m.dc || 'default'}</td>
+        <td>${(m.roles||[]).join(', ') || '—'}</td>
+        <td class="${m.reachable ? 'reach-yes' : 'reach-no'}">${m.reachable ? '✓' : '✗'}</td>
+        <td>${m.latency_ms != null ? m.latency_ms + ' ms' : '—'}</td>
+      </tr>`).join('');
+  } catch(e) { tbody.innerHTML = `<tr><td colspan="6" class="empty">Error: ${e}</td></tr>`; }
+}
+
+async function loadServices() {
+  const tbody = document.getElementById('services-body');
+  try {
+    const r = await fetch(BASE + '/cluster/services');
+    const data = await r.json();
+    const keys = Object.keys(data || {});
+    if (!keys.length) { tbody.innerHTML = '<tr><td colspan="2" class="empty">No services registered.</td></tr>'; return; }
+    tbody.innerHTML = keys.map(k =>
+      `<tr><td><strong>${k}</strong></td><td>${(data[k]||[]).join('<br>')}</td></tr>`
+    ).join('');
+  } catch(e) { tbody.innerHTML = `<tr><td colspan="2" class="empty">Error: ${e}</td></tr>`; }
+}
+
+async function loadConfig() {
+  const tbody = document.getElementById('config-body');
+  try {
+    const r = await fetch(BASE + '/cluster/config');
+    const data = await r.json();
+    const keys = Object.keys(data || {});
+    if (!keys.length) { tbody.innerHTML = '<tr><td colspan="2" class="empty">No configuration entries.</td></tr>'; return; }
+    tbody.innerHTML = keys.map(k =>
+      `<tr><td><code>${k}</code></td><td>${JSON.stringify(data[k])}</td></tr>`
+    ).join('');
+  } catch(e) { tbody.innerHTML = `<tr><td colspan="2" class="empty">Error: ${e}</td></tr>`; }
+}
+
+async function updateConfig() {
+  const key   = document.getElementById('cfg-key').value.trim();
+  const value = document.getElementById('cfg-value').value.trim();
+  if (!key) { showToast('Key is required'); return; }
+  let parsed;
+  try { parsed = JSON.parse(value); } catch { parsed = value; }
+  try {
+    const r = await fetch(BASE + '/cluster/config', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({key, value: parsed}),
+    });
+    const data = await r.json();
+    showToast(data.message || 'Updated');
+    document.getElementById('cfg-key').value = '';
+    document.getElementById('cfg-value').value = '';
+    loadConfig();
+  } catch(e) { showToast('Error: ' + e); }
+}
+
+async function loadShards() {
+  const typeName = document.getElementById('shard-type').value.trim();
+  const tbody = document.getElementById('shards-body');
+  if (!typeName) { showToast('Enter a typeName'); return; }
+  try {
+    const r = await fetch(BASE + '/cluster/sharding/' + encodeURIComponent(typeName));
+    if (r.status === 404) { tbody.innerHTML = `<tr><td colspan="2" class="empty">No coordinator registered for "${typeName}".</td></tr>`; return; }
+    const data = await r.json();
+    const keys = Object.keys(data || {});
+    if (!keys.length) { tbody.innerHTML = '<tr><td colspan="2" class="empty">No shards allocated yet.</td></tr>'; return; }
+    tbody.innerHTML = keys.sort().map(k =>
+      `<tr><td><code>${k}</code></td><td><code>${data[k]}</code></td></tr>`
+    ).join('');
+  } catch(e) { tbody.innerHTML = `<tr><td colspan="2" class="empty">Error: ${e}</td></tr>`; }
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+function loadAll() { loadMembers(); loadServices(); loadConfig(); }
+
+loadAll();
+</script>
+</body>
+</html>

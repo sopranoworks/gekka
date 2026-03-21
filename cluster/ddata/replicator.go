@@ -184,6 +184,24 @@ func (r *Replicator) Start(ctx context.Context) {
 	}()
 }
 
+// AllSetsSnapshot returns a point-in-time copy of all ORSets currently known
+// to this Replicator.  Keys are set names; values are element slices.
+// Safe to call from any goroutine.
+func (r *Replicator) AllSetsSnapshot() map[string][]string {
+	r.mu.RLock()
+	sets := make(map[string]*ORSet, len(r.sets))
+	for k, v := range r.sets {
+		sets[k] = v
+	}
+	r.mu.RUnlock()
+
+	result := make(map[string][]string, len(sets))
+	for key, s := range sets {
+		result[key] = s.Elements()
+	}
+	return result
+}
+
 // Stop halts the gossip loop.
 func (r *Replicator) Stop() {
 	close(r.stopCh)

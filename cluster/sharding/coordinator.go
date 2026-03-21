@@ -10,23 +10,57 @@ package sharding
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
 )
+
+// ── Package-level coordinator registry ───────────────────────────────────────
+//
+// StartSharding registers the ShardCoordinator instance for each entity type
+// so that external observers (e.g. the HTTP Management API) can query the live
+// shard allocation map without going through the actor mailbox.
+
+var (
+	coordRegistryMu sync.RWMutex
+	coordRegistry   = map[string]*ShardCoordinator{}
+)
+
+// RegisterCoordinator records coord as the active coordinator for typeName.
+// Called by StartSharding when the coordinator actor is created.
+func RegisterCoordinator(typeName string, coord *ShardCoordinator) {
+	coordRegistryMu.Lock()
+	defer coordRegistryMu.Unlock()
+	coordRegistry[typeName] = coord
+}
+
+// LookupCoordinator returns the registered coordinator for typeName.
+// Returns nil, false when no coordinator has been registered.
+func LookupCoordinator(typeName string) (*ShardCoordinator, bool) {
+	coordRegistryMu.RLock()
+	defer coordRegistryMu.RUnlock()
+	c, ok := coordRegistry[typeName]
+	return c, ok
+}
 
 // rebalanceTick is a periodic self-message that triggers a rebalance check.
 type rebalanceTick struct{}
 
 type ShardCoordinator struct {
 	actor.BaseActor
-	strategy ShardAllocationStrategy
-	regions  map[string]actor.Ref    // RegionPath -> Ref
-	shards   map[ShardId]string      // ShardId -> RegionPath
-	rebalanceInProgress map[ShardId]struct{} // shards currently being rebalanced
+	strategy            ShardAllocationStrategy
+	regions             map[string]actor.Ref    // RegionPath -> Ref
+	shards              map[ShardId]string      // ShardId -> RegionPath
+	rebalanceInProgress map[ShardId]struct{}    // shards currently being rebalanced
 	// RebalanceInterval overrides the default 10 s period between rebalance
 	// checks.  Zero means 10 s.  Exposed for testing (set before PreStart).
 	RebalanceInterval time.Duration
+
+	// snapshotMu protects snapshot for concurrent reads from outside the actor
+	// goroutine (e.g. the HTTP Management API handler).
+	snapshotMu sync.RWMutex
+	snapshot   map[ShardId]string
 }
 
 func NewShardCoordinator(strategy ShardAllocationStrategy) *ShardCoordinator {
@@ -36,7 +70,32 @@ func NewShardCoordinator(strategy ShardAllocationStrategy) *ShardCoordinator {
 		regions:             make(map[string]actor.Ref),
 		shards:              make(map[ShardId]string),
 		rebalanceInProgress: make(map[ShardId]struct{}),
+		snapshot:            make(map[ShardId]string),
 	}
+}
+
+// AllocationSnapshot returns a point-in-time copy of the shard → region
+// mapping.  Safe to call from any goroutine.
+func (c *ShardCoordinator) AllocationSnapshot() map[ShardId]string {
+	c.snapshotMu.RLock()
+	defer c.snapshotMu.RUnlock()
+	result := make(map[ShardId]string, len(c.snapshot))
+	for k, v := range c.snapshot {
+		result[k] = v
+	}
+	return result
+}
+
+// updateSnapshot copies c.shards into the protected snapshot.
+// Must only be called from within Receive (actor goroutine).
+func (c *ShardCoordinator) updateSnapshot() {
+	snap := make(map[ShardId]string, len(c.shards))
+	for k, v := range c.shards {
+		snap[k] = v
+	}
+	c.snapshotMu.Lock()
+	c.snapshot = snap
+	c.snapshotMu.Unlock()
 }
 
 // PreStart schedules the first periodic rebalance check.
@@ -131,6 +190,7 @@ func (c *ShardCoordinator) Receive(msg any) {
 			if region != nil {
 				regionPath = region.Path()
 				c.shards[m.ShardId] = regionPath
+				c.updateSnapshot()
 				c.Log().Info("Shard allocated", "shardId", m.ShardId, "region", regionPath)
 			} else {
 				c.Log().Warn("Failed to allocate shard (no regions available)", "shardId", m.ShardId)
@@ -153,6 +213,7 @@ func (c *ShardCoordinator) Receive(msg any) {
 			}
 		}
 		delete(c.regions, regionPath)
+		c.updateSnapshot()
 		c.Log().Info("Handoff complete: shards released",
 			"region", regionPath, "released", released)
 		c.Sender().Tell(HandoffComplete{RegionPath: regionPath}, c.Self())
@@ -179,6 +240,7 @@ func (c *ShardCoordinator) Receive(msg any) {
 		// GetShardHome re-assigns it to a less-loaded region.
 		delete(c.rebalanceInProgress, m.ShardId)
 		delete(c.shards, m.ShardId)
+		c.updateSnapshot()
 		c.Log().Info("Rebalance: shard cleared for reallocation", "shardId", m.ShardId)
 
 	case actor.TerminatedMessage:
@@ -195,6 +257,7 @@ func (c *ShardCoordinator) Receive(msg any) {
 				}
 			}
 			delete(c.regions, terminatedPath)
+			c.updateSnapshot()
 		}
 	}
 }

@@ -41,6 +41,13 @@ type mockProvider struct {
 	leaveErr      error // if set, LeaveMember returns this error
 	downErr       error // if set, DownMember returns this error
 	quarantined   bool  // simulates a quarantined Artery association
+
+	// Phase-13 extensions
+	services         map[string][]string
+	configEntries    map[string]any
+	configUpdated    map[string]any   // captures UpdateConfigEntry calls
+	shardDist        map[string]string
+	shardDistFound   bool
 }
 
 func (p *mockProvider) ClusterManager() *cluster.ClusterManager { return p.cm }
@@ -69,6 +76,43 @@ func (p *mockProvider) DownMember(address string) error {
 	}
 	p.downCalledOn = append(p.downCalledOn, address)
 	return nil
+}
+
+func (p *mockProvider) Services() map[string][]string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.services == nil {
+		return map[string][]string{}
+	}
+	return p.services
+}
+
+func (p *mockProvider) ConfigEntries() map[string]any {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.configEntries == nil {
+		return map[string]any{}
+	}
+	return p.configEntries
+}
+
+func (p *mockProvider) UpdateConfigEntry(configKey string, value any) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.configUpdated == nil {
+		p.configUpdated = make(map[string]any)
+	}
+	p.configUpdated[configKey] = value
+	if p.configEntries == nil {
+		p.configEntries = make(map[string]any)
+	}
+	p.configEntries[configKey] = value
+}
+
+func (p *mockProvider) ShardDistribution(typeName string) (map[string]string, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.shardDist, p.shardDistFound
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -595,5 +639,213 @@ func TestHealthAlive_MethodNotAllowed(t *testing.T) {
 
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405, got %d", w.Code)
+	}
+}
+
+// ── Phase 13: services, config, sharding, dashboard ──────────────────────────
+
+func TestGetServices_ReturnsMap(t *testing.T) {
+	p := &mockProvider{
+		cm: buildGossip([]memberSpec{
+			{"127.0.0.1", 2552, "GekkaSystem", gproto_cluster.MemberStatus_Up, []string{}},
+		}),
+		services: map[string][]string{
+			"order-processor": {"10.0.0.1:8080", "10.0.0.2:8080"},
+			"auth-service":    {"10.0.0.3:9090"},
+		},
+	}
+	h := newHandler(t, p)
+
+	req := httptest.NewRequest(http.MethodGet, "/cluster/services", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var result map[string][]string
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("expected 2 services, got %d", len(result))
+	}
+	if len(result["order-processor"]) != 2 {
+		t.Errorf("order-processor: expected 2 addresses, got %v", result["order-processor"])
+	}
+	if len(result["auth-service"]) != 1 || result["auth-service"][0] != "10.0.0.3:9090" {
+		t.Errorf("auth-service: expected [10.0.0.3:9090], got %v", result["auth-service"])
+	}
+}
+
+func TestGetServices_MethodNotAllowed(t *testing.T) {
+	p := &mockProvider{
+		cm: buildGossip([]memberSpec{
+			{"127.0.0.1", 2552, "GekkaSystem", gproto_cluster.MemberStatus_Up, []string{}},
+		}),
+	}
+	h := newHandler(t, p)
+	req := httptest.NewRequest(http.MethodPost, "/cluster/services", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d", w.Code)
+	}
+}
+
+func TestGetConfig_ReturnsEntries(t *testing.T) {
+	p := &mockProvider{
+		cm: buildGossip([]memberSpec{
+			{"127.0.0.1", 2552, "GekkaSystem", gproto_cluster.MemberStatus_Up, []string{}},
+		}),
+		configEntries: map[string]any{
+			"log-level":    "DEBUG",
+			"max-replicas": float64(3),
+		},
+	}
+	h := newHandler(t, p)
+
+	req := httptest.NewRequest(http.MethodGet, "/cluster/config", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var result map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if result["log-level"] != "DEBUG" {
+		t.Errorf("expected log-level=DEBUG, got %v", result["log-level"])
+	}
+	if result["max-replicas"] != float64(3) {
+		t.Errorf("expected max-replicas=3, got %v", result["max-replicas"])
+	}
+}
+
+func TestPostConfig_UpdatesEntry(t *testing.T) {
+	p := &mockProvider{
+		cm: buildGossip([]memberSpec{
+			{"127.0.0.1", 2552, "GekkaSystem", gproto_cluster.MemberStatus_Up, []string{}},
+		}),
+	}
+	h := newHandler(t, p)
+
+	body := strings.NewReader(`{"key":"log-level","value":"WARN"}`)
+	req := httptest.NewRequest(http.MethodPost, "/cluster/config", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.configUpdated["log-level"] != "WARN" {
+		t.Errorf("expected UpdateConfigEntry called with log-level=WARN, got %v", p.configUpdated)
+	}
+}
+
+func TestPostConfig_MissingKey(t *testing.T) {
+	p := &mockProvider{
+		cm: buildGossip([]memberSpec{
+			{"127.0.0.1", 2552, "GekkaSystem", gproto_cluster.MemberStatus_Up, []string{}},
+		}),
+	}
+	h := newHandler(t, p)
+	body := strings.NewReader(`{"value":"WARN"}`)
+	req := httptest.NewRequest(http.MethodPost, "/cluster/config", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestGetSharding_Found(t *testing.T) {
+	p := &mockProvider{
+		cm: buildGossip([]memberSpec{
+			{"127.0.0.1", 2552, "GekkaSystem", gproto_cluster.MemberStatus_Up, []string{}},
+		}),
+		shardDist:      map[string]string{"0": "/user/shardRegion-Cart", "1": "/user/shardRegion-Cart"},
+		shardDistFound: true,
+	}
+	h := newHandler(t, p)
+
+	req := httptest.NewRequest(http.MethodGet, "/cluster/sharding/Cart", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var result map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("expected 2 shards, got %d", len(result))
+	}
+	if result["0"] != "/user/shardRegion-Cart" {
+		t.Errorf("shard 0: expected /user/shardRegion-Cart, got %q", result["0"])
+	}
+}
+
+func TestGetSharding_NotFound(t *testing.T) {
+	p := &mockProvider{
+		cm: buildGossip([]memberSpec{
+			{"127.0.0.1", 2552, "GekkaSystem", gproto_cluster.MemberStatus_Up, []string{}},
+		}),
+		shardDistFound: false,
+	}
+	h := newHandler(t, p)
+
+	req := httptest.NewRequest(http.MethodGet, "/cluster/sharding/Unknown", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestGetSharding_MethodNotAllowed(t *testing.T) {
+	p := &mockProvider{
+		cm:             buildGossip([]memberSpec{{"127.0.0.1", 2552, "GekkaSystem", gproto_cluster.MemberStatus_Up, []string{}}}),
+		shardDistFound: false,
+	}
+	h := newHandler(t, p)
+	req := httptest.NewRequest(http.MethodPost, "/cluster/sharding/Cart", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d", w.Code)
+	}
+}
+
+func TestDashboard_ReturnsHTML(t *testing.T) {
+	p := &mockProvider{
+		cm: buildGossip([]memberSpec{
+			{"127.0.0.1", 2552, "GekkaSystem", gproto_cluster.MemberStatus_Up, []string{}},
+		}),
+	}
+	h := newHandler(t, p)
+
+	req := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	ct := w.Header().Get("Content-Type")
+	if !strings.Contains(ct, "text/html") {
+		t.Errorf("expected Content-Type text/html, got %q", ct)
+	}
+	if !strings.Contains(w.Body.String(), "Gekka Cluster Dashboard") {
+		t.Errorf("dashboard body does not contain expected title")
 	}
 }

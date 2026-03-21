@@ -109,8 +109,13 @@ func StartSharding(
 	// The coordinator manages the authoritative shard→region allocation map.
 	// Wrapping it in ClusterSingletonManager ensures exactly one instance is
 	// alive in the cluster at any time (always on the oldest eligible node).
+	typeName := cfg.TypeName // capture for closure
 	coordProps := actor.Props{
-		New: func() actor.Actor { return NewShardCoordinator(strategy) },
+		New: func() actor.Actor {
+			c := NewShardCoordinator(strategy)
+			RegisterCoordinator(typeName, c)
+			return c
+		},
 	}
 	mgrName := "shardCoordinator-" + cfg.TypeName
 	mgrProps := actor.Props{

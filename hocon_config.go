@@ -11,6 +11,7 @@ package gekka
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -267,6 +268,43 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
 			nodeCfg.Sharding.HandoffTimeout = d
 		}
+	}
+
+	// ── Failure Detector (gekka-native) ─────────────────────────────────────
+	fdPrefix := "gekka.cluster.failure-detector"
+	if v, err := cfg.GetString(fdPrefix + ".threshold"); err == nil {
+		if f, parseErr := strconv.ParseFloat(strings.TrimSpace(v), 64); parseErr == nil {
+			nodeCfg.FailureDetector.Threshold = f
+		}
+	}
+	if v, err := cfg.GetInt(fdPrefix + ".max-sample-size"); err == nil {
+		nodeCfg.FailureDetector.MaxSampleSize = v
+	}
+	if v, err := cfg.GetString(fdPrefix + ".min-std-deviation"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.FailureDetector.MinStdDeviation = d
+		}
+	}
+
+	// ── Internal SBR Strategy (gekka-native) ────────────────────────────────
+	iSBRPrefix := "gekka.cluster.split-brain-resolver"
+	if v, err := cfg.GetString(iSBRPrefix + ".active-strategy"); err == nil {
+		nodeCfg.InternalSBR.ActiveStrategy = strings.TrimSpace(v)
+	}
+	if v, err := cfg.GetString(iSBRPrefix + ".stable-after"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.InternalSBR.StableAfter = d
+		}
+	}
+	if v, err := cfg.GetInt(iSBRPrefix + ".static-quorum.size"); err == nil {
+		nodeCfg.InternalSBR.QuorumSize = v
+	}
+	if v, err := cfg.GetString(iSBRPrefix + ".keep-oldest.role"); err == nil {
+		nodeCfg.InternalSBR.Role = strings.TrimSpace(v)
+	}
+	if v, err := cfg.GetString(iSBRPrefix + ".keep-oldest.down-if-alone"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		nodeCfg.InternalSBR.DownIfAlone = v == "on" || v == "true"
 	}
 
 	// ── Split Brain Resolver ────────────────────────────────────────────────

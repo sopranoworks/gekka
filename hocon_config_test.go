@@ -374,6 +374,138 @@ pekko.cluster.seed-nodes = []
 	}
 }
 
+// ── Failure Detector HOCON parsing ───────────────────────────────────────────
+
+func TestParseHOCON_FailureDetector_Threshold(t *testing.T) {
+	cfg, err := parseHOCONString(`
+gekka.cluster.failure-detector.threshold = 15.0
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.FailureDetector.Threshold != 15.0 {
+		t.Errorf("Threshold = %v, want 15.0", cfg.FailureDetector.Threshold)
+	}
+}
+
+func TestParseHOCON_FailureDetector_MaxSampleSize(t *testing.T) {
+	cfg, err := parseHOCONString(`
+gekka.cluster.failure-detector.max-sample-size = 500
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.FailureDetector.MaxSampleSize != 500 {
+		t.Errorf("MaxSampleSize = %d, want 500", cfg.FailureDetector.MaxSampleSize)
+	}
+}
+
+func TestParseHOCON_FailureDetector_MinStdDeviation(t *testing.T) {
+	cfg, err := parseHOCONString(`
+gekka.cluster.failure-detector.min-std-deviation = 200ms
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.FailureDetector.MinStdDeviation != 200*time.Millisecond {
+		t.Errorf("MinStdDeviation = %v, want 200ms", cfg.FailureDetector.MinStdDeviation)
+	}
+}
+
+// ── Internal SBR HOCON parsing ────────────────────────────────────────────────
+
+func TestParseHOCON_InternalSBR_ActiveStrategy(t *testing.T) {
+	cfg, err := parseHOCONString(`
+gekka.cluster.split-brain-resolver.active-strategy = static-quorum
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.InternalSBR.ActiveStrategy != "static-quorum" {
+		t.Errorf("ActiveStrategy = %q, want %q", cfg.InternalSBR.ActiveStrategy, "static-quorum")
+	}
+}
+
+func TestParseHOCON_InternalSBR_StableAfter(t *testing.T) {
+	cfg, err := parseHOCONString(`
+gekka.cluster.split-brain-resolver.stable-after = 30s
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.InternalSBR.StableAfter != 30*time.Second {
+		t.Errorf("StableAfter = %v, want 30s", cfg.InternalSBR.StableAfter)
+	}
+}
+
+func TestParseHOCON_InternalSBR_StaticQuorumSize(t *testing.T) {
+	cfg, err := parseHOCONString(`
+gekka.cluster.split-brain-resolver.static-quorum.size = 5
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.InternalSBR.QuorumSize != 5 {
+		t.Errorf("QuorumSize = %d, want 5", cfg.InternalSBR.QuorumSize)
+	}
+}
+
+func TestParseHOCON_InternalSBR_KeepOldestRole(t *testing.T) {
+	cfg, err := parseHOCONString(`
+gekka.cluster.split-brain-resolver.keep-oldest.role = worker
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.InternalSBR.Role != "worker" {
+		t.Errorf("Role = %q, want %q", cfg.InternalSBR.Role, "worker")
+	}
+}
+
+func TestParseHOCON_InternalSBR_KeepOldestDownIfAlone(t *testing.T) {
+	cfg, err := parseHOCONString(`
+gekka.cluster.split-brain-resolver.keep-oldest.down-if-alone = true
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if !cfg.InternalSBR.DownIfAlone {
+		t.Error("DownIfAlone = false, want true")
+	}
+}
+
+func TestParseHOCON_InternalSBR_FullKeepOldest(t *testing.T) {
+	cfg, err := parseHOCONString(`
+gekka {
+  cluster {
+    split-brain-resolver {
+      active-strategy = keep-oldest
+      stable-after = 25s
+      keep-oldest {
+        role = seed
+        down-if-alone = false
+      }
+    }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.InternalSBR.ActiveStrategy != "keep-oldest" {
+		t.Errorf("ActiveStrategy = %q, want keep-oldest", cfg.InternalSBR.ActiveStrategy)
+	}
+	if cfg.InternalSBR.StableAfter != 25*time.Second {
+		t.Errorf("StableAfter = %v, want 25s", cfg.InternalSBR.StableAfter)
+	}
+	if cfg.InternalSBR.Role != "seed" {
+		t.Errorf("Role = %q, want seed", cfg.InternalSBR.Role)
+	}
+	if cfg.InternalSBR.DownIfAlone {
+		t.Error("DownIfAlone = true, want false")
+	}
+}
+
 func TestJoinSeeds_NoSeeds(t *testing.T) {
 	node, err := NewCluster(ClusterConfig{Host: "127.0.0.1", Port: 0})
 	if err != nil {

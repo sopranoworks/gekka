@@ -161,6 +161,35 @@ type ClusterConfig struct {
 	//	},
 	SBR SBRConfig
 
+	// FailureDetector tunes the Phi Accrual Failure Detector.
+	// Zero values are replaced by safe defaults (threshold=10.0, maxSamples=1000,
+	// minStdDeviation=500ms).
+	//
+	// Parse from HOCON:
+	//
+	//	gekka.cluster.failure-detector {
+	//	    threshold         = 10.0
+	//	    max-sample-size   = 1000
+	//	    min-std-deviation = 100ms
+	//	}
+	FailureDetector FailureDetectorConfig
+
+	// InternalSBR configures the lightweight internal SBR strategy
+	// (icluster.Strategy) that is evaluated inline by CheckReachability.
+	// This complements the richer event-driven SBRManager (driven by SBR field).
+	//
+	// Parse from HOCON:
+	//
+	//	gekka.cluster.split-brain-resolver {
+	//	    active-strategy = "keep-oldest"
+	//	    stable-after    = 20s
+	//	    keep-oldest {
+	//	        role         = ""
+	//	        down-if-alone = true
+	//	    }
+	//	}
+	InternalSBR InternalSBRConfig
+
 	// Sharding holds parsed sharding configuration from HOCON.
 	// It is used to populate ShardingSettings when StartSharding is called.
 	//
@@ -301,6 +330,16 @@ type PersistenceConfig struct {
 // SBRConfig is a re-export of cluster.SBRConfig for use in ClusterConfig.
 // Import gekka directly — you do not need to import the cluster sub-package.
 type SBRConfig = gcluster.SBRConfig
+
+// FailureDetectorConfig is a re-export of cluster.FailureDetectorConfig.
+// It tunes the Phi Accrual Failure Detector parameters.
+// Parsed from HOCON: gekka.cluster.failure-detector.*
+type FailureDetectorConfig = gcluster.FailureDetectorConfig
+
+// InternalSBRConfig is a re-export of cluster.InternalSBRConfig.
+// It configures the lightweight icluster.Strategy (internal SBR primitives).
+// Parsed from HOCON: gekka.cluster.split-brain-resolver.*
+type InternalSBRConfig = gcluster.InternalSBRConfig
 
 // ClusterSingletonManagerInterface is an alias for gcluster.ClusterSingletonManagerInterface.
 type ClusterSingletonManagerInterface = gcluster.ClusterSingletonManagerInterface
@@ -502,6 +541,13 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	if len(cfg.Roles) > 0 {
 		cm.SetLocalRoles(cfg.Roles)
 	}
+
+	// Apply Phi Accrual Failure Detector configuration from HOCON.
+	gcluster.ApplyDetectorConfig(cm, cfg.FailureDetector)
+
+	// Wire the lightweight internal SBR strategy (icluster.Strategy).
+	gcluster.ApplyInternalSBRConfig(cm, cfg.InternalSBR)
+
 	nm.SetClusterManager(cm)
 
 	ctx, cancel := context.WithCancel(context.Background())

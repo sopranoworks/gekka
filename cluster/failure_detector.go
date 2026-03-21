@@ -26,6 +26,26 @@ type PhiAccrualFailureDetector struct {
 	minStdDeviation time.Duration
 }
 
+// FailureDetectorConfig holds tunable parameters for the PhiAccrualFailureDetector.
+// All fields are optional; zero values fall back to safe defaults.
+type FailureDetectorConfig struct {
+	// Threshold is the φ value above which a node is declared unreachable.
+	// Corresponds to HOCON: gekka.cluster.failure-detector.threshold
+	// Default: 10.0
+	Threshold float64
+
+	// MaxSampleSize is the sliding-window size for heartbeat inter-arrival history.
+	// Corresponds to HOCON: gekka.cluster.failure-detector.max-sample-size
+	// Default: 1000
+	MaxSampleSize int
+
+	// MinStdDeviation is the lower bound on σ to prevent φ explosions when
+	// heartbeats are very regular or the window is small.
+	// Corresponds to HOCON: gekka.cluster.failure-detector.min-std-deviation
+	// Default: 500ms
+	MinStdDeviation time.Duration
+}
+
 func NewPhiAccrualFailureDetector(threshold float64, windowSize int) *PhiAccrualFailureDetector {
 	return &PhiAccrualFailureDetector{
 		detectors:       make(map[string]*icluster.PhiAccrualFailureDetector),
@@ -33,6 +53,18 @@ func NewPhiAccrualFailureDetector(threshold float64, windowSize int) *PhiAccrual
 		maxSampleSize:   windowSize,
 		minStdDeviation: 500 * time.Millisecond,
 	}
+}
+
+// Reconfigure updates the detector parameters and clears all per-node history so
+// subsequent heartbeats use the new settings.  Safe to call before the cluster
+// has been joined (no active detection history is lost in practice).
+func (fd *PhiAccrualFailureDetector) Reconfigure(threshold float64, maxSamples int, minStdDev time.Duration) {
+	fd.mu.Lock()
+	defer fd.mu.Unlock()
+	fd.threshold = threshold
+	fd.maxSampleSize = maxSamples
+	fd.minStdDeviation = minStdDev
+	fd.detectors = make(map[string]*icluster.PhiAccrualFailureDetector)
 }
 
 func (fd *PhiAccrualFailureDetector) detectorFor(nodeKey string) *icluster.PhiAccrualFailureDetector {

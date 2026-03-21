@@ -138,6 +138,16 @@ func (s *localActorSystem) Context() context.Context {
 	return s.ctx
 }
 
+// Terminate implements ActorSystem.
+func (s *localActorSystem) Terminate() {
+	s.cancel()
+}
+
+// WhenTerminated implements ActorSystem.
+func (s *localActorSystem) WhenTerminated() <-chan struct{} {
+	return s.ctx.Done()
+}
+
 // Watch implements ActorSystem.
 func (s *localActorSystem) Watch(watcher ActorRef, target ActorRef) {
 	if target.local != nil {

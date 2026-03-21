@@ -1521,6 +1521,16 @@ func (c *Cluster) Shutdown() error {
 	return nil
 }
 
+// Terminate implements ActorSystem.
+func (c *Cluster) Terminate() {
+	_ = c.Shutdown()
+}
+
+// WhenTerminated implements ActorSystem.
+func (c *Cluster) WhenTerminated() <-chan struct{} {
+	return c.ctx.Done()
+}
+
 // ActorOf implements ActorSystem.
 func (c *Cluster) ActorOf(props Props, name string) (ActorRef, error) {
 	return c.ActorOfHierarchical(props, name, "/user")
@@ -1717,7 +1727,7 @@ func (n *Cluster) SpawnActor(path string, a actor.Actor, props actor.Props) acto
 
 	// Inject parent reference if this is a child actor.
 	if parentPath != "/user" {
-		if parentActor, found := n.actors[parentPath]; found {
+		if parentActor, found := n.GetLocalActor(parentPath); found {
 			if parentRef, err := n.ActorSelection(n.SelfPathURI(parentPath)).Resolve(context.TODO()); err == nil {
 				actor.InjectParent(a, parentRef)
 				// Also register this child with the parent
@@ -1756,7 +1766,7 @@ func (n *Cluster) SpawnActor(path string, a actor.Actor, props actor.Props) acto
 
 		// Remove from parent's children list
 		if parentPath != "/user" {
-			if parentActor, found := n.actors[parentPath]; found {
+			if parentActor, found := n.GetLocalActor(parentPath); found {
 				type childRemover interface{ RemoveChild(string) }
 				if cr, ok := parentActor.(childRemover); ok {
 					cr.RemoveChild(path[lastSlash+1:])

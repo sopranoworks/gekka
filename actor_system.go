@@ -98,6 +98,12 @@ type ActorSystem interface {
 	// messages are delivered lazily via Artery.
 	RemoteActorOf(address actor.Address, path string) ActorRef
 
+	// Terminate stops the actor system and all its actors.
+	Terminate()
+
+	// WhenTerminated returns a channel that is closed when the system has fully shut down.
+	WhenTerminated() <-chan struct{}
+
 	// Ask sends msg to the actor at dst and blocks until a reply is received
 	// or ctx is cancelled.
 	Ask(ctx context.Context, dst interface{}, msg any) (*IncomingMessage, error)

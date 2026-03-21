@@ -48,10 +48,13 @@ type Shard struct {
 	// passivation: tracks the last time each entity received a message.
 	lastActivity map[EntityId]time.Time
 
-	// remember-entities: monotonic sequence number for journal writes.
+	// remember-entities (journal path): monotonic sequence number.
 	seqNr         uint64
 	persistenceId string
 	journal       persistence.Journal
+
+	// remember-entities (store path): set-based; passivation keeps entities.
+	store ShardStore
 }
 
 // NewShard creates a Shard for the given type/shard identifiers.
@@ -74,19 +77,44 @@ func NewShard(
 	}
 }
 
-// PreStart recovers entity membership from the journal (when RememberEntities
-// is on) and starts the passivation check timer.
+// PreStart recovers entity membership from the configured store (when
+// RememberEntities is on) and starts the passivation check timer.
+//
+// Two recovery paths exist:
+//   - Store path (ShardSettings.Store or auto-created FileStore from
+//     JournalStorePath): set-based; all previously recorded entities are
+//     re-spawned unconditionally, including those that were passivated.
+//   - Journal path (ShardSettings.Journal): event-sourced; only entities
+//     that were active (not passivated) at the time of shutdown are recovered.
 func (s *Shard) PreStart() {
-	// ── Remember Entities: setup journal ─────────────────────────────────
+	// ── Remember Entities ─────────────────────────────────────────────────
 	if s.settings.RememberEntities {
-		s.journal = s.settings.Journal
-		if s.journal == nil {
-			s.journal = persistence.NewInMemoryJournal()
-		}
-		s.persistenceId = "shard-" + s.typeName + "-" + s.shardId
+		switch {
+		case s.settings.Store != nil:
+			// Explicit store supplied — use set-based recovery.
+			s.store = s.settings.Store
+			s.recoverFromStore()
 
-		// Recover the set of active entities by replaying all events.
-		s.recoverFromJournal()
+		case s.settings.JournalStorePath != "":
+			// Auto-create a FileStore from the configured path.
+			fs, err := NewFileStore(s.settings.JournalStorePath)
+			if err != nil {
+				s.Log().Error("remember-entities: failed to create FileStore",
+					"path", s.settings.JournalStorePath, "error", err)
+			} else {
+				s.store = fs
+				s.recoverFromStore()
+			}
+
+		default:
+			// Fall back to event-sourced journal path.
+			s.journal = s.settings.Journal
+			if s.journal == nil {
+				s.journal = persistence.NewInMemoryJournal()
+			}
+			s.persistenceId = "shard-" + s.typeName + "-" + s.shardId
+			s.recoverFromJournal()
+		}
 	}
 
 	// ── Passivation: schedule first idle check ────────────────────────────
@@ -144,6 +172,33 @@ func (s *Shard) recoverFromJournal() {
 	}
 }
 
+// recoverFromStore replays the ShardStore's entity set and re-spawns every
+// entity it contains.  Unlike recoverFromJournal, passivated entities are NOT
+// filtered out — the store is a live set that only shrinks on explicit
+// termination.
+func (s *Shard) recoverFromStore() {
+	ids, err := s.store.GetEntities(s.shardId)
+	if err != nil {
+		s.Log().Error("remember-entities: failed to read entities from store",
+			"shardId", s.shardId, "error", err)
+		return
+	}
+	for _, entityId := range ids {
+		entity, spawnErr := s.entityCreator(s.System(), entityId)
+		if spawnErr != nil {
+			s.Log().Error("remember-entities: failed to re-spawn entity from store",
+				"entityId", entityId, "error", spawnErr)
+			continue
+		}
+		s.entities[entityId] = entity
+		if s.settings.PassivationIdleTimeout > 0 {
+			s.lastActivity[entityId] = time.Now()
+		}
+		s.Log().Info("remember-entities: store-recovered entity",
+			"entityId", entityId, "shardId", s.shardId)
+	}
+}
+
 // schedulePassivationCheck sends a checkPassivationMsg to self after one
 // check interval.  The check interval is PassivationIdleTimeout/4, minimum
 // 500 ms.
@@ -162,7 +217,15 @@ func (s *Shard) Receive(msg any) {
 		s.handleEnvelope(m)
 
 	case actor.Passivate:
+		// Passivation: remove from in-memory map but do NOT call
+		// store.RemoveEntity — the entity remains remembered so it will be
+		// re-spawned on the next shard restart.
 		s.handlePassivate(m.Entity)
+
+	case actor.TerminatedMessage:
+		// Explicit entity termination: remove from both memory and the store
+		// so it is not re-spawned after a restart.
+		s.handleTerminated(m.TerminatedActor())
 
 	case checkPassivationMsg:
 		s.checkIdleEntities()
@@ -195,6 +258,14 @@ func (s *Shard) handleEnvelope(m ShardingEnvelope) {
 			return
 		}
 		s.entities[m.EntityId] = entity
+		// Store path: record new entity in the set-based store.
+		if s.store != nil {
+			if addErr := s.store.AddEntity(s.shardId, m.EntityId); addErr != nil {
+				s.Log().Error("remember-entities: store.AddEntity failed",
+					"entityId", m.EntityId, "error", addErr)
+			}
+		}
+		// Journal path: persist EntityStarted event.
 		s.persistEntityStarted(m.EntityId)
 	}
 
@@ -218,6 +289,28 @@ func (s *Shard) handlePassivate(entity actor.Ref) {
 			delete(s.lastActivity, id)
 			s.persistEntityStopped(id)
 			s.Log().Info("entity passivated", "entityId", id)
+			return
+		}
+	}
+}
+
+// handleTerminated processes an actor.TerminatedMessage for an entity that was
+// explicitly stopped (e.g., by the actor system or a supervising parent).
+// Unlike passivation, this permanently removes the entity from the ShardStore
+// so it is not re-spawned after a shard restart.
+func (s *Shard) handleTerminated(terminated actor.Ref) {
+	for id, ref := range s.entities {
+		if ref.Path() == terminated.Path() {
+			delete(s.entities, id)
+			delete(s.lastActivity, id)
+			if s.store != nil {
+				if err := s.store.RemoveEntity(s.shardId, id); err != nil {
+					s.Log().Error("remember-entities: store.RemoveEntity failed",
+						"entityId", id, "error", err)
+				}
+			}
+			s.persistEntityStopped(id)
+			s.Log().Info("entity terminated (removed from store)", "entityId", id)
 			return
 		}
 	}

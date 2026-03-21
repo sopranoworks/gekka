@@ -50,6 +50,22 @@ type ShardSettings struct {
 	// StartSharding when DataCenter is set; leave nil if not using multi-DC.
 	IsLocalDC func(host string, port uint32) bool
 
+	// Store, when non-nil, is used for remember-entities instead of the
+	// event-sourced Journal.  ShardStore tracks the current set of live
+	// entity IDs directly: passivation does NOT remove an entity from the
+	// store, so all entities are re-spawned on shard restart regardless of
+	// whether they were passivated before the crash.  An entity is removed
+	// from the store only on explicit termination (actor.TerminatedMessage).
+	//
+	// When Store is nil and RememberEntities is true, the Journal-based
+	// event-sourcing path is used instead.
+	Store ShardStore
+
+	// JournalStorePath is the filesystem path for a FileStore that is
+	// auto-created when Store is nil and RememberEntities is true.
+	// Ignored when Store is set explicitly.
+	JournalStorePath string
+
 	// HandoffTimeout is the maximum duration ShardRegion.PostStop waits for
 	// a HandoffComplete acknowledgement from the ShardCoordinator before
 	// proceeding with shutdown.  When zero the default of 10 seconds applies.

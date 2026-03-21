@@ -342,6 +342,139 @@ func TestCoordinator_LeastShardsAllocation(t *testing.T) {
 	}
 }
 
+// TestCoordinator_RebalanceTwoNodes is the Phase 3 integration test that
+// verifies the full rebalancing flow:
+//
+//  1. Node A joins and receives all four shards.
+//  2. Node B joins with zero shards.
+//  3. A rebalanceTick fires → coordinator initiates BeginHandOff for one shard.
+//  4. The test simulates the region responding with BeginHandOffAck and then
+//     (after receiving HandOff) with ShardStopped.
+//  5. The freed shard is re-requested by region B and allocated to B.
+//  6. A second rebalanceTick + handoff cycle moves a second shard to B,
+//     achieving the target balanced state of 2 shards each.
+func TestCoordinator_RebalanceTwoNodes(t *testing.T) {
+	// maxSimultaneousRebalance=1 so each tick moves exactly one shard.
+	coord := NewShardCoordinator(NewLeastShardAllocationStrategy(1, 1))
+	mctx := newMockActorContext()
+	actor.InjectSystem(coord, mctx)
+	coord.SetSelf(&mockRef{path: "/user/coordinator"})
+
+	regionA := &mockRef{path: "/user/regionA"}
+	regionB := &mockRef{path: "/user/regionB"}
+
+	// ── Setup: register A, allocate 4 shards ──────────────────────────────
+	actor.InjectSender(coord, regionA)
+	coord.Receive(RegisterRegion{RegionPath: "/user/regionA"})
+
+	for i := 0; i < 4; i++ {
+		actor.InjectSender(coord, regionA)
+		coord.Receive(GetShardHome{ShardId: fmt.Sprintf("shard-%d", i)})
+	}
+	if len(coord.shards) != 4 {
+		t.Fatalf("setup: expected 4 shards allocated to A, got %d", len(coord.shards))
+	}
+	for sid, rp := range coord.shards {
+		if rp != "/user/regionA" {
+			t.Errorf("setup: shard %s expected on A, got %s", sid, rp)
+		}
+	}
+
+	// ── B joins ────────────────────────────────────────────────────────────
+	actor.InjectSender(coord, regionB)
+	coord.Receive(RegisterRegion{RegionPath: "/user/regionB"})
+
+	// At this point: A=4 shards, B=0 shards → imbalance of 4 > threshold 1.
+
+	// ── Rebalance round 1 ─────────────────────────────────────────────────
+	coord.Receive(rebalanceTick{})
+
+	// Coordinator should have sent exactly 1 BeginHandOff to A.
+	var handoffShards []ShardId
+	for _, msg := range regionA.messages {
+		if bho, ok := msg.(BeginHandOff); ok {
+			handoffShards = append(handoffShards, bho.ShardId)
+		}
+	}
+	if len(handoffShards) != 1 {
+		t.Fatalf("round 1: expected 1 BeginHandOff, got %d (regionA.messages: %v)",
+			len(handoffShards), regionA.messages)
+	}
+	shard1 := handoffShards[0]
+
+	// Simulate region A completing the first handoff:
+	//   BeginHandOffAck → coordinator sends HandOff back → ShardStopped
+	actor.InjectSender(coord, regionA)
+	coord.Receive(BeginHandOffAck{ShardId: shard1})
+
+	handOffSent := false
+	for _, msg := range regionA.messages {
+		if ho, ok := msg.(HandOff); ok && ho.ShardId == shard1 {
+			handOffSent = true
+			break
+		}
+	}
+	if !handOffSent {
+		t.Errorf("round 1: coordinator must send HandOff to A after BeginHandOffAck")
+	}
+
+	actor.InjectSender(coord, regionA)
+	coord.Receive(ShardStopped{ShardId: shard1})
+
+	if _, still := coord.shards[shard1]; still {
+		t.Errorf("round 1: shard %s must be cleared after ShardStopped", shard1)
+	}
+	if _, inProg := coord.rebalanceInProgress[shard1]; inProg {
+		t.Errorf("round 1: shard %s must leave rebalanceInProgress after ShardStopped", shard1)
+	}
+
+	// ── Rebalance round 2 ─────────────────────────────────────────────────
+	// A=3 shards, B=0 shards — still imbalanced.
+	coord.Receive(rebalanceTick{})
+
+	var newHandoffShards []ShardId
+	for _, msg := range regionA.messages {
+		if bho, ok := msg.(BeginHandOff); ok && bho.ShardId != shard1 {
+			newHandoffShards = append(newHandoffShards, bho.ShardId)
+		}
+	}
+	if len(newHandoffShards) == 0 {
+		t.Fatalf("round 2: expected a second BeginHandOff for a different shard")
+	}
+	shard2 := newHandoffShards[0]
+
+	actor.InjectSender(coord, regionA)
+	coord.Receive(BeginHandOffAck{ShardId: shard2})
+	actor.InjectSender(coord, regionA)
+	coord.Receive(ShardStopped{ShardId: shard2})
+
+	if _, still := coord.shards[shard2]; still {
+		t.Errorf("round 2: shard %s must be cleared after ShardStopped", shard2)
+	}
+
+	// ── Verify reallocation to B ──────────────────────────────────────────
+	// Region B asks for the two freed shards.  With A=2 and B=0, both must go to B.
+	for _, sid := range []ShardId{shard1, shard2} {
+		actor.InjectSender(coord, regionB)
+		coord.Receive(GetShardHome{ShardId: sid})
+	}
+
+	// Collect ShardHome replies received by B.
+	allocatedToB := 0
+	for _, msg := range regionB.messages {
+		if sh, ok := msg.(ShardHome); ok {
+			if sh.RegionPath == "/user/regionB" {
+				allocatedToB++
+			} else {
+				t.Errorf("freed shard %s reallocated to %q instead of regionB", sh.ShardId, sh.RegionPath)
+			}
+		}
+	}
+	if allocatedToB != 2 {
+		t.Errorf("expected 2 shards reallocated to regionB, got %d", allocatedToB)
+	}
+}
+
 // ── Phase 1 tests (unchanged below) ──────────────────────────────────────────
 
 // TestShardRegion_LocalRouting_DifferentShards verifies that two entities

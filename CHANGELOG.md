@@ -206,7 +206,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Message Dispatch**: Fixed a critical bug where messages were not correctly routed to registered actors by default when incoming envelopes contained full URIs.
 
 
-[0.10.0]: https://github.com/sopranoworks/gekka/compare/v0.9.0...HEAD
+[0.11.0]: https://github.com/sopranoworks/gekka/compare/v0.10.0...v0.11.0
+[0.10.0]: https://github.com/sopranoworks/gekka/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/sopranoworks/gekka/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/sopranoworks/gekka/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/sopranoworks/gekka/releases/tag/v0.7.0

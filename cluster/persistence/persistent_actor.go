@@ -10,6 +10,7 @@ package persistence
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/sopranoworks/gekka/actor"
 )
@@ -39,6 +40,12 @@ type PersistentActor interface {
 	// Called both during recovery (replay) and after a successful Persist in
 	// normal operation.  Must be deterministic and side-effect-free.
 	OnEvent(event any)
+
+	// OnSnapshot is called during recovery when a saved snapshot is found.
+	// Apply snapshot to restore the actor's state so that only events after
+	// the snapshot's SequenceNr need to be replayed from the journal.
+	// When no SnapshotStore is configured this method is never called.
+	OnSnapshot(snapshot any)
 }
 
 // PersistContext is provided to OnCommand and gives access to the runtime's
@@ -48,6 +55,12 @@ type PersistContext interface {
 	// then invokes the optional handler with the same event.  If the journal
 	// write fails the actor is stopped and handler is not called.
 	Persist(event any, handler func(any))
+
+	// SaveSnapshot saves snapshot to the SnapshotStore at the current
+	// SequenceNr.  Subsequent recoveries will load this snapshot and replay
+	// only events written after it.  A no-op when no SnapshotStore is
+	// configured.
+	SaveSnapshot(snapshot any)
 
 	// Self returns the actor's own Ref.
 	Self() actor.Ref
@@ -68,11 +81,12 @@ type PersistContext interface {
 //	}, "myActor")
 type PersistentActorWrapper struct {
 	actor.BaseActor
-	inner      PersistentActor
-	journal    Journal
-	seqNr      int64
-	recovering bool
-	stash      []stashedEnvelope
+	inner         PersistentActor
+	journal       Journal
+	snapshotStore SnapshotStore
+	seqNr         int64
+	recovering    bool
+	stash         []stashedEnvelope
 }
 
 type stashedEnvelope struct {
@@ -82,13 +96,21 @@ type stashedEnvelope struct {
 
 // NewPersistentActorWrapper returns an actor.Actor that drives inner through
 // the event-sourcing lifecycle using journal for persistence.
-func NewPersistentActorWrapper(inner PersistentActor, journal Journal) actor.Actor {
-	return &PersistentActorWrapper{
+//
+// An optional SnapshotStore may be provided as the third argument.  When
+// supplied, recovery loads the latest snapshot before replaying journal events,
+// and PersistContext.SaveSnapshot becomes operational.
+func NewPersistentActorWrapper(inner PersistentActor, journal Journal, snapStore ...SnapshotStore) actor.Actor {
+	w := &PersistentActorWrapper{
 		BaseActor:  actor.NewBaseActor(),
 		inner:      inner,
 		journal:    journal,
 		recovering: true,
 	}
+	if len(snapStore) > 0 {
+		w.snapshotStore = snapStore[0]
+	}
+	return w
 }
 
 // PreStart enters Recovering state and replays all persisted events, calling
@@ -125,9 +147,35 @@ func (w *PersistentActorWrapper) Receive(msg any) {
 	w.dispatchCommand(msg, w.Sender())
 }
 
-// recover replays the journal, calling OnEvent for each event.
+// recover restores actor state via the following two-phase protocol:
+//
+//  1. Snapshot phase (optional): if a SnapshotStore is configured, load the
+//     latest snapshot and call OnSnapshot.  The journal replay then starts at
+//     snapshot.SequenceNr + 1 rather than 1, skipping all earlier events.
+//
+//  2. Journal replay phase: read events from fromSeqNr to the end of the log
+//     and call OnEvent for each.
 func (w *PersistentActorWrapper) recover() error {
-	stream, err := w.journal.Read(w.inner.PersistenceId(), 1)
+	fromSeqNr := int64(1)
+
+	// ── Phase 1: snapshot ─────────────────────────────────────────────────
+	if w.snapshotStore != nil {
+		snap, err := w.snapshotStore.Load(w.inner.PersistenceId())
+		if err != nil {
+			return fmt.Errorf("snapshotStore.Load: %w", err)
+		}
+		if snap != nil {
+			w.inner.OnSnapshot(snap.Snapshot)
+			w.seqNr = snap.Metadata.SequenceNr
+			fromSeqNr = snap.Metadata.SequenceNr + 1
+			w.Log().Info("PersistentActorWrapper: snapshot loaded",
+				"persistenceId", w.inner.PersistenceId(),
+				"snapshotSeqNr", snap.Metadata.SequenceNr)
+		}
+	}
+
+	// ── Phase 2: journal replay from snapshot boundary ────────────────────
+	stream, err := w.journal.Read(w.inner.PersistenceId(), fromSeqNr)
 	if err != nil {
 		return fmt.Errorf("journal.Read: %w", err)
 	}
@@ -175,6 +223,25 @@ func (c *persistContextImpl) Persist(event any, handler func(any)) {
 	c.wrapper.inner.OnEvent(event)
 	if handler != nil {
 		handler(event)
+	}
+}
+
+// SaveSnapshot saves snapshot to the SnapshotStore at the actor's current
+// SequenceNr.  A no-op when no SnapshotStore was configured.
+func (c *persistContextImpl) SaveSnapshot(snapshot any) {
+	if c.wrapper.snapshotStore == nil {
+		return
+	}
+	meta := SnapshotMetadata{
+		PersistenceId: c.wrapper.inner.PersistenceId(),
+		SequenceNr:    c.wrapper.seqNr,
+		Timestamp:     time.Now().Unix(),
+	}
+	if err := c.wrapper.snapshotStore.Save(c.wrapper.inner.PersistenceId(), meta, snapshot); err != nil {
+		c.wrapper.Log().Error("PersistContext.SaveSnapshot failed",
+			"persistenceId", c.wrapper.inner.PersistenceId(),
+			"seqNr", c.wrapper.seqNr,
+			"error", err)
 	}
 }
 

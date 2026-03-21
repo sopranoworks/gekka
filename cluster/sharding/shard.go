@@ -55,6 +55,13 @@ type Shard struct {
 
 	// remember-entities (store path): set-based; passivation keeps entities.
 	store ShardStore
+
+	// handoff stash: when inHandoff is true, incoming ShardingEnvelope
+	// messages are buffered here rather than delivered to entities.  On
+	// ShardDrainRequest the buffer is forwarded back to the region so that
+	// the messages can be re-routed to the new shard home.
+	inHandoff    bool
+	handoffStash []ShardingEnvelope
 }
 
 // NewShard creates a Shard for the given type/shard identifiers.
@@ -216,6 +223,23 @@ func (s *Shard) Receive(msg any) {
 	case ShardingEnvelope:
 		s.handleEnvelope(m)
 
+	case ShardBeginHandoff:
+		// Region is being handed off: buffer subsequent messages.
+		s.inHandoff = true
+		s.Log().Info("Shard entering handoff mode", "shardId", s.shardId)
+
+	case ShardDrainRequest:
+		// Flush stash back to region so it can re-route messages to the new home.
+		for _, env := range s.handoffStash {
+			m.RegionRef.Tell(env)
+		}
+		stashLen := len(s.handoffStash)
+		s.handoffStash = nil
+		s.inHandoff = false
+		s.Log().Info("Shard drained stash to region",
+			"shardId", s.shardId, "count", stashLen)
+		m.RegionRef.Tell(ShardDrainResponse{ShardId: s.shardId})
+
 	case actor.Passivate:
 		// Passivation: remove from in-memory map but do NOT call
 		// store.RemoveEntity — the entity remains remembered so it will be
@@ -236,6 +260,14 @@ func (s *Shard) Receive(msg any) {
 
 // handleEnvelope routes a ShardingEnvelope to its entity, spawning if needed.
 func (s *Shard) handleEnvelope(m ShardingEnvelope) {
+	// During handoff, buffer messages for later replay rather than delivering.
+	if s.inHandoff {
+		s.handoffStash = append(s.handoffStash, m)
+		s.Log().Debug("Shard stashing message during handoff",
+			"shardId", s.shardId, "entityId", m.EntityId)
+		return
+	}
+
 	// Unmarshal the user message.
 	var userMsg any = m.Message
 	if s.messageUnmarshaler != nil {

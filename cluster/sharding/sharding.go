@@ -186,4 +186,37 @@ type (
 		ShardId      ShardId
 		TargetRegion string // actor path of the destination ShardRegion
 	}
+
+	// ── Shard-level handoff drain protocol ───────────────────────────────────
+	//
+	// When a ShardRegion receives BeginHandOff it tells the local Shard actor
+	// to enter buffering mode (ShardBeginHandoff).  When HandOff arrives the
+	// region asks the shard to flush its stash back to the region
+	// (ShardDrainRequest) before stopping it.  This prevents in-flight
+	// messages from being discarded when the shard actor is stopped.
+
+	// ShardBeginHandoff is sent by ShardRegion to a local Shard actor to
+	// instruct it to buffer incoming ShardingEnvelope messages instead of
+	// delivering them to entities.  New messages buffered during handoff are
+	// replayed by the region after the shard is stopped so they can be
+	// re-routed to the new home.
+	ShardBeginHandoff struct {
+		ShardId ShardId
+	}
+
+	// ShardDrainRequest is sent by ShardRegion to a local Shard actor to
+	// flush its stash buffer.  The shard re-sends all buffered envelopes to
+	// RegionRef and then replies with ShardDrainResponse.
+	ShardDrainRequest struct {
+		ShardId   ShardId
+		RegionRef actor.Ref
+	}
+
+	// ShardDrainResponse is the shard's acknowledgement that all buffered
+	// messages have been forwarded back to the region.  On receipt the
+	// ShardRegion stops the shard actor and sends ShardStopped to the
+	// coordinator.
+	ShardDrainResponse struct {
+		ShardId ShardId
+	}
 )

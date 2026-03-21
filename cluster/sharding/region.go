@@ -30,6 +30,7 @@ type ShardRegion struct {
 	shardHomePaths     map[ShardId]string       // ShardId -> Region Path (cached)
 	pendingMessages    map[ShardId][]actor.Envelope
 	handoffInProgress  map[ShardId]struct{}     // shards being rebalanced away
+	drainPending       map[ShardId]struct{}     // shards awaiting ShardDrainResponse
 
 	// handoffDone is closed by Receive when a HandoffComplete message arrives
 	// from the coordinator.  PostStop blocks on this channel (with a timeout)
@@ -58,6 +59,7 @@ func NewShardRegion(
 		shardHomePaths:     make(map[ShardId]string),
 		pendingMessages:    make(map[ShardId][]actor.Envelope),
 		handoffInProgress:  make(map[ShardId]struct{}),
+		drainPending:       make(map[ShardId]struct{}),
 		handoffDone:        make(chan struct{}),
 	}
 }
@@ -141,21 +143,44 @@ func (r *ShardRegion) Receive(msg any) {
 
 	case BeginHandOff:
 		// Coordinator wants to rebalance this shard to a less-loaded region.
-		// Acknowledge receipt so the coordinator can send HandOff; also clear
-		// the home-path cache so new messages buffer and re-ask the coordinator
-		// for the shard's new home after the handoff completes.
+		// Tell the local shard (if any) to buffer incoming messages, clear
+		// the home-path cache so new messages from other regions buffer here
+		// too, then acknowledge to the coordinator.
 		sid := m.ShardId
 		r.handoffInProgress[sid] = struct{}{}
 		delete(r.shardHomePaths, sid)
 		r.Log().Info("ShardRegion: BeginHandOff received", "shardId", sid)
+		if shard, ok := r.shards[sid]; ok {
+			shard.Tell(ShardBeginHandoff{ShardId: sid})
+		}
 		if r.coordinator != nil {
 			r.coordinator.Tell(BeginHandOffAck{ShardId: sid}, r.Self())
 		}
 
 	case HandOff:
-		// Coordinator authorises the entity shutdown.  Stop the local Shard
-		// actor (which stops all its entities) and notify the coordinator that
-		// the shard is empty and ready for reallocation.
+		// Coordinator authorises the entity shutdown.  Ask the local shard to
+		// flush its stash buffer back to this region first (drain protocol),
+		// then stop it.  ShardDrainResponse triggers the actual stop and the
+		// ShardStopped notification to the coordinator.
+		// If no local shard exists, notify the coordinator immediately.
+		sid := m.ShardId
+		if shard, ok := r.shards[sid]; ok {
+			r.drainPending[sid] = struct{}{}
+			shard.Tell(ShardDrainRequest{ShardId: sid, RegionRef: r.Self()})
+			r.Log().Info("ShardRegion: HandOff — drain requested", "shardId", sid)
+		} else {
+			delete(r.handoffInProgress, sid)
+			r.Log().Info("ShardRegion: HandOff — no local shard, notifying coordinator", "shardId", sid)
+			if r.coordinator != nil {
+				r.coordinator.Tell(ShardStopped{ShardId: sid}, r.Self())
+			}
+		}
+
+	case ShardDrainResponse:
+		// Shard has flushed its stash; stashed envelopes have been re-sent to
+		// this region as plain ShardingEnvelope messages and will be buffered
+		// in pendingMessages (home path is already cleared).  Now stop the
+		// shard and notify the coordinator.
 		sid := m.ShardId
 		if shard, ok := r.shards[sid]; ok {
 			if stopper, ok := r.System().(interface{ Stop(actor.Ref) }); ok {
@@ -163,8 +188,9 @@ func (r *ShardRegion) Receive(msg any) {
 			}
 			delete(r.shards, sid)
 		}
+		delete(r.drainPending, sid)
 		delete(r.handoffInProgress, sid)
-		r.Log().Info("ShardRegion: HandOff complete, shard stopped", "shardId", sid)
+		r.Log().Info("ShardRegion: drain complete, shard stopped", "shardId", sid)
 		if r.coordinator != nil {
 			r.coordinator.Tell(ShardStopped{ShardId: sid}, r.Self())
 		}

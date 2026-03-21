@@ -19,11 +19,18 @@ type EntityId = string
 type ShardId = string
 
 // ShardingEnvelope is a standard envelope for sharded messages.
+//
+// TraceContext carries the W3C TraceContext headers (e.g. "traceparent",
+// "tracestate") so that the distributed trace can be propagated across
+// actor-message boundaries where no context.Context is passed directly.
+// Populate it using go.opentelemetry.io/otel/propagation.MapCarrier and
+// otel.GetTextMapPropagator().Inject before sending the envelope.
 type ShardingEnvelope struct {
 	EntityId        EntityId
 	ShardId         ShardId
 	Message         json.RawMessage
-	MessageManifest string // manifest of the message for serialization
+	MessageManifest string            // manifest of the message for serialization
+	TraceContext    map[string]string // W3C TraceContext headers for distributed tracing
 }
 
 // ExtractEntityId pulls entity ID, shard ID and the actual message from an incoming message.

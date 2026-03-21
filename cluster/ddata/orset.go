@@ -20,16 +20,26 @@ type Dot struct {
 // Elements are tagged with dots; removal removes all observed dots.
 // Merge = union of dots for elements present in either side,
 // filtered to only include dots known to both sides (for removed elements).
+//
+// ORSet implements DeltaReplicatedData: Add/Remove operations are accumulated
+// in a compact delta so the replicator can gossip only the changes.
 type ORSet struct {
 	mu   sync.RWMutex
 	dots map[string]map[Dot]struct{} // element -> set of dots
 	vv   map[string]uint64           // version vector: nodeID -> max counter seen
+
+	// delta accumulator
+	deltaAdded    map[string][]Dot // new dots since last ResetDelta
+	deltaRemoved  []string         // elements explicitly removed since last ResetDelta
+	deltaVV       map[string]uint64
 }
 
 func NewORSet() *ORSet {
 	return &ORSet{
-		dots: make(map[string]map[Dot]struct{}),
-		vv:   make(map[string]uint64),
+		dots:         make(map[string]map[Dot]struct{}),
+		vv:           make(map[string]uint64),
+		deltaAdded:   make(map[string][]Dot),
+		deltaVV:      make(map[string]uint64),
 	}
 }
 
@@ -43,6 +53,9 @@ func (s *ORSet) Add(nodeID, element string) {
 		s.dots[element] = make(map[Dot]struct{})
 	}
 	s.dots[element][dot] = struct{}{}
+	// delta tracking
+	s.deltaAdded[element] = append(s.deltaAdded[element], dot)
+	s.deltaVV[nodeID] = s.vv[nodeID]
 }
 
 // Remove removes element by clearing all its dots.
@@ -50,6 +63,8 @@ func (s *ORSet) Remove(element string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.dots, element)
+	// delta tracking
+	s.deltaRemoved = append(s.deltaRemoved, element)
 }
 
 // Contains returns true if element is in the set.
@@ -164,3 +179,62 @@ func (s *ORSet) MergeSnapshot(snap ORSetSnapshot) {
 		}
 	}
 }
+
+// MergeORSetDelta merges an incoming ORSetDelta into this set.
+func (s *ORSet) MergeORSetDelta(d ORSetDelta) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Apply added dots
+	for elem, dots := range d.AddedDots {
+		if s.dots[elem] == nil {
+			s.dots[elem] = make(map[Dot]struct{})
+		}
+		for _, dot := range dots {
+			s.dots[elem][dot] = struct{}{}
+		}
+	}
+	// Apply removals
+	for _, elem := range d.RemovedElements {
+		delete(s.dots, elem)
+	}
+	// Merge version vector
+	for k, v := range d.VV {
+		if v > s.vv[k] {
+			s.vv[k] = v
+		}
+	}
+}
+
+// DeltaPayload implements DeltaReplicatedData.
+func (s *ORSet) DeltaPayload() (any, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.deltaAdded) == 0 && len(s.deltaRemoved) == 0 {
+		return nil, false
+	}
+	added := make(map[string][]Dot, len(s.deltaAdded))
+	for elem, dots := range s.deltaAdded {
+		cp := make([]Dot, len(dots))
+		copy(cp, dots)
+		added[elem] = cp
+	}
+	removed := make([]string, len(s.deltaRemoved))
+	copy(removed, s.deltaRemoved)
+	vv := make(map[string]uint64, len(s.deltaVV))
+	for k, v := range s.deltaVV {
+		vv[k] = v
+	}
+	return ORSetDelta{AddedDots: added, RemovedElements: removed, VV: vv}, true
+}
+
+// ResetDelta implements DeltaReplicatedData.
+func (s *ORSet) ResetDelta() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deltaAdded = make(map[string][]Dot)
+	s.deltaRemoved = nil
+	s.deltaVV = make(map[string]uint64)
+}
+
+// Ensure ORSet implements DeltaReplicatedData at compile time.
+var _ DeltaReplicatedData = (*ORSet)(nil)

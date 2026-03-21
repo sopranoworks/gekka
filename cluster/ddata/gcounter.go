@@ -13,20 +13,29 @@ import "sync"
 // GCounter is a Grow-only Counter CRDT.
 // Each node can only increment its own slot; the total value is the sum of all slots.
 // Merge is pairwise max, which satisfies commutativity, associativity, and idempotency.
+//
+// GCounter implements DeltaReplicatedData: each Increment call accumulates the
+// incremental value in a separate delta map.  The replicator calls DeltaPayload
+// to retrieve the delta and ResetDelta to clear it after gossip.
 type GCounter struct {
 	mu    sync.RWMutex
 	state map[string]uint64 // nodeID -> value
+	delta map[string]uint64 // accumulated increments since last ResetDelta
 }
 
 func NewGCounter() *GCounter {
-	return &GCounter{state: make(map[string]uint64)}
+	return &GCounter{
+		state: make(map[string]uint64),
+		delta: make(map[string]uint64),
+	}
 }
 
-// Increment adds delta to this node's slot.
-func (g *GCounter) Increment(nodeID string, delta uint64) {
+// Increment adds d to this node's slot and records it in the delta accumulator.
+func (g *GCounter) Increment(nodeID string, d uint64) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.state[nodeID] += delta
+	g.state[nodeID] += d
+	g.delta[nodeID] += d
 }
 
 // Value returns the total count across all nodes.
@@ -88,3 +97,42 @@ func (g *GCounter) MergeState(incoming map[string]uint64) {
 		}
 	}
 }
+
+// MergeCounterDelta merges an incoming GCounterDelta into this counter.
+// Delta values are added to the current slot values (clamped so the total
+// never decreases — identical semantics to pairwise-max on absolute values).
+func (g *GCounter) MergeCounterDelta(d GCounterDelta) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for k, inc := range d.Delta {
+		if g.state[k]+inc > g.state[k] { // overflow guard
+			g.state[k] += inc
+		}
+	}
+}
+
+// DeltaPayload implements DeltaReplicatedData. Returns the accumulated delta
+// since the last ResetDelta call. Returns (nil, false) when no increments have
+// occurred since the last reset.
+func (g *GCounter) DeltaPayload() (any, bool) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	if len(g.delta) == 0 {
+		return nil, false
+	}
+	d := make(map[string]uint64, len(g.delta))
+	for k, v := range g.delta {
+		d[k] = v
+	}
+	return GCounterDelta{Delta: d}, true
+}
+
+// ResetDelta implements DeltaReplicatedData. Clears the accumulated delta.
+func (g *GCounter) ResetDelta() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.delta = make(map[string]uint64)
+}
+
+// Ensure GCounter implements DeltaReplicatedData at compile time.
+var _ DeltaReplicatedData = (*GCounter)(nil)

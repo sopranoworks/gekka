@@ -13,6 +13,7 @@ import (
 
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/cluster"
+	cpersistence "github.com/sopranoworks/gekka/cluster/persistence"
 	"github.com/sopranoworks/gekka/cluster/singleton"
 )
 
@@ -43,7 +44,31 @@ type ClusterShardingConfig struct {
 	// Role, when non-empty, restricts the coordinator singleton to nodes that
 	// carry this cluster role.  Pass "" to allow any node.
 	Role string
+
+	// PersistentEntityFactory, when non-nil, is called instead of EntityProps
+	// to create each entity actor.  The returned PersistentActor is wrapped in
+	// a PersistentActorWrapper so that events are journalled automatically.
+	// EntityJournal must also be set when this field is non-nil.
+	PersistentEntityFactory func(entityId EntityId) cpersistence.PersistentActor
+
+	// EntityJournal is the Journal used to persist events for sharded entities
+	// when PersistentEntityFactory is set.
+	EntityJournal cpersistence.Journal
+
+	// EntitySnapshotStore, when non-nil, enables snapshot support for sharded
+	// persistent entities.  Optional even when PersistentEntityFactory is set.
+	EntitySnapshotStore cpersistence.SnapshotStore
 }
+
+// entityIdAdapter wraps a PersistentActor and overrides PersistenceId to
+// return the sharding EntityId, so that users do not need to thread the ID
+// through their own actor implementations.
+type entityIdAdapter struct {
+	cpersistence.PersistentActor
+	entityId EntityId
+}
+
+func (a *entityIdAdapter) PersistenceId() string { return a.entityId }
 
 // StartSharding wires the full cluster-sharding stack and returns the local
 // ShardRegion actor's Ref.
@@ -122,10 +147,28 @@ func StartSharding(
 	// messages while awaiting ShardHome responses and forwards them once the
 	// allocation is known — either to a locally-spawned Shard or to the
 	// remote ShardRegion on the owning node.
-	entityCreator := func(ctx actor.ActorContext, id EntityId) (actor.Ref, error) {
-		return ctx.ActorOf(actor.Props{
-			New: func() actor.Actor { return cfg.EntityProps.New(id) },
-		}, id)
+	var entityCreator func(ctx actor.ActorContext, id EntityId) (actor.Ref, error)
+	if cfg.PersistentEntityFactory != nil && cfg.EntityJournal != nil {
+		entityCreator = func(ctx actor.ActorContext, id EntityId) (actor.Ref, error) {
+			return ctx.ActorOf(actor.Props{
+				New: func() actor.Actor {
+					inner := &entityIdAdapter{
+						PersistentActor: cfg.PersistentEntityFactory(id),
+						entityId:        id,
+					}
+					if cfg.EntitySnapshotStore != nil {
+						return cpersistence.NewPersistentActorWrapper(inner, cfg.EntityJournal, cfg.EntitySnapshotStore)
+					}
+					return cpersistence.NewPersistentActorWrapper(inner, cfg.EntityJournal)
+				},
+			}, id)
+		}
+	} else {
+		entityCreator = func(ctx actor.ActorContext, id EntityId) (actor.Ref, error) {
+			return ctx.ActorOf(actor.Props{
+				New: func() actor.Actor { return cfg.EntityProps.New(id) },
+			}, id)
+		}
 	}
 	regionName := "shardRegion-" + cfg.TypeName
 	regionRef, err := sys.ActorOf(actor.Props{

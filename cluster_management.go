@@ -9,6 +9,8 @@
 package gekka
 
 import (
+	"fmt"
+
 	"github.com/sopranoworks/gekka/cluster/ddata"
 	"github.com/sopranoworks/gekka/cluster/sharding"
 )
@@ -52,4 +54,20 @@ func (c *Cluster) ShardDistribution(typeName string) (map[string]string, bool) {
 		return nil, false
 	}
 	return coord.AllocationSnapshot(), true
+}
+
+// RebalanceShard sends a RebalanceShard control message to the coordinator for
+// typeName, requesting that shardId be moved to targetRegion.
+// Returns an error when no coordinator is registered for typeName.
+// Satisfies management.ClusterStateProvider; used by POST /cluster/sharding/{typeName}/rebalance.
+func (c *Cluster) RebalanceShard(typeName, shardId, targetRegion string) error {
+	coord, ok := sharding.LookupCoordinator(typeName)
+	if !ok {
+		return fmt.Errorf("no coordinator registered for entity type %q", typeName)
+	}
+	coord.Self().Tell(sharding.RebalanceShard{
+		ShardId:      shardId,
+		TargetRegion: targetRegion,
+	})
+	return nil
 }

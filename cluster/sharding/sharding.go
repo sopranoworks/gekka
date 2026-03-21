@@ -169,4 +169,21 @@ type (
 	ShardStopped struct {
 		ShardId ShardId
 	}
+
+	// RebalanceShard is a control message that operators or tooling can send
+	// directly to a ShardCoordinator to move a specific shard to a named
+	// target region, bypassing the automatic allocation strategy.
+	//
+	// The coordinator initiates the standard BeginHandOff → HandOff →
+	// ShardStopped sequence against the current shard owner.  When the shard
+	// is cleared it is pre-assigned to TargetRegion so the next GetShardHome
+	// for that shard goes to the desired region rather than being re-allocated
+	// by the strategy.
+	//
+	// If ShardId is not currently allocated, or TargetRegion is not a
+	// registered region, the message is silently dropped (idempotent).
+	RebalanceShard struct {
+		ShardId      ShardId
+		TargetRegion string // actor path of the destination ShardRegion
+	}
 )

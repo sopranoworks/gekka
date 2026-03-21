@@ -48,6 +48,14 @@ type mockProvider struct {
 	configUpdated    map[string]any   // captures UpdateConfigEntry calls
 	shardDist        map[string]string
 	shardDistFound   bool
+
+	// Phase-15 extensions
+	rebalanceCalled []rebalanceCall
+	rebalanceErr    error
+}
+
+type rebalanceCall struct {
+	typeName, shardID, targetRegion string
 }
 
 func (p *mockProvider) ClusterManager() *cluster.ClusterManager { return p.cm }
@@ -113,6 +121,16 @@ func (p *mockProvider) ShardDistribution(typeName string) (map[string]string, bo
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.shardDist, p.shardDistFound
+}
+
+func (p *mockProvider) RebalanceShard(typeName, shardID, targetRegion string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.rebalanceErr != nil {
+		return p.rebalanceErr
+	}
+	p.rebalanceCalled = append(p.rebalanceCalled, rebalanceCall{typeName, shardID, targetRegion})
+	return nil
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -847,5 +865,74 @@ func TestDashboard_ReturnsHTML(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "Gekka Cluster Dashboard") {
 		t.Errorf("dashboard body does not contain expected title")
+	}
+}
+
+// ── Phase-15: POST /cluster/sharding/{typeName}/rebalance ─────────────────────
+
+func TestPostShardingRebalance_Accepted(t *testing.T) {
+	p := &mockProvider{
+		cm: buildGossip([]memberSpec{
+			{"127.0.0.1", 2552, "GekkaSystem", gproto_cluster.MemberStatus_Up, []string{}},
+		}),
+		shardDistFound: true,
+		shardDist:      map[string]string{"s1": "/user/region-A"},
+	}
+	h := newHandler(t, p)
+
+	body := `{"shard_id":"s1","target_region":"/user/region-C"}`
+	req := httptest.NewRequest(http.MethodPost, "/cluster/sharding/Cart/rebalance",
+		strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", w.Code, w.Body.String())
+	}
+	p.mu.Lock()
+	calls := p.rebalanceCalled
+	p.mu.Unlock()
+	if len(calls) != 1 {
+		t.Fatalf("expected RebalanceShard called once, got %d", len(calls))
+	}
+	if calls[0].typeName != "Cart" || calls[0].shardID != "s1" || calls[0].targetRegion != "/user/region-C" {
+		t.Errorf("unexpected call args: %+v", calls[0])
+	}
+}
+
+func TestPostShardingRebalance_MissingFields(t *testing.T) {
+	p := &mockProvider{
+		cm: buildGossip([]memberSpec{
+			{"127.0.0.1", 2552, "GekkaSystem", gproto_cluster.MemberStatus_Up, []string{}},
+		}),
+	}
+	h := newHandler(t, p)
+
+	req := httptest.NewRequest(http.MethodPost, "/cluster/sharding/Cart/rebalance",
+		strings.NewReader(`{"shard_id":"s1"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestPostShardingRebalance_MethodNotAllowed(t *testing.T) {
+	p := &mockProvider{
+		cm: buildGossip([]memberSpec{
+			{"127.0.0.1", 2552, "GekkaSystem", gproto_cluster.MemberStatus_Up, []string{}},
+		}),
+	}
+	h := newHandler(t, p)
+
+	req := httptest.NewRequest(http.MethodDelete, "/cluster/sharding/Cart/rebalance", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d", w.Code)
 	}
 }

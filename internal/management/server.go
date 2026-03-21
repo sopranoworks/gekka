@@ -113,6 +113,12 @@ type ClusterStateProvider interface {
 	// typeName (i.e. this node is not the coordinator for that type, or
 	// StartSharding has not been called).
 	ShardDistribution(typeName string) (map[string]string, bool)
+
+	// RebalanceShard sends a manual rebalance request to the coordinator for
+	// typeName, instructing it to move shardId to targetRegion.
+	// Returns an error when typeName has no registered coordinator, or when
+	// shardId / targetRegion validation fails inside the coordinator.
+	RebalanceShard(typeName, shardId, targetRegion string) error
 }
 
 // MemberInfo is the JSON representation of a single cluster member returned by
@@ -382,15 +388,30 @@ func (ms *ManagementServer) handleConfig(w http.ResponseWriter, r *http.Request)
 
 // ── Sharding handler ──────────────────────────────────────────────────────────
 
-// handleSharding serves GET /cluster/sharding/{typeName} — returns the
-// shard→region allocation map for the given entity type.
-// Responds 404 when no coordinator is registered for typeName.
+// handleSharding dispatches requests under /cluster/sharding/:
+//
+//	GET  /cluster/sharding/{typeName}           → shard distribution map
+//	POST /cluster/sharding/{typeName}/rebalance → manual shard rebalance
 func (ms *ManagementServer) handleSharding(w http.ResponseWriter, r *http.Request) {
+	tail := strings.TrimPrefix(r.URL.Path, "/cluster/sharding/")
+
+	// POST .../rebalance
+	if r.Method == http.MethodPost && strings.HasSuffix(tail, "/rebalance") {
+		typeName := strings.TrimSuffix(tail, "/rebalance")
+		if typeName == "" {
+			http.Error(w, "bad request: typeName is required", http.StatusBadRequest)
+			return
+		}
+		ms.handleShardingRebalance(w, r, typeName)
+		return
+	}
+
+	// GET .../typeName
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	typeName := strings.TrimPrefix(r.URL.Path, "/cluster/sharding/")
+	typeName := tail
 	if typeName == "" {
 		http.Error(w, `bad request: typeName is required`, http.StatusBadRequest)
 		return
@@ -406,6 +427,31 @@ func (ms *ManagementServer) handleSharding(w http.ResponseWriter, r *http.Reques
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	enc.Encode(dist) //nolint:errcheck
+}
+
+// handleShardingRebalance serves POST /cluster/sharding/{typeName}/rebalance.
+// Body: {"shard_id":"<id>","target_region":"<actorPath>"}
+func (ms *ManagementServer) handleShardingRebalance(w http.ResponseWriter, r *http.Request, typeName string) {
+	var body struct {
+		ShardID      string `json:"shard_id"`
+		TargetRegion string `json:"target_region"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if body.ShardID == "" || body.TargetRegion == "" {
+		http.Error(w, "bad request: shard_id and target_region are required", http.StatusBadRequest)
+		return
+	}
+	if err := ms.provider.RebalanceShard(typeName, body.ShardID, body.TargetRegion); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	fmt.Fprintf(w, `{"status":"rebalance initiated","shard_id":%q,"target_region":%q}`+"\n", //nolint:errcheck
+		body.ShardID, body.TargetRegion)
 }
 
 // ── Dashboard handler ─────────────────────────────────────────────────────────

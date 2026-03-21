@@ -53,6 +53,7 @@ type ShardCoordinator struct {
 	regions             map[string]actor.Ref    // RegionPath -> Ref
 	shards              map[ShardId]string      // ShardId -> RegionPath
 	rebalanceInProgress map[ShardId]struct{}    // shards currently being rebalanced
+	forcedTarget        map[ShardId]string      // ShardId -> RegionPath for manual rebalance
 	// RebalanceInterval overrides the default 10 s period between rebalance
 	// checks.  Zero means 10 s.  Exposed for testing (set before PreStart).
 	RebalanceInterval time.Duration
@@ -70,6 +71,7 @@ func NewShardCoordinator(strategy ShardAllocationStrategy) *ShardCoordinator {
 		regions:             make(map[string]actor.Ref),
 		shards:              make(map[ShardId]string),
 		rebalanceInProgress: make(map[ShardId]struct{}),
+		forcedTarget:        make(map[ShardId]string),
 		snapshot:            make(map[ShardId]string),
 	}
 }
@@ -236,12 +238,52 @@ func (c *ShardCoordinator) Receive(msg any) {
 		}
 
 	case ShardStopped:
-		// Region has drained the shard; clear allocation so the next
-		// GetShardHome re-assigns it to a less-loaded region.
+		// Region has drained the shard.
 		delete(c.rebalanceInProgress, m.ShardId)
-		delete(c.shards, m.ShardId)
+		if target, forced := c.forcedTarget[m.ShardId]; forced {
+			// Manual rebalance: pre-assign to the requested region so the
+			// next GetShardHome routes there without re-running the strategy.
+			delete(c.forcedTarget, m.ShardId)
+			c.shards[m.ShardId] = target
+			c.Log().Info("Manual rebalance: shard pre-assigned to target",
+				"shardId", m.ShardId, "target", target)
+		} else {
+			// Normal rebalance: clear so the strategy re-allocates.
+			delete(c.shards, m.ShardId)
+			c.Log().Info("Rebalance: shard cleared for reallocation", "shardId", m.ShardId)
+		}
 		c.updateSnapshot()
-		c.Log().Info("Rebalance: shard cleared for reallocation", "shardId", m.ShardId)
+
+	case RebalanceShard:
+		// Manual rebalance request: move a specific shard to TargetRegion,
+		// bypassing the automatic allocation strategy.
+		ownerPath, allocated := c.shards[m.ShardId]
+		if !allocated {
+			c.Log().Warn("RebalanceShard: shard not allocated — ignoring",
+				"shardId", m.ShardId, "target", m.TargetRegion)
+			return
+		}
+		if _, known := c.regions[m.TargetRegion]; !known {
+			c.Log().Warn("RebalanceShard: target region not registered — ignoring",
+				"shardId", m.ShardId, "target", m.TargetRegion)
+			return
+		}
+		if ownerPath == m.TargetRegion {
+			c.Log().Info("RebalanceShard: shard already on target region — no-op",
+				"shardId", m.ShardId, "target", m.TargetRegion)
+			return
+		}
+		if _, alreadyMoving := c.rebalanceInProgress[m.ShardId]; alreadyMoving {
+			c.Log().Warn("RebalanceShard: shard already being rebalanced — ignoring",
+				"shardId", m.ShardId)
+			return
+		}
+		ownerRef := c.regions[ownerPath]
+		c.forcedTarget[m.ShardId] = m.TargetRegion
+		c.rebalanceInProgress[m.ShardId] = struct{}{}
+		ownerRef.Tell(BeginHandOff{ShardId: m.ShardId}, c.Self())
+		c.Log().Info("Manual rebalance: BeginHandOff sent",
+			"shardId", m.ShardId, "from", ownerPath, "to", m.TargetRegion)
 
 	case actor.TerminatedMessage:
 		// Region stopped unexpectedly (node crash / process kill).
@@ -254,6 +296,13 @@ func (c *ShardCoordinator) Receive(msg any) {
 				if rpath == terminatedPath {
 					delete(c.shards, sid)
 					delete(c.rebalanceInProgress, sid)
+					delete(c.forcedTarget, sid)
+				}
+			}
+			// Also cancel any forced rebalance targeting the terminated region.
+			for sid, target := range c.forcedTarget {
+				if target == terminatedPath {
+					delete(c.forcedTarget, sid)
 				}
 			}
 			delete(c.regions, terminatedPath)

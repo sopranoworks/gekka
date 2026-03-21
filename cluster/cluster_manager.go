@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
+	icluster "github.com/sopranoworks/gekka/internal/cluster"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 
 	"google.golang.org/protobuf/proto"
@@ -81,6 +82,20 @@ type ClusterManager struct {
 
 	// Router is a function for sending messages, avoiding a cycle with the root package.
 	Router func(ctx context.Context, path string, msg any) error
+
+	// SBRStrategy is an optional static-quorum strategy from the internal SBR
+	// primitives.  When set, CheckReachability invokes it after the partition
+	// has been unreachable for SBRStableAfter and calls LeaveCluster on Down.
+	SBRStrategy icluster.Strategy
+
+	// SBRStableAfter is how long the unreachable set must remain non-empty
+	// before the SBRStrategy is consulted.  Defaults to 20s when zero.
+	SBRStableAfter time.Duration
+
+	// sbrUnreachableSince records when the current unreachable set first
+	// appeared.  Zero means the cluster is currently fully reachable.
+	// Protected by Mu.
+	sbrUnreachableSince time.Time
 
 	// Cluster event subscribers — managed by cluster_events.go methods.
 	SubMu sync.RWMutex
@@ -1640,6 +1655,102 @@ func (cm *ClusterManager) CheckReachability() {
 			cm.Mu.Unlock()
 		}
 	}
+
+	// Internal SBR strategy check (static-quorum primitive).
+	// Consult the strategy only after the unreachable set has been stable for
+	// SBRStableAfter, preventing spurious downing during transient partitions.
+	if cm.SBRStrategy != nil {
+		cm.checkInternalSBR()
+	}
+}
+
+// checkInternalSBR evaluates the internal SBR strategy after the stable-after
+// period and calls LeaveCluster when the strategy returns Down.
+func (cm *ClusterManager) checkInternalSBR() {
+	stableAfter := cm.SBRStableAfter
+	if stableAfter <= 0 {
+		stableAfter = 20 * time.Second
+	}
+
+	allMembers, unreachableMembers := cm.collectSBRMembersLocked()
+
+	cm.Mu.Lock()
+	if len(unreachableMembers) > 0 {
+		if cm.sbrUnreachableSince.IsZero() {
+			cm.sbrUnreachableSince = time.Now()
+		}
+	} else {
+		cm.sbrUnreachableSince = time.Time{} // reset: all members reachable again
+		cm.Mu.Unlock()
+		return
+	}
+	elapsed := time.Since(cm.sbrUnreachableSince)
+	cm.Mu.Unlock()
+
+	if elapsed < stableAfter {
+		return // partition too recent — wait for stability
+	}
+
+	action := cm.SBRStrategy.Decide(allMembers, unreachableMembers)
+	log.Printf("SBR(internal): action=%v reachable=%d total=%d",
+		action, len(allMembers)-len(unreachableMembers), len(allMembers))
+
+	if action == icluster.Down {
+		log.Printf("SBR(internal): downing self — partition below static quorum")
+		if err := cm.LeaveCluster(); err != nil {
+			log.Printf("SBR(internal): LeaveCluster error: %v", err)
+		}
+	}
+}
+
+// collectSBRMembersLocked reads the gossip state and returns two slices:
+// all Up/WeaklyUp members and the unreachable subset.
+// Safe to call without holding Mu (acquires read lock internally).
+func (cm *ClusterManager) collectSBRMembersLocked() (all []icluster.Member, unreachable []icluster.Member) {
+	cm.Mu.RLock()
+	defer cm.Mu.RUnlock()
+
+	state := cm.State
+
+	unreachableIdx := make(map[int32]struct{})
+	if state.Overview != nil {
+		for _, obs := range state.Overview.ObserverReachability {
+			if obs.GetAddressIndex() != 0 {
+				continue
+			}
+			for _, sub := range obs.SubjectReachability {
+				if sub.GetStatus() == gproto_cluster.ReachabilityStatus_Unreachable {
+					unreachableIdx[sub.GetAddressIndex()] = struct{}{}
+				}
+			}
+		}
+	}
+
+	for _, mem := range state.Members {
+		st := mem.GetStatus()
+		if st != gproto_cluster.MemberStatus_Up && st != gproto_cluster.MemberStatus_WeaklyUp {
+			continue
+		}
+		addrIdx := mem.GetAddressIndex()
+		ua := state.AllAddresses[addrIdx]
+		a := ua.GetAddress()
+		roles := make([]string, 0, len(mem.GetRolesIndexes()))
+		for _, idx := range mem.GetRolesIndexes() {
+			if int(idx) < len(state.AllRoles) {
+				roles = append(roles, state.AllRoles[idx])
+			}
+		}
+		m := icluster.Member{
+			Host:  a.GetHostname(),
+			Port:  a.GetPort(),
+			Roles: roles,
+		}
+		all = append(all, m)
+		if _, isUnreachable := unreachableIdx[addrIdx]; isUnreachable {
+			unreachable = append(unreachable, m)
+		}
+	}
+	return
 }
 
 func (cm *ClusterManager) updateReachability(addrIdx int32, status gproto_cluster.ReachabilityStatus) {

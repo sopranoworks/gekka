@@ -20,8 +20,15 @@ import (
 )
 
 // ReplicatorMsg is the JSON envelope sent over Artery for gossip.
+//
+// Full-state message types: "gcounter-gossip", "orset-gossip", "lwwmap-gossip",
+// "pncounter-gossip", "orflag-gossip", "lwwregister-gossip".
+//
+// Delta message types (Phase 18): "gcounter-delta", "orset-delta", "lwwmap-delta".
+// Delta messages carry only changes since the last gossip cycle; the replicator
+// falls back to a full-state message every fullStateEvery rounds.
 type ReplicatorMsg struct {
-	Type    string          `json:"type"` // "gcounter-gossip", "orset-gossip", "lwwmap-gossip", "get-reply"
+	Type    string          `json:"type"`
 	Key     string          `json:"key"`
 	Payload json.RawMessage `json:"payload"`
 }
@@ -59,7 +66,15 @@ const (
 	WriteAll
 )
 
+// fullStateEvery controls how often a full-state gossip is sent.
+// Between full-state rounds, only deltas are sent (when available).
+const fullStateEvery = 10
+
 // Replicator manages a set of named CRDTs and gossips state to peers.
+//
+// Delta-aware CRDTs (GCounter, ORSet, LWWMap) are gossiped using compact delta
+// messages on most rounds, and a full-state message every fullStateEvery rounds
+// to repair any dropped deltas.
 type Replicator struct {
 	mu       sync.RWMutex
 	nodeID   string
@@ -74,6 +89,7 @@ type Replicator struct {
 	router *actor.Router
 
 	GossipInterval time.Duration
+	gossipRound    int // incremented each gossipAll call
 	stopCh         chan struct{}
 	wg             sync.WaitGroup
 
@@ -322,6 +338,35 @@ func (r *Replicator) HandleIncoming(data []byte) error {
 		reg.MergeSnapshot(p.LWWRegisterSnapshot)
 		log.Printf("Replicator: merged LWWRegister[%s], value=%v", msg.Key, func() any { v, _ := reg.Get(); return v }())
 
+	// ── Delta message types ────────────────────────────────────────────────
+
+	case "gcounter-delta":
+		var d GCounterDelta
+		if err := json.Unmarshal(msg.Payload, &d); err != nil {
+			return err
+		}
+		c := r.GCounter(msg.Key)
+		c.MergeCounterDelta(d)
+		log.Printf("Replicator: merged GCounter delta[%s], value=%d", msg.Key, c.Value())
+
+	case "orset-delta":
+		var d ORSetDelta
+		if err := json.Unmarshal(msg.Payload, &d); err != nil {
+			return err
+		}
+		s := r.ORSet(msg.Key)
+		s.MergeORSetDelta(d)
+		log.Printf("Replicator: merged ORSet delta[%s], elements=%v", msg.Key, s.Elements())
+
+	case "lwwmap-delta":
+		var d LWWMapDelta
+		if err := json.Unmarshal(msg.Payload, &d); err != nil {
+			return err
+		}
+		m := r.LWWMap(msg.Key)
+		m.MergeLWWMapDelta(d)
+		log.Printf("Replicator: merged LWWMap delta[%s], keys=%d", msg.Key, len(m.Entries()))
+
 	default:
 		if r.OnUnknownKey != nil {
 			r.OnUnknownKey(msg.Key, msg)
@@ -331,7 +376,11 @@ func (r *Replicator) HandleIncoming(data []byte) error {
 }
 
 func (r *Replicator) gossipAll(ctx context.Context) {
-	r.mu.RLock()
+	r.mu.Lock()
+	r.gossipRound++
+	round := r.gossipRound
+	fullState := round%fullStateEvery == 0
+
 	counters := make(map[string]*GCounter, len(r.counters))
 	for k, v := range r.counters {
 		counters[k] = v
@@ -340,9 +389,9 @@ func (r *Replicator) gossipAll(ctx context.Context) {
 	for k, v := range r.sets {
 		sets[k] = v
 	}
-	maps := make(map[string]*LWWMap, len(r.maps))
+	lwwMaps := make(map[string]*LWWMap, len(r.maps))
 	for k, v := range r.maps {
-		maps[k] = v
+		lwwMaps[k] = v
 	}
 	pnCounters := make(map[string]*PNCounter, len(r.pnCounters))
 	for k, v := range r.pnCounters {
@@ -356,17 +405,49 @@ func (r *Replicator) gossipAll(ctx context.Context) {
 	for k, v := range r.registers {
 		registers[k] = v
 	}
-	r.mu.RUnlock()
+	r.mu.Unlock()
 
+	// Delta-aware CRDTs: send delta unless it's a full-state round.
 	for key, c := range counters {
+		if !fullState {
+			if payload, ok := c.DeltaPayload(); ok {
+				r.gossipDelta(ctx, "gcounter-delta", key, payload)
+				c.ResetDelta()
+				continue
+			}
+			// No delta — skip (peer already has the current state from a
+			// previous full-state round, or this node hasn't changed).
+			continue
+		}
+		c.ResetDelta()
 		r.gossipCounter(ctx, key, c)
 	}
 	for key, s := range sets {
+		if !fullState {
+			if payload, ok := s.DeltaPayload(); ok {
+				r.gossipDelta(ctx, "orset-delta", key, payload)
+				s.ResetDelta()
+				continue
+			}
+			continue
+		}
+		s.ResetDelta()
 		r.gossipSet(ctx, key, s)
 	}
-	for key, m := range maps {
+	for key, m := range lwwMaps {
+		if !fullState {
+			if payload, ok := m.DeltaPayload(); ok {
+				r.gossipDelta(ctx, "lwwmap-delta", key, payload)
+				m.ResetDelta()
+				continue
+			}
+			continue
+		}
+		m.ResetDelta()
 		r.gossipMap(ctx, key, m)
 	}
+
+	// Non-delta CRDTs: always send full state.
 	for key, c := range pnCounters {
 		r.gossipPNCounter(ctx, key, c)
 	}
@@ -376,6 +457,14 @@ func (r *Replicator) gossipAll(ctx context.Context) {
 	for key, reg := range registers {
 		r.gossipLWWRegister(ctx, key, reg)
 	}
+}
+
+func (r *Replicator) gossipDelta(ctx context.Context, msgType, key string, payload any) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	r.sendToPeers(ctx, ReplicatorMsg{Type: msgType, Key: key, Payload: data})
 }
 
 func (r *Replicator) gossipCounter(ctx context.Context, key string, c *GCounter) {

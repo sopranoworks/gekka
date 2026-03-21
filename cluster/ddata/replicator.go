@@ -41,6 +41,16 @@ type LWWMapPayload struct {
 	State map[string]LWWEntry `json:"state"`
 }
 
+// PNCounterPayload carries a PNCounter snapshot.
+type PNCounterPayload struct {
+	PNCounterSnapshot
+}
+
+// LWWRegisterPayload carries a LWWRegister snapshot.
+type LWWRegisterPayload struct {
+	LWWRegisterSnapshot
+}
+
 // Consistency levels for Write operations.
 type WriteConsistency int
 
@@ -53,9 +63,12 @@ const (
 type Replicator struct {
 	mu       sync.RWMutex
 	nodeID   string
-	counters map[string]*GCounter
-	sets     map[string]*ORSet
-	maps     map[string]*LWWMap
+	counters   map[string]*GCounter
+	sets       map[string]*ORSet
+	maps       map[string]*LWWMap
+	pnCounters map[string]*PNCounter
+	orFlags    map[string]*ORFlag
+	registers  map[string]*LWWRegister
 
 	peers  []peerInfo // remote actor paths to gossip to
 	router *actor.Router
@@ -79,6 +92,9 @@ func NewReplicator(nodeID string, router *actor.Router) *Replicator {
 		counters:       make(map[string]*GCounter),
 		sets:           make(map[string]*ORSet),
 		maps:           make(map[string]*LWWMap),
+		pnCounters:     make(map[string]*PNCounter),
+		orFlags:        make(map[string]*ORFlag),
+		registers:      make(map[string]*LWWRegister),
 		router:         router,
 		GossipInterval: 2 * time.Second,
 		stopCh:         make(chan struct{}),
@@ -126,6 +142,42 @@ func (r *Replicator) LWWMap(key string) *LWWMap {
 	m := NewLWWMap()
 	r.maps[key] = m
 	return m
+}
+
+// PNCounter returns (or creates) the named PNCounter.
+func (r *Replicator) PNCounter(key string) *PNCounter {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if c, ok := r.pnCounters[key]; ok {
+		return c
+	}
+	c := NewPNCounter()
+	r.pnCounters[key] = c
+	return c
+}
+
+// ORFlag returns (or creates) the named ORFlag.
+func (r *Replicator) ORFlag(key string) *ORFlag {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if f, ok := r.orFlags[key]; ok {
+		return f
+	}
+	f := NewORFlag()
+	r.orFlags[key] = f
+	return f
+}
+
+// LWWRegister returns (or creates) the named LWWRegister.
+func (r *Replicator) LWWRegister(key string) *LWWRegister {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if reg, ok := r.registers[key]; ok {
+		return reg
+	}
+	reg := NewLWWRegister()
+	r.registers[key] = reg
+	return reg
 }
 
 // IncrementCounter increments the named counter for this node.
@@ -243,6 +295,33 @@ func (r *Replicator) HandleIncoming(data []byte) error {
 		m.Merge(p.State)
 		log.Printf("Replicator: merged LWWMap[%s], keys=%d", msg.Key, len(m.Entries()))
 
+	case "pncounter-gossip":
+		var p PNCounterPayload
+		if err := json.Unmarshal(msg.Payload, &p); err != nil {
+			return err
+		}
+		c := r.PNCounter(msg.Key)
+		c.MergeSnapshot(p.PNCounterSnapshot)
+		log.Printf("Replicator: merged PNCounter[%s], value=%d", msg.Key, c.Value())
+
+	case "orflag-gossip":
+		var snap ORSetSnapshot
+		if err := json.Unmarshal(msg.Payload, &snap); err != nil {
+			return err
+		}
+		f := r.ORFlag(msg.Key)
+		f.MergeSnapshot(snap)
+		log.Printf("Replicator: merged ORFlag[%s], value=%v", msg.Key, f.Value())
+
+	case "lwwregister-gossip":
+		var p LWWRegisterPayload
+		if err := json.Unmarshal(msg.Payload, &p); err != nil {
+			return err
+		}
+		reg := r.LWWRegister(msg.Key)
+		reg.MergeSnapshot(p.LWWRegisterSnapshot)
+		log.Printf("Replicator: merged LWWRegister[%s], value=%v", msg.Key, func() any { v, _ := reg.Get(); return v }())
+
 	default:
 		if r.OnUnknownKey != nil {
 			r.OnUnknownKey(msg.Key, msg)
@@ -265,6 +344,18 @@ func (r *Replicator) gossipAll(ctx context.Context) {
 	for k, v := range r.maps {
 		maps[k] = v
 	}
+	pnCounters := make(map[string]*PNCounter, len(r.pnCounters))
+	for k, v := range r.pnCounters {
+		pnCounters[k] = v
+	}
+	orFlags := make(map[string]*ORFlag, len(r.orFlags))
+	for k, v := range r.orFlags {
+		orFlags[k] = v
+	}
+	registers := make(map[string]*LWWRegister, len(r.registers))
+	for k, v := range r.registers {
+		registers[k] = v
+	}
 	r.mu.RUnlock()
 
 	for key, c := range counters {
@@ -275,6 +366,15 @@ func (r *Replicator) gossipAll(ctx context.Context) {
 	}
 	for key, m := range maps {
 		r.gossipMap(ctx, key, m)
+	}
+	for key, c := range pnCounters {
+		r.gossipPNCounter(ctx, key, c)
+	}
+	for key, f := range orFlags {
+		r.gossipORFlag(ctx, key, f)
+	}
+	for key, reg := range registers {
+		r.gossipLWWRegister(ctx, key, reg)
 	}
 }
 
@@ -304,6 +404,30 @@ func (r *Replicator) gossipMap(ctx context.Context, key string, m *LWWMap) {
 	}
 	msg := ReplicatorMsg{Type: "lwwmap-gossip", Key: key, Payload: payload}
 	r.sendToPeers(ctx, msg)
+}
+
+func (r *Replicator) gossipPNCounter(ctx context.Context, key string, c *PNCounter) {
+	payload, err := json.Marshal(PNCounterPayload{c.Snapshot()})
+	if err != nil {
+		return
+	}
+	r.sendToPeers(ctx, ReplicatorMsg{Type: "pncounter-gossip", Key: key, Payload: payload})
+}
+
+func (r *Replicator) gossipORFlag(ctx context.Context, key string, f *ORFlag) {
+	payload, err := json.Marshal(f.Snapshot())
+	if err != nil {
+		return
+	}
+	r.sendToPeers(ctx, ReplicatorMsg{Type: "orflag-gossip", Key: key, Payload: payload})
+}
+
+func (r *Replicator) gossipLWWRegister(ctx context.Context, key string, reg *LWWRegister) {
+	payload, err := json.Marshal(LWWRegisterPayload{reg.Snapshot()})
+	if err != nil {
+		return
+	}
+	r.sendToPeers(ctx, ReplicatorMsg{Type: "lwwregister-gossip", Key: key, Payload: payload})
 }
 
 func (r *Replicator) sendToPeers(ctx context.Context, msg ReplicatorMsg) {

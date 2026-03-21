@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/cluster/sharding"
 )
 
 // EntityRef is a type-safe handle to a specific sharded entity.
@@ -34,18 +35,10 @@ func NewEntityRef[M any](typeName string, entityID string, region actor.Ref) *En
 	}
 }
 
-// shardingEnvelope mirrors the structure in parent sharding package to avoid cycle.
-type shardingEnvelope struct {
-	EntityId        string          `json:"entityId"`
-	ShardId         string          `json:"shardId"`
-	Message         json.RawMessage `json:"message"`
-	MessageManifest string          `json:"manifest"`
-}
-
 // Tell sends a message to the sharded entity.
 func (r *EntityRef[M]) Tell(msg M) {
 	data, _ := json.Marshal(msg)
-	r.region.Tell(shardingEnvelope{
+	r.region.Tell(sharding.ShardingEnvelope{
 		EntityId:        r.entityID,
 		Message:         data,
 		MessageManifest: reflect.TypeOf(msg).String(),

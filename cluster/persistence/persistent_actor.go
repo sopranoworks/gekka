@@ -87,6 +87,12 @@ type PersistentActorWrapper struct {
 	seqNr         int64
 	recovering    bool
 	stash         []stashedEnvelope
+
+	// Tagger, when non-nil, is called for each persisted event to derive the
+	// set of tags stored alongside the event in the journal.  Tags are used by
+	// FileReadJournal for cross-actor EventsByTag queries (CQRS read side).
+	// Leave nil when tagging is not required.
+	Tagger func(event any) []string
 }
 
 type stashedEnvelope struct {
@@ -208,8 +214,12 @@ type persistContextImpl struct {
 // Persist writes event to the journal, applies it via OnEvent, then calls
 // handler (if non-nil) with the event.  Stops the actor on journal failure.
 func (c *persistContextImpl) Persist(event any, handler func(any)) {
+	var tags []string
+	if c.wrapper.Tagger != nil {
+		tags = c.wrapper.Tagger(event)
+	}
 	c.wrapper.seqNr++
-	if err := c.wrapper.journal.Write(c.wrapper.inner.PersistenceId(), c.wrapper.seqNr, event); err != nil {
+	if err := c.wrapper.journal.Write(c.wrapper.inner.PersistenceId(), c.wrapper.seqNr, event, tags); err != nil {
 		c.wrapper.Log().Error("PersistContext.Persist: journal write failed — stopping actor",
 			"persistenceId", c.wrapper.inner.PersistenceId(),
 			"seqNr", c.wrapper.seqNr,

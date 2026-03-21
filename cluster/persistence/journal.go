@@ -25,6 +25,9 @@ type Event struct {
 	// Payload is the reconstructed event value as produced by the
 	// EventDecoder registered with the FileJournal.
 	Payload any
+	// Tags are the classification labels stored alongside this event.
+	// Populated only when the writer supplied a Tagger; nil otherwise.
+	Tags []string
 }
 
 // EventStream is a forward-only cursor over replayed events.
@@ -42,7 +45,10 @@ type EventStream interface {
 // starting at fromSeqNr (inclusive).  Implementations must be safe for
 // concurrent use.
 type Journal interface {
-	Write(persistenceId string, seqNr int64, event any) error
+	// Write records event under persistenceId at seqNr.  tags are optional
+	// classification labels used by the read-journal for CQRS queries;
+	// pass nil when tagging is not required.
+	Write(persistenceId string, seqNr int64, event any, tags []string) error
 	Read(persistenceId string, fromSeqNr int64) (EventStream, error)
 }
 
@@ -81,11 +87,13 @@ type journalRecord struct {
 	SeqNr         int64           `json:"seqNr"`
 	Type          string          `json:"type"`
 	Data          json.RawMessage `json:"data"`
+	Tags          []string        `json:"tags,omitempty"`
 }
 
 // Write appends event to the JSONL file.  The type tag is derived from the
 // concrete dynamic type of event (e.g. "IncrementedEvent").
-func (j *FileJournal) Write(persistenceId string, seqNr int64, event any) error {
+// tags are stored in the record as-is; pass nil when no tagging is needed.
+func (j *FileJournal) Write(persistenceId string, seqNr int64, event any, tags []string) error {
 	data, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("FileJournal.Write: marshal event: %w", err)
@@ -97,6 +105,7 @@ func (j *FileJournal) Write(persistenceId string, seqNr int64, event any) error 
 		SeqNr:         seqNr,
 		Type:          typeName,
 		Data:          json.RawMessage(data),
+		Tags:          tags,
 	}
 	line, err := json.Marshal(rec)
 	if err != nil {
@@ -147,7 +156,7 @@ func (j *FileJournal) Read(persistenceId string, fromSeqNr int64) (EventStream, 
 		}
 		if j.decoder == nil {
 			// No decoder: return raw JSON message as payload.
-			events = append(events, Event{SeqNr: rec.SeqNr, Payload: rec.Data})
+			events = append(events, Event{SeqNr: rec.SeqNr, Payload: rec.Data, Tags: rec.Tags})
 			continue
 		}
 		payload, err := j.decoder(rec.Type, rec.Data)
@@ -155,7 +164,7 @@ func (j *FileJournal) Read(persistenceId string, fromSeqNr int64) (EventStream, 
 			return nil, fmt.Errorf("FileJournal.Read: decode event (type=%q seqNr=%d): %w",
 				rec.Type, rec.SeqNr, err)
 		}
-		events = append(events, Event{SeqNr: rec.SeqNr, Payload: payload})
+		events = append(events, Event{SeqNr: rec.SeqNr, Payload: payload, Tags: rec.Tags})
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("FileJournal.Read: scan: %w", err)

@@ -155,6 +155,15 @@ func (cm *ClusterManager) Unsubscribe(ref actor.Ref) {
 	cm.Subs = kept
 }
 
+// ForcePublishEvent injects a synthetic ClusterDomainEvent directly into the
+// subscriber bus without going through the gossip state machine.
+//
+// This is intended for use in tests that need to trigger SBR or other
+// subscriber logic without running a full cluster.
+func (cm *ClusterManager) ForcePublishEvent(evt ClusterDomainEvent) {
+	cm.publishEvent(evt)
+}
+
 // publishEvent delivers evt to all matching subscribers.
 //
 // Safe to call while holding cm.Mu because it only acquires cm.SubMu (a separate lock).

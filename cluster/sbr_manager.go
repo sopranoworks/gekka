@@ -101,6 +101,12 @@ func (cm *ClusterManager) SubscribeChannel(types ...reflect.Type) *ChanSubscript
 // SBRManager watches cluster domain events and triggers the configured
 // Split Brain Resolver strategy after a stable-after delay.
 //
+// When an InfrastructureProvider is configured (SetInfraProvider), the manager
+// first queries the provider when a member becomes unreachable.  If the
+// provider returns InfraDead the member is downed immediately — bypassing the
+// stable-after wait.  If the provider returns InfraUnknown or InfraAlive the
+// normal stable-after timer is started instead.
+//
 // When the strategy returns DownSelf the local node calls LeaveCluster.
 // When it returns DownMembers the local leader downs those members directly
 // in the gossip state via ClusterManager.DownMember.
@@ -108,6 +114,21 @@ type SBRManager struct {
 	cm       *ClusterManager
 	strategy Strategy
 	cfg      SBRConfig
+
+	// infra is the optional infrastructure provider; nil means disabled.
+	infra InfrastructureProvider
+
+	// unreachableSince records when each member first became unreachable.
+	// Keyed by MemberAddress.String().  Used by the auto-down-unreachable-after
+	// feature to enforce a hard maximum on how long a member may stay in the
+	// cluster.
+	unreachableSince map[string]time.Time
+
+	// downFn and leaveFn are the actions the manager takes when the strategy
+	// decides to down a remote member or down the local node, respectively.
+	// Defaults to cm.DownMember and cm.LeaveCluster; overridable in tests.
+	downFn  func(MemberAddress)
+	leaveFn func() error
 }
 
 // NewSBRManager constructs a SBRManager. Returns nil when cfg.ActiveStrategy
@@ -124,65 +145,155 @@ func NewSBRManager(cm *ClusterManager, cfg SBRConfig) *SBRManager {
 	if cfg.StableAfter <= 0 {
 		cfg.StableAfter = 20 * time.Second
 	}
-	return &SBRManager{cm: cm, strategy: strat, cfg: cfg}
+	return &SBRManager{
+		cm:               cm,
+		strategy:         strat,
+		cfg:              cfg,
+		unreachableSince: make(map[string]time.Time),
+		downFn:           cm.DownMember,
+		leaveFn:          cm.LeaveCluster,
+	}
 }
 
+// SetInfraProvider attaches an InfrastructureProvider to the manager.
+// When non-nil, PodStatus is queried on every UnreachableMember event and
+// also during the decide phase so that infra-confirmed-dead members are
+// downed individually before running the strategy on the remainder.
+//
+// Must be called before Start.
+func (m *SBRManager) SetInfraProvider(p InfrastructureProvider) {
+	m.infra = p
+}
+
+// SetDownFnForTest replaces the action taken when the strategy decides to down
+// a remote member.  For testing only; allows test code to capture down calls
+// without wiring a full ClusterManager gossip state.
+func (m *SBRManager) SetDownFnForTest(fn func(MemberAddress)) { m.downFn = fn }
+
+// SetLeaveFnForTest replaces the action taken when the strategy decides to
+// down the local node.  For testing only.
+func (m *SBRManager) SetLeaveFnForTest(fn func() error) { m.leaveFn = fn }
+
 // Start runs the SBR event loop. It subscribes to cluster domain events,
-// starts a stable-after timer whenever an UnreachableMember event arrives,
-// and invokes the strategy when the timer fires without a ReachableMember
-// event cancelling it.
+// queries the InfrastructureProvider (if configured) on UnreachableMember
+// events for a fast-down path, and falls back to the stable-after timer when
+// infrastructure status is unknown.
 //
 // Call in a goroutine; returns when ctx is cancelled.
 func (m *SBRManager) Start(ctx context.Context) {
 	sub := m.cm.SubscribeChannel(EventUnreachableMember, EventReachableMember)
 	defer sub.Cancel()
 
-	var timer *time.Timer
-	resetTimer := func() {
-		if timer != nil {
-			timer.Stop()
+	var stableTimer *time.Timer
+	resetStableTimer := func() {
+		if stableTimer != nil {
+			stableTimer.Stop()
 		}
-		timer = time.NewTimer(m.cfg.StableAfter)
+		stableTimer = time.NewTimer(m.cfg.StableAfter)
 	}
-	stopTimer := func() {
-		if timer != nil {
-			timer.Stop()
-			timer = nil
+	stopStableTimer := func() {
+		if stableTimer != nil {
+			stableTimer.Stop()
+			stableTimer = nil
 		}
 	}
 
+	// autoDownTicker fires at AutoDownUnreachableAfter/4 intervals so that
+	// the per-member age check has sub-second granularity even for short timeouts.
+	var autoDownTickC <-chan time.Time
+	if m.cfg.AutoDownUnreachableAfter > 0 {
+		interval := m.cfg.AutoDownUnreachableAfter / 4
+		if interval < 50*time.Millisecond {
+			interval = 50 * time.Millisecond
+		}
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		autoDownTickC = ticker.C
+	}
+
 	for {
-		var timerC <-chan time.Time
-		if timer != nil {
-			timerC = timer.C
+		var stableC <-chan time.Time
+		if stableTimer != nil {
+			stableC = stableTimer.C
 		}
 
 		select {
 		case <-ctx.Done():
-			stopTimer()
+			stopStableTimer()
 			return
 
 		case evt, ok := <-sub.C:
 			if !ok {
 				return
 			}
-			switch evt.(type) {
+			switch e := evt.(type) {
 			case UnreachableMember:
-				log.Printf("SBR: unreachable event — starting stable-after timer (%s)", m.cfg.StableAfter)
-				resetTimer()
+				addr := e.Member // MemberAddress
+				key := addr.String()
+
+				// Record when this member first became unreachable.
+				if _, seen := m.unreachableSince[key]; !seen {
+					m.unreachableSince[key] = time.Now()
+				}
+
+				// Fast-path: if the infra provider confirms the pod is dead,
+				// down it immediately without waiting for stable-after.
+				if m.infra != nil {
+					if m.infra.PodStatus(ctx, addr) == InfraDead {
+						log.Printf("SBR: infra confirms %s is dead — downing immediately", addr)
+						m.downFn(addr)
+						delete(m.unreachableSince, key)
+						if !m.hasUnreachable() {
+							stopStableTimer()
+						}
+						continue
+					}
+				}
+
+				log.Printf("SBR: unreachable %s — starting stable-after timer (%s)", addr, m.cfg.StableAfter)
+				resetStableTimer()
+
 			case ReachableMember:
+				delete(m.unreachableSince, e.Member.String())
 				if !m.hasUnreachable() {
 					log.Printf("SBR: all members reachable — cancelling stable-after timer")
-					stopTimer()
+					stopStableTimer()
 				}
 			}
 
-		case <-timerC:
-			timer = nil
-			m.decide()
+		case <-stableC:
+			stableTimer = nil
+			m.decide(ctx)
+
+		case <-autoDownTickC:
+			m.checkAutoDown(ctx)
 		}
 	}
 }
+
+// checkAutoDown enforces the AutoDownUnreachableAfter hard limit: if any member
+// has been unreachable longer than the configured threshold, the strategy is
+// invoked immediately (regardless of the stable-after timer).
+func (m *SBRManager) checkAutoDown(ctx context.Context) {
+	if m.cfg.AutoDownUnreachableAfter <= 0 {
+		return
+	}
+	now := time.Now()
+	_, unreachable := m.classifyMembers()
+	for _, u := range unreachable {
+		since, ok := m.unreachableSince[u.Address.String()]
+		if !ok {
+			continue
+		}
+		if now.Sub(since) >= m.cfg.AutoDownUnreachableAfter {
+			log.Printf("SBR: auto-down-unreachable-after (%s) elapsed for %s — executing strategy",
+				m.cfg.AutoDownUnreachableAfter, u.Address)
+			m.decide(ctx)
+			return // decide handles all unreachable members at once
+		}
+	}
+}
+
 
 // hasUnreachable returns true if any Up/WeaklyUp member is still unreachable.
 func (m *SBRManager) hasUnreachable() bool {
@@ -191,11 +302,32 @@ func (m *SBRManager) hasUnreachable() bool {
 }
 
 // decide runs the strategy and applies its decision.
-func (m *SBRManager) decide() {
+// If an InfrastructureProvider is configured, infra-confirmed-dead members are
+// downed individually before the strategy evaluates the remainder.
+func (m *SBRManager) decide(ctx context.Context) {
 	reachable, unreachable := m.classifyMembers()
 	if len(unreachable) == 0 {
 		log.Printf("SBR: stable-after elapsed but no unreachable members — no action")
 		return
+	}
+
+	// Fast-down infra-confirmed-dead members before running the strategy.
+	if m.infra != nil {
+		var remaining []Member
+		for _, u := range unreachable {
+			if m.infra.PodStatus(ctx, u.Address) == InfraDead {
+				log.Printf("SBR: decide: infra confirms %s dead — downing", u.Address)
+				m.downFn(u.Address)
+				delete(m.unreachableSince, u.Address.String())
+			} else {
+				remaining = append(remaining, u)
+			}
+		}
+		unreachable = remaining
+	}
+
+	if len(unreachable) == 0 {
+		return // all accounted for via infra
 	}
 
 	self := memberAddressFromUA(m.cm.LocalAddress)
@@ -205,7 +337,7 @@ func (m *SBRManager) decide() {
 
 	if decision.DownSelf {
 		log.Printf("SBR: downing self (%s)", self)
-		if err := m.cm.LeaveCluster(); err != nil {
+		if err := m.leaveFn(); err != nil {
 			log.Printf("SBR: LeaveCluster error: %v", err)
 		}
 		return
@@ -213,7 +345,7 @@ func (m *SBRManager) decide() {
 
 	for _, dm := range decision.DownMembers {
 		log.Printf("SBR: downing member %s", dm.Address)
-		m.cm.DownMember(dm.Address)
+		m.downFn(dm.Address)
 	}
 }
 

@@ -35,6 +35,19 @@ type SBRConfig struct {
 	// Defaults to 20s.
 	StableAfter time.Duration
 
+	// AutoDownUnreachableAfter is the maximum time an unreachable member may
+	// remain in the cluster before the SBR forcibly executes the configured
+	// strategy to restore cluster health.
+	//
+	// This acts as a last-resort backstop when the InfrastructureProvider
+	// cannot determine liveness (e.g. during a genuine network partition where
+	// both sides are up).  After this duration the strategy (e.g. keep-majority)
+	// is invoked regardless of the stable-after timer state.
+	//
+	// Maps to: gekka.cluster.sbr.auto-down-unreachable-after
+	// Defaults to 0 (disabled).  Recommended value: 60s.
+	AutoDownUnreachableAfter time.Duration
+
 	// Role restricts SBR to only count members with this role.
 	// Empty means count all members.
 	Role string

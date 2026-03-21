@@ -213,10 +213,10 @@ func TestCounterActor_StashDuringRecovery(t *testing.T) {
 	journal := NewFileJournal(journalPath, counterDecoder)
 
 	// Pre-populate the journal with 2 events.
-	if err := journal.Write("counter-1", 1, IncrementedEvent{Amount: 10}); err != nil {
+	if err := journal.Write("counter-1", 1, IncrementedEvent{Amount: 10}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := journal.Write("counter-1", 2, IncrementedEvent{Amount: 5}); err != nil {
+	if err := journal.Write("counter-1", 2, IncrementedEvent{Amount: 5}, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -273,13 +273,13 @@ func TestFileJournal_WriteRead(t *testing.T) {
 	j := NewFileJournal(filepath.Join(t.TempDir(), "events.jsonl"), counterDecoder)
 
 	// Write events for two different persistence IDs.
-	if err := j.Write("a", 1, IncrementedEvent{Amount: 1}); err != nil {
+	if err := j.Write("a", 1, IncrementedEvent{Amount: 1}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := j.Write("b", 1, IncrementedEvent{Amount: 99}); err != nil {
+	if err := j.Write("b", 1, IncrementedEvent{Amount: 99}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := j.Write("a", 2, IncrementedEvent{Amount: 2}); err != nil {
+	if err := j.Write("a", 2, IncrementedEvent{Amount: 2}, nil); err != nil {
 		t.Fatal(err)
 	}
 

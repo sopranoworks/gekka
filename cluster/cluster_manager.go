@@ -1741,9 +1741,10 @@ func (cm *ClusterManager) collectSBRMembersLocked() (all []icluster.Member, unre
 			}
 		}
 		m := icluster.Member{
-			Host:  a.GetHostname(),
-			Port:  a.GetPort(),
-			Roles: roles,
+			Host:     a.GetHostname(),
+			Port:     a.GetPort(),
+			Roles:    roles,
+			UpNumber: mem.GetUpNumber(),
 		}
 		all = append(all, m)
 		if _, isUnreachable := unreachableIdx[addrIdx]; isUnreachable {

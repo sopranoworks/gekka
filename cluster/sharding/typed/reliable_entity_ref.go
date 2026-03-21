@@ -13,6 +13,8 @@ import (
 	"reflect"
 	"sync"
 	"time"
+
+	"github.com/sopranoworks/gekka/cluster/sharding"
 )
 
 // ReliableEnvelope wraps a user message with a monotonic sequence number for
@@ -102,7 +104,7 @@ func (r *ReliableEntityRef[M]) Tell(msg M) {
 	})
 	r.mu.Unlock()
 
-	r.inner.region.Tell(shardingEnvelope{
+	r.inner.region.Tell(sharding.ShardingEnvelope{
 		EntityId:        r.inner.entityID,
 		Message:         data,
 		MessageManifest: manifest,
@@ -180,7 +182,7 @@ func (r *ReliableEntityRef[M]) retransmitExpired() {
 	r.mu.Unlock()
 
 	for _, e := range toRetransmit {
-		r.inner.region.Tell(shardingEnvelope{
+		r.inner.region.Tell(sharding.ShardingEnvelope{
 			EntityId:        r.inner.entityID,
 			Message:         e.data,
 			MessageManifest: e.manifest,

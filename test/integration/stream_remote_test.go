@@ -12,7 +12,6 @@
 package integration_test
 
 import (
-	"encoding/json"
 	"errors"
 	"sync/atomic"
 	"testing"
@@ -497,14 +496,3 @@ var (
 	}
 )
 
-// jsonEncodeString encodes a string as JSON for round-trip tests.
-func jsonEncodeString(s string) ([]byte, int32, []byte, error) {
-	b, err := json.Marshal(s)
-	return b, 9, nil, err
-}
-
-// jsonDecodeString decodes a JSON string.
-func jsonDecodeString(b []byte, _ int32, _ []byte) (string, error) {
-	var s string
-	return s, json.Unmarshal(b, &s)
-}

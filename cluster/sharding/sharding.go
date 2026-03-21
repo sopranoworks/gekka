@@ -133,4 +133,40 @@ type (
 		// RegionPath echoes the path from the corresponding RegionHandoffRequest.
 		RegionPath string
 	}
+
+	// ── Shard-level rebalancing protocol ─────────────────────────────────────
+	//
+	// Rebalancing moves individual shards between regions without shutting down
+	// the entire region.  The three-message exchange mirrors Pekko's
+	// ClusterSharding rebalancing protocol (serializer manifests BH/BI/BJ/BK).
+
+	// BeginHandOff is sent by ShardCoordinator to the owning ShardRegion to
+	// start a shard rebalancing handoff.  The region must stop routing new
+	// messages to the shard and reply with BeginHandOffAck.
+	BeginHandOff struct {
+		ShardId ShardId
+	}
+
+	// BeginHandOffAck is sent by ShardRegion to ShardCoordinator to confirm
+	// receipt of BeginHandOff.  The coordinator then sends HandOff to instruct
+	// the region to drain and stop the shard's entities.
+	BeginHandOffAck struct {
+		ShardId ShardId
+	}
+
+	// HandOff is sent by ShardCoordinator to the owning ShardRegion after it
+	// receives BeginHandOffAck.  This is the coordinator's authorisation to
+	// stop all entities in the shard.  Once the shard is empty the region
+	// replies with ShardStopped.
+	HandOff struct {
+		ShardId ShardId
+	}
+
+	// ShardStopped is sent by ShardRegion to ShardCoordinator once all
+	// entities in the handed-off shard have been stopped and the shard is
+	// empty.  The coordinator clears the allocation so that the next
+	// GetShardHome re-assigns the shard to a less-loaded region.
+	ShardStopped struct {
+		ShardId ShardId
+	}
 )

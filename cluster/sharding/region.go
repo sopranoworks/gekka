@@ -26,9 +26,10 @@ type ShardRegion struct {
 	coordinator        actor.Ref
 	shardSettings      ShardSettings
 
-	shards          map[ShardId]actor.Ref // Local shards
-	shardHomePaths  map[ShardId]string    // ShardId -> Region Path (cached)
-	pendingMessages map[ShardId][]actor.Envelope
+	shards             map[ShardId]actor.Ref    // Local shards
+	shardHomePaths     map[ShardId]string       // ShardId -> Region Path (cached)
+	pendingMessages    map[ShardId][]actor.Envelope
+	handoffInProgress  map[ShardId]struct{}     // shards being rebalanced away
 
 	// handoffDone is closed by Receive when a HandoffComplete message arrives
 	// from the coordinator.  PostStop blocks on this channel (with a timeout)
@@ -56,6 +57,7 @@ func NewShardRegion(
 		shards:             make(map[ShardId]actor.Ref),
 		shardHomePaths:     make(map[ShardId]string),
 		pendingMessages:    make(map[ShardId][]actor.Envelope),
+		handoffInProgress:  make(map[ShardId]struct{}),
 		handoffDone:        make(chan struct{}),
 	}
 }
@@ -135,6 +137,36 @@ func (r *ShardRegion) Receive(msg any) {
 			// Already closed — ignore duplicate acks.
 		default:
 			close(r.handoffDone)
+		}
+
+	case BeginHandOff:
+		// Coordinator wants to rebalance this shard to a less-loaded region.
+		// Acknowledge receipt so the coordinator can send HandOff; also clear
+		// the home-path cache so new messages buffer and re-ask the coordinator
+		// for the shard's new home after the handoff completes.
+		sid := m.ShardId
+		r.handoffInProgress[sid] = struct{}{}
+		delete(r.shardHomePaths, sid)
+		r.Log().Info("ShardRegion: BeginHandOff received", "shardId", sid)
+		if r.coordinator != nil {
+			r.coordinator.Tell(BeginHandOffAck{ShardId: sid}, r.Self())
+		}
+
+	case HandOff:
+		// Coordinator authorises the entity shutdown.  Stop the local Shard
+		// actor (which stops all its entities) and notify the coordinator that
+		// the shard is empty and ready for reallocation.
+		sid := m.ShardId
+		if shard, ok := r.shards[sid]; ok {
+			if stopper, ok := r.System().(interface{ Stop(actor.Ref) }); ok {
+				stopper.Stop(shard)
+			}
+			delete(r.shards, sid)
+		}
+		delete(r.handoffInProgress, sid)
+		r.Log().Info("ShardRegion: HandOff complete, shard stopped", "shardId", sid)
+		if r.coordinator != nil {
+			r.coordinator.Tell(ShardStopped{ShardId: sid}, r.Self())
 		}
 
 	case actor.TerminatedMessage:

@@ -117,6 +117,10 @@ func (j *SpannerJournal) ReplayMessages(
 	if limit <= 0 {
 		limit = math.MaxInt64
 	}
+	to := int64(toSequenceNr)
+	if toSequenceNr > math.MaxInt64 {
+		to = math.MaxInt64
+	}
 	stmt := spanner.Statement{
 		SQL: `SELECT persistence_id, sequence_nr, payload, manifest, sender_path
 		      FROM journal
@@ -129,7 +133,7 @@ func (j *SpannerJournal) ReplayMessages(
 		Params: map[string]any{
 			"pid":  persistenceId,
 			"from": int64(fromSequenceNr),
-			"to":   int64(toSequenceNr),
+			"to":   to,
 			"lim":  limit,
 		},
 	}
@@ -172,13 +176,17 @@ func (j *SpannerJournal) ReplayMessages(
 // AsyncDeleteMessagesTo deletes all events for persistenceId with sequence
 // numbers <= toSequenceNr using a partitioned DML statement.
 func (j *SpannerJournal) AsyncDeleteMessagesTo(ctx context.Context, persistenceId string, toSequenceNr uint64) error {
+	to := int64(toSequenceNr)
+	if toSequenceNr > math.MaxInt64 {
+		to = math.MaxInt64
+	}
 	stmt := spanner.Statement{
 		SQL: `DELETE FROM journal
 		      WHERE persistence_id = @pid
 		        AND sequence_nr <= @to`,
 		Params: map[string]any{
 			"pid": persistenceId,
-			"to":  int64(toSequenceNr),
+			"to":  to,
 		},
 	}
 	_, err := j.client.PartitionedUpdate(ctx, stmt)

@@ -35,6 +35,15 @@ Configuration is loaded via [`gekka-config`](https://github.com/sopranoworks/gek
 - **Extensible Serialization** — Protobuf (ID 2), raw bytes (ID 4), and JSON (ID 9).
 - **Coordinated Shutdown** — Phased exit with readiness drain gate, shard handoff, and CRDT flush.
 - **Rolling Update Support** — `/health/ready` drain gate and shard handoff handshake for zero-downtime pod restarts.
+- **High-Performance Persistence Recovery** — Verified recovery of thousands of actors with mission-critical speed using Spanner Native integration and PostgreSQL.
+
+---
+
+## Performance
+
+Gekka is built for scale. Our latest benchmarks demonstrate **sub-millisecond cold recovery** for large actor systems, **~20,600 remote Ask round-trips/s** over Artery TCP, and **< 1% overhead** with OpenTelemetry tracing enabled. Periodic snapshots (every 1,000 events) deliver a ~2× recovery speedup over full event replay with no code changes.
+
+See the [Full Benchmark Report](docs/BENCHMARKS.md) for detailed results and instructions to reproduce them on your hardware.
 
 ---
 
@@ -300,6 +309,7 @@ Mutual TLS (mTLS) is supported; nodes must present a valid certificate to connec
 - [**Split Brain Resolver**](docs/SBR.md) — Partition resolution strategies and interoperability testing.
 - [**Multi-Data Center**](docs/MULTI_DC.md) — DC-aware cluster configuration and routing.
 - [**Secure Transport (TLS)**](docs/TLS.md) — Configuring and using Artery TLS with PEM certificates.
+- [**Benchmark Report**](docs/BENCHMARKS.md) — Scale, throughput, reliable delivery, tracing, and persistence recovery numbers.
 
 ## License
 

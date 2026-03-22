@@ -17,8 +17,6 @@ gekka-metrics
 # Agent-specific files
 .gemini/
 .claude/
-CLAUDE.md
-GEMINI.md
 .antigravity.yaml
 .antigravity_root
 

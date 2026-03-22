@@ -22,8 +22,7 @@ import (
 
 func TestFSM_Integration(t *testing.T) {
 	// Use the root gekka package to spawn FSM in a real ActorSystem
-	cfg := gekka.DefaultConfig()
-	sys, err := gekka.NewActorSystem("fsm-test", cfg)
+	sys, err := gekka.NewActorSystem("fsm-test")
 	if err != nil {
 		t.Fatalf("Failed to create ActorSystem: %v", err)
 	}
@@ -62,7 +61,7 @@ func TestFSM_Integration(t *testing.T) {
 	}
 
 	// Integration test with Ask
-	ctx := context.Background()
+	_ = context.Background()
 	
 	// We don't have a way to query FSM state directly via messages unless we implement it.
 	// For this test, we just verify it doesn't crash and responds.

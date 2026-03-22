@@ -18,9 +18,12 @@ object MultiNodeClusterRecovery extends App {
 
   val baseConf = ConfigFactory.load("cluster")
 
-  // Override SBR stable-after to give the test time to resume heartbeats.
+  // Override SBR stable-after and failure detector to speed up the test.
   val recoveryOverride = ConfigFactory.parseString(
-    "pekko.cluster.split-brain-resolver.stable-after = 60s"
+    """
+    pekko.cluster.split-brain-resolver.stable-after = 10s
+    pekko.cluster.failure-detector.acceptable-heartbeat-pause = 3s
+    """
   )
 
   // ── Node 1: seed at :2552 ─────────────────────────────────────────────────
@@ -32,7 +35,8 @@ object MultiNodeClusterRecovery extends App {
     """
     pekko.remote.artery.canonical.port = 2554
     pekko.cluster.seed-nodes = ["pekko://ClusterSystem@127.0.0.1:2552"]
-    pekko.cluster.split-brain-resolver.stable-after = 60s
+    pekko.cluster.split-brain-resolver.stable-after = 10s
+    pekko.cluster.failure-detector.acceptable-heartbeat-pause = 3s
     """
   ).withFallback(baseConf)
   val system2 = ActorSystem("ClusterSystem", conf2)

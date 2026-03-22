@@ -190,9 +190,9 @@ func (nm *NodeManager) HasQuarantinedAssociation() bool {
 	return false
 }
 
-// routePendingReply delivers meta to a waiting Ask call if path is registered.
+// RoutePendingReply delivers meta to a waiting Ask call if path is registered.
 // Returns true when a waiting caller was found and the message routed.
-func (nm *NodeManager) routePendingReply(path string, meta *ArteryMetadata) bool {
+func (nm *NodeManager) RoutePendingReply(path string, meta *ArteryMetadata) bool {
 	nm.pendingRepliesMu.RLock()
 	ch, ok := nm.pendingReplies[path]
 	nm.pendingRepliesMu.RUnlock()
@@ -375,6 +375,9 @@ func (nm *NodeManager) RegisterAssociation(remote *gproto_remote.UniqueAddress, 
 
 // ProcessConnection is the unified entry point for both inbound and outbound connections.
 func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, role AssociationRole, remote *gproto_remote.Address, streamId int32) error {
+	assocCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	if role == INBOUND {
 		magic := make([]byte, 5)
 		if _, err := io.ReadFull(conn, magic); err != nil {
@@ -404,7 +407,12 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 		nm.RegisterAssociation(assoc.remote, assoc)
 	}
 
-	// Start background write loop
+	// Start background write loop.
+	// Uses the outer ctx (node lifetime), NOT assocCtx, so that the write loop
+	// keeps draining the outbox even after the read loop exits.  In Artery-TCP
+	// the outbound TCP stream is unidirectional: Pekko half-closes its write end
+	// immediately, causing the read loop to get EOF and return, but writes in the
+	// opposite direction are still valid and must continue.
 	go func() {
 		for {
 			select {
@@ -426,6 +434,8 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 				log.Printf("Association %p: SENDING frame of %d bytes", assoc, len(msg))
 				if err := WriteFrame(assoc.conn, msg); err != nil {
 					log.Printf("Association %p: write error: %v", assoc, err)
+					// Close so the read loop also exits cleanly.
+					_ = assoc.conn.Close()
 					return
 				}
 			}
@@ -445,7 +455,7 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 			defer ticker.Stop()
 			for {
 				select {
-				case <-ctx.Done():
+				case <-assocCtx.Done():
 					return
 				case <-ticker.C:
 					assoc.mu.RLock()
@@ -461,7 +471,7 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 		}()
 	}
 
-	return assoc.Process(ctx)
+	return assoc.Process(assocCtx)
 }
 
 func (assoc *GekkaAssociation) initiateHandshake(to *gproto_remote.Address) error {
@@ -591,18 +601,13 @@ func (assoc *GekkaAssociation) handleUserMessage(meta *ArteryMetadata) error {
 		recipientPath := meta.Recipient.GetPath()
 		// If the recipient is a full URI, extract the path segment for pending-reply lookup.
 		if strings.Contains(recipientPath, "://") {
-			if idx := strings.LastIndex(recipientPath, "/"); idx != -1 {
-				if recipientPath[idx:] != "/" { // e.g. "pekko://System@host:port/user/foo" -> "/user/foo"
-					// Find the start of the path part (after the authority)
-					// URI format: scheme://authority/path
-					// authority is System@host:port
-					if firstSlash := strings.Index(recipientPath[strings.Index(recipientPath, "://")+3:], "/"); firstSlash != -1 {
-						recipientPath = recipientPath[strings.Index(recipientPath, "://")+3+firstSlash:]
-					}
-				}
+			// Find the start of the path part (after the authority)
+			// URI format: scheme://system@host:port/path
+			if firstSlash := strings.Index(recipientPath[strings.Index(recipientPath, "://")+3:], "/"); firstSlash != -1 {
+				recipientPath = recipientPath[strings.Index(recipientPath, "://")+3+firstSlash:]
 			}
 		}
-		if recipientPath != "" && assoc.nodeMgr.routePendingReply(recipientPath, meta) {
+		if recipientPath != "" && assoc.nodeMgr.RoutePendingReply(recipientPath, meta) {
 			return nil
 		}
 	}
@@ -636,7 +641,7 @@ func (assoc *GekkaAssociation) SendWithSender(recipient, senderPath string, payl
 	if err != nil {
 		return err
 	}
-	log.Printf("Association %p: SendWithSender frame of %d bytes, sender=%q", assoc, len(frame), senderPath)
+	log.Printf("Association %p: SendWithSender frame of %d bytes, sender=%q, recipient=%q", assoc, len(frame), senderPath, recipient)
 
 	assoc.mu.Lock()
 	defer assoc.mu.Unlock()
@@ -820,34 +825,11 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 		return nil
 
 	default:
-		// If ID 6 and no manifest, it's likely a CompressionTableAdvertisement
 		if meta.SerializerId == 6 && manifest == "" {
-			// Try to unmarshal as CompressionTableAdvertisement
-			adv := &gproto_remote.CompressionTableAdvertisement{}
-			if err := proto.Unmarshal(meta.Payload, adv); err == nil {
-				if assoc.nodeMgr.compressionMgr != nil {
-					// Guess if it's ActorRef or ClassManifest based on typical Pekko behavior
-					// Actually, the Advertisement message itself doesn't say.
-					// But we can update both or peek at keys.
-					// For now, let's assume if it contains '/' it's ActorRef, otherwise it might be ClassManifest.
-					isActorRef := false
-					if len(adv.Keys) > 0 && strings.Contains(adv.Keys[0], "/") {
-						isActorRef = true
-					}
-					// If we can't tell, we might have to update both or store it specially.
-					// Pekko actually sends them separately.
-					// Let's just try to update both if we are unsure, but ideally we'd know.
-					// Actually, the manifest is usually "ActorRefCompressionAdvertisement" or "ClassManifestCompressionAdvertisement".
-					// If it's missing, Pekko might be using a different scheme.
-
-					log.Printf("Association: Received Advertisement with ID 6 and empty manifest. Guessing isActorRef=%v", isActorRef)
-					localUA := &gproto_remote.UniqueAddress{
-						Address: assoc.nodeMgr.LocalAddr,
-						Uid:     proto.Uint64(assoc.nodeMgr.localUid),
-					}
-					return assoc.nodeMgr.compressionMgr.HandleAdvertisement(ctx, adv, isActorRef, localUA)
-				}
-			}
+			// MessageContainerSerializer (ID=6) wraps ActorSelectionMessage.
+			// Pekko sends these when routing heartbeats via actorSelection to
+			// /system/cluster/heartbeatReceiver. We cannot decode them; discard silently.
+			return nil
 		}
 		log.Printf("Association: unidentified control message with manifest %q (id=%d)", manifest, meta.SerializerId)
 		return nil
@@ -929,13 +911,21 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 					// Go-to-Go secondary connections: the remote's INBOUND dispatch calls
 					// handleHandshakeRsp and completes the remote's waiting OUTBOUND to us.
 					log.Printf("Association %p (INBOUND): routing HandshakeRsp via OUTBOUND %p", assoc, outboundToRemote)
-					outboundToRemote.outbox <- frame
+					select {
+					case outboundToRemote.outbox <- frame:
+					default:
+						log.Printf("Association %p (INBOUND): OUTBOUND %p outbox full, dropping HandshakeRsp", assoc, outboundToRemote)
+					}
 				} else {
 					// No OUTBOUND to this remote yet — send directly on the INBOUND TCP.
 					// This is the first-contact case where the remote dialled us but we have
 					// not yet dialled them (pure inbound-only peer).
 					log.Printf("Association %p (INBOUND): no outbound — sending HandshakeRsp via INBOUND", assoc)
-					assoc.outbox <- frame
+					select {
+					case assoc.outbox <- frame:
+					default:
+						log.Printf("Association %p (INBOUND): outbox full, dropping HandshakeRsp", assoc)
+					}
 				}
 			}
 		}
@@ -954,7 +944,11 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 				close(matched.Handshake)
 			}
 			for _, msg := range matched.pending {
-				matched.outbox <- msg
+				select {
+				case matched.outbox <- msg:
+				default:
+					log.Printf("Association %p: outbox full, dropping pending frame during handshake flush", matched)
+				}
 			}
 			matched.pending = nil
 			matched.mu.Unlock()
@@ -967,7 +961,11 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 	// OUTBOUND: flush pending and send HandshakeRsp (if we were the one initiating)
 	assoc.mu.Lock()
 	for _, msg := range assoc.pending {
-		assoc.outbox <- msg
+		select {
+		case assoc.outbox <- msg:
+		default:
+			log.Printf("Association %p: outbox full, dropping pending frame during handshake flush", assoc)
+		}
 	}
 	assoc.pending = nil
 	assoc.mu.Unlock()
@@ -985,7 +983,11 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 		return err
 	}
 	log.Printf("Association %p: sending HandshakeRsp (e) for UID %d", assoc, assoc.localUid)
-	assoc.outbox <- frame
+	select {
+	case assoc.outbox <- frame:
+	default:
+		log.Printf("Association %p: outbox full, dropping HandshakeRsp frame", assoc)
+	}
 	return nil
 }
 
@@ -1048,7 +1050,11 @@ func (assoc *GekkaAssociation) handleHandshakeRsp(mwa *gproto_remote.MessageWith
 
 		// Flush pending messages
 		for _, msg := range matched.pending {
-			matched.outbox <- msg
+			select {
+			case matched.outbox <- msg:
+			default:
+				log.Printf("Association %p: outbox full, dropping pending frame during handshakeRsp flush", matched)
+			}
 		}
 		matched.pending = nil
 		matched.mu.Unlock()

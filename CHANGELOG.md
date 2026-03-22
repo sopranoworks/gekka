@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-03-22
+
+### Added
+
+- ☁️ **Cloud Spanner Native Persistence**: High-performance backend using Spanner Mutations and Streaming Reads for low-latency event sourcing. Supports `SpannerJournal` and `SpannerSnapshotStore`.
+- 🏗️ **Advanced Sharding**:
+  - **Adaptive Shard Allocation**: Balanced entity distribution based on node pressure (CPU, Heap, Mailbox).
+  - **Manual Rebalance API**: Programmatic and CLI control over shard movement.
+  - **Remember Entities Recovery**: Efficient recovery of sharded entities from persistent storage.
+- 📦 **Exactly-once Reliable Delivery**: Deep integration between Sharding and Reliable Delivery to ensure zero message loss during failovers.
+- 🕵️ **End-to-End Distributed Tracing**: Full OpenTelemetry instrumentation across Sharding, Persistence, and Projections.
+- 📈 **Performance Benchmarking Suite**: New tools for measuring scale, throughput, and recovery metrics (Phase 20).
+- 🧬 **Delta-CRDT Gossip Optimization**: Bandwidth-efficient state synchronization for large-scale clusters (Phase 18).
+- 🛡️ **Kubernetes-aware Split Brain Resolver**: Enhanced SBR that monitors Pod lifecycle via K8s API (Phase 17).
+
+### Changed
+
+- 🛠️ **Refactored Reliable Delivery API**: Simplified `ProducerController` and `ConsumerController` initialization with automated registration.
+- 📂 **Integration Test Pathing**: Standardized `scala-server` paths across all integration tests for consistent execution in CI and local environments.
+
+### Fixed
+
+- 🐛 **Integration Test Compilation**: Resolved numerous `undefined` errors and API mismatches caused by the v0.10.0 structural refactoring.
+- 🧪 **Test Stability**: Fixed a race condition in `TestIntegration_PekkoServer` where a probe message interfered with the echo verification.
+
 ## [0.11.0] - 2026-03-21
 
 ### Added

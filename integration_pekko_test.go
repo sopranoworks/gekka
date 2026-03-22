@@ -33,7 +33,7 @@ import (
 	"github.com/sopranoworks/gekka/cluster/pubsub"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 	"github.com/sopranoworks/gekka/persistence"
-	"github.com/sopranoworks/gekka/cluster/sharding/typed"
+	"github.com/sopranoworks/gekka/cluster/sharding"
 )
 
 // scalaSignals collects the named signals emitted by PekkoIntegrationNode on
@@ -666,8 +666,8 @@ func TestShardingPassivationInterop(t *testing.T) {
 			PersistenceID: "entity-" + id,
 			Journal:       journal,
 			InitialState:  "",
-			CommandHandler: func(ctx actor.TypedContext[string], state string, cmd string) actor.Effect[string, string] {
-				return actor.Persist[string, string](cmd)
+			CommandHandler: func(ctx TypedContext[string], state string, cmd string) Effect[string, string] {
+				return Persist[string, string](cmd)
 			},
 			EventHandler: func(state string, evt string) string { return evt },
 		}
@@ -691,7 +691,7 @@ func TestShardingPassivationInterop(t *testing.T) {
 	// ── 5. Create entities via nodeA ──────────────────────────────────────
 	entities := []string{"apple", "banana", "cherry"}
 	for _, id := range entities {
-		ref, _ := GetEntityRef[string](nodeA, "InteropEntity", id)
+		ref, _ := EntityRefFor[string](nodeA, "InteropEntity", id)
 		ref.Tell("init-" + id)
 		log.Printf("[GO] Sent message to entity %q", id)
 	}
@@ -701,7 +701,7 @@ func TestShardingPassivationInterop(t *testing.T) {
 
 	// Verify entities are accessible from nodeB as well.
 	for _, id := range entities {
-		ref, _ := GetEntityRef[string](nodeB, "InteropEntity", id)
+		ref, _ := EntityRefFor[string](nodeB, "InteropEntity", id)
 		ref.Tell("ping-" + id)
 	}
 
@@ -715,7 +715,7 @@ func TestShardingPassivationInterop(t *testing.T) {
 	// a new message re-creates the entity without error.
 	log.Println("[GO] Re-activating entities after passivation...")
 	for _, id := range entities {
-		ref, _ := GetEntityRef[string](nodeA, "InteropEntity", id)
+		ref, _ := EntityRefFor[string](nodeA, "InteropEntity", id)
 		ref.Tell("reactivate-" + id)
 	}
 	time.Sleep(500 * time.Millisecond)

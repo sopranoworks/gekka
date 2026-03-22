@@ -227,14 +227,12 @@ func BuildSystemEnvelope(message []byte, serializerId int32, manifest string, se
 
 // WriteFrame prepends the 4-byte length header and writes the payload to the writer.
 func WriteFrame(writer io.Writer, payload []byte) error {
-	header := make([]byte, 4)
-	binary.LittleEndian.PutUint32(header, uint32(len(payload)))
+	frame := make([]byte, 4+len(payload))
+	binary.LittleEndian.PutUint32(frame[:4], uint32(len(payload)))
+	copy(frame[4:], payload)
 
-	if _, err := writer.Write(header); err != nil {
-		return fmt.Errorf("failed to write header: %w", err)
-	}
-	if _, err := writer.Write(payload); err != nil {
-		return fmt.Errorf("failed to write payload: %w", err)
+	if _, err := writer.Write(frame); err != nil {
+		return fmt.Errorf("failed to write frame: %w", err)
 	}
 	log.Printf("WriteFrame: wrote %d bytes (header+payload)", 4+len(payload))
 	return nil

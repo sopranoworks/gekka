@@ -111,15 +111,11 @@ func testGoProducerScalaConsumer(t *testing.T, ctx context.Context, node *Cluste
 	t.Helper()
 
 	const msgCount = 5
-	scalaConsumerPath := "pekko://GekkaSystem@127.0.0.1:2552/user/scalaConsumer"
-
 	// Spawn Go's ProducerController at /user/goProducer.
-	pc := delivery.NewProducerController("go-producer", scalaConsumerPath, delivery.DefaultWindowSize)
-	goProducerRef, err := node.System.ActorOf(Props{New: func() actor.Actor {
-		return actor.NewTypedActor[any](pc)
-	}}, "goProducer")
+	pc := NewProducerController("go-producer")
+	goProducerRef, err := Spawn(node, pc, "goProducer")
 	if err != nil {
-		t.Fatalf("ActorOf goProducer: %v", err)
+		t.Fatalf("Spawn goProducer: %v", err)
 	}
 	log.Printf("[GO→SCALA] ProducerController spawned at %s", goProducerRef.Path())
 
@@ -218,12 +214,10 @@ func testScalaProducerGoConsumer(t *testing.T, ctx context.Context, node *Cluste
 	log.Printf("[SCALA→GO] App consumer spawned at %s", appConsumerRef.Path())
 
 	// Spawn Go's ConsumerController at /user/goConsumer.
-	cc := delivery.NewConsumerController(appConsumerRef, delivery.DefaultWindowSize)
-	goConsumerRef, err := node.System.ActorOf(Props{New: func() actor.Actor {
-		return actor.NewTypedActor[any](cc)
-	}}, "goConsumer")
+	cc := NewConsumerController(appConsumerRef, delivery.DefaultWindowSize)
+	goConsumerRef, err := Spawn(node, cc, "goConsumer")
 	if err != nil {
-		t.Fatalf("ActorOf goConsumer: %v", err)
+		t.Fatalf("Spawn goConsumer: %v", err)
 	}
 	log.Printf("[SCALA→GO] ConsumerController spawned at %s", goConsumerRef.Path())
 

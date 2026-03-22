@@ -434,6 +434,7 @@ type IncomingMessage struct {
 // Create one with Spawn (or SpawnFromConfig), then call Join (or JoinSeeds)
 // to connect to a Pekko gcluster.
 type Cluster struct {
+	cfg        ClusterConfig
 	nm         *core.NodeManager
 	cm         *gcluster.ClusterManager
 	router     *actor.Router
@@ -607,6 +608,7 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	mg := gcluster.NewMetricsGossip(nodeID, repl, 5*time.Second)
 
 	cluster := &Cluster{
+		cfg:            cfg,
 		nm:             nm,
 		cm:             cm,
 		router:         router,
@@ -914,6 +916,13 @@ func (c *Cluster) handleArteryMessage(ctx context.Context, meta *core.ArteryMeta
 		return nil
 	}
 
+	// Try pending replies (Ask pattern)
+	if strings.HasPrefix(recipientPath, "/temp/") {
+		if c.nm.RoutePendingReply(recipientPath, meta) {
+			return nil
+		}
+	}
+
 	if c.onMessage == nil {
 		return nil
 	}
@@ -1059,9 +1068,7 @@ func (c *Cluster) Ask(ctx context.Context, dst interface{}, msg interface{}) (*I
 		return nil, fmt.Errorf("gekka: Ask: generate id: %w", err)
 	}
 	id := hex.EncodeToString(buf[:])
-	self := c.SelfAddress()
-	tempPath := fmt.Sprintf("%s://%s@%s:%d/temp/ask-%s",
-		self.Protocol, self.System, self.Host, self.Port, id)
+	tempPath := c.SelfPathURI("/temp/ask-" + id)
 
 	// Register a reply channel keyed by the path portion only (e.g. "/temp/ask-<id>").
 	// handleUserMessage extracts just the path from the incoming Artery recipient URI.
@@ -1283,8 +1290,6 @@ func (c *Cluster) HasQuarantinedAssociation() bool {
 func (c *Cluster) StopHeartbeat() {
 	if c.seedAddr != nil {
 		c.cm.StopHeartbeat(core.ToClusterAddress(c.seedAddr))
-		// Immediately restart — this counts as a reset.
-		c.cm.StartHeartbeat(core.ToClusterAddress(c.seedAddr))
 	}
 }
 

@@ -63,6 +63,9 @@ func NewTcpClient(cfg TcpClientConfig) (*TcpClient, error) {
 // Connect establishes a connection and calls the handler.
 // It returns when the handler returns or when the connection fails.
 func (c *TcpClient) Connect(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	d := net.Dialer{
 		Timeout: c.cfg.DialTimeout,
 	}

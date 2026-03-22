@@ -1638,7 +1638,9 @@ func (cm *ClusterManager) CheckReachability() {
 	cm.Mu.Unlock()
 
 	for i, addr := range addresses {
-		key := fmt.Sprintf("%s:%d-%d", addr.GetAddress().GetHostname(), addr.GetAddress().GetPort(), addr.GetUid())
+		a := addr.GetAddress()
+		uid64 := uint64(addr.GetUid()) | (uint64(addr.GetUid2()) << 32)
+		key := fmt.Sprintf("%s:%d-%d", a.GetHostname(), a.GetPort(), uid64)
 		phi := cm.Fd.Phi(key)
 
 		// Pekko Cluster logic: update ObserverReachability
@@ -1648,7 +1650,7 @@ func (cm *ClusterManager) CheckReachability() {
 			cm.Mu.Lock()
 			cm.updateReachability(int32(i), gproto_cluster.ReachabilityStatus_Unreachable)
 			cm.Mu.Unlock()
-		} else if phi < 1.0 {
+		} else if phi < cm.Fd.threshold {
 			// Mark as REACHABLE if it was previously unreachable
 			cm.Mu.Lock()
 			cm.updateReachability(int32(i), gproto_cluster.ReachabilityStatus_Reachable)
@@ -1759,6 +1761,20 @@ func (cm *ClusterManager) updateReachability(addrIdx int32, status gproto_cluste
 		cm.State.Overview = &gproto_cluster.GossipOverview{}
 	}
 
+	localHost := cm.LocalAddress.Address.GetHostname()
+	localPort := cm.LocalAddress.Address.GetPort()
+	localIdx := int32(-1)
+	for i, ua := range cm.State.AllAddresses {
+		if ua.GetAddress().GetHostname() == localHost && ua.GetAddress().GetPort() == localPort {
+			localIdx = int32(i)
+			break
+		}
+	}
+	if localIdx == -1 {
+		log.Printf("Cluster: could not find local address in AllAddresses, using index 0 as fallback")
+		localIdx = 0
+	}
+
 	// Build the MemberAddress for event publishing (safe: addrIdx is always valid here).
 	var ma MemberAddress
 	if int(addrIdx) < len(cm.State.AllAddresses) {
@@ -1767,7 +1783,7 @@ func (cm *ClusterManager) updateReachability(addrIdx int32, status gproto_cluste
 
 	found := false
 	for _, r := range cm.State.Overview.ObserverReachability {
-		if r.GetAddressIndex() == 0 { // 0 is us (local address index)
+		if r.GetAddressIndex() == localIdx {
 			for _, s := range r.SubjectReachability {
 				if s.GetAddressIndex() == addrIdx {
 					if s.GetStatus() != status {
@@ -1805,7 +1821,7 @@ func (cm *ClusterManager) updateReachability(addrIdx int32, status gproto_cluste
 
 	if !found {
 		cm.State.Overview.ObserverReachability = append(cm.State.Overview.ObserverReachability, &gproto_cluster.ObserverReachability{
-			AddressIndex: proto.Int32(0),
+			AddressIndex: proto.Int32(localIdx),
 			Version:      proto.Int64(1),
 			SubjectReachability: []*gproto_cluster.SubjectReachability{
 				{

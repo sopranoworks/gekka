@@ -20,6 +20,7 @@ Configuration is loaded via [`gekka-config`](https://github.com/sopranoworks/gek
 - **Kubernetes-aware Self-Healing** — A smart Split Brain Resolver that accelerates recovery by directly monitoring Pod states via the K8s API.
 - **Delta-CRDT Gossip** — Bandwidth-efficient Distributed Data synchronization using delta-state propagation.
 - **End-to-End Distributed Tracing** — Full observability across the entire pipeline—from Sharding to Persistence and Projections—via OpenTelemetry.
+- **Performance Benchmarking Suite** — Comprehensive suite for measuring Scale, Throughput, and Recovery metrics to ensure production readiness.
 
 ---
 

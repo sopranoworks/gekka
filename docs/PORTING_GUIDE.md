@@ -75,7 +75,7 @@ Gekka uses the same **HOCON** syntax as Pekko, powered by the [`gekka-config`](h
 - **Naming**: While Gekka recognizes `pekko.*` and `akka.*` prefixes for interoperability, we recommend using Go-style naming in your custom configs.
 - **Deployment**: Routers can be configured in HOCON just like in Scala:
   ```hocon
-  gekka.actor.deployment {
+  pekko.actor.deployment {
     "/user/myRouter" {
       router = round-robin-pool
       nr-of-instances = 5
@@ -98,7 +98,7 @@ Gekka's persistence model follows the Pekko Typed pattern closely.
 
 ## 🛡️ Best Practices
 
-1. **Location Transparency**: Always use `ref.Tell()` or `gekka.Ask()`. Never assume an actor is local.
+1. **Location Transparency**: Always use `ref.Tell()` or `ref.Ask(ctx, ...)`. Never assume an actor is local.
 2. **Type Safety**: Leverage Go generics. Avoid using `any` unless implementing a polymorphic router or supervisor.
 3. **Graceful Shutdown**: Use `cluster.Shutdown()` to trigger the **Coordinated Shutdown** sequence, ensuring shards are handed off and TCP connections are closed cleanly.
 

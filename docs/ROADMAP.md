@@ -45,9 +45,26 @@
 - **Advanced Routing**: Implemented Scatter-Gather, Tail-Chopping, and Consistent Hashing routing logics for both classic and typed systems.
 - **Message Adaptation (Ask)**: Implemented the `TypedContext.Ask` pattern for asynchronous response handling.
 
+### v0.11.0 — Distributed Data & Self-Healing (2026-03-20) [COMPLETED]
+- **Distributed Data (CRDTs)**: Implemented `PNCounter`, `ORSet`, and `LWWRegister` with full serializer support.
+- **Delta-CRDT Gossip**: Bandwidth-efficient state synchronization using delta-propagation for massive clusters.
+- **Kubernetes-aware Self-Healing**: Smart Split Brain Resolver that monitors Pod lifecycle via the K8s API to accelerate recovery.
+
+### v0.12.0 — Spanner Persistence & Performance Audit (2026-03-22) [COMPLETED]
+- **Cloud Spanner Native Persistence**: Highly optimized backend using Spanner Mutations and Streaming Reads for low-latency event sourcing.
+- **Advanced Sharding**: Adaptive shard allocation based on node pressure and Manual Rebalance API for ops control.
+- **Exactly-once Reliable Delivery**: Deep integration between Sharding and Reliable Delivery to ensure zero message loss during failovers.
+- **End-to-End Distributed Tracing**: Full OpenTelemetry instrumentation across Sharding, Persistence, and Projections.
+- **Performance Benchmarking Suite**: Comprehensive suite for measuring Scale, Throughput, and Recovery metrics.
+
 ---
 
 ## Upcoming
+
+### v0.13.0 — Documentation & Ecosystem Integration
+- **Enhanced GoDoc**: Comprehensive documentation and examples across all public packages.
+- **Tracing Auto-instrumentation**: Integration with popular SQL drivers (pgx, etc.) for seamless trace propagation.
+- **Reliable Delivery Flow Control**: Advanced congestion control and windowing for high-throughput messaging.
 
 ### v1.0.0 — Production Readiness & Stability
 

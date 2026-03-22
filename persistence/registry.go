@@ -136,6 +136,28 @@ func DurableStateStoreNames() []string {
 	return names
 }
 
+// JournalProviderNames returns the names of all registered zero-config Journal providers.
+func JournalProviderNames() []string {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+	names := make([]string, 0, len(journalProviders))
+	for n := range journalProviders {
+		names = append(names, n)
+	}
+	return names
+}
+
+// SnapshotStoreProviderNames returns the names of all registered zero-config SnapshotStore providers.
+func SnapshotStoreProviderNames() []string {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+	names := make([]string, 0, len(snapshotProviders))
+	for n := range snapshotProviders {
+		names = append(names, n)
+	}
+	return names
+}
+
 // ── Zero-config provider registration ────────────────────────────────────────
 
 // RegisterJournalProvider registers a zero-config JournalProvider under name.

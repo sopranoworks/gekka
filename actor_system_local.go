@@ -22,6 +22,7 @@ import (
 	"github.com/sopranoworks/gekka/internal/core"
 	"github.com/sopranoworks/gekka/persistence"
 	"github.com/sopranoworks/gekka/stream"
+	"github.com/sopranoworks/gekka/telemetry"
 )
 
 // localActorSystem implements ActorSystem for local-only use without networking.
@@ -69,6 +70,16 @@ func NewActorSystem(name string, config ...*hocon.Config) (ActorSystem, error) {
 	ss, err := persistence.NewSnapshotStore(snapshotPlugin)
 	if err != nil {
 		return nil, fmt.Errorf("actor system: provision snapshot store %q: %w", snapshotPlugin, err)
+	}
+
+	telemetryPlugin := "no-op"
+	if len(config) > 0 && config[0] != nil {
+		if v, err := config[0].GetString("telemetry.provider.plugin"); err == nil && v != "" {
+			telemetryPlugin = v
+		}
+	}
+	if tp, err := telemetry.GetProvider(telemetryPlugin); err == nil {
+		telemetry.SetProvider(tp)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

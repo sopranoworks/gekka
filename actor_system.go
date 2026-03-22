@@ -17,6 +17,7 @@ import (
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/actor/typed"
 	"github.com/sopranoworks/gekka/internal/core"
+	"github.com/sopranoworks/gekka/persistence"
 	"github.com/sopranoworks/gekka/stream"
 )
 
@@ -134,6 +135,17 @@ type ActorSystem interface {
 
 	// Receptionist returns the reference to the cluster-aware receptionist.
 	Receptionist() typed.TypedActorRef[any]
+
+	// Journal returns the Journal provisioned for this system.
+	// By default this is an InMemoryJournal; call ProvideJournal to replace it
+	// with a durable backend before spawning persistent actors.
+	//
+	//	behavior.Journal = node.System.Journal()
+	Journal() persistence.Journal
+
+	// SnapshotStore returns the SnapshotStore provisioned for this system.
+	// By default this is an InMemorySnapshotStore.
+	SnapshotStore() persistence.SnapshotStore
 }
 
 // internalSystem is an unexported interface used by ActorRef and ActorSelection

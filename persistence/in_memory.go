@@ -13,6 +13,15 @@ import (
 	"sync"
 )
 
+func init() {
+	RegisterJournalProvider("in-memory", func() Journal {
+		return NewInMemoryJournal()
+	})
+	RegisterSnapshotStoreProvider("in-memory", func() SnapshotStore {
+		return NewInMemorySnapshotStore()
+	})
+}
+
 // InMemoryJournal is an in-memory implementation of the Journal interface.
 type InMemoryJournal struct {
 	mu       sync.RWMutex

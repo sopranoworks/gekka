@@ -70,21 +70,26 @@ func (c *Cluster) ProvideSnapshotStoreDB(plugin string, db *sql.DB) error {
 	return nil
 }
 
-// Journal returns the Journal provisioned by ProvideJournalDB, or nil if none
-// has been provisioned.  A nil return signals that no SQL-backed journal has
-// been wired up yet; fall back to persistence.NewInMemoryJournal() in tests.
+// Journal returns the Journal provisioned by ProvideJournalDB, falling back to
+// an in-memory journal when no durable backend has been wired up yet.
 func (c *Cluster) Journal() persistence.Journal {
 	c.ps.mu.RLock()
 	j := c.ps.journal
 	c.ps.mu.RUnlock()
-	return j
+	if j != nil {
+		return j
+	}
+	return persistence.NewInMemoryJournal()
 }
 
-// SnapshotStore returns the SnapshotStore provisioned by
-// ProvideSnapshotStoreDB, or nil if none has been provisioned.
+// SnapshotStore returns the SnapshotStore provisioned by ProvideSnapshotStoreDB,
+// falling back to an in-memory snapshot store when none has been wired up yet.
 func (c *Cluster) SnapshotStore() persistence.SnapshotStore {
 	c.ps.mu.RLock()
 	ss := c.ps.snapshotStore
 	c.ps.mu.RUnlock()
-	return ss
+	if ss != nil {
+		return ss
+	}
+	return persistence.NewInMemorySnapshotStore()
 }

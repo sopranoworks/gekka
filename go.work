@@ -1,0 +1,10 @@
+go 1.26.1
+
+use (
+	.
+	./cmd
+	./extensions/cluster/k8s
+	./extensions/persistence/spanner
+	./extensions/telemetry/otel
+	./test/bench
+)

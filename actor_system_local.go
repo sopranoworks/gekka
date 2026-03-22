@@ -20,30 +20,66 @@ import (
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/actor/typed"
 	"github.com/sopranoworks/gekka/internal/core"
+	"github.com/sopranoworks/gekka/persistence"
 	"github.com/sopranoworks/gekka/stream"
 )
 
 // localActorSystem implements ActorSystem for local-only use without networking.
 type localActorSystem struct {
-	name       string
-	ctx        context.Context
-	cancel     context.CancelFunc
-	actors     map[string]actor.Actor
-	actorsMu   sync.RWMutex
-	logHandler slog.Handler
-	sched      *systemScheduler
+	name          string
+	ctx           context.Context
+	cancel        context.CancelFunc
+	actors        map[string]actor.Actor
+	actorsMu      sync.RWMutex
+	logHandler    slog.Handler
+	sched         *systemScheduler
+	journal       persistence.Journal
+	snapshotStore persistence.SnapshotStore
 }
 
 // NewActorSystem creates and returns a local-only ActorSystem.
 // It manages actors within the same process without networking or cluster features.
+//
+// A Journal and SnapshotStore are provisioned automatically from the plugin
+// registry. The default plugin is "in-memory" (stdlib only, no external deps).
+// Override via the HOCON key persistence.journal.plugin / persistence.snapshot-store.plugin:
+//
+//	gekka {
+//	  persistence {
+//	    journal.plugin       = "postgres"
+//	    snapshot-store.plugin = "postgres"
+//	  }
+//	}
 func NewActorSystem(name string, config ...*hocon.Config) (ActorSystem, error) {
+	journalPlugin := "in-memory"
+	snapshotPlugin := "in-memory"
+	if len(config) > 0 && config[0] != nil {
+		if v, err := config[0].GetString("persistence.journal.plugin"); err == nil && v != "" {
+			journalPlugin = v
+		}
+		if v, err := config[0].GetString("persistence.snapshot-store.plugin"); err == nil && v != "" {
+			snapshotPlugin = v
+		}
+	}
+
+	j, err := persistence.NewJournal(journalPlugin)
+	if err != nil {
+		return nil, fmt.Errorf("actor system: provision journal %q: %w", journalPlugin, err)
+	}
+	ss, err := persistence.NewSnapshotStore(snapshotPlugin)
+	if err != nil {
+		return nil, fmt.Errorf("actor system: provision snapshot store %q: %w", snapshotPlugin, err)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &localActorSystem{
-		name:   name,
-		ctx:    ctx,
-		cancel: cancel,
-		actors: make(map[string]actor.Actor),
-		sched:  newSystemScheduler(),
+		name:          name,
+		ctx:           ctx,
+		cancel:        cancel,
+		actors:        make(map[string]actor.Actor),
+		sched:         newSystemScheduler(),
+		journal:       j,
+		snapshotStore: ss,
 	}
 	// Terminate the scheduler when the system context is cancelled.
 	go func() {
@@ -51,6 +87,27 @@ func NewActorSystem(name string, config ...*hocon.Config) (ActorSystem, error) {
 		s.sched.terminate()
 	}()
 	return s, nil
+}
+
+// Journal implements ActorSystem.
+func (s *localActorSystem) Journal() persistence.Journal { return s.journal }
+
+// SnapshotStore implements ActorSystem.
+func (s *localActorSystem) SnapshotStore() persistence.SnapshotStore { return s.snapshotStore }
+
+// ProvideJournal replaces the journal backend at runtime.  Call before spawning
+// any persistent actors.  Idiomatic for tests that want a real SQL backend:
+//
+//	db, _ := sql.Open("pgx", dsn)
+//	journal, _ := persistence.NewJournalFromDB("postgres", db)
+//	sys.(*localActorSystem).ProvideJournal(journal)
+func (s *localActorSystem) ProvideJournal(j persistence.Journal) {
+	s.journal = j
+}
+
+// ProvideSnapshotStore replaces the snapshot store backend at runtime.
+func (s *localActorSystem) ProvideSnapshotStore(ss persistence.SnapshotStore) {
+	s.snapshotStore = ss
 }
 
 // Scheduler implements ActorSystem.

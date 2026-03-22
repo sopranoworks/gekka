@@ -10,6 +10,8 @@ package telemetry
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 
 	hocon "github.com/sopranoworks/gekka-config"
@@ -42,9 +44,14 @@ func RegisterProvider(name string, factory func(hocon.Config) (Provider, error))
 func GetProvider(name string, cfg hocon.Config) (Provider, error) {
 	providerRegistryMu.RLock()
 	f, ok := providerRegistry[name]
+	var available []string
+	if !ok {
+		available = sortedProviderNames()
+	}
 	providerRegistryMu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("telemetry: no provider registered under %q", name)
+		return nil, fmt.Errorf("telemetry: provider %q not found — available providers: [%s]. Did you forget a blank import?",
+			name, strings.Join(available, ", "))
 	}
 	return f(cfg)
 }
@@ -57,5 +64,15 @@ func ProviderNames() []string {
 	for n := range providerRegistry {
 		names = append(names, n)
 	}
+	return names
+}
+
+// sortedProviderNames returns sorted quoted provider names; must be called with providerRegistryMu held.
+func sortedProviderNames() []string {
+	names := make([]string, 0, len(providerRegistry))
+	for n := range providerRegistry {
+		names = append(names, "'"+n+"'")
+	}
+	sort.Strings(names)
 	return names
 }

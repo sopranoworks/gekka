@@ -11,10 +11,43 @@ package persistence
 import (
 	"database/sql"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 
 	hocon "github.com/sopranoworks/gekka-config"
 )
+
+// ── Config validation ─────────────────────────────────────────────────────────
+
+// ValidateProviderConfig checks that every key in requiredKeys is present and
+// non-empty in cfg.  Returns a descriptive error listing every missing key and
+// the HOCON path at which each one should be set.
+//
+// Use this at the top of a JournalProvider or SnapshotStoreProvider factory to
+// fail fast before any I/O is attempted:
+//
+//	persistence.RegisterJournalProvider("mybackend", func(cfg hocon.Config) (persistence.Journal, error) {
+//	    if err := persistence.ValidateProviderConfig(cfg, "host", "port", "database"); err != nil {
+//	        return nil, err
+//	    }
+//	    // ... create the client
+//	})
+func ValidateProviderConfig(cfg hocon.Config, requiredKeys ...string) error {
+	var missing []string
+	for _, key := range requiredKeys {
+		v, err := cfg.GetString(key)
+		if err != nil || strings.TrimSpace(v) == "" {
+			missing = append(missing, "'"+key+"'")
+		}
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return fmt.Errorf("persistence: missing required configuration keys: [%s]. Set them under persistence.journal.settings (or snapshot-store.settings) in your HOCON file",
+			strings.Join(missing, ", "))
+	}
+	return nil
+}
 
 // ── SQL-backed factories ──────────────────────────────────────────────────────
 
@@ -193,11 +226,13 @@ func NewJournal(name string, cfg hocon.Config) (Journal, error) {
 	}
 	registryMu.RLock()
 	_, sqlOK := journalReg[name]
+	available := journalProviderNames()
 	registryMu.RUnlock()
 	if sqlOK {
 		return nil, fmt.Errorf("persistence: journal %q requires a *sql.DB; use NewJournalFromDB instead", name)
 	}
-	return nil, fmt.Errorf("persistence: no journal registered under %q", name)
+	return nil, fmt.Errorf("persistence: journal provider %q not found — available providers: [%s]. Did you forget a blank import?",
+		name, strings.Join(available, ", "))
 }
 
 // NewSnapshotStore looks up the SnapshotStoreProvider registered under name,
@@ -211,9 +246,31 @@ func NewSnapshotStore(name string, cfg hocon.Config) (SnapshotStore, error) {
 	}
 	registryMu.RLock()
 	_, sqlOK := snapshotReg[name]
+	available := snapshotProviderNames()
 	registryMu.RUnlock()
 	if sqlOK {
 		return nil, fmt.Errorf("persistence: snapshot store %q requires a *sql.DB; use NewSnapshotStoreFromDB instead", name)
 	}
-	return nil, fmt.Errorf("persistence: no snapshot store registered under %q", name)
+	return nil, fmt.Errorf("persistence: snapshot store provider %q not found — available providers: [%s]. Did you forget a blank import?",
+		name, strings.Join(available, ", "))
+}
+
+// journalProviderNames returns sorted provider names; must be called with registryMu held.
+func journalProviderNames() []string {
+	names := make([]string, 0, len(journalProviders))
+	for n := range journalProviders {
+		names = append(names, "'"+n+"'")
+	}
+	sort.Strings(names)
+	return names
+}
+
+// snapshotProviderNames returns sorted provider names; must be called with registryMu held.
+func snapshotProviderNames() []string {
+	names := make([]string, 0, len(snapshotProviders))
+	for n := range snapshotProviders {
+		names = append(names, "'"+n+"'")
+	}
+	sort.Strings(names)
+	return names
 }

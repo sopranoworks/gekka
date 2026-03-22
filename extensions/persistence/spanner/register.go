@@ -17,55 +17,48 @@ import (
 	"github.com/sopranoworks/gekka/persistence"
 )
 
-// spannerFactory is the shared factory logic: reads project-id, instance, and
-// database from cfg, opens a Spanner client, and passes it to constructor fn.
-func spannerFactory(cfg hocon.Config, constructor func(*spanner.Client) persistence.Journal) (persistence.Journal, error) {
-	projectID, _ := cfg.GetString("project-id")
-	instance, _ := cfg.GetString("instance")
-	database, _ := cfg.GetString("database")
-
-	if projectID == "" || instance == "" || database == "" {
-		return nil, fmt.Errorf(
-			"spannerstore: persistence.journal.settings must define project-id, instance, and database; got project-id=%q instance=%q database=%q",
-			projectID, instance, database,
-		)
-	}
-
-	dsn := fmt.Sprintf("projects/%s/instances/%s/databases/%s", projectID, instance, database)
-	client, err := spanner.NewClient(context.Background(), dsn)
-	if err != nil {
-		return nil, fmt.Errorf("spannerstore: open spanner client for %s: %w", dsn, err)
-	}
-	return constructor(client), nil
+// ValidateConfig checks that all required Spanner configuration keys are
+// present in cfg.  It is called automatically by the registered factories
+// before any network I/O; use it directly when you need early validation:
+//
+//	if err := spannerstore.ValidateConfig(cfg); err != nil {
+//	    log.Fatal(err)
+//	}
+func ValidateConfig(cfg hocon.Config) error {
+	return persistence.ValidateProviderConfig(cfg, "project-id", "instance", "database")
 }
 
-func spannerSnapshotFactory(cfg hocon.Config) (persistence.SnapshotStore, error) {
+// spannerDSN builds the Spanner database path from validated config.
+// Precondition: ValidateConfig(cfg) == nil.
+func spannerDSN(cfg hocon.Config) string {
 	projectID, _ := cfg.GetString("project-id")
-	instance, _ := cfg.GetString("instance")
-	database, _ := cfg.GetString("database")
-
-	if projectID == "" || instance == "" || database == "" {
-		return nil, fmt.Errorf(
-			"spannerstore: persistence.snapshot-store.settings must define project-id, instance, and database; got project-id=%q instance=%q database=%q",
-			projectID, instance, database,
-		)
-	}
-
-	dsn := fmt.Sprintf("projects/%s/instances/%s/databases/%s", projectID, instance, database)
-	client, err := spanner.NewClient(context.Background(), dsn)
-	if err != nil {
-		return nil, fmt.Errorf("spannerstore: open spanner client for %s: %w", dsn, err)
-	}
-	return NewSpannerSnapshotStore(client, NewJSONCodec()), nil
+	inst, _ := cfg.GetString("instance")
+	db, _ := cfg.GetString("database")
+	return fmt.Sprintf("projects/%s/instances/%s/databases/%s", projectID, inst, db)
 }
 
 func init() {
 	persistence.RegisterJournalProvider("spanner", func(cfg hocon.Config) (persistence.Journal, error) {
-		return spannerFactory(cfg, func(c *spanner.Client) persistence.Journal {
-			return NewSpannerJournal(c, NewJSONCodec())
-		})
+		if err := ValidateConfig(cfg); err != nil {
+			return nil, err
+		}
+		dsn := spannerDSN(cfg)
+		client, err := spanner.NewClient(context.Background(), dsn)
+		if err != nil {
+			return nil, fmt.Errorf("spannerstore: open spanner client for %s: %w", dsn, err)
+		}
+		return NewSpannerJournal(client, NewJSONCodec()), nil
 	})
+
 	persistence.RegisterSnapshotStoreProvider("spanner", func(cfg hocon.Config) (persistence.SnapshotStore, error) {
-		return spannerSnapshotFactory(cfg)
+		if err := ValidateConfig(cfg); err != nil {
+			return nil, err
+		}
+		dsn := spannerDSN(cfg)
+		client, err := spanner.NewClient(context.Background(), dsn)
+		if err != nil {
+			return nil, fmt.Errorf("spannerstore: open spanner client for %s: %w", dsn, err)
+		}
+		return NewSpannerSnapshotStore(client, NewJSONCodec()), nil
 	})
 }

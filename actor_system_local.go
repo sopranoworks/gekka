@@ -63,11 +63,24 @@ func NewActorSystem(name string, config ...*hocon.Config) (ActorSystem, error) {
 		}
 	}
 
-	j, err := persistence.NewJournal(journalPlugin)
+	var journalCfg, snapshotCfg, telemetryCfg hocon.Config
+	if len(config) > 0 && config[0] != nil {
+		if sc, err := config[0].GetConfig("persistence.journal.settings"); err == nil {
+			journalCfg = sc
+		}
+		if sc, err := config[0].GetConfig("persistence.snapshot-store.settings"); err == nil {
+			snapshotCfg = sc
+		}
+		if sc, err := config[0].GetConfig("telemetry.settings"); err == nil {
+			telemetryCfg = sc
+		}
+	}
+
+	j, err := persistence.NewJournal(journalPlugin, journalCfg)
 	if err != nil {
 		return nil, fmt.Errorf("actor system: provision journal %q: %w", journalPlugin, err)
 	}
-	ss, err := persistence.NewSnapshotStore(snapshotPlugin)
+	ss, err := persistence.NewSnapshotStore(snapshotPlugin, snapshotCfg)
 	if err != nil {
 		return nil, fmt.Errorf("actor system: provision snapshot store %q: %w", snapshotPlugin, err)
 	}
@@ -78,7 +91,7 @@ func NewActorSystem(name string, config ...*hocon.Config) (ActorSystem, error) {
 			telemetryPlugin = v
 		}
 	}
-	if tp, err := telemetry.GetProvider(telemetryPlugin); err == nil {
+	if tp, err := telemetry.GetProvider(telemetryPlugin, telemetryCfg); err == nil {
 		telemetry.SetProvider(tp)
 	}
 

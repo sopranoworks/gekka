@@ -16,7 +16,7 @@ import (
 	"github.com/sopranoworks/gekka"
 	"github.com/sopranoworks/gekka/discovery"
 	"github.com/sopranoworks/gekka/cmd/internal/cli"
-	_ "github.com/sopranoworks/gekka/discovery/kubernetes"
+	_ "github.com/sopranoworks/gekka-extensions-cluster-k8s"
 	"github.com/spf13/cobra"
 )
 

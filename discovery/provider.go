@@ -43,3 +43,14 @@ func Get(name string, config DiscoveryConfig) (SeedProvider, error) {
 
 	return factory(config)
 }
+
+// ProviderNames returns the names of all registered seed provider factories.
+func ProviderNames() []string {
+	providersMu.RLock()
+	defer providersMu.RUnlock()
+	names := make([]string, 0, len(providers))
+	for n := range providers {
+		names = append(names, n)
+	}
+	return names
+}

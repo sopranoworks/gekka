@@ -8,10 +8,13 @@
 
 package otel
 
-import "github.com/sopranoworks/gekka/telemetry"
+import (
+	hocon "github.com/sopranoworks/gekka-config"
+	"github.com/sopranoworks/gekka/telemetry"
+)
 
 func init() {
-	telemetry.RegisterProvider("otel", func() telemetry.Provider {
-		return NewProvider()
+	telemetry.RegisterProvider("otel", func(_ hocon.Config) (telemetry.Provider, error) {
+		return NewProvider(), nil
 	})
 }

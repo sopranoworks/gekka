@@ -12,6 +12,8 @@ import (
 	"database/sql"
 	"fmt"
 	"sync"
+
+	hocon "github.com/sopranoworks/gekka-config"
 )
 
 // ── SQL-backed factories ──────────────────────────────────────────────────────
@@ -26,15 +28,15 @@ type SnapshotStoreFactory func(db *sql.DB) SnapshotStore
 // DurableStateStoreFactory creates a DurableStateStore backed by a pre-opened *sql.DB.
 type DurableStateStoreFactory func(db *sql.DB) DurableStateStore
 
-// ── Zero-config providers ─────────────────────────────────────────────────────
+// ── Config-driven providers ───────────────────────────────────────────────────
 
-// JournalProvider creates a Journal with no external dependencies.
-// Used by self-contained backends such as "in-memory". Register with
-// RegisterJournalProvider; retrieve with NewJournal.
-type JournalProvider func() Journal
+// JournalProvider creates a Journal from a HOCON sub-config.
+// The config is the value at persistence.journal.settings in the actor system
+// configuration.  Self-contained backends (e.g. "in-memory") may ignore it.
+type JournalProvider func(cfg hocon.Config) (Journal, error)
 
-// SnapshotStoreProvider creates a SnapshotStore with no external dependencies.
-type SnapshotStoreProvider func() SnapshotStore
+// SnapshotStoreProvider creates a SnapshotStore from a HOCON sub-config.
+type SnapshotStoreProvider func(cfg hocon.Config) (SnapshotStore, error)
 
 var (
 	registryMu      sync.RWMutex
@@ -42,8 +44,8 @@ var (
 	snapshotReg     = make(map[string]SnapshotStoreFactory)
 	durableStateReg = make(map[string]DurableStateStoreFactory)
 
-	journalProviders      = make(map[string]JournalProvider)
-	snapshotProviders     = make(map[string]SnapshotStoreProvider)
+	journalProviders  = make(map[string]JournalProvider)
+	snapshotProviders = make(map[string]SnapshotStoreProvider)
 )
 
 // RegisterJournal registers a JournalFactory under name.
@@ -103,7 +105,7 @@ func NewDurableStateStoreFromDB(name string, db *sql.DB) (DurableStateStore, err
 	return f(db), nil
 }
 
-// JournalNames returns the names of all registered Journal factories.
+// JournalNames returns the names of all registered SQL-backed Journal factories.
 func JournalNames() []string {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
@@ -136,7 +138,7 @@ func DurableStateStoreNames() []string {
 	return names
 }
 
-// JournalProviderNames returns the names of all registered zero-config Journal providers.
+// JournalProviderNames returns the names of all registered config-driven Journal providers.
 func JournalProviderNames() []string {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
@@ -147,7 +149,7 @@ func JournalProviderNames() []string {
 	return names
 }
 
-// SnapshotStoreProviderNames returns the names of all registered zero-config SnapshotStore providers.
+// SnapshotStoreProviderNames returns the names of all registered config-driven SnapshotStore providers.
 func SnapshotStoreProviderNames() []string {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
@@ -158,11 +160,10 @@ func SnapshotStoreProviderNames() []string {
 	return names
 }
 
-// ── Zero-config provider registration ────────────────────────────────────────
+// ── Provider registration ─────────────────────────────────────────────────────
 
-// RegisterJournalProvider registers a zero-config JournalProvider under name.
-// The provider is a closure that captures all configuration at registration
-// time and needs no external resources when called.
+// RegisterJournalProvider registers a config-driven JournalProvider under name.
+// The factory receives the HOCON sub-config at persistence.journal.settings.
 //
 // The built-in "in-memory" provider is pre-registered automatically.
 func RegisterJournalProvider(name string, provider JournalProvider) {
@@ -171,25 +172,24 @@ func RegisterJournalProvider(name string, provider JournalProvider) {
 	registryMu.Unlock()
 }
 
-// RegisterSnapshotStoreProvider registers a zero-config SnapshotStoreProvider under name.
+// RegisterSnapshotStoreProvider registers a config-driven SnapshotStoreProvider under name.
 func RegisterSnapshotStoreProvider(name string, provider SnapshotStoreProvider) {
 	registryMu.Lock()
 	snapshotProviders[name] = provider
 	registryMu.Unlock()
 }
 
-// NewJournal looks up the JournalProvider registered under name and returns a
-// new Journal instance.  The provider registry is checked first; if not found
-// there the SQL-backed JournalFactory registry is consulted but returns an
-// error because a *sql.DB is required for SQL factories.
+// NewJournal looks up the JournalProvider registered under name, passes cfg to
+// it, and returns the resulting Journal.  cfg is the HOCON sub-config at
+// persistence.journal.settings; backends that need no configuration may ignore it.
 //
 // Use the name "in-memory" for the built-in in-process journal.
-func NewJournal(name string) (Journal, error) {
+func NewJournal(name string, cfg hocon.Config) (Journal, error) {
 	registryMu.RLock()
 	p, ok := journalProviders[name]
 	registryMu.RUnlock()
 	if ok {
-		return p(), nil
+		return p(cfg)
 	}
 	registryMu.RLock()
 	_, sqlOK := journalReg[name]
@@ -200,14 +200,14 @@ func NewJournal(name string) (Journal, error) {
 	return nil, fmt.Errorf("persistence: no journal registered under %q", name)
 }
 
-// NewSnapshotStore looks up the SnapshotStoreProvider registered under name
-// and returns a new SnapshotStore instance.
-func NewSnapshotStore(name string) (SnapshotStore, error) {
+// NewSnapshotStore looks up the SnapshotStoreProvider registered under name,
+// passes cfg to it, and returns the resulting SnapshotStore.
+func NewSnapshotStore(name string, cfg hocon.Config) (SnapshotStore, error) {
 	registryMu.RLock()
 	p, ok := snapshotProviders[name]
 	registryMu.RUnlock()
 	if ok {
-		return p(), nil
+		return p(cfg)
 	}
 	registryMu.RLock()
 	_, sqlOK := snapshotReg[name]

@@ -1,4 +1,12 @@
-package kubernetes
+/*
+ * dns_provider.go
+ * This file is part of the gekka project.
+ *
+ * Copyright (c) 2026 Sopranoworks, Osamu Takahashi
+ * SPDX-License-Identifier: MIT
+ */
+
+package k8s
 
 import (
 	"fmt"
@@ -8,14 +16,13 @@ import (
 )
 
 func init() {
-	discovery.Register("kubernetes-dns", DNSFactory)
+	discovery.Register("kubernetes", DNSFactory)
 }
 
 // DNSFactory creates a new DNSProvider from generic DiscoveryConfig.
 func DNSFactory(config discovery.DiscoveryConfig) (discovery.SeedProvider, error) {
 	serviceName, _ := config.Config["service-name"].(string)
 	port, _ := config.Config["port"].(int)
-
 	return NewDNSProvider(serviceName, port), nil
 }
 
@@ -27,10 +34,7 @@ type DNSProvider struct {
 
 // NewDNSProvider creates a new DNS-based seed provider.
 func NewDNSProvider(serviceName string, defaultPort int) *DNSProvider {
-	return &DNSProvider{
-		serviceName: serviceName,
-		defaultPort: defaultPort,
-	}
+	return &DNSProvider{serviceName: serviceName, defaultPort: defaultPort}
 }
 
 // FetchSeedNodes resolves SRV records and returns a list of node addresses.
@@ -46,13 +50,10 @@ func (p *DNSProvider) FetchSeedNodes() ([]string, error) {
 		if port == 0 {
 			port = p.defaultPort
 		}
-
 		ips, err := net.LookupHost(srv.Target)
 		if err != nil {
-			// Skip individual resolve failures but continue for others
 			continue
 		}
-
 		for _, ip := range ips {
 			seeds = append(seeds, fmt.Sprintf("%s:%d", ip, port))
 		}
@@ -61,7 +62,6 @@ func (p *DNSProvider) FetchSeedNodes() ([]string, error) {
 	if len(seeds) == 0 {
 		return nil, fmt.Errorf("no seed nodes discovered via DNS SRV for %s", p.serviceName)
 	}
-
 	return seeds, nil
 }
 

@@ -5,6 +5,7 @@ go 1.26.1
 require (
 	cloud.google.com/go/spanner v1.88.0
 	github.com/sopranoworks/gekka v0.13.0-dev
+	github.com/sopranoworks/gekka-config v1.0.4
 	github.com/testcontainers/testcontainers-go v0.41.0
 	google.golang.org/api v0.265.0
 )

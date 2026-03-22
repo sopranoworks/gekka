@@ -11,14 +11,16 @@ package persistence
 import (
 	"context"
 	"sync"
+
+	hocon "github.com/sopranoworks/gekka-config"
 )
 
 func init() {
-	RegisterJournalProvider("in-memory", func() Journal {
-		return NewInMemoryJournal()
+	RegisterJournalProvider("in-memory", func(_ hocon.Config) (Journal, error) {
+		return NewInMemoryJournal(), nil
 	})
-	RegisterSnapshotStoreProvider("in-memory", func() SnapshotStore {
-		return NewInMemorySnapshotStore()
+	RegisterSnapshotStoreProvider("in-memory", func(_ hocon.Config) (SnapshotStore, error) {
+		return NewInMemorySnapshotStore(), nil
 	})
 }
 

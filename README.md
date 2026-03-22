@@ -61,68 +61,10 @@ Configuration is loaded via [`gekka-config`](https://github.com/sopranoworks/gek
 
 ## Operational Tooling
 
-Two standalone binaries ship with the gekka module for cluster operators.
+Gekka provides a powerful suite of operational tools for managing and monitoring your cluster.
+Use **`gekka-cli`** for dynamic shard rebalancing and cluster management, and **`gekka-metrics`** for real-time observability via OpenTelemetry.
 
-### gekka-cli
-
-`gekka-cli` is a command-line interface for inspecting and managing a live cluster via the HTTP Management API.
-
-```
-gekka-cli [--config FILE] [--profile NAME] [--json] <subcommand>
-```
-
-| Subcommand | Description |
-|---|---|
-| `members` | List all cluster members with status, roles, DC, and reachability |
-| `leave` | Initiate a graceful leave for a named member (`PUT /cluster/members/{address}`) |
-| `down` | Mark a member as Down immediately (`DELETE /cluster/members/{address}`) |
-| `discovery-check` | Diagnostic tool for testing Kubernetes API/DNS discovery settings |
-
-**Config file** (`~/.gekka/config.yaml` by default):
-
-```yaml
-management_url: http://127.0.0.1:8558
-default_profile: local
-
-profiles:
-  local:
-    management_url: http://127.0.0.1:8558
-  staging:
-    management_url: http://staging-node:8558
-```
-
-The `--url` flag always overrides the config file.  The `--profile` flag selects a named profile.
-
-### gekka-metrics
-
-`gekka-metrics` is a **full cluster node** that joins the cluster with the `metrics-exporter` role and reads gossip state directly — no HTTP polling, no dependency on the Management API.  It exports cluster-state metrics via **OpenTelemetry Protocol (OTLP/HTTP)**.
-
-```
-gekka-metrics --config FILE [--otlp ENDPOINT]
-```
-
-**HOCON configuration** (same format as any cluster node):
-
-```hocon
-pekko {
-  remote.artery.canonical { hostname = "127.0.0.1", port = 2560 }
-  cluster.seed-nodes = ["pekko://ClusterSystem@127.0.0.1:2552"]
-}
-
-gekka.telemetry.exporter.otlp {
-  endpoint = "http://otel-collector:4318"
-}
-```
-
-The `metrics-exporter` role is injected automatically so sharding allocators and singleton managers exclude this node from hosting production workloads.
-
-**Exported metric:**
-
-| Metric | Type | Attributes | Description |
-|---|---|---|---|
-| `gekka.cluster.members` | ObservableGauge | `status`, `dc` | Member count per status/DC combination |
-
-When no OTLP endpoint is configured the process still joins and exports metrics locally.
+For detailed usage and command references, see the [Operational Tooling Guide](docs/OPERATIONAL_TOOLING.md).
 
 ---
 

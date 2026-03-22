@@ -17,7 +17,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/sopranoworks/gekka"
 	_ "github.com/sopranoworks/gekka/discovery/kubernetes"
-	"github.com/sopranoworks/gekka/internal/management/client"
+	"github.com/sopranoworks/gekka/management/client"
 	"github.com/spf13/cobra"
 )
 

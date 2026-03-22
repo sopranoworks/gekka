@@ -15,8 +15,8 @@ import (
 	"sort"
 	"text/tabwriter"
 
-	"github.com/sopranoworks/gekka/internal/cli"
-	"github.com/sopranoworks/gekka/internal/management/client"
+	"github.com/sopranoworks/gekka/cmd/internal/cli"
+	"github.com/sopranoworks/gekka/management/client"
 	"github.com/spf13/cobra"
 )
 

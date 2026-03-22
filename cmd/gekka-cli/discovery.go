@@ -15,7 +15,7 @@ import (
 
 	"github.com/sopranoworks/gekka"
 	"github.com/sopranoworks/gekka/discovery"
-	"github.com/sopranoworks/gekka/internal/cli"
+	"github.com/sopranoworks/gekka/cmd/internal/cli"
 	_ "github.com/sopranoworks/gekka/discovery/kubernetes"
 	"github.com/spf13/cobra"
 )

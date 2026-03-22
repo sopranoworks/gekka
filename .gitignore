@@ -10,11 +10,13 @@ debug_envelope.go
 *.swp
 *.swo
 
-# Gekka Binaries
-gekka-cli
-gekka-metrics
+# Gekka Binaries (root-level only)
+/gekka-cli
+/gekka-metrics
 
-# Agent-specific files
+# Agent-specific files (local-only context, never committed)
+CLAUDE.md
+GEMINI.md
 .gemini/
 .claude/
 .antigravity.yaml

@@ -14,7 +14,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/sopranoworks/gekka"
-	"github.com/sopranoworks/gekka/internal/cli"
+	"github.com/sopranoworks/gekka/cmd/internal/cli"
 	"github.com/spf13/cobra"
 )
 

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/cluster/sharding"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -23,7 +24,7 @@ type counterMsg struct {
 
 func TestEntityRef_Tell(t *testing.T) {
 	region := &MockRegion{
-		Received: make(chan shardingEnvelope, 10),
+		Received: make(chan sharding.ShardingEnvelope, 10),
 	}
 
 	ref := NewEntityRef[counterMsg]("Counter", "entity-1", region)
@@ -54,11 +55,11 @@ func TestEntityRef_Ask(t *testing.T) {
 
 type MockRegion struct {
 	actor.Ref
-	Received chan shardingEnvelope
+	Received chan sharding.ShardingEnvelope
 }
 
 func (m *MockRegion) Tell(msg any, _ ...actor.Ref) {
-	if env, ok := msg.(shardingEnvelope); ok {
+	if env, ok := msg.(sharding.ShardingEnvelope); ok {
 		if m.Received != nil {
 			m.Received <- env
 		}

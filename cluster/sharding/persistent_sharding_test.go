@@ -41,13 +41,13 @@ func (a *AccountActor) PersistenceId() string { return "account" }
 func (a *AccountActor) OnCommand(ctx cpersistence.PersistContext, cmd any) {
 	switch c := cmd.(type) {
 	case DepositCmd:
-		ctx.Persist(DepositedEvent{Amount: c.Amount}, nil)
+		ctx.Persist(DepositedEvent(c), nil)
 	case json.RawMessage:
 		// Messages routed through ShardingEnvelope arrive as raw JSON bytes.
 		// Decode into DepositCmd; ignore unknown shapes.
 		var d DepositCmd
 		if err := json.Unmarshal(c, &d); err == nil && d.Amount > 0 {
-			ctx.Persist(DepositedEvent{Amount: d.Amount}, nil)
+			ctx.Persist(DepositedEvent(d), nil)
 		}
 	case GetBalanceCmd:
 		c.Reply <- a.balance

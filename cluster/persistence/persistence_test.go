@@ -37,7 +37,7 @@ func (a *CounterActor) PersistenceId() string { return "counter-1" }
 func (a *CounterActor) OnCommand(ctx PersistContext, cmd any) {
 	switch c := cmd.(type) {
 	case IncrementCmd:
-		ctx.Persist(IncrementedEvent{Amount: c.Amount}, nil)
+		ctx.Persist(IncrementedEvent(c), nil)
 	}
 }
 

@@ -48,7 +48,6 @@ type benchActorContext struct {
 	mu      sync.Mutex
 	seq     atomic.Int64
 	actors  map[string]actor.Ref
-	stopRef func(actor.Ref)
 }
 
 func newBenchActorContext() *benchActorContext {
@@ -324,13 +323,6 @@ func BenchmarkScale_SpawnShardedActors(b *testing.B) {
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 type shardMsg struct{ id string }
-
-type countingActor struct {
-	actor.BaseActor
-	counter *atomic.Int64
-}
-
-func (a *countingActor) Receive(_ any) { a.counter.Add(1) }
 
 func fnv32(s string) uint32 {
 	var h uint32 = 2166136261

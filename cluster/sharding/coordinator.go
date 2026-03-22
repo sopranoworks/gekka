@@ -233,7 +233,7 @@ func (c *ShardCoordinator) Receive(msg any) {
 			return
 		}
 		if ownerRef, ok := c.regions[ownerPath]; ok {
-			ownerRef.Tell(HandOff{ShardId: m.ShardId}, c.Self())
+			ownerRef.Tell(HandOff(m), c.Self())
 			c.Log().Info("Rebalance: HandOff sent to region", "shardId", m.ShardId, "region", ownerPath)
 		}
 

@@ -265,7 +265,7 @@ func (a *namedCounterActor) PersistenceId() string { return a.name }
 
 func (a *namedCounterActor) OnCommand(ctx PersistContext, cmd any) {
 	if c, ok := cmd.(IncrementCmd); ok {
-		ctx.Persist(IncrementedEvent{Amount: c.Amount}, nil)
+		ctx.Persist(IncrementedEvent(c), nil)
 	}
 }
 

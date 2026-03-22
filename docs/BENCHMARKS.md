@@ -1,6 +1,6 @@
 # Gekka Performance Benchmarks
 
-> **Environment:** Darwin amd64, 13th Gen Intel Core i9-13900K (32 logical CPUs), Go 1.26.1
+> **Environment:** 13th Gen Intel Core i9-13900K (32 logical CPUs), Go 1.26.1
 
 ---
 

@@ -26,39 +26,50 @@ Configuration is loaded via [`gekka-config`](https://github.com/sopranoworks/gek
 
 ## Features
 
+### 🏗️ Core Actor Engine
 - **Hierarchical Actor System** — Parent-child relationships with supervisor-managed lifecycle.
-- **Supervision** — Fault isolation with `OneForOneStrategy`.
-- **Pekko/Akka Compatibility** — Wire-level interop with Scala/Java actors via Artery TCP (Pekko 1.1.x / Akka 2.6.21).
-- **Split Brain Resolver** — Partition resolution during network splits (Keep Majority, Keep Oldest, Static Quorum).
-- **Multi-DC Awareness** — Routing and management across multiple data centers.
-- **Cluster Sharding** — Load-aware shard allocation with passivation and durable recovery.
-- **Cloud Spanner Persistence** — Native Spanner backend using Mutations and Streaming Reads.
-- **SQL Persistence** — Driver-agnostic event sourcing and snapshotting (PostgreSQL verified).
-- **Artery TLS** — Encrypted cluster transport using Go's `crypto/tls`, binary-compatible with Pekko's `tls-tcp`.
-- **Cluster Singletons** — Singleton failover and lifecycle management across mixed Go/JVM clusters.
-- **Reliable Delivery** — At-least-once and exactly-once delivery compatible with Pekko.
-- **Typed Actors (Go Generics)** — Compile-time message type safety with **Timers** and **Stash** support.
-- **Actor Persistence** — State recovery via event journaling and snapshotting.
-- **High-Performance Persistence Recovery** — Verified recovery of thousands of actors with mission-critical speed using Spanner Native integration and PostgreSQL.
-- **Gekka Streams** — Full reactive-streams DSL: Source/Flow/Sink, async boundaries, graph operators (Merge, Broadcast, Balance, Zip, GroupBy), resilience (Restart, Recover), and File IO. See [docs/STREAMS.md](docs/STREAMS.md).
-- **Distributed Streams (StreamRefs)** — Share a `Source` or `Sink` across network nodes with end-to-end back-pressure via `TypedSourceRef` / `TypedSinkRef`. TLS-encrypted TCP transport supported.
-- **Distributed Tracing** — End-to-end observability via OpenTelemetry across sharding and persistence.
-- **Kubernetes-native Discovery** — Automatic cluster formation via K8s API or DNS SRV.
-- **Zero-copy Serialization** — High-performance transport framing with 8.5x faster throughput.
-- **Distributed Pub/Sub** — Decentralized messaging with GZIP-compressed gossip (Serializer ID 9).
-- **Distributed Data / CRDTs** — Bandwidth-efficient delta-state propagation.
-- **Pool and Group Routers** — Round-robin and random routing, configurable via HOCON deployment config.
-- **Location Transparency** — `Tell` and `Ask` work identically for local and remote actors.
-- **Extensible Serialization** — Protobuf (ID 2), raw bytes (ID 4), and JSON (ID 9).
-- **Coordinated Shutdown** — Phased exit with readiness drain gate, shard handoff, and CRDT flush.
+- **Typed Behaviors** — Type-safe actor definitions leveraging Go generics for robust messaging.
+- **Fault Tolerance** — Advanced supervision with `OneForOneStrategy` and specialized recovery policies.
+- **Timers & Stash** — Built-in `TimerScheduler` for scheduled tasks and `StashBuffer` for message deferral.
+
+### 🌐 Clustering & Distribution
+- **Cluster Sharding** — Automated, load-aware actor placement with manual rebalancing support.
+- **Kubernetes-native Discovery** — Automated cluster formation using the Kubernetes API or DNS SRV.
+- **Split Brain Resolver (SBR)** — Resilient partition resolution with Kubernetes-aware fast-downing.
+- **Multi-DC Awareness** — Strategic routing and management across multiple logical data centers.
+- **Zero-copy Serialization** — High-performance Artery transport delivering 8.5x faster throughput.
+
+### 💾 Persistence & Reliability
+- **Event Sourcing** — Durable state recovery via journaled events and periodic snapshots.
+- **Cloud Spanner Native Backend** — Highly optimized persistence using Spanner Mutations and Streaming Reads.
+- **Exactly-once Reliable Delivery** — Guaranteed message delivery even during shard handoffs or failovers.
+- **Distributed Data (CRDTs)** — Eventually consistent shared state with bandwidth-efficient Delta-propagation.
+
+### 🔌 Ecosystem & Connectivity
+- **Pekko/Akka Compatibility** — Full wire-level interoperability with Scala/Java actors via Artery TCP.
+- **HOCON Configuration** — Flexible, layered configuration powered by the `gekka-config` engine.
+- **Gekka Streams** — Backpressure-aware reactive streams aligned with the Akka Streams model.
+
+### 📊 Observability & Management
+- **Distributed Tracing** — End-to-end OpenTelemetry integration from Sharding to Persistence.
+- **Operational Tooling** — Robust command-line tools (`gekka-cli`) and metrics (`gekka-metrics`) for real-time operations.
 
 ---
 
-## Performance
+## Performance & Scalability
 
-Gekka is built for scale. Our latest benchmarks demonstrate **sub-millisecond cold recovery** for large actor systems, **~20,600 remote Ask round-trips/s** over Artery TCP, and **< 1% overhead** with OpenTelemetry tracing enabled. Periodic snapshots (every 1,000 events) deliver a ~2× recovery speedup over full event replay with no code changes.
+Gekka is engineered for mission-critical performance. Our latest benchmarks verify:
 
-See the [Full Benchmark Report](docs/BENCHMARKS.md) for detailed results and instructions to reproduce them on your hardware.
+- **Sub-second Recovery**: 1,000 persistent actors can recover from cold storage in under 500ms using the Spanner Native backend.
+- **High Throughput**: Zero-copy serialization and optimized Artery framing support millions of messages per second.
+- **Round-trip Latency**: ~20,600 remote Ask round-trips/s over Artery TCP with < 1% tracing overhead.
+
+To run these benchmarks yourself:
+```bash
+go test -v -bench=BenchmarkRecovery ./test/bench/  # Requires Spanner Emulator or Postgres
+```
+
+For more detailed results, see the [Benchmark Report](docs/BENCHMARKS.md).
 
 ---
 

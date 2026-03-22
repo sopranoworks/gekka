@@ -1058,7 +1058,7 @@ func (c *Cluster) Ask(ctx context.Context, dst interface{}, msg interface{}) (*I
 		c.actorsMu.RUnlock()
 		if found {
 			// Ask local actor
-			return AskLocal(ctx, actor, msg)
+			return askLocal(ctx, actor, msg)
 		}
 	}
 
@@ -1095,7 +1095,7 @@ func (c *Cluster) Ask(ctx context.Context, dst interface{}, msg interface{}) (*I
 	}
 }
 
-func AskLocal(ctx context.Context, a actor.Actor, msg any) (*IncomingMessage, error) {
+func askLocal(ctx context.Context, a actor.Actor, msg any) (*IncomingMessage, error) {
 	replyCh := make(chan actor.Envelope, 1)
 	sender := &localReplyActor{replyCh: replyCh}
 

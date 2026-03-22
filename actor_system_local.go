@@ -96,6 +96,17 @@ func NewActorSystem(name string, config ...*hocon.Config) (ActorSystem, error) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+
+	// Propagate the system lifetime context to plugins that opt in via Lifecycle.
+	if err := persistence.StartLifecycle(ctx, j); err != nil {
+		cancel()
+		return nil, fmt.Errorf("actor system: start journal lifecycle: %w", err)
+	}
+	if err := persistence.StartLifecycle(ctx, ss); err != nil {
+		cancel()
+		return nil, fmt.Errorf("actor system: start snapshot store lifecycle: %w", err)
+	}
+
 	s := &localActorSystem{
 		name:          name,
 		ctx:           ctx,
@@ -282,7 +293,7 @@ func (s *localActorSystem) Ask(ctx context.Context, dst interface{}, msg any) (*
 			a, found := s.actors[pathStr]
 			s.actorsMu.RUnlock()
 			if found {
-				return AskLocal(ctx, a, msg)
+				return askLocal(ctx, a, msg)
 			}
 			return nil, fmt.Errorf("gekka: Ask: actor not found: %s", pathStr)
 		}
@@ -296,7 +307,7 @@ func (s *localActorSystem) Ask(ctx context.Context, dst interface{}, msg any) (*
 		a, found := s.actors[localPath]
 		s.actorsMu.RUnlock()
 		if found {
-			return AskLocal(ctx, a, msg)
+			return askLocal(ctx, a, msg)
 		}
 	}
 

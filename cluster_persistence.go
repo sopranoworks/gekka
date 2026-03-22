@@ -10,6 +10,7 @@ package gekka
 
 import (
 	"database/sql"
+	"fmt"
 	"sync"
 
 	"github.com/sopranoworks/gekka/persistence"
@@ -50,6 +51,9 @@ func (c *Cluster) ProvideJournalDB(plugin string, db *sql.DB) error {
 	if err != nil {
 		return err
 	}
+	if err := persistence.StartLifecycle(c.ctx, j); err != nil {
+		return fmt.Errorf("gekka: start journal lifecycle: %w", err)
+	}
 	c.ps.mu.Lock()
 	c.ps.journal = j
 	c.ps.mu.Unlock()
@@ -63,6 +67,9 @@ func (c *Cluster) ProvideSnapshotStoreDB(plugin string, db *sql.DB) error {
 	ss, err := persistence.NewSnapshotStoreFromDB(plugin, db)
 	if err != nil {
 		return err
+	}
+	if err := persistence.StartLifecycle(c.ctx, ss); err != nil {
+		return fmt.Errorf("gekka: start snapshot store lifecycle: %w", err)
 	}
 	c.ps.mu.Lock()
 	c.ps.snapshotStore = ss

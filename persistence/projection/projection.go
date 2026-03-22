@@ -16,8 +16,7 @@ import (
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/persistence/query"
 	"github.com/sopranoworks/gekka/stream"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/propagation"
+	"github.com/sopranoworks/gekka/telemetry"
 )
 
 // Projection represents a component that processes an event stream and maintains
@@ -110,8 +109,7 @@ func (r *projectionRunner) runManual(ctx context.Context, src stream.Source[quer
 	// Use SyncMaterializer for synchronous execution.
 	m := stream.SyncMaterializer{}
 
-	tracer := otel.Tracer(projectionTracingScope)
-	propagator := otel.GetTextMapPropagator()
+	tracer := telemetry.GetTracer(projectionTracingScope)
 
 	_, err := stream.RunWith(src, stream.ForeachErr(func(env query.EventEnvelope) error {
 		// Extract the write-side trace context stored in the event envelope and
@@ -119,7 +117,7 @@ func (r *projectionRunner) runManual(ctx context.Context, src stream.Source[quer
 		// command's trace.
 		eventCtx := ctx
 		if len(env.TraceContext) > 0 {
-			eventCtx = propagator.Extract(ctx, propagation.MapCarrier(env.TraceContext))
+			eventCtx = tracer.Extract(ctx, env.TraceContext)
 		}
 		_, span := tracer.Start(eventCtx, "Projection.Handle")
 

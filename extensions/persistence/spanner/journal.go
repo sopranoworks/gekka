@@ -21,30 +21,16 @@ import (
 )
 
 // SpannerJournal implements persistence.Journal on top of Cloud Spanner.
-//
-// Events are stored in the `journal` table (see JournalDDL).  Writes use
-// InsertOrUpdate mutations for idempotency; reads use read-only transactions
-// with SQL queries.
-//
-// Create the schema once before first use:
-//
-//	spannerstore.CreateSchema(ctx, adminClient, databaseName)
 type SpannerJournal struct {
 	client *spanner.Client
 	codec  PayloadCodec
 }
 
 // NewSpannerJournal creates a SpannerJournal.
-//
-//   - client — an open *spanner.Client pointing at the target database
-//   - codec  — payload serialiser; all event types must be registered
 func NewSpannerJournal(client *spanner.Client, codec PayloadCodec) *SpannerJournal {
 	return &SpannerJournal{client: client, codec: codec}
 }
 
-// AsyncWriteMessages writes a batch of events using InsertOrUpdate mutations
-// (idempotent: re-writing the same (persistenceId, sequenceNr) is a no-op
-// because the payload is identical).
 func (j *SpannerJournal) AsyncWriteMessages(ctx context.Context, messages []persistence.PersistentRepr) error {
 	if len(messages) == 0 {
 		return nil
@@ -78,8 +64,6 @@ func (j *SpannerJournal) AsyncWriteMessages(ctx context.Context, messages []pers
 	return nil
 }
 
-// ReadHighestSequenceNr returns the highest stored sequence number for
-// persistenceId that is >= fromSequenceNr.  Returns 0 when no rows exist.
 func (j *SpannerJournal) ReadHighestSequenceNr(ctx context.Context, persistenceId string, fromSequenceNr uint64) (uint64, error) {
 	stmt := spanner.Statement{
 		SQL: `SELECT COALESCE(MAX(sequence_nr), -1) AS highest
@@ -104,8 +88,6 @@ func (j *SpannerJournal) ReadHighestSequenceNr(ctx context.Context, persistenceI
 	return uint64(highest), nil
 }
 
-// ReplayMessages queries events for persistenceId in [fromSequenceNr, toSequenceNr]
-// and calls callback for each in sequence order.  Pass max=0 for unlimited.
 func (j *SpannerJournal) ReplayMessages(
 	ctx context.Context,
 	persistenceId string,
@@ -173,8 +155,6 @@ func (j *SpannerJournal) ReplayMessages(
 	return nil
 }
 
-// AsyncDeleteMessagesTo deletes all events for persistenceId with sequence
-// numbers <= toSequenceNr using a partitioned DML statement.
 func (j *SpannerJournal) AsyncDeleteMessagesTo(ctx context.Context, persistenceId string, toSequenceNr uint64) error {
 	to := int64(toSequenceNr)
 	if toSequenceNr > math.MaxInt64 {

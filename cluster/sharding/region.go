@@ -16,8 +16,7 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/propagation"
+	"github.com/sopranoworks/gekka/telemetry"
 )
 
 type ShardRegion struct {
@@ -230,12 +229,12 @@ func (r *ShardRegion) Receive(msg any) {
 }
 
 // injectTraceContext extracts the current span context from ctx and encodes it
-// as W3C TraceContext headers using the global OTel TextMapPropagator.
+// as W3C TraceContext headers using the global telemetry Tracer's Inject method.
 // Returns an empty map when no active span is present.
 func injectTraceContext(ctx context.Context) map[string]string {
-	carrier := propagation.MapCarrier{}
-	otel.GetTextMapPropagator().Inject(ctx, carrier)
-	return map[string]string(carrier)
+	carrier := make(map[string]string)
+	telemetry.GetTracer("github.com/sopranoworks/gekka/cluster/sharding").Inject(ctx, carrier)
+	return carrier
 }
 
 func (r *ShardRegion) deliverMessageWithSender(shardId ShardId, envelope ShardingEnvelope, sender actor.Ref) {

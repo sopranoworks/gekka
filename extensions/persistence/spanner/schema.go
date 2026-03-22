@@ -9,16 +9,6 @@
 package spannerstore
 
 // JournalDDL is the Cloud Spanner DDL statement that creates the journal table.
-//
-// Columns:
-//   - persistence_id : actor persistence identifier (part of PK)
-//   - sequence_nr    : monotonically increasing event sequence (part of PK)
-//   - payload        : JSON-encoded event payload bytes
-//   - manifest       : Go type name used by PayloadCodec to reconstruct the value
-//   - sender_path    : optional Artery actor path of the original sender
-//   - deleted        : soft-delete flag (rows are physically deleted by AsyncDeleteMessagesTo)
-//   - written_at     : wall-clock nanoseconds at write time (for diagnostics)
-//   - tags           : comma-separated event tags
 const JournalDDL = `CREATE TABLE IF NOT EXISTS journal (
   persistence_id STRING(MAX) NOT NULL,
   sequence_nr    INT64       NOT NULL,
@@ -31,13 +21,6 @@ const JournalDDL = `CREATE TABLE IF NOT EXISTS journal (
 ) PRIMARY KEY (persistence_id, sequence_nr)`
 
 // SnapshotsDDL is the Cloud Spanner DDL statement that creates the snapshots table.
-//
-// Columns:
-//   - persistence_id : actor persistence identifier (part of PK)
-//   - sequence_nr    : sequence number at snapshot time (part of PK)
-//   - snapshot_ts    : wall-clock nanoseconds at snapshot time
-//   - snapshot       : JSON-encoded snapshot bytes
-//   - manifest       : Go type name used by PayloadCodec to reconstruct the value
 const SnapshotsDDL = `CREATE TABLE IF NOT EXISTS snapshots (
   persistence_id STRING(MAX) NOT NULL,
   sequence_nr    INT64       NOT NULL,

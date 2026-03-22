@@ -20,24 +20,16 @@ import (
 )
 
 // SpannerSnapshotStore implements persistence.SnapshotStore on top of Cloud Spanner.
-//
-// Snapshots are stored in the `snapshots` table (see SnapshotsDDL).  Saves use
-// InsertOrUpdate mutations (upsert semantics); loads use read-only transactions.
 type SpannerSnapshotStore struct {
 	client *spanner.Client
 	codec  PayloadCodec
 }
 
 // NewSpannerSnapshotStore creates a SpannerSnapshotStore.
-//
-//   - client — an open *spanner.Client pointing at the target database
-//   - codec  — payload serialiser; all snapshot state types must be registered
 func NewSpannerSnapshotStore(client *spanner.Client, codec PayloadCodec) *SpannerSnapshotStore {
 	return &SpannerSnapshotStore{client: client, codec: codec}
 }
 
-// SaveSnapshot persists a snapshot using InsertOrUpdate (upsert) semantics.
-// A second save for the same (persistenceId, sequenceNr) overwrites the first.
 func (s *SpannerSnapshotStore) SaveSnapshot(
 	ctx context.Context,
 	metadata persistence.SnapshotMetadata,
@@ -70,8 +62,6 @@ func (s *SpannerSnapshotStore) SaveSnapshot(
 	return nil
 }
 
-// LoadSnapshot returns the most recent snapshot satisfying all criteria fields,
-// or nil when no matching snapshot exists.
 func (s *SpannerSnapshotStore) LoadSnapshot(
 	ctx context.Context,
 	persistenceId string,
@@ -141,8 +131,6 @@ func (s *SpannerSnapshotStore) LoadSnapshot(
 	}, nil
 }
 
-// DeleteSnapshot removes the snapshot identified by (metadata.PersistenceID,
-// metadata.SequenceNr).
 func (s *SpannerSnapshotStore) DeleteSnapshot(ctx context.Context, metadata persistence.SnapshotMetadata) error {
 	key := spanner.Key{metadata.PersistenceID, int64(metadata.SequenceNr)}
 	_, err := s.client.Apply(ctx, []*spanner.Mutation{
@@ -155,7 +143,6 @@ func (s *SpannerSnapshotStore) DeleteSnapshot(ctx context.Context, metadata pers
 	return nil
 }
 
-// DeleteSnapshots removes all snapshots matching criteria using partitioned DML.
 func (s *SpannerSnapshotStore) DeleteSnapshots(
 	ctx context.Context,
 	persistenceId string,

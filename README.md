@@ -1,4 +1,4 @@
-# gekka &nbsp;[![Version](https://img.shields.io/badge/version-0.12.0-blue)](https://github.com/sopranoworks/gekka)
+# gekka &nbsp;[![Version](https://img.shields.io/badge/version-0.13.0--dev-orange)](https://github.com/sopranoworks/gekka)
 
  [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Go CI](https://github.com/sopranoworks/gekka/actions/workflows/go.yml/badge.svg)](https://github.com/sopranoworks/gekka/actions/workflows/go.yml)
 
@@ -11,6 +11,13 @@ Configuration is loaded via [`gekka-config`](https://github.com/sopranoworks/gek
 **Requirement**: Go 1.26.1 or later.
 
 ---
+
+## What's New in v0.13.0-dev
+
+- **Ultra Thin Core** — Heavy third-party SDKs (Cloud Spanner, OpenTelemetry, Kubernetes client) are being extracted from the core module into independent extension sub-modules under `/extensions/`.
+- **Plugin-based Persistence** — `JournalStore` and `SnapshotStore` interfaces are now pure Go standard-library definitions; all backends (Spanner, SQL, in-memory) are supplied via dependency injection.
+- **Telemetry Middleware Pattern** — The core actor and cluster logic uses the `telemetry` abstraction package exclusively; direct OpenTelemetry SDK imports are removed from all core packages.
+- **Extension Skeletons** — `/extensions/persistence/spanner` and `/extensions/telemetry/otel` are ready to graduate to independent Go modules, keeping `go.mod` lean.
 
 ## What's New in v0.12.0
 

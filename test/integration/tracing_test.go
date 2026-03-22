@@ -12,47 +12,139 @@ package integration_test
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"sync"
 	"testing"
 
+	"github.com/sopranoworks/gekka/cluster/sharding"
 	"github.com/sopranoworks/gekka/persistence"
 	"github.com/sopranoworks/gekka/persistence/projection"
 	"github.com/sopranoworks/gekka/persistence/query"
-	"github.com/sopranoworks/gekka/cluster/sharding"
 	"github.com/sopranoworks/gekka/stream"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/propagation"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	"go.opentelemetry.io/otel/sdk/trace/tracetest"
-	"go.opentelemetry.io/otel/trace"
+	"github.com/sopranoworks/gekka/telemetry"
 )
 
-// ── helpers ───────────────────────────────────────────────────────────────────
+// ── In-process spy telemetry provider ────────────────────────────────────────
 
-// setupTracer configures an in-memory span recorder as the global OTel tracer
-// and W3C TraceContext as the global propagator.  Returns the recorder and a
-// cleanup function that restores the previous global state.
-func setupTracer(t *testing.T) (*tracetest.SpanRecorder, func()) {
-	t.Helper()
-	rec := tracetest.NewSpanRecorder()
-	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
+// spyTraceID is a 16-byte trace identifier generated with crypto/rand.
+type spyTraceID [16]byte
 
-	prevTP := otel.GetTracerProvider()
-	prevProp := otel.GetTextMapPropagator()
+func (id spyTraceID) String() string { return fmt.Sprintf("%032x", id[:]) }
 
-	otel.SetTracerProvider(tp)
-	otel.SetTextMapPropagator(propagation.TraceContext{})
+// spySpanRecord is an ended span captured by spyRecorder.
+type spySpanRecord struct {
+	name    string
+	traceID spyTraceID
+}
 
-	return rec, func() {
-		otel.SetTracerProvider(prevTP)
-		otel.SetTextMapPropagator(prevProp)
+// spyRecorder implements telemetry.Provider and collects ended spans.
+type spyRecorder struct {
+	mu    sync.Mutex
+	spans []spySpanRecord
+}
+
+func newSpyRecorder() *spyRecorder { return &spyRecorder{} }
+
+func (r *spyRecorder) record(name string, traceID spyTraceID) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.spans = append(r.spans, spySpanRecord{name: name, traceID: traceID})
+}
+
+// Ended returns a snapshot of all spans recorded so far.
+func (r *spyRecorder) Ended() []spySpanRecord {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]spySpanRecord(nil), r.spans...)
+}
+
+// telemetry.Provider implementation.
+func (r *spyRecorder) Tracer(_ string) telemetry.Tracer { return &spyTracer{rec: r} }
+func (r *spyRecorder) Meter(_ string) telemetry.Meter   { return telemetry.NoopMeter{} }
+
+// spyTraceKey is the unexported context key used to propagate trace IDs.
+type spyTraceKey struct{}
+
+const spyTraceHeader = "x-spy-trace-id"
+
+// spyTracer implements telemetry.Tracer using context.WithValue propagation.
+type spyTracer struct{ rec *spyRecorder }
+
+func (t *spyTracer) Start(ctx context.Context, spanName string) (context.Context, telemetry.Span) {
+	traceID, ok := ctx.Value(spyTraceKey{}).(spyTraceID)
+	if !ok {
+		var id spyTraceID
+		if _, err := rand.Read(id[:]); err != nil {
+			panic("spyTracer: crypto/rand: " + err.Error())
+		}
+		traceID = id
+	}
+	ctx = context.WithValue(ctx, spyTraceKey{}, traceID)
+	return ctx, &spySpan{name: spanName, traceID: traceID, rec: t.rec}
+}
+
+func (t *spyTracer) Inject(ctx context.Context, carrier map[string]string) {
+	if id, ok := ctx.Value(spyTraceKey{}).(spyTraceID); ok {
+		carrier[spyTraceHeader] = fmt.Sprintf("%032x", id[:])
 	}
 }
 
-// allSpansShareTraceID returns true when every span in spans shares the same
-// TraceID as root.
-func allSpansShareTraceID(root trace.TraceID, spans []sdktrace.ReadOnlySpan) bool {
+func (t *spyTracer) Extract(ctx context.Context, carrier map[string]string) context.Context {
+	s, ok := carrier[spyTraceHeader]
+	if !ok || len(s) != 32 {
+		return ctx
+	}
+	b, err := hex.DecodeString(s)
+	if err != nil || len(b) != 16 {
+		return ctx
+	}
+	var id spyTraceID
+	copy(id[:], b)
+	return context.WithValue(ctx, spyTraceKey{}, id)
+}
+
+// spySpan implements telemetry.Span; records itself on End().
+type spySpan struct {
+	name    string
+	traceID spyTraceID
+	rec     *spyRecorder
+	ended   bool
+}
+
+func (s *spySpan) End() {
+	if !s.ended {
+		s.ended = true
+		s.rec.record(s.name, s.traceID)
+	}
+}
+func (s *spySpan) SetAttribute(_ string, _ any) {}
+func (s *spySpan) RecordError(_ error)          {}
+func (s *spySpan) IsRecording() bool            { return !s.ended }
+
+// traceIDFromCtx extracts the spy trace ID from a context, if present.
+func traceIDFromCtx(ctx context.Context) (spyTraceID, bool) {
+	id, ok := ctx.Value(spyTraceKey{}).(spyTraceID)
+	return id, ok
+}
+
+// ── helpers ───────────────────────────────────────────────────────────────────
+
+// setupTracer installs an in-memory spy as the global gekka telemetry provider.
+// Returns the recorder and a cleanup function that restores the previous state.
+func setupTracer(t *testing.T) (*spyRecorder, func()) {
+	t.Helper()
+	rec := newSpyRecorder()
+	prev := telemetry.Global()
+	telemetry.SetProvider(rec)
+	return rec, func() { telemetry.SetProvider(prev) }
+}
+
+// allSpansShareTraceID returns true when every span shares root's TraceID.
+func allSpansShareTraceID(root spyTraceID, spans []spySpanRecord) bool {
 	for _, s := range spans {
-		if s.SpanContext().TraceID() != root {
+		if s.traceID != root {
 			return false
 		}
 	}
@@ -60,13 +152,25 @@ func allSpansShareTraceID(root trace.TraceID, spans []sdktrace.ReadOnlySpan) boo
 }
 
 // findSpanByName returns the first recorded span whose name equals name.
-func findSpanByName(spans []sdktrace.ReadOnlySpan, name string) (sdktrace.ReadOnlySpan, bool) {
+func findSpanByName(spans []spySpanRecord, name string) (spySpanRecord, bool) {
 	for _, s := range spans {
-		if s.Name() == name {
+		if s.name == name {
 			return s, true
 		}
 	}
-	return nil, false
+	return spySpanRecord{}, false
+}
+
+// rootTraceID returns the TraceID from the "HandleCommand" span,
+// falling back to the first recorded span.
+func rootTraceID(spans []spySpanRecord) (spyTraceID, bool) {
+	if s, ok := findSpanByName(spans, "HandleCommand"); ok {
+		return s.traceID, true
+	}
+	if len(spans) > 0 {
+		return spans[0].traceID, true
+	}
+	return spyTraceID{}, false
 }
 
 // ── Test: TraceID flows from ShardingEnvelope through Journal to Projection ──
@@ -84,15 +188,14 @@ func TestTraceContinuity_ShardJournalProjection(t *testing.T) {
 	rec, cleanup := setupTracer(t)
 	defer cleanup()
 
-	tracer := otel.Tracer("test")
-	propagator := otel.GetTextMapPropagator()
+	tracer := telemetry.GetTracer("test")
 
 	// ── Step 1: Start root span and inject into ShardingEnvelope ─────────────
 	rootCtx, rootSpan := tracer.Start(context.Background(), "HandleCommand")
 
-	carrier := propagation.MapCarrier{}
-	propagator.Inject(rootCtx, carrier)
-	traceCtx := map[string]string(carrier)
+	carrier := map[string]string{}
+	tracer.Inject(rootCtx, carrier)
+	traceCtx := carrier
 
 	envelope := sharding.ShardingEnvelope{
 		EntityId:     "entity-1",
@@ -161,70 +264,55 @@ func TestTraceContinuity_ShardJournalProjection(t *testing.T) {
 	journalSpan, found := findSpanByName(spans, "Journal.Write")
 	if !found {
 		t.Error("span 'Journal.Write' not found in recorded spans")
-	} else if journalSpan.SpanContext().TraceID() != rootID {
+	} else if journalSpan.traceID != rootID {
 		t.Errorf("Journal.Write TraceID mismatch: got %s, want %s",
-			journalSpan.SpanContext().TraceID(), rootID)
+			journalSpan.traceID, rootID)
 	}
 
 	// "Projection.Handle" span must exist and share the TraceID.
 	projSpan, found := findSpanByName(spans, "Projection.Handle")
 	if !found {
 		t.Error("span 'Projection.Handle' not found in recorded spans")
-	} else if projSpan.SpanContext().TraceID() != rootID {
+	} else if projSpan.traceID != rootID {
 		t.Errorf("Projection.Handle TraceID mismatch: got %s, want %s",
-			projSpan.SpanContext().TraceID(), rootID)
+			projSpan.traceID, rootID)
 	}
 
 	if !allSpansShareTraceID(rootID, spans) {
 		t.Error("not all spans share the same TraceID")
 		for _, s := range spans {
-			t.Logf("  span %q: traceID=%s", s.Name(), s.SpanContext().TraceID())
+			t.Logf("  span %q: traceID=%s", s.name, s.traceID)
 		}
 	}
-}
-
-// rootTraceID returns the TraceID from the first span named "HandleCommand",
-// falling back to the first recorded span.
-func rootTraceID(spans []sdktrace.ReadOnlySpan) (trace.TraceID, bool) {
-	if s, ok := findSpanByName(spans, "HandleCommand"); ok {
-		return s.SpanContext().TraceID(), true
-	}
-	if len(spans) > 0 {
-		return spans[0].SpanContext().TraceID(), true
-	}
-	return trace.TraceID{}, false
 }
 
 // ── TestTraceContinuity_ShardEnvelopeInject verifies that ShardingEnvelope.TraceContext
 // is populated by injectTraceContext when building an envelope from a raw message.
 func TestTraceContinuity_ShardEnvelopeInject(t *testing.T) {
-	rec, cleanup := setupTracer(t)
+	_, cleanup := setupTracer(t)
 	defer cleanup()
 
-	tracer := otel.Tracer("test")
-	propagator := otel.GetTextMapPropagator()
+	tracer := telemetry.GetTracer("test")
 
 	// Start a span and inject into a carrier, simulating what ShardRegion does.
 	ctx, span := tracer.Start(context.Background(), "root")
 	defer span.End()
 
-	carrier := propagation.MapCarrier{}
-	propagator.Inject(ctx, carrier)
-	tc := map[string]string(carrier)
+	carrier := map[string]string{}
+	tracer.Inject(ctx, carrier)
+	tc := carrier
 
 	if len(tc) == 0 {
 		t.Fatal("expected non-empty TraceContext carrier after Inject")
 	}
 
 	// Extract back and verify we get the same TraceID.
-	extracted := propagator.Extract(context.Background(), propagation.MapCarrier(tc))
-	extractedSpan := trace.SpanFromContext(extracted)
-	if extractedSpan.SpanContext().TraceID() != span.SpanContext().TraceID() {
-		t.Errorf("extracted TraceID %s != original %s",
-			extractedSpan.SpanContext().TraceID(), span.SpanContext().TraceID())
+	extractedCtx := tracer.Extract(context.Background(), tc)
+	extractedID, _ := traceIDFromCtx(extractedCtx)
+	originalID, _ := traceIDFromCtx(ctx)
+	if extractedID != originalID {
+		t.Errorf("extracted TraceID %s != original %s", extractedID, originalID)
 	}
-
-	_ = rec // recorder not needed for this test
 }
 
 // ── TestTracingJournal_WriteRead verifies that TracingJournal emits both
@@ -233,13 +321,12 @@ func TestTracingJournal_WriteRead(t *testing.T) {
 	rec, cleanup := setupTracer(t)
 	defer cleanup()
 
-	tracer := otel.Tracer("test")
-	propagator := otel.GetTextMapPropagator()
+	tracer := telemetry.GetTracer("test")
 
 	ctx, rootSpan := tracer.Start(context.Background(), "root")
-	carrier := propagation.MapCarrier{}
-	propagator.Inject(ctx, carrier)
-	tc := map[string]string(carrier)
+	carrier := map[string]string{}
+	tracer.Inject(ctx, carrier)
+	tc := carrier
 	rootSpan.End()
 
 	journal := persistence.NewTracingJournal(persistence.NewInMemoryJournal())
@@ -258,13 +345,13 @@ func TestTracingJournal_WriteRead(t *testing.T) {
 	}
 
 	spans := rec.Ended()
-	names := make(map[string]trace.TraceID)
+	names := make(map[string]spyTraceID)
 	for _, s := range spans {
-		names[s.Name()] = s.SpanContext().TraceID()
+		names[s.name] = s.traceID
 	}
 
 	rootID := names["root"]
-	if rootID == (trace.TraceID{}) {
+	if rootID == (spyTraceID{}) {
 		t.Fatal("root span not recorded")
 	}
 	if id, ok := names["Journal.Write"]; !ok {

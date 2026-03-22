@@ -26,7 +26,7 @@ import (
 	"github.com/sopranoworks/gekka"
 	"github.com/sopranoworks/gekka/actor/typed"
 	"github.com/sopranoworks/gekka/persistence"
-	spannerstore "github.com/sopranoworks/gekka/persistence/spanner"
+	spannerstore "github.com/sopranoworks/gekka-extensions-persistence-spanner"
 	sqlstore "github.com/sopranoworks/gekka/persistence/sql"
 	tc "github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"

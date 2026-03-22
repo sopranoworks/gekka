@@ -11,9 +11,7 @@ package persistence
 import (
 	"context"
 
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/propagation"
-	"go.opentelemetry.io/otel/trace"
+	"github.com/sopranoworks/gekka/telemetry"
 )
 
 // tracingInstrumentationName is the OTel instrumentation scope for the persistence layer.
@@ -74,18 +72,15 @@ func NewTracingJournal(inner Journal) *TracingJournal {
 	return &TracingJournal{inner: inner}
 }
 
-func (t *TracingJournal) tracer() trace.Tracer {
-	return otel.Tracer(tracingInstrumentationName)
+func (t *TracingJournal) tracer() telemetry.Tracer {
+	return telemetry.GetTracer(tracingInstrumentationName)
 }
 
 func (t *TracingJournal) extractCtx(tc map[string]string) context.Context {
 	if len(tc) == 0 {
 		return context.Background()
 	}
-	return otel.GetTextMapPropagator().Extract(
-		context.Background(),
-		propagation.MapCarrier(tc),
-	)
+	return telemetry.GetTracer(tracingInstrumentationName).Extract(context.Background(), tc)
 }
 
 // AsyncWriteMessages starts a "Journal.Write" child span linked to the first

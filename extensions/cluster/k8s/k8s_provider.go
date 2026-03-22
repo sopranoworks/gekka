@@ -6,14 +6,17 @@
  * SPDX-License-Identifier: MIT
  */
 
-// Package sbr provides infrastructure-aware Split Brain Resolver helpers.
+// Package k8s provides Kubernetes-aware extensions for the Gekka cluster.
 //
-// The K8sProvider implements cluster.InfrastructureProvider by querying the
+// K8sProvider implements cluster.InfrastructureProvider by querying the
 // Kubernetes API to confirm whether a cluster member's Pod is still running.
 // When the SBR receives an UnreachableMember event it calls PodStatus; if the
 // provider returns InfraDead the member is downed immediately without waiting
 // for the stable-after timeout.
-package sbr
+//
+// APIProvider implements discovery.SeedProvider using the Kubernetes API,
+// automatically registering the "kubernetes-api" provider on import.
+package k8s
 
 import (
 	"context"

@@ -22,7 +22,7 @@
 //	    sdktrace "go.opentelemetry.io/otel/sdk/trace"
 //
 //	    "github.com/sopranoworks/gekka/telemetry"
-//	    "github.com/sopranoworks/gekka/telemetry/otel"
+//	    gekkaotel "github.com/sopranoworks/gekka-extensions-telemetry-otel"
 //	)
 //
 //	func initTelemetry(ctx context.Context) {
@@ -32,7 +32,7 @@
 //	        propagation.TraceContext{},
 //	        propagation.Baggage{},
 //	    ))
-//	    telemetry.SetProvider(otel.NewProvider())
+//	    telemetry.SetProvider(gekkaotel.NewProvider())
 //	}
 package otel
 
@@ -48,23 +48,10 @@ import (
 	"github.com/sopranoworks/gekka/telemetry"
 )
 
-// ── Provider ──────────────────────────────────────────────────────────────────
-
 // Provider wraps the global OTEL TracerProvider and MeterProvider.
-// It satisfies the telemetry.Provider interface.
-//
-// Register it once before starting actors:
-//
-//	telemetry.SetProvider(otel.NewProvider())
 type Provider struct{}
 
-// NewProvider returns a Provider that delegates to:
-//   - otel.GetTracerProvider() for tracing
-//   - otel.GetMeterProvider() for metrics
-//   - otel.GetTextMapPropagator() for W3C trace-context propagation
-//
-// Configure the global OTEL SDK before calling NewProvider so the correct
-// exporter is in place.
+// NewProvider returns a Provider that delegates to the global OTel SDK.
 func NewProvider() *Provider { return &Provider{} }
 
 func (Provider) Tracer(name string) telemetry.Tracer {
@@ -77,8 +64,6 @@ func (Provider) Tracer(name string) telemetry.Tracer {
 func (Provider) Meter(name string) telemetry.Meter {
 	return &otelMeter{inner: otelapi.GetMeterProvider().Meter(name)}
 }
-
-// ── otelTracer ────────────────────────────────────────────────────────────────
 
 type otelTracer struct {
 	inner      oteltrace.Tracer
@@ -98,8 +83,6 @@ func (t *otelTracer) Extract(ctx context.Context, carrier map[string]string) con
 	return t.propagator.Extract(ctx, propagation.MapCarrier(carrier))
 }
 
-// ── otelSpan ─────────────────────────────────────────────────────────────────
-
 type otelSpan struct{ inner oteltrace.Span }
 
 func (s *otelSpan) End() { s.inner.End() }
@@ -110,8 +93,6 @@ func (s *otelSpan) SetAttribute(key string, value any) {
 
 func (s *otelSpan) RecordError(err error) { s.inner.RecordError(err) }
 func (s *otelSpan) IsRecording() bool     { return s.inner.IsRecording() }
-
-// ── otelMeter ─────────────────────────────────────────────────────────────────
 
 type otelMeter struct{ inner otelmetric.Meter }
 
@@ -148,8 +129,6 @@ func (m *otelMeter) Histogram(name, description, unit string) telemetry.Histogra
 	return &otelHistogram{inner: h}
 }
 
-// ── otel instruments ──────────────────────────────────────────────────────────
-
 type otelCounter struct{ inner otelmetric.Int64Counter }
 
 func (c *otelCounter) Add(ctx context.Context, delta int64, attrs ...telemetry.Attribute) {
@@ -167,8 +146,6 @@ type otelHistogram struct{ inner otelmetric.Float64Histogram }
 func (h *otelHistogram) Record(ctx context.Context, value float64, attrs ...telemetry.Attribute) {
 	h.inner.Record(ctx, value, otelmetric.WithAttributes(toKVs(attrs)...))
 }
-
-// ── attribute conversion helpers ──────────────────────────────────────────────
 
 func toKV(a telemetry.Attribute) attribute.KeyValue {
 	switch v := a.Value.(type) {

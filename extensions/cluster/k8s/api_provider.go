@@ -1,4 +1,12 @@
-package kubernetes
+/*
+ * api_provider.go
+ * This file is part of the gekka project.
+ *
+ * Copyright (c) 2026 Sopranoworks, Osamu Takahashi
+ * SPDX-License-Identifier: MIT
+ */
+
+package k8s
 
 import (
 	"context"

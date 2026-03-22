@@ -2,6 +2,7 @@
 *.test
 *.out
 debug_envelope.go
+*.txt
 
 # IDE / editor
 .idea/
@@ -9,10 +10,21 @@ debug_envelope.go
 *.swp
 *.swo
 
-# Claude Code internal
+# Gekka Binaries
+gekka-cli
+gekka-metrics
+
+# Agent-specific files
+.gemini/
 .claude/
+CLAUDE.md
+GEMINI.md
 .antigravity.yaml
 .antigravity_root
+
+# Temporary files
+.!*
+tmp/
 
 # Embedded Pekko source repo (reference only — not part of this project)
 pekko/

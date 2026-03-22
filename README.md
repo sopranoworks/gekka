@@ -39,6 +39,7 @@ Configuration is loaded via [`gekka-config`](https://github.com/sopranoworks/gek
 - **Reliable Delivery** — At-least-once and exactly-once delivery compatible with Pekko.
 - **Typed Actors (Go Generics)** — Compile-time message type safety with **Timers** and **Stash** support.
 - **Actor Persistence** — State recovery via event journaling and snapshotting.
+- **High-Performance Persistence Recovery** — Verified recovery of thousands of actors with mission-critical speed using Spanner Native integration and PostgreSQL.
 - **Gekka Streams** — Full reactive-streams DSL: Source/Flow/Sink, async boundaries, graph operators (Merge, Broadcast, Balance, Zip, GroupBy), resilience (Restart, Recover), and File IO. See [docs/STREAMS.md](docs/STREAMS.md).
 - **Distributed Streams (StreamRefs)** — Share a `Source` or `Sink` across network nodes with end-to-end back-pressure via `TypedSourceRef` / `TypedSinkRef`. TLS-encrypted TCP transport supported.
 - **Distributed Tracing** — End-to-end observability via OpenTelemetry across sharding and persistence.
@@ -50,6 +51,14 @@ Configuration is loaded via [`gekka-config`](https://github.com/sopranoworks/gek
 - **Location Transparency** — `Tell` and `Ask` work identically for local and remote actors.
 - **Extensible Serialization** — Protobuf (ID 2), raw bytes (ID 4), and JSON (ID 9).
 - **Coordinated Shutdown** — Phased exit with readiness drain gate, shard handoff, and CRDT flush.
+
+---
+
+## Performance
+
+Gekka is built for scale. Our latest benchmarks demonstrate **sub-millisecond cold recovery** for large actor systems, **~20,600 remote Ask round-trips/s** over Artery TCP, and **< 1% overhead** with OpenTelemetry tracing enabled. Periodic snapshots (every 1,000 events) deliver a ~2× recovery speedup over full event replay with no code changes.
+
+See the [Full Benchmark Report](docs/BENCHMARKS.md) for detailed results and instructions to reproduce them on your hardware.
 
 ---
 
@@ -251,6 +260,8 @@ Mutual TLS (mTLS) is supported; nodes must present a valid certificate to connec
 - [**Split Brain Resolver**](docs/SBR.md) — Partition resolution strategies and interoperability testing.
 - [**Multi-Data Center**](docs/MULTI_DC.md) — DC-aware cluster configuration and routing.
 - [**Secure Transport (TLS)**](docs/TLS.md) — Configuring and using Artery TLS with PEM certificates.
+- [**Benchmark Report**](docs/BENCHMARKS.md) — Scale, throughput, reliable delivery, tracing, and persistence recovery numbers.
+- [**Operational Tooling Guide**](docs/OPERATIONAL_TOOLING.md) — Cluster management via `gekka-cli` and OTel metrics via `gekka-metrics`.
 
 ## License
 

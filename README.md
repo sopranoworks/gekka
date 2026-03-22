@@ -1,12 +1,25 @@
-# gekka &nbsp;[![Version](https://img.shields.io/badge/version-0.11.0-blue)](https://github.com/sopranoworks/gekka)
+# gekka &nbsp;[![Version](https://img.shields.io/badge/version-0.12.0--dev-blue)](https://github.com/sopranoworks/gekka)
 
  [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Go CI](https://github.com/sopranoworks/gekka/actions/workflows/go.yml/badge.svg)](https://github.com/sopranoworks/gekka/actions/workflows/go.yml)
+
+⚠️ Warning: Gekka is currently under active development. The public API and internal protocols are subject to change until v1.0.0 is released.
 
 A Go implementation of the Pekko/Akka actor protocol, with wire-level interoperability with [Apache Pekko](https://pekko.apache.org/) and [Lightbend Akka](https://www.lightbend.com/akka).
 
 Configuration is loaded via [`gekka-config`](https://github.com/sopranoworks/gekka-config), a HOCON engine that supports both automatic cluster formation and direct node-to-node communication using the standard `pekko://` and `akka://` URI schemes.
 
 **Requirement**: Go 1.26.1 or later.
+
+---
+
+## What's New in v0.12.0
+
+- **Cloud Spanner Native Persistence** — Highly optimized persistence backend using Mutations and Streaming Reads for mission-critical workloads.
+- **Advanced Sharding** — Adaptive shard allocation based on node load and support for manual rebalancing via Management API.
+- **Exactly-once Reliable Delivery** — Integrated reliable delivery with Sharding to ensure zero message loss during shard handoffs and node failovers.
+- **Kubernetes-aware Self-Healing** — A smart Split Brain Resolver that accelerates recovery by directly monitoring Pod states via the K8s API.
+- **Delta-CRDT Gossip** — Bandwidth-efficient Distributed Data synchronization using delta-state propagation.
+- **End-to-End Distributed Tracing** — Full observability across the entire pipeline—from Sharding to Persistence and Projections—via OpenTelemetry.
 
 ---
 
@@ -17,24 +30,25 @@ Configuration is loaded via [`gekka-config`](https://github.com/sopranoworks/gek
 - **Pekko/Akka Compatibility** — Wire-level interop with Scala/Java actors via Artery TCP (Pekko 1.1.x / Akka 2.6.21).
 - **Split Brain Resolver** — Partition resolution during network splits (Keep Majority, Keep Oldest, Static Quorum).
 - **Multi-DC Awareness** — Routing and management across multiple data centers.
-- **Cluster Sharding** — Location-transparent actor placement with passivation and durable recovery.
+- **Cluster Sharding** — Load-aware shard allocation with passivation and durable recovery.
+- **Cloud Spanner Persistence** — Native Spanner backend using Mutations and Streaming Reads.
 - **SQL Persistence** — Driver-agnostic event sourcing and snapshotting (PostgreSQL verified).
 - **Artery TLS** — Encrypted cluster transport using Go's `crypto/tls`, binary-compatible with Pekko's `tls-tcp`.
 - **Cluster Singletons** — Singleton failover and lifecycle management across mixed Go/JVM clusters.
-- **Reliable Delivery** — At-least-once delivery (Serializer ID 36) compatible with Pekko.
+- **Reliable Delivery** — At-least-once and exactly-once delivery compatible with Pekko.
 - **Typed Actors (Go Generics)** — Compile-time message type safety with **Timers** and **Stash** support.
 - **Actor Persistence** — State recovery via event journaling and snapshotting.
 - **Gekka Streams** — Full reactive-streams DSL: Source/Flow/Sink, async boundaries, graph operators (Merge, Broadcast, Balance, Zip, GroupBy), resilience (Restart, Recover), and File IO. See [docs/STREAMS.md](docs/STREAMS.md).
 - **Distributed Streams (StreamRefs)** — Share a `Source` or `Sink` across network nodes with end-to-end back-pressure via `TypedSourceRef` / `TypedSinkRef`. TLS-encrypted TCP transport supported.
+- **Distributed Tracing** — End-to-end observability via OpenTelemetry across sharding and persistence.
 - **Kubernetes-native Discovery** — Automatic cluster formation via K8s API or DNS SRV.
 - **Zero-copy Serialization** — High-performance transport framing with 8.5x faster throughput.
 - **Distributed Pub/Sub** — Decentralized messaging with GZIP-compressed gossip (Serializer ID 9).
-- **Distributed Data / CRDTs** — G-Counter and OR-Set replication (Serializer ID 11/12).
+- **Distributed Data / CRDTs** — Bandwidth-efficient delta-state propagation.
 - **Pool and Group Routers** — Round-robin and random routing, configurable via HOCON deployment config.
 - **Location Transparency** — `Tell` and `Ask` work identically for local and remote actors.
 - **Extensible Serialization** — Protobuf (ID 2), raw bytes (ID 4), and JSON (ID 9).
 - **Coordinated Shutdown** — Phased exit with readiness drain gate, shard handoff, and CRDT flush.
-- **Rolling Update Support** — `/health/ready` drain gate and shard handoff handshake for zero-downtime pod restarts.
 
 ---
 
@@ -108,43 +122,6 @@ The `metrics-exporter` role is injected automatically so sharding allocators and
 | `gekka.cluster.members` | ObservableGauge | `status`, `dc` | Member count per status/DC combination |
 
 When no OTLP endpoint is configured the process still joins and exports metrics locally.
-
----
-
-## Rolling Update Support
-
-v0.9.0 continues to support zero-downtime rolling updates in Kubernetes-hosted clusters through coordinated mechanisms.
-
-### /health/ready drain gate
-
-When `GracefulShutdown` is called, the **first** coordinated-shutdown task (`service-unbind`) calls `ManagementServer.SetShuttingDown()`.  From that point every `GET /health/ready` request returns **503 Service Unavailable** with body:
-
-```json
-{"status":"not_ready","reason":"shutting_down"}
-```
-
-This causes Kubernetes to stop routing traffic to the node immediately — before any cluster membership changes occur — giving in-flight requests time to complete while the node is still fully joined.
-
-### Shard handoff handshake
-
-Before `cluster-leave` runs, each `ShardRegion` actor executes `PostStop`:
-
-1. Sends `RegionHandoffRequest{RegionPath}` to the `ShardCoordinator`.
-2. Blocks on an internal channel (10-second timeout) waiting for `HandoffComplete`.
-3. The coordinator releases all locally-owned shards from its allocation table and replies `HandoffComplete{RegionPath}`.
-4. The log line **"Handoff Completed"** is emitted; `PostStop` returns; the node proceeds to `cluster-leave`.
-
-This ensures the coordinator can reallocate shards to surviving members before the departing node's membership status changes, preventing missed-message windows during pod restarts.
-
-**Shutdown sequence:**
-
-```
-service-unbind              → /health/ready returns 503 "shutting_down"
-cluster-sharding-shutdown   → RegionHandoffRequest → HandoffComplete (10 s window)
-cluster-leave               → Leave → Exiting → Removed
-cluster-shutdown            → CRDT replicator stop
-actor-system-terminate      → TCP close
-```
 
 ---
 
@@ -258,6 +235,37 @@ func main() {
 
 	// Send a type-safe message
 	ref.Tell(Greet{Name: "Gopher"})
+}
+```
+
+### Quick Start: Streaming API
+
+Build type-safe processing pipelines with back-pressure.
+
+```go
+package main
+
+import (
+	"fmt"
+
+	"github.com/sopranoworks/gekka"
+	"github.com/sopranoworks/gekka/stream"
+)
+
+func main() {
+	system, _ := gekka.NewActorSystem("StreamSystem")
+
+	// 1. Define stages
+	source := stream.FromSlice([]int{1, 2, 3})
+	flow := stream.Map(func(i int) int { return i * 2 })
+	sink := stream.Foreach(func(i int) { fmt.Println(i) })
+
+	// 2. Connect stages and run with a materializer
+	// stream.Via(source, flow).To(sink) creates a RunnableGraph
+	graph := stream.Via(source, flow).To(sink)
+	
+	// 3. Execute the graph
+	graph.Run(stream.ActorMaterializer{})
 }
 ```
 

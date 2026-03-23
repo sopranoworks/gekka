@@ -101,4 +101,12 @@ func init() {
 		}
 		return NewRedisSnapshotStore(client, prefix, DefaultCodec), nil
 	})
+
+	persistence.RegisterDurableStateStoreProvider("redis", func(cfg hocon.Config) (persistence.DurableStateStore, error) {
+		client, prefix, err := newClientFromConfig(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("redisstore: build state store client: %w", err)
+		}
+		return NewRedisDurableStateStore(client, prefix, DefaultCodec), nil
+	})
 }

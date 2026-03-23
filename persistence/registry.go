@@ -71,14 +71,20 @@ type JournalProvider func(cfg hocon.Config) (Journal, error)
 // SnapshotStoreProvider creates a SnapshotStore from a HOCON sub-config.
 type SnapshotStoreProvider func(cfg hocon.Config) (SnapshotStore, error)
 
+// DurableStateStoreProvider creates a DurableStateStore from a HOCON sub-config.
+// The config is the value at persistence.state-store.settings in the actor system
+// configuration.  Self-contained backends may ignore it.
+type DurableStateStoreProvider func(cfg hocon.Config) (DurableStateStore, error)
+
 var (
 	registryMu      sync.RWMutex
 	journalReg      = make(map[string]JournalFactory)
 	snapshotReg     = make(map[string]SnapshotStoreFactory)
 	durableStateReg = make(map[string]DurableStateStoreFactory)
 
-	journalProviders  = make(map[string]JournalProvider)
-	snapshotProviders = make(map[string]SnapshotStoreProvider)
+	journalProviders      = make(map[string]JournalProvider)
+	snapshotProviders     = make(map[string]SnapshotStoreProvider)
+	durableStateProviders = make(map[string]DurableStateStoreProvider)
 )
 
 // RegisterJournal registers a JournalFactory under name.
@@ -212,6 +218,14 @@ func RegisterSnapshotStoreProvider(name string, provider SnapshotStoreProvider) 
 	registryMu.Unlock()
 }
 
+// RegisterDurableStateStoreProvider registers a config-driven DurableStateStoreProvider under name.
+// The factory receives the HOCON sub-config at persistence.state-store.settings.
+func RegisterDurableStateStoreProvider(name string, provider DurableStateStoreProvider) {
+	registryMu.Lock()
+	durableStateProviders[name] = provider
+	registryMu.Unlock()
+}
+
 // NewJournal looks up the JournalProvider registered under name, passes cfg to
 // it, and returns the resulting Journal.  cfg is the HOCON sub-config at
 // persistence.journal.settings; backends that need no configuration may ignore it.
@@ -269,6 +283,43 @@ func journalProviderNames() []string {
 func snapshotProviderNames() []string {
 	names := make([]string, 0, len(snapshotProviders))
 	for n := range snapshotProviders {
+		names = append(names, "'"+n+"'")
+	}
+	sort.Strings(names)
+	return names
+}
+
+// NewDurableStateStore looks up the DurableStateStoreProvider registered under name,
+// passes cfg to it, and returns the resulting DurableStateStore.
+func NewDurableStateStore(name string, cfg hocon.Config) (DurableStateStore, error) {
+	registryMu.RLock()
+	p, ok := durableStateProviders[name]
+	registryMu.RUnlock()
+	if ok {
+		return p(cfg)
+	}
+	registryMu.RLock()
+	_, sqlOK := durableStateReg[name]
+	available := durableStateProviderNames()
+	registryMu.RUnlock()
+	if sqlOK {
+		return nil, fmt.Errorf("persistence: durable state store %q requires a *sql.DB; use NewDurableStateStoreFromDB instead", name)
+	}
+	return nil, fmt.Errorf("persistence: durable state store provider %q not found — available providers: [%s]. Did you forget a blank import?",
+		name, strings.Join(available, ", "))
+}
+
+// DurableStateStoreProviderNames returns the names of all registered config-driven DurableStateStore providers.
+func DurableStateStoreProviderNames() []string {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+	return durableStateProviderNames()
+}
+
+// durableStateProviderNames returns sorted provider names; must be called with registryMu held.
+func durableStateProviderNames() []string {
+	names := make([]string, 0, len(durableStateProviders))
+	for n := range durableStateProviders {
 		names = append(names, "'"+n+"'")
 	}
 	sort.Strings(names)

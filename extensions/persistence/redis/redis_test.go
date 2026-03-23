@@ -287,6 +287,73 @@ func TestRedis_SnapshotStore_Delete(t *testing.T) {
 	assert.Nil(t, snap)
 }
 
+// ── DurableStateStore tests ───────────────────────────────────────────────────
+
+func TestRedis_StateStore_UpsertAndGet(t *testing.T) {
+	codec := redisstore.NewJSONCodec()
+	codec.Register(CartState{})
+
+	ss := redisstore.NewRedisDurableStateStore(newClient(t), uniquePrefix(t), codec)
+	ctx := context.Background()
+	const pid = "cart-state-1"
+
+	require.NoError(t, ss.Upsert(ctx, pid, 1, CartState{Items: []string{"apple", "banana"}}, ""))
+
+	state, rev, err := ss.Get(ctx, pid)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(1), rev)
+	cart, ok := state.(CartState)
+	require.True(t, ok)
+	assert.Equal(t, []string{"apple", "banana"}, cart.Items)
+}
+
+func TestRedis_StateStore_UpsertOverwrites(t *testing.T) {
+	codec := redisstore.NewJSONCodec()
+	codec.Register(CartState{})
+
+	ss := redisstore.NewRedisDurableStateStore(newClient(t), uniquePrefix(t), codec)
+	ctx := context.Background()
+	const pid = "cart-overwrite"
+
+	require.NoError(t, ss.Upsert(ctx, pid, 1, CartState{Items: []string{"a"}}, ""))
+	require.NoError(t, ss.Upsert(ctx, pid, 2, CartState{Items: []string{"a", "b", "c"}}, "checkout"))
+
+	state, rev, err := ss.Get(ctx, pid)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(2), rev)
+	cart, ok := state.(CartState)
+	require.True(t, ok)
+	assert.Equal(t, []string{"a", "b", "c"}, cart.Items)
+}
+
+func TestRedis_StateStore_NotFound(t *testing.T) {
+	codec := redisstore.NewJSONCodec()
+	ss := redisstore.NewRedisDurableStateStore(newClient(t), uniquePrefix(t), codec)
+	ctx := context.Background()
+
+	state, rev, err := ss.Get(ctx, "nonexistent-state")
+	require.NoError(t, err)
+	assert.Nil(t, state)
+	assert.Equal(t, uint64(0), rev)
+}
+
+func TestRedis_StateStore_Delete(t *testing.T) {
+	codec := redisstore.NewJSONCodec()
+	codec.Register(CartState{})
+
+	ss := redisstore.NewRedisDurableStateStore(newClient(t), uniquePrefix(t), codec)
+	ctx := context.Background()
+	const pid = "cart-state-delete"
+
+	require.NoError(t, ss.Upsert(ctx, pid, 1, CartState{Items: []string{"x"}}, ""))
+	require.NoError(t, ss.Delete(ctx, pid))
+
+	state, rev, err := ss.Get(ctx, pid)
+	require.NoError(t, err)
+	assert.Nil(t, state)
+	assert.Equal(t, uint64(0), rev)
+}
+
 // ── Registration smoke-test ───────────────────────────────────────────────────
 
 func TestRedis_Registration(t *testing.T) {
@@ -303,4 +370,8 @@ func TestRedis_Registration(t *testing.T) {
 	ss, err := persistence.NewSnapshotStore("redis", *cfg)
 	require.NoError(t, err, "redis snapshot store provider should be registered after blank import")
 	assert.NotNil(t, ss)
+
+	dst, err := persistence.NewDurableStateStore("redis", *cfg)
+	require.NoError(t, err, "redis durable state store provider should be registered after blank import")
+	assert.NotNil(t, dst)
 }

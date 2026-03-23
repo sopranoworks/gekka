@@ -50,29 +50,29 @@ func TestNodeRegistry_UIDRestart(t *testing.T) {
 	}
 
 	conn1, _ := net.Pipe()
-	assoc1 := &GekkaAssociation{state: ASSOCIATED, conn: conn1, nodeMgr: nm}
+	assoc1 := &GekkaAssociation{state: ASSOCIATED, conn: conn1, nodeMgr: nm, streamId: 1}
 	nm.RegisterAssociation(remoteUA1, assoc1)
 
 	// Verify UA1 is registered
-	if _, ok := nm.GetAssociation(remoteUA1); !ok {
+	if _, ok := nm.GetAssociation(remoteUA1, 1); !ok {
 		t.Fatal("UA1 should be registered")
 	}
 
 	// Register UA2 (same host, different UID)
 	conn2, _ := net.Pipe()
-	assoc2 := &GekkaAssociation{state: ASSOCIATED, conn: conn2, nodeMgr: nm}
+	assoc2 := &GekkaAssociation{state: ASSOCIATED, conn: conn2, nodeMgr: nm, streamId: 1}
 	nm.RegisterAssociation(remoteUA2, assoc2)
 
 	// Verify UA1 is now quarantined and removed
 	if assoc1.GetState() != QUARANTINED {
 		t.Errorf("expected assoc1 to be QUARANTINED, got %v", assoc1.GetState())
 	}
-	if _, ok := nm.GetAssociation(remoteUA1); ok {
+	if _, ok := nm.GetAssociation(remoteUA1, 1); ok {
 		t.Error("UA1 should have been removed from registry")
 	}
 
 	// Verify UA2 is registered
-	if _, ok := nm.GetAssociation(remoteUA2); !ok {
+	if _, ok := nm.GetAssociation(remoteUA2, 1); !ok {
 		t.Fatal("UA2 should be registered")
 	}
 }
@@ -111,7 +111,7 @@ func TestDispatcher_AutoACK(t *testing.T) {
 	defer cancel()
 
 	go func() {
-		_ = assoc.Process(ctx)
+		_ = assoc.Process(ctx, "akka")
 	}()
 
 	// Build a SystemMessageEnvelope (SeqNo=42 requires an ACK) and wrap it in
@@ -183,7 +183,7 @@ func TestDispatcher_Heuristic(t *testing.T) {
 
 	ctx := context.Background()
 	go func() {
-		_ = assoc.Process(ctx)
+		_ = assoc.Process(ctx, "akka")
 	}()
 
 	// Send HeartbeatRsp without manifest

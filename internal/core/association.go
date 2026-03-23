@@ -217,6 +217,25 @@ func (nm *NodeManager) GetAssociationByHost(host string, port uint32) (actor.Rem
 	nm.mu.RLock()
 	defer nm.mu.RUnlock()
 
+	// Prioritize Control Stream (1) for outbound delivery.
+	for _, assoc := range nm.associations {
+		assoc.mu.RLock()
+		remote := assoc.remote
+		role := assoc.role
+		state := assoc.state
+		streamId := assoc.streamId
+		assoc.mu.RUnlock()
+
+		if remote != nil && remote.Address.GetHostname() == host && remote.Address.GetPort() == port {
+			if role == OUTBOUND && (state == ASSOCIATED || state == INITIATED || state == WAITING_FOR_HANDSHAKE) {
+				if streamId == 1 {
+					return assoc, true
+				}
+			}
+		}
+	}
+
+	// Fallback to any outbound if control not found
 	for _, assoc := range nm.associations {
 		assoc.mu.RLock()
 		remote := assoc.remote
@@ -303,13 +322,13 @@ type MessageContext struct {
 	AckReplyTo *gproto_remote.UniqueAddress
 }
 
-// GetAssociation looks up an existing association by unique address.
-func (nm *NodeManager) GetAssociation(remote *gproto_remote.UniqueAddress) (*GekkaAssociation, bool) {
+// GetAssociation looks up an existing association by unique address and streamId.
+func (nm *NodeManager) GetAssociation(remote *gproto_remote.UniqueAddress, streamId int32) (*GekkaAssociation, bool) {
 	if remote == nil || remote.Address == nil {
 		return nil, false
 	}
 	addr := remote.GetAddress()
-	key := fmt.Sprintf("%s:%d-%d", addr.GetHostname(), addr.GetPort(), remote.GetUid())
+	key := fmt.Sprintf("%s:%d-%d-s%d", addr.GetHostname(), addr.GetPort(), remote.GetUid(), streamId)
 	nm.mu.RLock()
 	defer nm.mu.RUnlock()
 	assoc, ok := nm.associations[key]
@@ -322,7 +341,7 @@ func (nm *NodeManager) RegisterAssociation(remote *gproto_remote.UniqueAddress, 
 		return
 	}
 	addr := remote.GetAddress()
-	newKey := fmt.Sprintf("%s:%d-%d", addr.GetHostname(), addr.GetPort(), remote.GetUid())
+	newKey := fmt.Sprintf("%s:%d-%d-s%d", addr.GetHostname(), addr.GetPort(), remote.GetUid(), assoc.streamId)
 
 	nm.mu.Lock()
 	defer nm.mu.Unlock()
@@ -331,16 +350,16 @@ func (nm *NodeManager) RegisterAssociation(remote *gproto_remote.UniqueAddress, 
 	// UID=0 (newKey) is an early placeholder — the confirmed remote UID is not yet known, so
 	// we cannot make a node-restart determination and must skip the quarantine check entirely.
 	hostPortKey := fmt.Sprintf("%s:%d-", addr.GetHostname(), addr.GetPort())
-	if !strings.HasSuffix(newKey, "-0") {
+	if !strings.Contains(newKey, "-0-s") {
 		for k, existing := range nm.associations {
-			if strings.HasPrefix(k, hostPortKey) && k != newKey {
+			if strings.HasPrefix(k, hostPortKey) && !strings.Contains(k, fmt.Sprintf("-%d-s", remote.GetUid())) {
 				// Skip early registrations (UID=0 placeholders).
-				if strings.HasSuffix(k, "-0") {
+				if strings.Contains(k, "-0-s") {
 					log.Printf("NodeManager: existing early registration %s found for host-port %s", k, hostPortKey)
 					continue
 				}
 
-				log.Printf("NodeManager: detected node restart for %s. Old UID association %s being quarantined.", hostPortKey, k)
+				log.Printf("NodeManager: detected node restart for %s. Old association %s being quarantined.", hostPortKey, k)
 				existing.mu.Lock()
 				existing.state = QUARANTINED
 				if existing.conn != nil {
@@ -352,9 +371,7 @@ func (nm *NodeManager) RegisterAssociation(remote *gproto_remote.UniqueAddress, 
 		}
 	}
 
-	// Never let an INBOUND association overwrite an existing OUTBOUND one.
-	// The associations map is used by getAssociationByHost for routing (sending),
-	// so OUTBOUND associations must take precedence.
+	// Never let an INBOUND association overwrite an existing OUTBOUND one for the same key.
 	assoc.mu.RLock()
 	incomingIsInbound := assoc.role == INBOUND
 	assoc.mu.RUnlock()
@@ -371,6 +388,7 @@ func (nm *NodeManager) RegisterAssociation(remote *gproto_remote.UniqueAddress, 
 	}
 
 	nm.associations[newKey] = assoc
+	log.Printf("NodeManager: registered association %p with key %s", assoc, newKey)
 }
 
 // ProcessConnection is the unified entry point for both inbound and outbound connections.
@@ -378,16 +396,41 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 	assocCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	protocol := "akka" // default
+	if nm.LocalAddr != nil && nm.LocalAddr.GetProtocol() != "" {
+		protocol = nm.LocalAddr.GetProtocol()
+	}
+
 	if role == INBOUND {
-		magic := make([]byte, 5)
-		if _, err := io.ReadFull(conn, magic); err != nil {
+		// Read first 3 bytes to decide preamble format
+		magic3 := make([]byte, 3)
+		if _, err := io.ReadFull(conn, magic3); err != nil {
 			return fmt.Errorf("failed to read artery magic: %w", err)
 		}
-		if string(magic[:4]) != "AKKA" {
-			return fmt.Errorf("invalid artery magic: %q", magic[:4])
+
+		if string(magic3) == "ART" {
+			// Artery 2.0 (Pekko): ART (3) + version (1) + streamId (1) = 5 bytes total
+			rest := make([]byte, 2)
+			if _, err := io.ReadFull(conn, rest); err != nil {
+				return fmt.Errorf("failed to read Pekko preamble rest: %w", err)
+			}
+			streamId = int32(rest[1])
+			protocol = "pekko"
+			log.Printf("ProcessConnection: INBOUND Pekko preamble read, streamId=%d", streamId)
+		} else {
+			// Artery 1.0 (Akka): AKKA (4) + streamId (1) = 5 bytes total
+			// magic3 already consumed "AKK"
+			next := make([]byte, 2) // 'A' + streamId byte
+			if _, err := io.ReadFull(conn, next); err != nil {
+				return fmt.Errorf("failed to read Akka magic rest: %w", err)
+			}
+			if magic3[0] != 'A' || magic3[1] != 'K' || magic3[2] != 'K' || next[0] != 'A' {
+				return fmt.Errorf("invalid artery magic: %q", string(magic3)+string(next))
+			}
+			streamId = int32(next[1])
+			protocol = "akka"
+			log.Printf("ProcessConnection: INBOUND Akka preamble read, streamId=%d", streamId)
 		}
-		streamId = int32(magic[4])
-		log.Printf("ProcessConnection: INBOUND magic read, streamId=%d", streamId)
 	}
 
 	assoc := &GekkaAssociation{
@@ -445,7 +488,7 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 	if role == OUTBOUND && remote != nil {
 		go func() {
 			// Give handler a moment to start and send magic header
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(200 * time.Millisecond)
 			if err := assoc.initiateHandshake(remote); err != nil {
 				log.Printf("Association %p: initiateHandshake error: %v", assoc, err)
 			}
@@ -481,7 +524,7 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 		}()
 	}
 
-	return assoc.Process(assocCtx)
+	return assoc.Process(assocCtx, protocol)
 }
 
 func (assoc *GekkaAssociation) initiateHandshake(to *gproto_remote.Address) error {
@@ -503,7 +546,7 @@ func (assoc *GekkaAssociation) initiateHandshake(to *gproto_remote.Address) erro
 	return SendArteryMessageWithAck(assoc.conn, int64(uid), actor.ArteryInternalSerializerID, "d", req, req.From, true)
 }
 
-func (assoc *GekkaAssociation) Process(ctx context.Context) error {
+func (assoc *GekkaAssociation) Process(ctx context.Context, protocol string) error {
 	dispatch := func(ctx context.Context, meta *ArteryMetadata) error {
 		return assoc.dispatch(ctx, meta)
 	}
@@ -512,7 +555,7 @@ func (assoc *GekkaAssociation) Process(ctx context.Context) error {
 		remoteUid = assoc.remote.GetUid()
 	}
 	if assoc.role == OUTBOUND {
-		return TcpArteryOutboundHandler(ctx, assoc.conn, dispatch, assoc.nodeMgr.compressionMgr, remoteUid, assoc.streamId)
+		return TcpArteryOutboundHandler(ctx, assoc.conn, dispatch, assoc.nodeMgr.compressionMgr, remoteUid, assoc.streamId, protocol)
 	}
 	return TcpArteryHandlerWithCallback(ctx, assoc.conn, dispatch, assoc.nodeMgr.compressionMgr, remoteUid, assoc.streamId)
 }
@@ -715,7 +758,9 @@ func (assoc *GekkaAssociation) Send(recipient string, payload []byte, serializer
 		}
 	}
 
-	sender := fmt.Sprintf("%s://%s@%s:%d/user/echo",
+	// Artery messages from Gekka's cluster manager should appear to come from
+	// the cluster daemon. Use a full URL so Akka/Pekko can resolve the sender.
+	sender := fmt.Sprintf("%s://%s@%s:%d/system/cluster/core/daemon",
 		assoc.nodeMgr.LocalAddr.GetProtocol(),
 		assoc.nodeMgr.LocalAddr.GetSystem(),
 		assoc.nodeMgr.LocalAddr.GetHostname(),
@@ -838,10 +883,25 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 		return nil
 
 	default:
-		if meta.SerializerId == 6 && manifest == "" {
+		if meta.SerializerId == 6 {
 			// MessageContainerSerializer (ID=6) wraps ActorSelectionMessage.
-			// Pekko sends these when routing heartbeats via actorSelection to
-			// /system/cluster/heartbeatReceiver. We cannot decode them; discard silently.
+			// Akka sends cluster heartbeats via actorSelection using serializer 6.
+			// Decode the SelectionEnvelope and forward inner cluster messages so
+			// our failure-detector keeps receiving HBR responses from Go.
+			if assoc.nodeMgr.clusterMgr != nil {
+				env := &gproto_remote.SelectionEnvelope{}
+				if err := proto.Unmarshal(meta.Payload, env); err == nil {
+					innerManifest := string(env.GetMessageManifest())
+					if env.GetSerializerId() == 5 && innerManifest != "" {
+						assoc.mu.RLock()
+						remote := assoc.remote
+						assoc.mu.RUnlock()
+						log.Printf("Association: forwarding actorSelection cluster message manifest=%q to clusterMgr", innerManifest)
+						return assoc.nodeMgr.clusterMgr.HandleIncomingClusterMessage(
+							ctx, env.GetEnclosedMessage(), innerManifest, ToClusterUniqueAddress(remote))
+					}
+				}
+			}
 			return nil
 		}
 		log.Printf("Association: unidentified control message with manifest %q (id=%d)", manifest, meta.SerializerId)
@@ -915,30 +975,14 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 		rspProto := &gproto_remote.MessageWithAddress{Address: localUA}
 		if rspPayload, err2 := proto.Marshal(rspProto); err2 == nil {
 			if frame, err2 := BuildArteryFrame(int64(assoc.localUid), actor.ArteryInternalSerializerID, "", "", "e", rspPayload, true); err2 == nil {
-				if outboundToRemote != nil {
-					// Route HandshakeRsp via our OUTBOUND to the remote (arrives on remote's
-					// INBOUND, which is read-friendly for any Artery implementation).
-					// Pekko's outbound TCP sockets are write-only — writing bytes back onto
-					// them triggers "Unexpected incoming bytes" and UID quarantine.  By
-					// sending via our OUTBOUND instead we avoid that, while still completing
-					// Go-to-Go secondary connections: the remote's INBOUND dispatch calls
-					// handleHandshakeRsp and completes the remote's waiting OUTBOUND to us.
-					log.Printf("Association %p (INBOUND): routing HandshakeRsp via OUTBOUND %p", assoc, outboundToRemote)
-					select {
-					case outboundToRemote.outbox <- frame:
-					default:
-						log.Printf("Association %p (INBOUND): OUTBOUND %p outbox full, dropping HandshakeRsp", assoc, outboundToRemote)
-					}
-				} else {
-					// No OUTBOUND to this remote yet — send directly on the INBOUND TCP.
-					// This is the first-contact case where the remote dialled us but we have
-					// not yet dialled them (pure inbound-only peer).
-					log.Printf("Association %p (INBOUND): no outbound — sending HandshakeRsp via INBOUND", assoc)
-					select {
-					case assoc.outbox <- frame:
-					default:
-						log.Printf("Association %p (INBOUND): outbox full, dropping HandshakeRsp", assoc)
-					}
+				// Artery TCP synchronous handshake: the HandshakeRsp MUST be sent
+				// back on the same TCP connection that received the HandshakeReq.
+				// This applies to ALL streams (Control, Ordinary, Large) opened by the remote.
+				log.Printf("Association %p (INBOUND): sending HandshakeRsp via INBOUND stream %d", assoc, assoc.streamId)
+				select {
+				case assoc.outbox <- frame:
+				default:
+					log.Printf("Association %p (INBOUND): outbox full, dropping HandshakeRsp", assoc)
 				}
 			}
 		}

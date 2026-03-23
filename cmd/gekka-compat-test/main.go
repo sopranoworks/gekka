@@ -86,18 +86,24 @@ func main() {
 	}
 	defer node.Shutdown()
 
-	// Subscribe to cluster domain events so we can detect our own MemberUp.
-	memberUpCh := make(chan cluster.MemberUp, 4)
+	// Subscribe to cluster domain events so we can detect our own MemberUp
+	// and detect failures (unreachable/down/removed).
+	eventCh := make(chan any, 16)
 	watcherRef, err := node.System.ActorOf(gekka.Props{
 		New: func() actor.Actor {
-			return &memberWatcher{BaseActor: actor.NewBaseActor(), ch: memberUpCh}
+			return &memberWatcher{BaseActor: actor.NewBaseActor(), ch: eventCh}
 		},
 	}, "compatWatcher")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ActorOf: %v\n", err)
 		os.Exit(1)
 	}
-	node.Subscribe(watcherRef)
+	node.Subscribe(watcherRef,
+		cluster.EventMemberUp,
+		cluster.EventUnreachableMember,
+		cluster.EventMemberDowned,
+		cluster.EventMemberRemoved,
+	)
 	defer node.Unsubscribe(watcherRef)
 
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
@@ -118,63 +124,83 @@ func main() {
 
 	// ── Wait for Artery handshake ─────────────────────────────────────────────
 	if err := node.WaitForHandshake(ctx, *seedHost, uint32(*seedPort)); err != nil {
-		fmt.Fprintf(os.Stderr, "WaitForHandshake: %v\n", err)
+		fmt.Printf("FAIL: HANDSHAKE_TIMEOUT %s:%d\n", *seedHost, *seedPort)
 		os.Exit(1)
 	}
-	fmt.Println("GEKKA_ARTERY_ASSOCIATED")
+	fmt.Println("STATUS: ARTERY_ASSOCIATED")
 
 	// ── Wait for MemberUp ─────────────────────────────────────────────────────
-	select {
-	case evt := <-memberUpCh:
-		fmt.Printf("GEKKA_MEMBER_UP:%s\n", evt.Member.String())
-	case <-ctx.Done():
-		fmt.Fprintln(os.Stderr, "timeout waiting for MemberUp")
-		os.Exit(1)
+	for {
+		select {
+		case evt := <-eventCh:
+			switch e := evt.(type) {
+			case cluster.MemberUp:
+				if e.Member.Host == cfg.Host && e.Member.Port == cfg.Port {
+					fmt.Printf("STATUS: MEMBER_UP:%s\n", e.Member.String())
+					goto memberUp
+				}
+			case cluster.UnreachableMember:
+				fmt.Printf("FAIL: CLUSTER_UNREACHABLE %s\n", e.Member.String())
+				os.Exit(1)
+			case cluster.MemberDowned:
+				fmt.Printf("FAIL: CLUSTER_MEMBER_DOWN %s\n", e.Member.String())
+				os.Exit(1)
+			case cluster.MemberRemoved:
+				if e.Member.Host == cfg.Host && e.Member.Port == cfg.Port {
+					fmt.Printf("FAIL: LOCAL_MEMBER_REMOVED %s\n", e.Member.String())
+					os.Exit(1)
+				}
+			}
+		case <-ctx.Done():
+			fmt.Println("FAIL: TIMEOUT")
+			os.Exit(1)
+		}
 	}
 
+memberUp:
 	// ── Query management API ──────────────────────────────────────────────────
 	time.Sleep(500 * time.Millisecond)
 	mgmtURL := fmt.Sprintf("http://127.0.0.1:%d/cluster/members", *mgmtPort)
 	resp, err := http.Get(mgmtURL) //nolint:gosec
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "GET %s: %v\n", mgmtURL, err)
+		fmt.Printf("FAIL: MGMT_API_GET_ERROR %v\n", err)
 		os.Exit(1)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		fmt.Fprintf(os.Stderr, "GET %s: HTTP %d\n", mgmtURL, resp.StatusCode)
+		fmt.Printf("FAIL: MGMT_API_HTTP_ERROR %d\n", resp.StatusCode)
 		os.Exit(1)
 	}
 
 	var membersPayload any
 	if err := json.NewDecoder(resp.Body).Decode(&membersPayload); err != nil {
-		fmt.Fprintf(os.Stderr, "decode members: %v\n", err)
+		fmt.Printf("FAIL: MGMT_API_DECODE_ERROR %v\n", err)
 		os.Exit(1)
 	}
 	membersJSON, _ := json.MarshalIndent(membersPayload, "", "  ")
 	fmt.Printf("CLUSTER_MEMBERS:%s\n", membersJSON)
-	fmt.Println("COMPAT_TEST_PASSED")
+	fmt.Println("STATUS: COMPAT_TEST_PASSED")
 
 	// Keep the management server alive until the test runner sends SIGTERM/SIGINT
-	// (Scala's proc.destroy()). The Scala test queries http://127.0.0.1:8558/cluster/members
-	// after a 1.5 s sleep, so we must not exit before it does.
+	// (Scala's proc.destroy()).
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	<-sigCh
 }
 
-// memberWatcher is a lightweight actor that forwards MemberUp events to the
+// memberWatcher is a lightweight actor that forwards cluster events to the
 // main goroutine via a buffered channel.
 type memberWatcher struct {
 	actor.BaseActor
-	ch chan cluster.MemberUp
+	ch chan any
 }
 
 func (a *memberWatcher) Receive(msg any) {
-	if evt, ok := msg.(cluster.MemberUp); ok {
+	switch msg.(type) {
+	case cluster.MemberUp, cluster.UnreachableMember, cluster.MemberDowned, cluster.MemberRemoved:
 		select {
-		case a.ch <- evt:
+		case a.ch <- msg:
 		default:
 		}
 	}

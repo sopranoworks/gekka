@@ -117,7 +117,7 @@ func TestArteryHandshake_Success(t *testing.T) {
 	}
 
 	// 4. Verify association state.
-	assoc, ok := nm.GetAssociation(remoteAddr)
+	assoc, ok := nm.GetAssociation(remoteAddr, 1)
 	if !ok {
 		t.Fatal("association not found")
 	}
@@ -237,7 +237,7 @@ func TestArteryControl_HeartbeatAndQuarantine(t *testing.T) {
 	// 3. Wait a moment for the handler to process the Quarantined message.
 	time.Sleep(100 * time.Millisecond)
 
-	foundAssoc, ok := nm.GetAssociation(remoteUA)
+	foundAssoc, ok := nm.GetAssociation(remoteUA, 1)
 	if !ok {
 		t.Fatal("association not found")
 	}

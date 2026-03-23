@@ -13,7 +13,7 @@ import scala.sys.process._
 import scala.util.Try
 
 import com.typesafe.config.ConfigFactory
-import akka.actor.{Actor, ActorLogging, Props}
+import akka.actor.Address
 import akka.cluster.{Cluster, MemberStatus}
 import akka.cluster.ClusterEvent._
 import akka.remote.testconductor.RoleName
@@ -89,6 +89,7 @@ abstract class GekkaSystem
   private def findGoBinary: String = {
     val candidates = Seq(
       sys.env.getOrElse("GEKKA_COMPAT_TEST_BIN", ""),
+      "../../../bin/gekka-compat-test",
       "../../bin/gekka-compat-test",
       "gekka-compat-test",
     ).filter(_.nonEmpty)
@@ -134,17 +135,33 @@ abstract class GekkaSystem
         val cluster = Cluster(system)
 
         // Subscribe before spawning the Go node so we don't miss the event.
-        val probe = TestProbe()
-        cluster.subscribe(probe.ref, initialStateMode = InitialStateAsSnapshot, classOf[MemberUp])
+        val memberProbe = TestProbe()
+        cluster.subscribe(memberProbe.ref, initialStateMode = InitialStateAsSnapshot,
+          classOf[MemberUp])
         // Drain the CurrentClusterState snapshot (contains seed itself).
-        probe.expectMsgType[CurrentClusterState](5.seconds)
+        memberProbe.expectMsgType[CurrentClusterState](5.seconds)
 
         // ── Spawn Go binary ───────────────────────────────────────────────
         val binary  = findGoBinary
         val goLogs  = ListBuffer.empty[String]
+        val failure = new java.util.concurrent.atomic.AtomicReference[String]("")
+
         val logger  = ProcessLogger(
-          out => { goLogs += out; println(s"[gekka] $out"); Console.flush() },
-          err => { goLogs += err; System.err.println(s"[gekka:err] $err") },
+          out => {
+            goLogs += out
+            println(s"[gekka] $out")
+            if (out.startsWith("FAIL:")) {
+              failure.set(out)
+            }
+            Console.flush()
+          },
+          err => {
+            goLogs += err
+            System.err.println(s"[gekka:err] $err")
+            if (err.startsWith("FAIL:")) {
+              failure.set(err)
+            }
+          },
         )
 
         info(s"Spawning Go joiner: $binary")
@@ -159,36 +176,101 @@ abstract class GekkaSystem
 
         try {
           // ── Wait for Go node MemberUp (up to 60 s) ───────────────────────
-          val joinerUp = probe.expectMsgType[MemberUp](60.seconds)
+          val joinerUp = awaitAssert({
+            if (failure.get().nonEmpty) fail(s"Go binary reported failure: ${failure.get()}")
+            if (!proc.isAlive()) fail(s"Go binary exited prematurely with code ${proc.exitValue()}")
+            memberProbe.expectMsgType[MemberUp](1.second)
+          }, 60.seconds, 1.second)
+
           val joinerAddr = joinerUp.member.address
 
-          info(s"GEKKA_MEMBER_UP: $joinerAddr")
-          println(s"GEKKA_MEMBER_UP: $joinerAddr")
+          info(s"STATUS: MEMBER_UP: $joinerAddr")
+          println(s"STATUS: MEMBER_UP: $joinerAddr")
           Console.flush()
 
-          // The joining node should not be the seed itself.
+          // ── Identity assertions ───────────────────────────────────────────
+          // The joining node must not be the seed itself.
           joinerAddr should not equal cluster.selfAddress
+          // Must have joined on the expected host and port.
+          joinerAddr.host shouldBe Some("127.0.0.1")
+          joinerAddr.port shouldBe Some(2552)
+          // Protocol must be akka (Artery TCP).
+          joinerAddr.protocol shouldBe "akka"
+          // System name must match what the Go binary was started with.
+          joinerAddr.system shouldBe "GekkaSystem"
 
-          // ── Verify via Management HTTP API ───────────────────────────────
-          // Give the management server a moment to process the membership update.
-          Thread.sleep(1500)
+          println(s"IDENTITY_OK: $joinerAddr")
+          Console.flush()
 
-          val mgmtURL = "http://127.0.0.1:8558/cluster/members"
-          val membersJson = Try(scala.io.Source.fromURL(mgmtURL).mkString)
-            .getOrElse(fail(s"Could not reach management API at $mgmtURL"))
+          // ── 60-second stability phase ─────────────────────────────────────
+          // Monitor for UnreachableMember events targeting the Go node.
+          // Fail immediately if Go becomes unreachable — that indicates the
+          // heartbeat or failure-detector integration is broken.
+          val stabilityProbe = TestProbe()
+          cluster.subscribe(stabilityProbe.ref, classOf[UnreachableMember])
+
+          val stabilityWindowMs = 60000L
+          val stepMs            = 1000L
+          val mgmtURL           = "http://127.0.0.1:8558/cluster/members"
+          val deadline          = System.currentTimeMillis() + stabilityWindowMs
+
+          while (System.currentTimeMillis() < deadline) {
+            // Fail-fast checks
+            if (failure.get().nonEmpty) fail(s"Go binary reported failure during stability: ${failure.get()}")
+            if (!proc.isAlive()) fail(s"Go binary exited during stability with code ${proc.exitValue()}")
+
+            val remaining = deadline - System.currentTimeMillis()
+            val waitMs    = math.min(stepMs, remaining).toInt
+
+            // Check for UnreachableMember events (non-blocking after timeout).
+            stabilityProbe.receiveOne(waitMs.millis) match {
+              case UnreachableMember(m) if m.address == joinerAddr =>
+                fail(s"STABILITY_FAILED: Go node $joinerAddr became UNREACHABLE after ${
+                  stabilityWindowMs - remaining}ms")
+              case _ => // other event or timeout — continue
+            }
+
+            // ── Periodic management API cross-check ───────────────────────
+            val elapsed = stabilityWindowMs - (deadline - System.currentTimeMillis())
+            // Only check every 5 seconds to reduce noise
+            if (elapsed % 5000 < stepMs) {
+              Try {
+                val src = scala.io.Source.fromURL(mgmtURL)
+                try src.mkString finally src.close()
+              } match {
+                case scala.util.Success(json) =>
+                  if (!json.contains("Up")) {
+                    fail(s"MGMT_API_FAIL at ${elapsed}ms: no 'Up' status in $json")
+                  }
+                  println(s"[stability ${elapsed}ms] MGMT_OK members=$json")
+                  Console.flush()
+                case scala.util.Failure(ex) =>
+                  fail(s"MGMT_API_UNREACHABLE at ${elapsed}ms: $ex")
+              }
+            }
+          }
+
+          cluster.unsubscribe(stabilityProbe.ref)
+          println("STABILITY_PASSED: Go node remained Up for 60 seconds")
+          Console.flush()
+
+          // ── Final management API snapshot ─────────────────────────────────
+          val membersJson = Try {
+            val src = scala.io.Source.fromURL(mgmtURL)
+            try src.mkString finally src.close()
+          }.getOrElse(fail(s"Could not reach management API at $mgmtURL after stability window"))
 
           info(s"CLUSTER_MEMBERS: $membersJson")
           println(s"CLUSTER_MEMBERS: $membersJson")
           Console.flush()
 
-          // Both members should appear as Up.
           membersJson should include("Up")
 
-          println("COMPAT_TEST_PASSED")
+          println("STATUS: COMPAT_TEST_PASSED")
           Console.flush()
 
         } finally {
-          cluster.unsubscribe(probe.ref)
+          cluster.unsubscribe(memberProbe.ref)
           proc.destroy()
         }
       }

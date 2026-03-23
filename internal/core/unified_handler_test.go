@@ -58,13 +58,13 @@ func TestUnifiedHandler_FullDuplexHandshake(t *testing.T) {
 
 	// NewNodeManager(addr, 0) assigns localUid=0, so HandshakeReq/Rsp carry Uid=0.
 	uniqueB := &gproto_remote.UniqueAddress{Address: nodeBAddr, Uid: proto.Uint64(0)}
-	assocA, okA := nmA.GetAssociation(uniqueB)
+	assocA, okA := nmA.GetAssociation(uniqueB, 1)
 	if !okA || assocA.GetState() != ASSOCIATED {
 		t.Errorf("Node A association failed: ok=%v, state=%v", okA, assocA.GetState())
 	}
 
 	uniqueA := &gproto_remote.UniqueAddress{Address: nodeAAddr, Uid: proto.Uint64(0)}
-	assocB, okB := nmB.GetAssociation(uniqueA)
+	assocB, okB := nmB.GetAssociation(uniqueA, 1)
 	if !okB || assocB.GetState() != ASSOCIATED {
 		t.Errorf("Node B association failed: ok=%v, state=%v", okB, assocB.GetState())
 	}
@@ -92,13 +92,14 @@ func TestUnifiedHandler_RegistryReuse(t *testing.T) {
 	}
 
 	assoc := &GekkaAssociation{
-		state: ASSOCIATED,
-		conn:  dummyConn,
+		state:    ASSOCIATED,
+		conn:     dummyConn,
+		streamId: 1,
 	}
 	nm.RegisterAssociation(remoteUnique, assoc)
 
 	// Verify lookup
-	found, ok := nm.GetAssociation(remoteUnique)
+	found, ok := nm.GetAssociation(remoteUnique, 1)
 	if !ok || found != assoc {
 		t.Errorf("Registry lookup failed")
 	}

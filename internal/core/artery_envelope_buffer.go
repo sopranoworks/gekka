@@ -82,7 +82,11 @@ func BuildArteryFrame(
 	// Now build the final fixed header with LittleEndian
 	var h [arteryHeaderSize]byte
 	h[0] = arteryVersion
-	h[1] = arteryFlags
+	if control {
+		h[1] = arteryFlags | 0x01 // Set Control flag (bit 0)
+	} else {
+		h[1] = arteryFlags
+	}
 	h[2] = arteryActorRefCompVer
 	h[3] = arteryManifestCompVer
 	binary.LittleEndian.PutUint64(h[4:12], uint64(uid))

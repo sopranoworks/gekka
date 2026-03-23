@@ -83,6 +83,9 @@ type MemberLeft struct{ Member MemberAddress }
 // and transitions to Exiting status.
 type MemberExited struct{ Member MemberAddress }
 
+// MemberDowned is published when a member is marked as Down.
+type MemberDowned struct{ Member MemberAddress }
+
 // MemberRemoved is published when a member is fully evicted from the
 // After this event the member's address may be reused by a new node.
 type MemberRemoved struct{ Member MemberAddress }
@@ -99,6 +102,7 @@ type ReachableMember struct{ Member MemberAddress }
 func (MemberUp) clusterDomainEvent()          {}
 func (MemberLeft) clusterDomainEvent()        {}
 func (MemberExited) clusterDomainEvent()      {}
+func (MemberDowned) clusterDomainEvent()      {}
 func (MemberRemoved) clusterDomainEvent()     {}
 func (UnreachableMember) clusterDomainEvent() {}
 func (ReachableMember) clusterDomainEvent()   {}
@@ -111,6 +115,7 @@ var (
 	EventMemberUp          = reflect.TypeOf(MemberUp{})
 	EventMemberLeft        = reflect.TypeOf(MemberLeft{})
 	EventMemberExited      = reflect.TypeOf(MemberExited{})
+	EventMemberDowned      = reflect.TypeOf(MemberDowned{})
 	EventMemberRemoved     = reflect.TypeOf(MemberRemoved{})
 	EventUnreachableMember = reflect.TypeOf(UnreachableMember{})
 	EventReachableMember   = reflect.TypeOf(ReachableMember{})
@@ -221,6 +226,8 @@ func diffGossipMembers(oldState, newState *gproto_cluster.Gossip) []ClusterDomai
 			events = append(events, MemberLeft{Member: ma})
 		case gproto_cluster.MemberStatus_Exiting:
 			events = append(events, MemberExited{Member: ma})
+		case gproto_cluster.MemberStatus_Down:
+			events = append(events, MemberDowned{Member: ma})
 		case gproto_cluster.MemberStatus_Removed:
 			events = append(events, MemberRemoved{Member: ma})
 		}

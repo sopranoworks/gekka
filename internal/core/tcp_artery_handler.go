@@ -60,14 +60,21 @@ func TcpArteryHandlerWithCallback(ctx context.Context, conn net.Conn, handler Fr
 	return tcpArteryReadLoop(ctx, conn, handler, ctm, remoteUid, streamId)
 }
 
-func TcpArteryOutboundHandler(ctx context.Context, conn net.Conn, handler FrameHandler, ctm *CompressionTableManager, remoteUid uint64, streamId int32) error {
-	// Outbound: write magic header (streamId=1 for Control stream), then enter read loop
-	// Pekko Artery: ControlStreamId = 1, OrdinaryStreamId = 2, LargeStreamId = 3
-	magicHeader := []byte{'A', 'K', 'K', 'A', byte(streamId)}
+func TcpArteryOutboundHandler(ctx context.Context, conn net.Conn, handler FrameHandler, ctm *CompressionTableManager, remoteUid uint64, streamId int32, protocol string) error {
+	var magicHeader []byte
+	if protocol == "pekko" || protocol == "artery" {
+		// Artery 2.0 (Pekko) preamble: ART (3) + version (1) + streamId (1) = 5 bytes total
+		magicHeader = []byte{'A', 'R', 'T', 1, byte(streamId)}
+		log.Printf("TcpArteryOutboundHandler: writing Pekko preamble [ART\\x01\\x%02x]", streamId)
+	} else {
+		// Artery 1.0 (Akka) preamble: AKKA (4) + streamId (1) = 5 bytes total
+		magicHeader = []byte{'A', 'K', 'K', 'A', byte(streamId)}
+		log.Printf("TcpArteryOutboundHandler: writing Akka preamble [AKKA\\x%02x]", streamId)
+	}
+
 	if _, err := conn.Write(magicHeader); err != nil {
 		return fmt.Errorf("failed to write stream magic header: %w", err)
 	}
-	log.Printf("TcpArteryOutboundHandler: magic header [AKKA\\x%02x] written, entering read loop", streamId)
 
 	return tcpArteryReadLoop(ctx, conn, handler, ctm, remoteUid, streamId)
 }

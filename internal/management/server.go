@@ -206,15 +206,27 @@ func (ms *ManagementServer) Addr() net.Addr {
 }
 
 // Start begins serving HTTP requests in the background and arranges graceful
-// shutdown when ctx is cancelled.
+// shutdown when ctx is cancelled. It returns immediately.
 func (ms *ManagementServer) Start(ctx context.Context) {
-	slog.Info("gekka: management server listening", "address", ms.listener.Addr().String())
-	go ms.srv.Serve(ms.listener) //nolint:errcheck
+	addr := ms.listener.Addr().String()
+	slog.Info("gekka: management server starting", "address", addr)
+
+	// Start the server in a background goroutine immediately.
+	go func() {
+		if err := ms.srv.Serve(ms.listener); err != nil && err != http.ErrServerClosed {
+			slog.Error("gekka: management server serve error", "error", err)
+		}
+	}()
+
+	// Background goroutine for graceful shutdown.
 	go func() {
 		<-ctx.Done()
+		slog.Info("gekka: management server shutting down", "address", addr)
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		ms.srv.Shutdown(shutCtx) //nolint:errcheck
+		if err := ms.srv.Shutdown(shutCtx); err != nil {
+			slog.Error("gekka: management server shutdown error", "error", err)
+		}
 	}()
 }
 

@@ -113,10 +113,13 @@ type Metrics interface {
 
 // Proto returns the configured actor-path scheme, defaulting to "pekko".
 func (cm *ClusterManager) Proto() string {
-	if cm.Protocol == "" {
-		return "pekko"
+	if cm.Protocol != "" {
+		return cm.Protocol
 	}
-	return cm.Protocol
+	if cm.LocalAddress != nil && cm.LocalAddress.GetAddress() != nil {
+		return cm.LocalAddress.GetAddress().GetProtocol()
+	}
+	return "pekko"
 }
 
 // ClusterCorePath builds the actor path to the cluster core daemon on a remote node.
@@ -127,6 +130,11 @@ func (cm *ClusterManager) ClusterCorePath(system, host string, port uint32) stri
 // HeartbeatPath builds the actor path to the heartbeat receiver on a remote node.
 func (cm *ClusterManager) HeartbeatPath(system, host string, port uint32) string {
 	return fmt.Sprintf("%s://%s@%s:%d/system/cluster/heartbeatReceiver", cm.Proto(), system, host, port)
+}
+
+// HeartbeatSenderPath builds the actor path to the heartbeat sender on a remote node.
+func (cm *ClusterManager) HeartbeatSenderPath(system, host string, port uint32) string {
+	return fmt.Sprintf("%s://%s@%s:%d/system/cluster/heartbeatSender", cm.Proto(), system, host, port)
 }
 
 // localHashString returns the hash string used for this node's VectorClock entry.
@@ -299,8 +307,9 @@ func (cm *ClusterManager) JoinCluster(ctx context.Context, seedHost string, seed
 	// Send a minimal config so the remote's JoinConfigCompatCheckCluster.check
 	// can call getString("<proto>.cluster.downing-provider-class") without throwing.
 	// The config key prefix must match the remote's actor-system protocol ("pekko" or "akka").
-	minConfig := proto.String(fmt.Sprintf(`%s.cluster.downing-provider-class = ""`, cm.Proto()))
-	initJoin := &gproto_cluster.InitJoin{CurrentConfig: minConfig}
+	proto := cm.Proto()
+	minConfig := fmt.Sprintf(`%s.cluster.downing-provider-class = "%s.cluster.sbr.SplitBrainResolverProvider"`, proto, proto)
+	initJoin := &gproto_cluster.InitJoin{CurrentConfig: &minConfig}
 	return cm.Router(ctx, path, initJoin)
 }
 
@@ -558,7 +567,7 @@ func (cm *ClusterManager) handleHeartbeat(payload []byte, manifest string, remot
 	}
 
 	addr := hb.GetFrom()
-	path := cm.HeartbeatPath(addr.GetSystem(), addr.GetHostname(), addr.GetPort())
+	path := cm.HeartbeatSenderPath(addr.GetSystem(), addr.GetHostname(), addr.GetPort())
 	return cm.Router(context.Background(), path, rsp)
 }
 
@@ -1984,8 +1993,9 @@ func (cm *ClusterManager) StartHeartbeat(target *gproto_cluster.Address) {
 			case <-ticker.C:
 				seq++
 				hb := &gproto_cluster.Heartbeat{
-					From:       toClusterAddress(cm.LocalAddress.Address),
-					SequenceNr: proto.Int64(seq),
+					From:         toClusterAddress(cm.LocalAddress.Address),
+					SequenceNr:   proto.Int64(seq),
+					CreationTime: proto.Int64(time.Now().UnixNano() / int64(time.Millisecond)),
 				}
 				if cm.Router != nil {
 					if err := cm.Router(context.Background(), path, hb); err != nil {

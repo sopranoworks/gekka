@@ -23,6 +23,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	gekka "github.com/sopranoworks/gekka"
 	gcluster "github.com/sopranoworks/gekka/cluster"
+	gekkaotel "github.com/sopranoworks/gekka-extensions-telemetry-otel"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -364,10 +365,16 @@ func initMeterProvider(ctx context.Context, otlpEndpoint string) (*sdkmetric.Met
 
 	var readerOpt sdkmetric.Option
 	if otlpEndpoint != "" {
-		exp, err := otlpmetrichttp.New(ctx,
-			otlpmetrichttp.WithEndpoint(otlpEndpoint),
-			otlpmetrichttp.WithInsecure(),
-		)
+		host, secure := gekkaotel.ParseEndpoint(otlpEndpoint)
+
+		opts := []otlpmetrichttp.Option{
+			otlpmetrichttp.WithEndpoint(host),
+		}
+		if !secure {
+			opts = append(opts, otlpmetrichttp.WithInsecure())
+		}
+
+		exp, err := otlpmetrichttp.New(ctx, opts...)
 		if err != nil {
 			return nil, nil, err
 		}

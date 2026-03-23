@@ -8,6 +8,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/sopranoworks/gekka v0.13.0-dev
 	github.com/sopranoworks/gekka-extensions-cluster-k8s v0.0.0
+	github.com/sopranoworks/gekka-extensions-telemetry-otel v0.0.0
 	github.com/spf13/cobra v1.10.2
 	go.opentelemetry.io/otel v1.42.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp v1.42.0
@@ -91,3 +92,5 @@ require (
 replace github.com/sopranoworks/gekka => ../
 
 replace github.com/sopranoworks/gekka-extensions-cluster-k8s => ../extensions/cluster/k8s
+
+replace github.com/sopranoworks/gekka-extensions-telemetry-otel => ../extensions/telemetry/otel

@@ -16,8 +16,8 @@ import (
 
 	"github.com/sopranoworks/gekka"
 	"github.com/sopranoworks/gekka/actor/typed"
-	ptyped "github.com/sopranoworks/gekka/persistence/typed"
 	"github.com/sopranoworks/gekka/persistence"
+	ptyped "github.com/sopranoworks/gekka/persistence/typed"
 )
 
 // --- Messages ---
@@ -65,15 +65,21 @@ func Counter(persistenceID string, journal persistence.Journal, snaps persistenc
 }
 
 func main() {
-	// 1. Setup persistence backends
-	journal := persistence.NewInMemoryJournal()
-	snaps := persistence.NewInMemorySnapshotStore()
-
-	// 2. Initialize actor system
+	// 1. Initialize actor system.
+	// Journal and SnapshotStore are provisioned automatically from the plugin
+	// registry. The built-in default is "in-memory" (no external dependencies).
+	// To switch to a durable backend, add a blank import for the desired plugin
+	// and set gekka.persistence.journal.plugin in your HOCON config:
+	//
+	//   import _ "github.com/sopranoworks/gekka-extensions-persistence-spanner"
 	system, err := gekka.NewActorSystem("PersistenceSystem")
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	// 2. Obtain the journal and snapshot store from the system.
+	journal := system.Journal()
+	snaps := system.SnapshotStore()
 
 	persistenceID := "my-counter"
 

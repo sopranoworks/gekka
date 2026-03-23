@@ -84,12 +84,14 @@ func ShoppingCartBehavior(journal persistence.Journal) func(id string) *gekka.Ev
 }
 
 func main() {
-	// 1. Setup persistence
-	journal := persistence.NewInMemoryJournal()
-
-	// 2. Start two nodes (simulated)
+	// 1. Start two nodes (simulated).
 	system1, _ := gekka.NewCluster(gekka.ClusterConfig{SystemName: "ShardingSystem", Port: 2551})
 	system2, _ := gekka.NewCluster(gekka.ClusterConfig{SystemName: "ShardingSystem", Port: 2552})
+
+	// Obtain the journal from the node's built-in registry.
+	// By default this is an in-memory journal; swap in a durable backend by
+	// calling system1.ProvideJournalDB("postgres", db) before this point.
+	journal := system1.Journal()
 
 	system2.Join("127.0.0.1", 2551)
 

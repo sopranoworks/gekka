@@ -10,6 +10,7 @@ package gekka
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"log/slog"
 	"reflect"
@@ -24,6 +25,9 @@ import (
 	"github.com/sopranoworks/gekka/stream"
 	"github.com/sopranoworks/gekka/telemetry"
 )
+
+//go:embed reference.conf
+var referenceConfContent string
 
 // localActorSystem implements ActorSystem for local-only use without networking.
 type localActorSystem struct {
@@ -41,40 +45,81 @@ type localActorSystem struct {
 // NewActorSystem creates and returns a local-only ActorSystem.
 // It manages actors within the same process without networking or cluster features.
 //
-// A Journal and SnapshotStore are provisioned automatically from the plugin
-// registry. The default plugin is "in-memory" (stdlib only, no external deps).
-// Override via the HOCON key persistence.journal.plugin / persistence.snapshot-store.plugin:
+// A Journal, SnapshotStore, and Telemetry provider are provisioned automatically
+// from the plugin registry. Defaults are defined in reference.conf (in-memory /
+// no-op). Override via HOCON:
 //
 //	gekka {
 //	  persistence {
-//	    journal.plugin       = "postgres"
+//	    journal.plugin        = "postgres"
 //	    snapshot-store.plugin = "postgres"
+//	  }
+//	  telemetry {
+//	    provider.plugin = "otel"
 //	  }
 //	}
 func NewActorSystem(name string, config ...*hocon.Config) (ActorSystem, error) {
-	journalPlugin := "in-memory"
-	snapshotPlugin := "in-memory"
-	if len(config) > 0 && config[0] != nil {
-		if v, err := config[0].GetString("persistence.journal.plugin"); err == nil && v != "" {
-			journalPlugin = v
-		}
-		if v, err := config[0].GetString("persistence.snapshot-store.plugin"); err == nil && v != "" {
-			snapshotPlugin = v
-		}
+	// Parse the built-in reference.conf, which supplies the lowest-priority defaults.
+	refCfg, err := hocon.ParseString(referenceConfContent)
+	if err != nil {
+		return nil, fmt.Errorf("actor system: parse reference.conf: %w", err)
 	}
 
-	var journalCfg, snapshotCfg, telemetryCfg hocon.Config
+	// Merge: user config (if any) takes precedence over reference.conf via WithFallback.
+	var userCfg *hocon.Config
 	if len(config) > 0 && config[0] != nil {
-		if sc, err := config[0].GetConfig("persistence.journal.settings"); err == nil {
+		userCfg = config[0]
+	}
+	var merged hocon.Config
+	if userCfg != nil {
+		merged = userCfg.WithFallback(*refCfg)
+	} else {
+		merged = *refCfg
+	}
+
+	// pluginWithFallback reads a plugin name from the merged config and reports
+	// whether the value came from reference.conf defaults (i.e. is a fallback).
+	pluginWithFallback := func(key string) (plugin string, isFallback bool) {
+		plugin, _ = merged.GetString(key)
+		if userCfg != nil {
+			if v, err := userCfg.GetString(key); err == nil && strings.TrimSpace(v) != "" {
+				return strings.TrimSpace(plugin), false
+			}
+		}
+		return strings.TrimSpace(plugin), true
+	}
+
+	journalPlugin, journalFallback := pluginWithFallback("gekka.persistence.journal.plugin")
+	snapshotPlugin, snapshotFallback := pluginWithFallback("gekka.persistence.snapshot-store.plugin")
+	telemetryPlugin, telemetryFallback := pluginWithFallback("gekka.telemetry.provider.plugin")
+
+	// Resolve optional provider-settings sub-configs.
+	var journalCfg, snapshotCfg, telemetryCfg hocon.Config
+	if userCfg != nil {
+		if sc, err := userCfg.GetConfig("gekka.persistence.journal.settings"); err == nil {
 			journalCfg = sc
 		}
-		if sc, err := config[0].GetConfig("persistence.snapshot-store.settings"); err == nil {
+		if sc, err := userCfg.GetConfig("gekka.persistence.snapshot-store.settings"); err == nil {
 			snapshotCfg = sc
 		}
-		if sc, err := config[0].GetConfig("telemetry.settings"); err == nil {
+		if sc, err := userCfg.GetConfig("gekka.telemetry.settings"); err == nil {
 			telemetryCfg = sc
 		}
 	}
+
+	// Log active providers; mark fallbacks so operators know no explicit config was found.
+	logProvider := func(component, plugin string, isFallback bool) {
+		if isFallback {
+			slog.Info("gekka: provider selected (fallback to built-in default)",
+				"system", name, "component", component, "plugin", plugin)
+		} else {
+			slog.Info("gekka: provider selected",
+				"system", name, "component", component, "plugin", plugin)
+		}
+	}
+	logProvider("journal", journalPlugin, journalFallback)
+	logProvider("snapshot-store", snapshotPlugin, snapshotFallback)
+	logProvider("telemetry", telemetryPlugin, telemetryFallback)
 
 	j, err := persistence.NewJournal(journalPlugin, journalCfg)
 	if err != nil {
@@ -85,12 +130,6 @@ func NewActorSystem(name string, config ...*hocon.Config) (ActorSystem, error) {
 		return nil, fmt.Errorf("actor system: provision snapshot store %q: %w", snapshotPlugin, err)
 	}
 
-	telemetryPlugin := "no-op"
-	if len(config) > 0 && config[0] != nil {
-		if v, err := config[0].GetString("telemetry.provider.plugin"); err == nil && v != "" {
-			telemetryPlugin = v
-		}
-	}
 	if tp, err := telemetry.GetProvider(telemetryPlugin, telemetryCfg); err == nil {
 		telemetry.SetProvider(tp)
 	}

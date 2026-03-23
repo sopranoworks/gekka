@@ -556,7 +556,10 @@ func (assoc *GekkaAssociation) sendSystemAck(seq uint64, to *gproto_remote.Uniqu
 			Uid:     proto.Uint64(assoc.localUid),
 		},
 	}
-	return SendArteryMessageWithAck(assoc.conn, int64(assoc.localUid), actor.ArteryInternalSerializerID, "SystemMessageDeliveryAck", ack, to, true)
+	// "h" is the ArteryMessageSerializer short manifest for SystemMessageDeliveryAck.
+	// Using the long class name causes Akka's ControlMessageObserver to skip the frame
+	// and pass it to MessageDispatcher.dispatch with an empty recipient → OptionVal.None.get.
+	return SendArteryMessageWithAck(assoc.conn, int64(assoc.localUid), actor.ArteryInternalSerializerID, "h", ack, to, true)
 }
 
 func (assoc *GekkaAssociation) handleSystemMessage(meta *ArteryMetadata) error {

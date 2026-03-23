@@ -150,8 +150,9 @@ func TestDispatcher_AutoACK(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseArteryFrame on ACK: %v", err)
 	}
-	if string(ackMeta.MessageManifest) != "SystemMessageDeliveryAck" {
-		t.Errorf("expected SystemMessageDeliveryAck manifest, got %q", string(ackMeta.MessageManifest))
+	// "h" is the ArteryMessageSerializer short manifest for SystemMessageDeliveryAck.
+	if string(ackMeta.MessageManifest) != "h" {
+		t.Errorf("expected SystemMessageDeliveryAck short manifest %q, got %q", "h", string(ackMeta.MessageManifest))
 	}
 
 	ackBody := &gproto_remote.SystemMessageDeliveryAck{}

@@ -11,9 +11,11 @@ package core
 import (
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net"
 	"time"
 
@@ -230,6 +232,20 @@ func WriteFrame(writer io.Writer, payload []byte) error {
 	frame := make([]byte, 4+len(payload))
 	binary.LittleEndian.PutUint32(frame[:4], uint32(len(payload)))
 	copy(frame[4:], payload)
+
+	// Trace-level hex dump of the first 64 bytes (header + start of Artery envelope).
+	// Enable with slog at Debug level to compare wire bytes against a real Pekko/Akka node.
+	if slog.Default().Enabled(nil, slog.LevelDebug) {
+		end := 64
+		if end > len(frame) {
+			end = len(frame)
+		}
+		slog.Debug("artery: outbound frame",
+			"total_bytes", len(frame),
+			"payload_bytes", len(payload),
+			"hex64", hex.EncodeToString(frame[:end]),
+		)
+	}
 
 	if _, err := writer.Write(frame); err != nil {
 		return fmt.Errorf("failed to write frame: %w", err)

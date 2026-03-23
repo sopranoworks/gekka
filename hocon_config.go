@@ -334,10 +334,32 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		nodeCfg.SBR.QuorumSize = v
 	}
 
-	// Unmarshal Management and Metrics configs from HOCON
+	// Unmarshal Management and Metrics configs from HOCON.
+	// cfg.Unmarshal is used as a first pass, but bool fields inside nested
+	// structs are not reliably populated by the HOCON library.  Explicit
+	// GetString calls below mirror the pattern used for Discovery / Telemetry.
 	nodeCfg.Management = core.DefaultManagementConfig()
 	nodeCfg.Metrics = core.DefaultMetricsExporterConfig()
 	_ = cfg.Unmarshal(&nodeCfg)
+
+	// ── Management HTTP API ───────────────────────────────────────────────────
+	mgmtPrefix := "gekka.management.http"
+	if v, err := cfg.GetString(mgmtPrefix + ".enabled"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		nodeCfg.Management.Enabled = v == "true" || v == "on"
+	}
+	if v, err := cfg.GetString(mgmtPrefix + ".hostname"); err == nil {
+		if v = strings.TrimSpace(v); v != "" {
+			nodeCfg.Management.Hostname = v
+		}
+	}
+	if v, err := cfg.GetInt(mgmtPrefix + ".port"); err == nil && v > 0 {
+		nodeCfg.Management.Port = v
+	}
+	if v, err := cfg.GetString(mgmtPrefix + ".health-checks.enabled"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		nodeCfg.Management.HealthChecksEnabled = v == "true" || v == "on"
+	}
 
 	// ── Telemetry ────────────────────────────────────────────────────────────
 	if v, err := cfg.GetString("gekka.telemetry.tracing.enabled"); err == nil {

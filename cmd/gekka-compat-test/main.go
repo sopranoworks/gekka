@@ -39,6 +39,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/sopranoworks/gekka"
@@ -153,6 +155,13 @@ func main() {
 	membersJSON, _ := json.MarshalIndent(membersPayload, "", "  ")
 	fmt.Printf("CLUSTER_MEMBERS:%s\n", membersJSON)
 	fmt.Println("COMPAT_TEST_PASSED")
+
+	// Keep the management server alive until the test runner sends SIGTERM/SIGINT
+	// (Scala's proc.destroy()). The Scala test queries http://127.0.0.1:8558/cluster/members
+	// after a 1.5 s sleep, so we must not exit before it does.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	<-sigCh
 }
 
 // memberWatcher is a lightweight actor that forwards MemberUp events to the

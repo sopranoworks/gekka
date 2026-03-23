@@ -16,6 +16,7 @@ import com.typesafe.config.ConfigFactory
 import akka.actor.{Actor, ActorLogging, Props}
 import akka.cluster.{Cluster, MemberStatus}
 import akka.cluster.ClusterEvent._
+import akka.remote.testconductor.RoleName
 import akka.remote.testkit.{MultiNodeConfig, MultiNodeSpec}
 import akka.testkit.{ImplicitSender, TestProbe}
 import org.scalatest.BeforeAndAfterAll
@@ -62,7 +63,7 @@ object GekkaCompatSpecConfig extends MultiNodeConfig {
 
 // ── Base MultiNodeSpec ────────────────────────────────────────────────────────
 
-abstract class GekkaCompatSpec
+abstract class GekkaSystem
     extends MultiNodeSpec(GekkaCompatSpecConfig)
     with AnyWordSpecLike
     with Matchers
@@ -205,4 +206,4 @@ abstract class GekkaCompatSpec
 // Since GekkaCompatSpecConfig defines exactly one JVM role (node1), we only
 // need Node1.
 //
-class GekkaCompatSpecMultiJvmNode1 extends GekkaCompatSpec
+class GekkaSystemMultiJvmNode1 extends GekkaSystem

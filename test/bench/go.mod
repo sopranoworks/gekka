@@ -5,10 +5,13 @@ go 1.26.1
 require (
 	cloud.google.com/go/spanner v1.88.0
 	github.com/jackc/pgx/v5 v5.8.0
+	github.com/redis/go-redis/v9 v9.17.3
 	github.com/sopranoworks/gekka v0.13.0-dev
+	github.com/sopranoworks/gekka-extensions-persistence-redis v0.0.0
 	github.com/sopranoworks/gekka-extensions-persistence-spanner v0.0.0
 	github.com/testcontainers/testcontainers-go v0.41.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.41.0
+	github.com/testcontainers/testcontainers-go/modules/redis v0.41.0
 	go.opentelemetry.io/otel v1.42.0
 	go.opentelemetry.io/otel/sdk v1.42.0
 	google.golang.org/api v0.265.0
@@ -38,6 +41,7 @@ require (
 	github.com/containerd/platforms v0.2.1 // indirect
 	github.com/cpuguy83/dockercfg v0.3.2 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
+	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/distribution/reference v0.6.0 // indirect
 	github.com/docker/docker v28.5.2+incompatible // indirect
 	github.com/docker/go-connections v0.6.0 // indirect
@@ -60,6 +64,7 @@ require (
 	github.com/klauspost/compress v1.18.2 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/magiconair/properties v1.8.10 // indirect
+	github.com/mdelapenya/tlscert v0.2.0 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/go-archive v0.2.0 // indirect
 	github.com/moby/patternmatcher v0.6.0 // indirect
@@ -106,5 +111,6 @@ require (
 
 replace (
 	github.com/sopranoworks/gekka => ../../
+	github.com/sopranoworks/gekka-extensions-persistence-redis => ../../extensions/persistence/redis
 	github.com/sopranoworks/gekka-extensions-persistence-spanner => ../../extensions/persistence/spanner
 )

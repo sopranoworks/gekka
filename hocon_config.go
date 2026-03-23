@@ -334,6 +334,11 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		nodeCfg.SBR.QuorumSize = v
 	}
 
+	// Unmarshal Management and Metrics configs from HOCON
+	nodeCfg.Management = core.DefaultManagementConfig()
+	nodeCfg.Metrics = core.DefaultMetricsExporterConfig()
+	_ = cfg.Unmarshal(&nodeCfg)
+
 	// ── Telemetry ────────────────────────────────────────────────────────────
 	if v, err := cfg.GetString("gekka.telemetry.tracing.enabled"); err == nil {
 		v = strings.ToLower(strings.TrimSpace(v))
@@ -347,38 +352,6 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		nodeCfg.Telemetry.OtlpEndpoint = strings.TrimSpace(v)
 	}
 
-	// ── HTTP Management ──────────────────────────────────────────────────────
-	mgmtPrefix := "gekka.management.http"
-	nodeCfg.Management = core.DefaultManagementConfig()
-	if v, err := cfg.GetString(mgmtPrefix + ".hostname"); err == nil {
-		nodeCfg.Management.Hostname = strings.TrimSpace(v)
-	}
-	if v, err := cfg.GetInt(mgmtPrefix + ".port"); err == nil {
-		nodeCfg.Management.Port = v
-	}
-	if v, err := cfg.GetString(mgmtPrefix + ".enabled"); err == nil {
-		v = strings.ToLower(strings.TrimSpace(v))
-		nodeCfg.Management.Enabled = v == "true" || v == "on"
-	}
-	if v, err := cfg.GetString(mgmtPrefix + ".health-checks.enabled"); err == nil {
-		v = strings.ToLower(strings.TrimSpace(v))
-		nodeCfg.Management.HealthChecksEnabled = v == "true" || v == "on"
-	}
-
-	// ── Metrics exporter ─────────────────────────────────────────────────────
-	nodeCfg.Metrics = core.DefaultMetricsExporterConfig()
-	metricsPrefix := "gekka.metrics"
-	if v, err := cfg.GetString(metricsPrefix + ".enabled"); err == nil {
-		v = strings.ToLower(strings.TrimSpace(v))
-		nodeCfg.Metrics.Enabled = v == "true" || v == "on"
-	}
-	if v, err := cfg.GetString(metricsPrefix + ".management-url"); err == nil {
-		nodeCfg.Metrics.ManagementURL = strings.TrimSpace(v)
-	}
-	if v, err := cfg.GetString(metricsPrefix + ".scrape-interval"); err == nil {
-		nodeCfg.Metrics.ScrapeInterval = strings.TrimSpace(v)
-	}
-
 	// ── Discovery ────────────────────────────────────────────────────────────
 	discoveryPrefix := "gekka.cluster.discovery"
 	if v, err := cfg.GetString(discoveryPrefix + ".enabled"); err == nil {
@@ -389,7 +362,9 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		nodeCfg.Discovery.Type = strings.TrimSpace(v)
 	}
 
-	nodeCfg.Discovery.Config.Config = make(map[string]any)
+	if nodeCfg.Discovery.Config.Config == nil {
+		nodeCfg.Discovery.Config.Config = make(map[string]any)
+	}
 	if configObj, err := cfg.GetConfig(discoveryPrefix + ".config"); err == nil {
 		_ = configObj.Unmarshal(&nodeCfg.Discovery.Config.Config)
 	}

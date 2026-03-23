@@ -61,6 +61,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -207,6 +208,7 @@ func (ms *ManagementServer) Addr() net.Addr {
 // Start begins serving HTTP requests in the background and arranges graceful
 // shutdown when ctx is cancelled.
 func (ms *ManagementServer) Start(ctx context.Context) {
+	slog.Info("gekka: management server listening", "address", ms.listener.Addr().String())
 	go ms.srv.Serve(ms.listener) //nolint:errcheck
 	go func() {
 		<-ctx.Done()

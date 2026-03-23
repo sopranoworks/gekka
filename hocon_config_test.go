@@ -518,3 +518,30 @@ func TestJoinSeeds_NoSeeds(t *testing.T) {
 		t.Error("expected error from JoinSeeds with no seeds, got nil")
 	}
 }
+
+func TestHOCON_ManagementConfig(t *testing.T) {
+	const hocon = `
+gekka.management.http {
+  hostname = "0.0.0.0"
+  port = 8558
+  enabled = true
+  health-checks.enabled = false
+}
+`
+	cfg, err := parseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Management.Hostname != "0.0.0.0" {
+		t.Errorf("Hostname = %q, want 0.0.0.0", cfg.Management.Hostname)
+	}
+	if cfg.Management.Port != 8558 {
+		t.Errorf("Port = %d, want 8558", cfg.Management.Port)
+	}
+	if !cfg.Management.Enabled {
+		t.Errorf("Enabled = false, want true")
+	}
+	if cfg.Management.HealthChecksEnabled {
+		t.Errorf("HealthChecksEnabled = true, want false")
+	}
+}

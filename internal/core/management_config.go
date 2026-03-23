@@ -63,19 +63,19 @@ type MetricsExporterConfig struct {
 	// Defaults to false.
 	//
 	// HOCON: gekka.metrics.enabled
-	Enabled bool
+	Enabled bool `hocon:"enabled"`
 
 	// ManagementURL is the base URL of the Management HTTP API to scrape.
 	// Defaults to "http://127.0.0.1:8558".
 	//
 	// HOCON: gekka.metrics.management-url
-	ManagementURL string
+	ManagementURL string `hocon:"management-url"`
 
 	// ScrapeInterval is how often the exporter fetches cluster state.
 	// Defaults to 15 seconds.
 	//
 	// HOCON: gekka.metrics.scrape-interval
-	ScrapeInterval string
+	ScrapeInterval string `hocon:"scrape-interval"`
 }
 
 // DefaultMetricsExporterConfig returns MetricsExporterConfig populated with
@@ -94,19 +94,19 @@ type ManagementConfig struct {
 	// Set to "0.0.0.0" to listen on all interfaces.
 	//
 	// HOCON: gekka.management.http.hostname
-	Hostname string
+	Hostname string `hocon:"hostname"`
 
 	// Port is the TCP port for the HTTP management server.
 	// Defaults to 8558 (Pekko Management convention).
 	//
 	// HOCON: gekka.management.http.port
-	Port int
+	Port int `hocon:"port"`
 
 	// Enabled controls whether the management server starts automatically
 	// when the Cluster is created. Defaults to false.
 	//
 	// HOCON: gekka.management.http.enabled
-	Enabled bool
+	Enabled bool `hocon:"enabled"`
 
 	// HealthChecksEnabled controls whether the /health/alive and /health/ready
 	// endpoints are registered on the management server.  Defaults to true when
@@ -114,7 +114,7 @@ type ManagementConfig struct {
 	// box.
 	//
 	// HOCON: gekka.management.http.health-checks.enabled
-	HealthChecksEnabled bool
+	HealthChecksEnabled bool `hocon:"health-checks.enabled"`
 }
 
 // DefaultManagementConfig returns a ManagementConfig populated with the

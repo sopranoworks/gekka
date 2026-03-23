@@ -250,7 +250,7 @@ type ClusterConfig struct {
 	// Endpoints:
 	//   GET /cluster/members            — list all members and their status
 	//   GET /cluster/members/{address}  — detail for a specific member
-	Management core.ManagementConfig
+	Management core.ManagementConfig `hocon:"gekka.management.http"`
 
 	// Metrics holds configuration for the optional metrics exporter that
 	// periodically scrapes the Management HTTP API and emits cluster state
@@ -263,7 +263,7 @@ type ClusterConfig struct {
 	//	    management-url  = "http://127.0.0.1:8558"
 	//	    scrape-interval = "15s"
 	//	}
-	Metrics core.MetricsExporterConfig
+	Metrics core.MetricsExporterConfig `hocon:"gekka.metrics"`
 
 	// Discovery configures the dynamic seed node discovery (v0.9.0).
 	// When Enabled is true, the cluster will use the specified Type to

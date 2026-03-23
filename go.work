@@ -4,6 +4,7 @@ use (
 	.
 	./cmd
 	./extensions/cluster/k8s
+	./extensions/persistence/redis
 	./extensions/persistence/spanner
 	./extensions/telemetry/otel
 	./test/bench

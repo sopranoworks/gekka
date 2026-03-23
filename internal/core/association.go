@@ -450,7 +450,13 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 				log.Printf("Association %p: initiateHandshake error: %v", assoc, err)
 			}
 
-			// Start heartbeat loop
+			// Start heartbeat loop.
+			// Guard: only send heartbeats after the handshake is fully complete
+			// (state == ASSOCIATED) AND the remote UID is known (non-zero).
+			// Sending "m" frames before these conditions are met is a protocol
+			// violation: Akka's ControlMessageObserver associates the heartbeat
+			// with a specific remote UID, and an unknown (zero) UID causes it to
+			// drop or misroute the frame.
 			ticker := time.NewTicker(1 * time.Second)
 			defer ticker.Stop()
 			for {
@@ -460,8 +466,12 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 				case <-ticker.C:
 					assoc.mu.RLock()
 					isAssociated := assoc.state == ASSOCIATED
+					remoteUID := uint64(0)
+					if assoc.remote != nil {
+						remoteUID = assoc.remote.GetUid()
+					}
 					assoc.mu.RUnlock()
-					if isAssociated {
+					if isAssociated && remoteUID != 0 {
 						if err := SendArteryHeartbeat(assoc); err != nil {
 							log.Printf("Association %p: failed to send heartbeat: %v", assoc, err)
 						}

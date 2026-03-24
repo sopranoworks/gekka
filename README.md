@@ -1,4 +1,4 @@
-# gekka &nbsp;[![Version](https://img.shields.io/badge/version-0.13.0--dev-orange)](https://github.com/sopranoworks/gekka)
+# gekka &nbsp;[![Version](https://img.shields.io/badge/version-0.13.0-orange)](https://github.com/sopranoworks/gekka)
 
  [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Go CI](https://github.com/sopranoworks/gekka/actions/workflows/go.yml/badge.svg)](https://github.com/sopranoworks/gekka/actions/workflows/go.yml)
 
@@ -12,14 +12,14 @@ Configuration is loaded via [`gekka-config`](https://github.com/sopranoworks/gek
 
 ---
 
-## What's New in v0.13.0-dev
+## What's New in v0.13.0
 
-- **Ultra Thin Core** — Heavy third-party SDKs (Cloud Spanner, OpenTelemetry, Kubernetes client) are being extracted from the core module into independent extension sub-modules under `/extensions/`.
-- **Plugin-based Persistence** — `JournalStore` and `SnapshotStore` interfaces are now pure Go standard-library definitions; all backends (Spanner, SQL, in-memory) are supplied via dependency injection.
-- **Telemetry Middleware Pattern** — The core actor and cluster logic uses the `telemetry` abstraction package exclusively; direct OpenTelemetry SDK imports are removed from all core packages.
+- **Artery TCP Wire Compatibility** — Full protocol alignment with Akka 2.6.x and Pekko 1.x, including preamble detection and manifest-based message routing.
 - **Auto-enable Management** — The Management Server now automatically enables itself if a `hostname` or `port` is defined in the configuration, simplifying bootstrap.
-- **Improved Logging** — High-frequency protocol traces are suppressed by default; use `gekka.logging.level = "DEBUG"` for deep inspection.
-- **Interactive Dashboard** — `gekka-cli dashboard` now features auto-scrolling for long member roles and an improved layout.
+- **Enhanced TUI Dashboard** — Interactive `gekka-cli dashboard` with dynamic column alignment, a scrolling marquee for long member roles, and standardized exit confirmation (ESC -> Y/n).
+- **Granular Logging (slog)** — Integrated structured logging with configurable levels via HOCON (`gekka.logging.level`), significantly reducing default noise while preserving critical protocol traces.
+- **Ultra Thin Core** — Strategic extraction of heavy third-party SDKs (Cloud Spanner, OpenTelemetry, Kubernetes) into independent extension sub-modules under `/extensions/`.
+- **Plugin-based Persistence** — Standard library-first interfaces for `JournalStore` and `SnapshotStore`, enabling dependency-injected backends without core bloat.
 
 ## Configuration
 
@@ -37,18 +37,6 @@ If either `gekka.management.http.hostname` or `gekka.management.http.port` is ex
 
 ---
 
-## What's New in v0.12.0
-
-- **Cloud Spanner Native Persistence** — Highly optimized persistence backend using Mutations and Streaming Reads for mission-critical workloads.
-- **Advanced Sharding** — Adaptive shard allocation based on node load and support for manual rebalancing via Management API.
-- **Exactly-once Reliable Delivery** — Integrated reliable delivery with Sharding to ensure zero message loss during shard handoffs and node failovers.
-- **Kubernetes-aware Self-Healing** — A smart Split Brain Resolver that accelerates recovery by directly monitoring Pod states via the K8s API.
-- **Delta-CRDT Gossip** — Bandwidth-efficient Distributed Data synchronization using delta-state propagation.
-- **End-to-End Distributed Tracing** — Full observability across the entire pipeline—from Sharding to Persistence and Projections—via OpenTelemetry.
-- **Performance Benchmarking Suite** — Comprehensive suite for measuring Scale, Throughput, and Recovery metrics to ensure production readiness.
-
----
-
 ## Features
 
 ### 🏗️ Core Actor Engine
@@ -58,26 +46,28 @@ If either `gekka.management.http.hostname` or `gekka.management.http.port` is ex
 - **Timers & Stash** — Built-in `TimerScheduler` for scheduled tasks and `StashBuffer` for message deferral.
 
 ### 🌐 Clustering & Distribution
-- **Cluster Sharding** — Automated, load-aware actor placement with manual rebalancing support.
+- **Artery TCP Transport** — High-performance, Pekko-compatible wire protocol with full preamble and manifest support.
+- **Cluster Sharding** — Automated, load-aware actor placement with manual rebalancing support via CLI.
 - **Kubernetes-native Discovery** — Automated cluster formation using the Kubernetes API or DNS SRV.
-- **Split Brain Resolver (SBR)** — Resilient partition resolution with Kubernetes-aware fast-downing.
+- **Split Brain Resolver (SBR)** — Resilient partition resolution with configurable strategies (static-quorum, keep-oldest).
 - **Multi-DC Awareness** — Strategic routing and management across multiple logical data centers.
-- **Zero-copy Serialization** — High-performance Artery transport delivering 8.5x faster throughput.
 
 ### 💾 Persistence & Reliability
 - **Event Sourcing** — Durable state recovery via journaled events and periodic snapshots.
-- **Cloud Spanner Native Backend** — Highly optimized persistence using Spanner Mutations and Streaming Reads.
+- **Extensible Backends** — Decoupled storage interfaces supporting Spanner, SQL, and Redis via extensions.
 - **Exactly-once Reliable Delivery** — Guaranteed message delivery even during shard handoffs or failovers.
 - **Distributed Data (CRDTs)** — Eventually consistent shared state with bandwidth-efficient Delta-propagation.
 
 ### 🔌 Ecosystem & Connectivity
-- **Pekko/Akka Compatibility** — Full wire-level interoperability with Scala/Java actors via Artery TCP.
+- **Pekko/Akka Interoperability** — Verified wire-level compatibility with JVM nodes via standard Artery TCP.
 - **HOCON Configuration** — Flexible, layered configuration powered by the `gekka-config` engine.
 - **Gekka Streams** — Backpressure-aware reactive streams aligned with the Akka Streams model.
 
 ### 📊 Observability & Management
-- **Distributed Tracing** — End-to-end OpenTelemetry integration from Sharding to Persistence.
-- **Operational Tooling** — Robust command-line tools (`gekka-cli`) and metrics (`gekka-metrics`) for real-time operations.
+- **Interactive Dashboard** — Real-time TUI dashboard in `gekka-cli` for monitoring member health and roles.
+- **Management API** — Comprehensive HTTP endpoints for cluster introspection and shard rebalancing.
+- **Distributed Tracing** — OpenTelemetry integration for end-to-end visibility across the actor pipeline.
+- **Real-time Metrics** — `gekka-metrics` tool for exporting cluster state to OTel collectors.
 
 ---
 

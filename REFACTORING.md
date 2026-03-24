@@ -76,7 +76,7 @@ Every entry in `go.mod` must be justified against the "Thin Core" rule:
 
 ## Extraction Order (recommended)
 
-1. **v0.13.0-dev** (current): Fix OTel imports in core packages (journal, region, projection).  Create extension skeletons.
+1. **v0.13.0** (current): Fix OTel imports in core packages (journal, region, projection).  Create extension skeletons.
 2. **v0.13.1-dev**: Move `persistence/spanner/` → `extensions/persistence/spanner/` with own `go.mod`. Remove `cloud.google.com/go/spanner` from root `go.mod`.
 3. **v0.13.2-dev**: Move `telemetry/otel/` → `extensions/telemetry/otel/` with own `go.mod`. Remove `go.opentelemetry.io/otel*` from root `go.mod`.
 4. **v0.13.3-dev**: Move `cluster/sbr/k8s_provider.go` + `discovery/kubernetes/` → `extensions/cluster/k8s/` with own `go.mod`. Remove `k8s.io/*` from root `go.mod`.
@@ -87,7 +87,7 @@ Every entry in `go.mod` must be justified against the "Thin Core" rule:
 
 ## Definition of Done for v0.13.0
 
-- [x] `version.go` → `"0.13.0-dev"`
+- [x] `version.go` → `"0.13.0"`
 - [x] `persistence/journal.go` — no `go.opentelemetry.io` imports
 - [x] `cluster/sharding/region.go` — no `go.opentelemetry.io` imports
 - [x] `persistence/projection/projection.go` — no `go.opentelemetry.io` imports

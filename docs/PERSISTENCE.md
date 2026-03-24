@@ -1,4 +1,4 @@
-# Actor Persistence (v0.7.0)
+# Actor Persistence (v0.13.0)
 
 Gekka's persistence layer implements the **Event Sourcing** pattern: instead of
 storing the latest state, an actor stores the sequence of *events* that led to

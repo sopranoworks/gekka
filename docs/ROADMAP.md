@@ -45,26 +45,29 @@
 - **Advanced Routing**: Implemented Scatter-Gather, Tail-Chopping, and Consistent Hashing routing logics for both classic and typed systems.
 - **Message Adaptation (Ask)**: Implemented the `TypedContext.Ask` pattern for asynchronous response handling.
 
-### v0.11.0 — Distributed Data & Self-Healing (2026-03-20) [COMPLETED]
+### v0.11.0 (2026-03-20)
 - **Distributed Data (CRDTs)**: Implemented `PNCounter`, `ORSet`, and `LWWRegister` with full serializer support.
 - **Delta-CRDT Gossip**: Bandwidth-efficient state synchronization using delta-propagation for massive clusters.
 - **Kubernetes-aware Self-Healing**: Smart Split Brain Resolver that monitors Pod lifecycle via the K8s API to accelerate recovery.
 
-### v0.12.0 — Spanner Persistence & Performance Audit (2026-03-22) [COMPLETED]
+### v0.12.0 (2026-03-22)
 - **Cloud Spanner Native Persistence**: Highly optimized backend using Spanner Mutations and Streaming Reads for low-latency event sourcing.
 - **Advanced Sharding**: Adaptive shard allocation based on node pressure and Manual Rebalance API for ops control.
 - **Exactly-once Reliable Delivery**: Deep integration between Sharding and Reliable Delivery to ensure zero message loss during failovers.
 - **End-to-End Distributed Tracing**: Full OpenTelemetry instrumentation across Sharding, Persistence, and Projections.
 - **Performance Benchmarking Suite**: Comprehensive suite for measuring Scale, Throughput, and Recovery metrics.
 
+### v0.13.0 (2026-03-24)
+- **Artery TCP Wire Compatibility**: Full protocol alignment with Akka 2.6.x and Pekko 1.x, featuring automated preamble detection and manifest-based routing.
+- **Enhanced Operational Suite**: Standardized TUI behaviors across `gekka-cli` and `gekka-metrics`, including interactive dashboards with auto-scrolling metadata and graceful exit confirmation.
+- **Management API Auto-Bootstrap**: Intelligent configuration-driven activation of the Cluster Management HTTP server.
+- **Thin-Core Refactoring**: Strategic extraction of heavy cloud and telemetry SDKs into independent extension modules, keeping the core dependency tree lean.
+- **Plugin-based Persistence**: Unified standard-library interfaces for Journal and Snapshot storage with support for dependency-injected backends (Spanner, SQL, Redis).
+- **Structured Logging (slog)**: Integrated granular log level control for high-frequency protocol events, significantly reducing default terminal noise.
+
 ---
 
 ## Upcoming
-
-### v0.13.0 — Documentation & Ecosystem Integration
-- **Enhanced GoDoc**: Comprehensive documentation and examples across all public packages.
-- **Tracing Auto-instrumentation**: Integration with popular SQL drivers (pgx, etc.) for seamless trace propagation.
-- **Reliable Delivery Flow Control**: Advanced congestion control and windowing for high-throughput messaging.
 
 ### v1.0.0 — Production Readiness & Stability
 

@@ -1,4 +1,4 @@
-# Operational Tooling Guide
+# Operational Tooling Guide (v0.13.0)
 
 Two standalone binaries ship with the gekka module for cluster operators:
 **`gekka-cli`** for interactive cluster management, and **`gekka-metrics`** for

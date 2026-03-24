@@ -4,7 +4,7 @@ go 1.26.1
 
 require (
 	github.com/redis/go-redis/v9 v9.17.3
-	github.com/sopranoworks/gekka v0.13.0-dev
+	github.com/sopranoworks/gekka v0.13.0
 	github.com/sopranoworks/gekka-config v1.0.4
 	github.com/stretchr/testify v1.11.1
 	github.com/testcontainers/testcontainers-go v0.41.0

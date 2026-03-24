@@ -1,4 +1,4 @@
-# Cluster Sharding (v0.7.0)
+# Cluster Sharding (v0.13.0)
 
 Cluster Sharding distributes entities across nodes automatically. Each entity
 lives on exactly one node at a time; messages are routed transparently,

@@ -133,8 +133,9 @@ func (cm *ClusterManager) HeartbeatPath(system, host string, port uint32) string
 }
 
 // HeartbeatSenderPath builds the actor path to the heartbeat sender on a remote node.
+// In Akka 2.6.x, ClusterHeartbeatSender is a child of ClusterCoreDaemon (at /system/cluster/core/daemon).
 func (cm *ClusterManager) HeartbeatSenderPath(system, host string, port uint32) string {
-	return fmt.Sprintf("%s://%s@%s:%d/system/cluster/heartbeatSender", cm.Proto(), system, host, port)
+	return fmt.Sprintf("%s://%s@%s:%d/system/cluster/core/daemon/heartbeatSender", cm.Proto(), system, host, port)
 }
 
 // localHashString returns the hash string used for this node's VectorClock entry.
@@ -1644,11 +1645,21 @@ func (cm *ClusterManager) CheckReachability() {
 	cm.Mu.Lock()
 	addresses := make([]*gproto_cluster.UniqueAddress, len(cm.State.AllAddresses))
 	copy(addresses, cm.State.AllAddresses)
+	localHost := cm.LocalAddress.GetAddress().GetHostname()
+	localPort := cm.LocalAddress.GetAddress().GetPort()
+	localUid64 := uint64(cm.LocalAddress.GetUid()) | (uint64(cm.LocalAddress.GetUid2()) << 32)
 	cm.Mu.Unlock()
 
 	for i, addr := range addresses {
 		a := addr.GetAddress()
 		uid64 := uint64(addr.GetUid()) | (uint64(addr.GetUid2()) << 32)
+
+		// Never run the failure detector against ourselves — the local node is
+		// always reachable by definition and has no heartbeat history in the FD.
+		if a.GetHostname() == localHost && a.GetPort() == localPort && uid64 == localUid64 {
+			continue
+		}
+
 		key := fmt.Sprintf("%s:%d-%d", a.GetHostname(), a.GetPort(), uid64)
 		phi := cm.Fd.Phi(key)
 

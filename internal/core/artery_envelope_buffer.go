@@ -64,12 +64,27 @@ func BuildArteryFrame(
 ) ([]byte, error) {
 	// Literal section: sender, recipient, manifest then payload
 	// Each literal: position stored at the tag offset, then 2-byte short length + ASCII bytes
+	//
+	// IMPORTANT: an absent sender must be encoded as DeadLettersCode = -1, NOT as an empty
+	// literal.  Akka/Pekko reads a non-(-1) sender tag as a pointer to an actor path string,
+	// resolves it to an ActorRef, and in several inbound pipeline stages calls
+	// OptionVal.get() on the result — which throws NoSuchElementException when the path is
+	// empty, crashing the inbound stream.
+	//
+	// The recipient must still be written as a literal (even if empty) because Akka's
+	// InboundHandshake and routing stages behave differently for recipient = -1.
 	litBuf := &bytes.Buffer{}
 
-	// Serialize literals
-	senderTag := int32(arteryHeaderSize + litBuf.Len())
-	writeLiteral(litBuf, senderPath)
+	// Sender: use DeadLettersCode for absent (empty) sender.
+	var senderTag int32
+	if senderPath == "" {
+		senderTag = DeadLettersCode
+	} else {
+		senderTag = int32(arteryHeaderSize + litBuf.Len())
+		writeLiteral(litBuf, senderPath)
+	}
 
+	// Recipient: always write as a literal (empty string is valid).
 	recipientTag := int32(arteryHeaderSize + litBuf.Len())
 	writeLiteral(litBuf, recipientPath)
 
@@ -82,11 +97,14 @@ func BuildArteryFrame(
 	// Now build the final fixed header with LittleEndian
 	var h [arteryHeaderSize]byte
 	h[0] = arteryVersion
-	if control {
-		h[1] = arteryFlags | 0x01 // Set Control flag (bit 0)
-	} else {
-		h[1] = arteryFlags
-	}
+	// Flags byte must always be 0x00.
+	// Bit 0 in Akka/Pekko Artery is MetadataPresentFlag — setting it causes
+	// the remote decoder to try to read a metadata container at offset 28,
+	// which reads our literal-length bytes as a huge buffer position and throws
+	// IllegalArgumentException: newPosition > limit.
+	// Control vs ordinary stream is signalled by the preamble streamId, not flags.
+	_ = control
+	h[1] = 0
 	h[2] = arteryActorRefCompVer
 	h[3] = arteryManifestCompVer
 	binary.LittleEndian.PutUint64(h[4:12], uint64(uid))

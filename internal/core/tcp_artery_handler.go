@@ -172,8 +172,6 @@ func SendArteryMessageWithAck(conn net.Conn, localUid int64, serializerId int32,
 		return err
 	}
 
-	log.Printf("OUT: len=%d serializerId=%d manifest=%q payload=%x", len(frame), serializerId, manifest, msgPayload)
-
 	return WriteFrame(conn, frame)
 }
 

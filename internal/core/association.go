@@ -970,19 +970,31 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 		}
 		nm.mu.RUnlock()
 
-		// Build HandshakeRsp frame.
-		localUA := &gproto_remote.UniqueAddress{Address: assoc.nodeMgr.LocalAddr, Uid: proto.Uint64(assoc.localUid)}
-		rspProto := &gproto_remote.MessageWithAddress{Address: localUA}
-		if rspPayload, err2 := proto.Marshal(rspProto); err2 == nil {
-			if frame, err2 := BuildArteryFrame(int64(assoc.localUid), actor.ArteryInternalSerializerID, "", "", "e", rspPayload, true); err2 == nil {
-				// Artery TCP synchronous handshake: the HandshakeRsp MUST be sent
-				// back on the same TCP connection that received the HandshakeReq.
-				// This applies to ALL streams (Control, Ordinary, Large) opened by the remote.
-				log.Printf("Association %p (INBOUND): sending HandshakeRsp via INBOUND stream %d", assoc, assoc.streamId)
-				select {
-				case assoc.outbox <- frame:
-				default:
-					log.Printf("Association %p (INBOUND): outbox full, dropping HandshakeRsp", assoc)
+		// HandshakeRsp must be sent on Go's OUTBOUND TCP connection to Akka.
+		// In Artery-TCP, Akka's outbound sockets are WRITE-ONLY — writing bytes
+		// back on them causes "Unexpected incoming bytes" and quarantine.
+		// Akka reads HandshakeRsp on its INBOUND (= Go's OUTBOUND to Akka:2551).
+		// Go only opens OUTBOUND-s1 (control), which satisfies all of Akka's
+		// OutboundHandshake stages via the InboundHandshake routing in Akka.
+		// Fallback: if no OUTBOUND exists yet (e.g. in unit tests), reply on the
+		// INBOUND connection so handshake tests pass.
+		{
+			localUA := &gproto_remote.UniqueAddress{Address: assoc.nodeMgr.LocalAddr, Uid: proto.Uint64(assoc.localUid)}
+			rspProto := &gproto_remote.MessageWithAddress{Address: localUA}
+			if rspPayload, err2 := proto.Marshal(rspProto); err2 == nil {
+				if frame, err2 := BuildArteryFrame(int64(assoc.localUid), actor.ArteryInternalSerializerID, "", "", "e", rspPayload, true); err2 == nil {
+					target := outboundToRemote
+					if target != nil {
+						log.Printf("Association %p (INBOUND): sending HandshakeRsp via OUTBOUND %p", assoc, target)
+					} else {
+						target = assoc
+						log.Printf("Association %p (INBOUND): no OUTBOUND found, sending HandshakeRsp via INBOUND (fallback)", assoc)
+					}
+					select {
+					case target.outbox <- frame:
+					default:
+						log.Printf("Association %p (INBOUND): outbox full, dropping HandshakeRsp", assoc)
+					}
 				}
 			}
 		}

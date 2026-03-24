@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-03-24
+
+### Features
+
+- 🚀 **Artery TCP Wire Compatibility**: Achieved full protocol alignment with Akka 2.6.x and Pekko 1.x. This includes verified preamble handling and manifest-based routing for seamless interoperability with JVM nodes.
+- 🚀 **Automated Management Activation**: The HTTP Management Server now automatically enables itself if a hostname or port is defined in the HOCON configuration, simplifying cluster bootstrap.
+- 🚀 **Granular Log Control**: Integrated `slog` with configurable levels via `gekka.logging.level`. This significantly reduces default terminal noise by moving high-frequency protocol events to DEBUG level.
+- 🚀 **Ultra Thin Core**: Successfully extracted heavy third-party SDKs (OpenTelemetry, Kubernetes, YAML) into independent extension modules under `/extensions/`, keeping the core module lean.
+- 🚀 **Redis Persistence Extension**: Introduced a new extension for Redis-backed Journal and Durable State storage, including Testcontainers-based integration testing.
+- 🚀 **Dynamic Extension Engine**: Implemented config-driven plugin auto-registration and provider loading for modular architecture.
+
+### Bug Fixes
+
+- 🐛 **Artery Preamble Length**: Fixed a critical mismatch between 4-byte and 5-byte preambles during Artery connection initiation.
+- 🐛 **Inbound Stream Consumption**: Resolved an issue where inbound Artery control streams were not fully consumed, leading to connection stalls.
+- 🐛 **Manifest Alignment**: Corrected message manifest strings to match JVM expectations for Handshake and Cluster internal messages.
+- 🐛 **TUI Dashboard Alignment**: Fixed a visual bug causing massive leading indentation and column misalignment when displaying long Artery addresses.
+- 🐛 **Local Node Filtering**: Implemented strict 64-bit UID-based filtering to ensure the local node is correctly hidden from the remote member list in the dashboard.
+- 🐛 **Bootstrap Status Promotion**: Fixed a bug where the first node in a cluster would remain in JOINING status; it now correctly promotes itself to UP upon convergence.
+- 🐛 **Telemetry Endpoint Prefix**: Resolved a double-protocol prefix issue in OTLP telemetry configuration.
+
+### Documentation
+
+- 📚 **v0.13.0 Release Documentation**: Updated all files in `/docs` to reflect the stable release features and configuration keys.
+- 📚 **Operational Tooling Guide**: Enhanced documentation for `gekka-cli` and `gekka-metrics` detailing new TUI behaviors like the ESC exit prompt and Roles marquee.
+- 📚 **Configuration Reference**: Added detailed HOCON keys for logging, management binding, and telemetry OTLP endpoints.
+
 ## [0.12.0] - 2026-03-22
 
 ### Added
@@ -231,7 +258,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Message Dispatch**: Fixed a critical bug where messages were not correctly routed to registered actors by default when incoming envelopes contained full URIs.
 
 
-[0.11.0]: https://github.com/sopranoworks/gekka/compare/v0.10.0...v0.11.0
+[0.13.0]: https://github.com/sopranoworks/gekka/compare/v0.12.0...v0.13.0
+[0.12.0]: https://github.com/sopranoworks/gekka/compare/v0.11.0...v0.12.0
 [0.10.0]: https://github.com/sopranoworks/gekka/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/sopranoworks/gekka/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/sopranoworks/gekka/compare/v0.7.0...v0.8.0

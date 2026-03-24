@@ -189,6 +189,17 @@ Features:
 **Exit Behavior:**
 Pressing `q` or `ESC` triggers a confirmation overlay. Press `y` to exit or `n` to return to the dashboard. The overlay automatically clears after 5 seconds of inactivity.
 
+**Example output:**
+
+```
+ADDRESS                          STATUS  ROLES                   REACHABLE  RTT
+-------                          ------  -----                   ---------  ---
+pekko://System@10.0.0.1:2552     Up      seed,shard-host         yes        2ms
+pekko://System@10.0.0.2:2552     Up      worker,compute          yes        4ms
+pekko://System@10.0.0.3:2552     Up      api-gateway,ingress     yes        12ms
+pekko://System@10.0.0.4:2552     Down    -                       NO         timeout
+```
+
 ---
 
 ### Discovery Diagnostics

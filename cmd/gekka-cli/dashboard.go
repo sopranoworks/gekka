@@ -248,7 +248,7 @@ func (m dashboardModel) View() string {
 		// Styles with fixed widths for alignment. Width includes right padding.
 		addrStyle := lipgloss.NewStyle().Width(maxAddrLen + 4)
 		statusStyle := lipgloss.NewStyle().Width(14)
-		roleStyle := lipgloss.NewStyle().Width(24)
+		roleStyle := lipgloss.NewStyle().Width(34)
 		reachStyle := lipgloss.NewStyle().Width(14)
 		rttStyle := lipgloss.NewStyle().Width(10)
 
@@ -267,7 +267,7 @@ func (m dashboardModel) View() string {
 		separator := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(
 			strings.Repeat("-", maxAddrLen) + "    " + 
 			strings.Repeat("-", 10) + "    " + 
-			strings.Repeat("-", 20) + "    " + 
+			strings.Repeat("-", 30) + "    " + 
 			strings.Repeat("-", 10) + "    " + 
 			strings.Repeat("-", 6))
 		rows = append(rows, separator)
@@ -285,12 +285,12 @@ func (m dashboardModel) View() string {
 				rolesStr = "-"
 			}
 			displayRoles := rolesStr
-			if len(rolesStr) > 20 {
+			if len(rolesStr) > 30 {
 				padding := "    "
 				marquee := rolesStr + padding
 				shift := m.frame % len(marquee)
 				displayRoles = marquee[shift:] + marquee[:shift]
-				displayRoles = displayRoles[:20]
+				displayRoles = displayRoles[:30]
 			}
 
 			reachable := "yes"

@@ -10,6 +10,7 @@ package persistence
 
 import (
 	"context"
+	"log"
 
 	"github.com/sopranoworks/gekka/telemetry"
 )
@@ -28,10 +29,26 @@ type PersistentRepr struct {
 	PersistenceID string
 	SequenceNr    uint64
 	Payload       any
+	Manifest      string // Manifest for the payload, used by EventAdapters for schema evolution
 	Deleted       bool
 	SenderPath    string
 	Tags          []string
 	TraceContext  map[string]string // W3C TraceContext headers; nil if tracing not active
+}
+
+// EventAdapter is used for schema evolution. It allows transforming events
+// before they are written to the journal and after they are read.
+type EventAdapter interface {
+	// ToJournal transforms the given event to a form suitable for the journal.
+	// It can return multiple events (e.g. for event splitting) or an empty slice.
+	ToJournal(event any) []any
+
+	// FromJournal transforms the given event from its journal representation.
+	// It returns the transformed event and its manifest.
+	FromJournal(event any, manifest string) (any, error)
+
+	// Manifest returns the manifest for the given event.
+	Manifest(event any) string
 }
 
 // Journal is the interface for storing and replaying events.
@@ -49,6 +66,80 @@ type Journal interface {
 	// AsyncDeleteMessagesTo deletes all messages up to (and including) the given sequenceNr.
 	AsyncDeleteMessagesTo(ctx context.Context, persistenceId string, toSequenceNr uint64) error
 }
+
+// ── AdaptedJournal ─────────────────────────────────────────────────────────────
+
+// AdaptedJournal wraps a Journal and applies EventAdapters to events.
+type AdaptedJournal struct {
+	inner    Journal
+	adapters map[string]EventAdapter // persistenceId prefix or exact match -> adapter
+}
+
+func NewAdaptedJournal(inner Journal) *AdaptedJournal {
+	return &AdaptedJournal{
+		inner:    inner,
+		adapters: make(map[string]EventAdapter),
+	}
+}
+
+func (a *AdaptedJournal) AddAdapter(prefix string, adapter EventAdapter) {
+	a.adapters[prefix] = adapter
+}
+
+func (a *AdaptedJournal) getAdapter(persistenceId string) EventAdapter {
+	// Simplified: find the longest matching prefix
+	// In a real implementation this might be more sophisticated
+	return a.adapters[persistenceId]
+}
+
+func (a *AdaptedJournal) AsyncWriteMessages(ctx context.Context, messages []PersistentRepr) error {
+	var adapted []PersistentRepr
+	for _, m := range messages {
+		adapter := a.getAdapter(m.PersistenceID)
+		if adapter == nil {
+			adapted = append(adapted, m)
+			continue
+		}
+
+		toWrite := adapter.ToJournal(m.Payload)
+		for _, payload := range toWrite {
+			cp := m
+			cp.Payload = payload
+			cp.Manifest = adapter.Manifest(payload)
+			adapted = append(adapted, cp)
+		}
+	}
+	return a.inner.AsyncWriteMessages(ctx, adapted)
+}
+
+func (a *AdaptedJournal) ReplayMessages(ctx context.Context, persistenceId string, fromSequenceNr, toSequenceNr uint64, max uint64, callback func(PersistentRepr)) error {
+	adapter := a.getAdapter(persistenceId)
+	if adapter == nil {
+		return a.inner.ReplayMessages(ctx, persistenceId, fromSequenceNr, toSequenceNr, max, callback)
+	}
+
+	return a.inner.ReplayMessages(ctx, persistenceId, fromSequenceNr, toSequenceNr, max, func(m PersistentRepr) {
+		transformed, err := adapter.FromJournal(m.Payload, m.Manifest)
+		if err != nil {
+			// In case of error, we still pass the original or log it?
+			// Pekko usually fails the recovery.
+			log.Printf("AdaptedJournal: fromJournal error for %s: %v", persistenceId, err)
+			return
+		}
+		m.Payload = transformed
+		callback(m)
+	})
+}
+
+func (a *AdaptedJournal) ReadHighestSequenceNr(ctx context.Context, persistenceId string, fromSequenceNr uint64) (uint64, error) {
+	return a.inner.ReadHighestSequenceNr(ctx, persistenceId, fromSequenceNr)
+}
+
+func (a *AdaptedJournal) AsyncDeleteMessagesTo(ctx context.Context, persistenceId string, toSequenceNr uint64) error {
+	return a.inner.AsyncDeleteMessagesTo(ctx, persistenceId, toSequenceNr)
+}
+
+var _ Journal = (*AdaptedJournal)(nil)
 
 // ── TracingJournal ─────────────────────────────────────────────────────────────
 

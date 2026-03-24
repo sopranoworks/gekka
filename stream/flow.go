@@ -414,6 +414,46 @@ func GroupBy[T any](src Source[T, NotUsed], maxSubstreams int, key func(T) strin
 	}
 }
 
+// ─── FlattenMerge ─────────────────────────────────────────────────────────
+
+// FlattenMerge flattens a stream of streams into a single stream, merging
+// up to breadth sub-streams concurrently.
+//
+// Elements from sub-streams are emitted as they become available.  The
+// breadth parameter limits the number of active sub-streams; when breadth
+// is reached no more sub-streams are pulled from the outer source until an
+// active sub-stream completes.
+func FlattenMerge[T any](src Source[Source[T, NotUsed], NotUsed], breadth int) Source[T, NotUsed] {
+	return Source[T, NotUsed]{
+		factory: func() (iterator[T], NotUsed) {
+			upstream, _ := src.factory()
+			return newFlattenMergeIterator(upstream, breadth), NotUsed{}
+		},
+	}
+}
+
+// ─── Conflate ─────────────────────────────────────────────────────────────
+
+// Conflate applies flow control that combines elements when the downstream
+// is slow.
+//
+//   - seed is called with the first element of a conflation batch to create
+//     the initial accumulated value S.
+//   - aggregate is called for subsequent elements, merging them into the
+//     current accumulator.
+//
+// When the downstream pulls, the current accumulator is emitted and reset.
+// This operator never applies back-pressure to the upstream; instead it
+// "compacts" elements.
+func Conflate[In, S any](src Source[In, NotUsed], seed func(In) S, aggregate func(S, In) S) Source[S, NotUsed] {
+	return Source[S, NotUsed]{
+		factory: func() (iterator[S], NotUsed) {
+			upstream, _ := src.factory()
+			return newConflateIterator(upstream, seed, aggregate), NotUsed{}
+		},
+	}
+}
+
 // ─── Log ──────────────────────────────────────────────────────────────────
 
 // Log inserts a logging stage after this Flow's output port.  Each element

@@ -39,10 +39,10 @@ var DefaultPhases = []string{
 // override is configured.
 const DefaultPhaseTimeout = 10 * time.Second
 
-// shutdownTask pairs a human-readable name with its implementation.
-type shutdownTask struct {
-	name string
-	fn   func(context.Context) error
+// ShutdownTask pairs a human-readable name with its implementation.
+type ShutdownTask struct {
+	Name string
+	Fn   func(context.Context) error
 }
 
 // CoordinatedShutdown executes registered tasks phase-by-phase in the order
@@ -62,7 +62,7 @@ type shutdownTask struct {
 //	cs.Run(context.Background())
 type CoordinatedShutdown struct {
 	phases   []string
-	tasks    map[string][]shutdownTask
+	tasks    map[string][]ShutdownTask
 	timeouts map[string]time.Duration
 
 	mu      sync.Mutex
@@ -76,7 +76,7 @@ func NewCoordinatedShutdown() *CoordinatedShutdown {
 	copy(phases, DefaultPhases)
 	return &CoordinatedShutdown{
 		phases:   phases,
-		tasks:    make(map[string][]shutdownTask),
+		tasks:    make(map[string][]ShutdownTask),
 		timeouts: make(map[string]time.Duration),
 	}
 }
@@ -91,18 +91,34 @@ func (cs *CoordinatedShutdown) SetPhaseTimeout(phase string, d time.Duration) {
 
 // AddTask registers fn under the given phase and descriptive name.
 // Tasks within a phase execute concurrently when that phase runs.
-// If phase is not in the standard phase list the task is ignored and a
-// warning is logged.
+// If phase is not in the standard phase list it is added before
+// "actor-system-terminate".
 func (cs *CoordinatedShutdown) AddTask(phase, name string, fn func(context.Context) error) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	for _, p := range cs.phases {
 		if p == phase {
-			cs.tasks[phase] = append(cs.tasks[phase], shutdownTask{name: name, fn: fn})
+			cs.tasks[phase] = append(cs.tasks[phase], ShutdownTask{Name: name, Fn: fn})
 			return
 		}
 	}
-	log.Printf("CoordinatedShutdown: unknown phase %q for task %q — ignored", phase, name)
+
+	// Phase not found, insert it before actor-system-terminate if possible
+	idx := -1
+	for i, p := range cs.phases {
+		if p == "actor-system-terminate" {
+			idx = i
+			break
+		}
+	}
+
+	if idx != -1 {
+		cs.phases = append(cs.phases[:idx], append([]string{phase}, cs.phases[idx:]...)...)
+	} else {
+		cs.phases = append(cs.phases, phase)
+	}
+
+	cs.tasks[phase] = append(cs.tasks[phase], ShutdownTask{Name: name, Fn: fn})
 }
 
 // Run executes every registered task in phase order and returns after all
@@ -126,9 +142,9 @@ func (cs *CoordinatedShutdown) runAllPhases(ctx context.Context) error {
 	cs.mu.Lock()
 	phases := make([]string, len(cs.phases))
 	copy(phases, cs.phases)
-	tasks := make(map[string][]shutdownTask, len(cs.tasks))
+	tasks := make(map[string][]ShutdownTask, len(cs.tasks))
 	for k, v := range cs.tasks {
-		cp := make([]shutdownTask, len(v))
+		cp := make([]ShutdownTask, len(v))
 		copy(cp, v)
 		tasks[k] = cp
 	}
@@ -160,7 +176,7 @@ func (cs *CoordinatedShutdown) runAllPhases(ctx context.Context) error {
 
 // runPhase executes all tasks for a single phase concurrently and waits for
 // all of them to finish or the phase timeout to expire.
-func runPhase(ctx context.Context, phase string, tasks []shutdownTask, timeout time.Duration) error {
+func runPhase(ctx context.Context, phase string, tasks []ShutdownTask, timeout time.Duration) error {
 	log.Printf("CoordinatedShutdown: [%s] starting (%d task(s))", phase, len(tasks))
 
 	phaseCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -172,8 +188,8 @@ func runPhase(ctx context.Context, phase string, tasks []shutdownTask, timeout t
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := t.fn(phaseCtx); err != nil {
-				log.Printf("CoordinatedShutdown: [%s] task %q: %v", phase, t.name, err)
+			if err := t.Fn(phaseCtx); err != nil {
+				log.Printf("CoordinatedShutdown: [%s] task %q: %v", phase, t.Name, err)
 			}
 		}()
 	}

@@ -10,6 +10,7 @@ package stream
 
 import (
 	"log"
+	"sync"
 	"time"
 )
 
@@ -664,4 +665,171 @@ func newGroupByIterator[T any](upstream iterator[T], maxSubstreams int, key func
 		substreams[i] = SubStream[T]{Key: k, Source: FromSlice(groups[k])}
 	}
 	return &sliceIterator[SubStream[T]]{elems: substreams}
+}
+
+// ─── flattenMergeIterator ──────────────────────────────────────────────────
+
+type flattenMergeIterator[T any] struct {
+	ch    chan T
+	errCh chan error
+}
+
+func newFlattenMergeIterator[T any](upstream iterator[Source[T, NotUsed]], breadth int) *flattenMergeIterator[T] {
+	f := &flattenMergeIterator[T]{
+		ch:    make(chan T, breadth*DefaultAsyncBufSize),
+		errCh: make(chan error, 1),
+	}
+
+	go func() {
+		defer close(f.ch)
+		var wg sync.WaitGroup
+		semaphore := make(chan struct{}, breadth)
+
+		for {
+			src, ok, err := upstream.next()
+			if err != nil {
+				select {
+				case f.errCh <- err:
+				default:
+				}
+				return
+			}
+			if !ok {
+				break
+			}
+
+			semaphore <- struct{}{}
+			wg.Add(1)
+			go func(s Source[T, NotUsed]) {
+				defer wg.Done()
+				defer func() { <-semaphore }()
+
+				it, _ := s.factory()
+				for {
+					elem, ok, err := it.next()
+					if err != nil {
+						select {
+						case f.errCh <- err:
+						default:
+						}
+						return
+					}
+					if !ok {
+						break
+					}
+					f.ch <- elem
+				}
+			}(src)
+		}
+		wg.Wait()
+	}()
+
+	return f
+}
+
+func (f *flattenMergeIterator[T]) next() (T, bool, error) {
+	select {
+	case err := <-f.errCh:
+		var zero T
+		return zero, false, err
+	default:
+	}
+	select {
+	case err := <-f.errCh:
+		var zero T
+		return zero, false, err
+	case v, ok := <-f.ch:
+		if !ok {
+			select {
+			case err := <-f.errCh:
+				var zero T
+				return zero, false, err
+			default:
+				var zero T
+				return zero, false, nil
+			}
+		}
+		return v, true, nil
+	}
+}
+
+// ─── conflateIterator ──────────────────────────────────────────────────────
+
+type conflateIterator[In, S any] struct {
+	ch    chan S
+	errCh chan error
+}
+
+func newConflateIterator[In, S any](upstream iterator[In], seed func(In) S, aggregate func(S, In) S) *conflateIterator[In, S] {
+	c := &conflateIterator[In, S]{
+		ch:    make(chan S, 1),
+		errCh: make(chan error, 1),
+	}
+
+	go func() {
+		defer close(c.ch)
+		var current S
+		var hasValue bool
+
+		for {
+			elem, ok, err := upstream.next()
+			if err != nil {
+				select {
+				case c.errCh <- err:
+				default:
+				}
+				return
+			}
+			if !ok {
+				if hasValue {
+					c.ch <- current
+				}
+				return
+			}
+
+			if !hasValue {
+				current = seed(elem)
+				hasValue = true
+			} else {
+				current = aggregate(current, elem)
+			}
+
+			// Try to send the conflated value if downstream is ready.
+			// This implements the non-blocking "compaction" behavior.
+			select {
+			case c.ch <- current:
+				hasValue = false
+			default:
+				// Downstream not ready, continue aggregating.
+			}
+		}
+	}()
+
+	return c
+}
+
+func (c *conflateIterator[In, S]) next() (S, bool, error) {
+	select {
+	case err := <-c.errCh:
+		var zero S
+		return zero, false, err
+	default:
+	}
+	select {
+	case err := <-c.errCh:
+		var zero S
+		return zero, false, err
+	case v, ok := <-c.ch:
+		if !ok {
+			select {
+			case err := <-c.errCh:
+				var zero S
+				return zero, false, err
+			default:
+				var zero S
+				return zero, false, nil
+			}
+		}
+		return v, true, nil
+	}
 }

@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"math/rand"
 
 	"sort"
@@ -165,9 +166,9 @@ func (cm *ClusterManager) syncLocalHashFromStateLocked() {
 		newHash := cm.State.AllHashes[i]
 		oldHash := cm.localHashString()
 		if newHash == oldHash {
-			break
+			return
 		}
-		log.Printf("Cluster: adopting Pekko hash %q for local node (was %q)", newHash, oldHash)
+		slog.Debug("cluster: adopting Pekko hash for local node", "new", newHash, "old", oldHash)
 		cm.LocalHashStr = newHash
 		// Replace the old hash key in the VectorClock Version entries.
 		for _, ver := range cm.State.Version.GetVersions() {
@@ -203,8 +204,7 @@ func (cm *ClusterManager) adoptHashFromGossipLocked(incoming *gproto_cluster.Gos
 	if pekkoHash == "" || pekkoHash == cm.localHashString() {
 		return
 	}
-
-	log.Printf("Cluster: adopting Pekko hash %q for local node (was %q)", pekkoHash, cm.localHashString())
+	slog.Debug("cluster: adopting Pekko hash for local node", "new", pekkoHash, "old", cm.localHashString())
 	oldHash := cm.localHashString()
 	cm.LocalHashStr = pekkoHash
 
@@ -494,14 +494,14 @@ func (cm *ClusterManager) isSelfRemovedOrGone(host string, port uint32) bool {
 // Pekko's ClusterMessageSerializer uses short manifests: "IJ", "IJA", "J", "W", "GE", "GS", "HB", "HBR", "L".
 // remoteAddr is the UniqueAddress of the node that sent this message (from the association handshake).
 func (cm *ClusterManager) HandleIncomingClusterMessage(ctx context.Context, payload []byte, manifest string, remoteAddr *gproto_cluster.UniqueAddress) error {
-	log.Printf("Cluster: HandleIncomingClusterMessage manifest=%q", manifest)
+	slog.Debug("cluster: HandleIncomingClusterMessage", "manifest", manifest)
 	switch manifest {
 	case "IJ": // InitJoin — we are the seed; reply with InitJoinAck
 		if remoteAddr == nil {
-			log.Printf("Cluster: InitJoin: no remote address (handshake pending), ignoring")
+			slog.Debug("cluster: InitJoin: no remote address (handshake pending), ignoring")
 			return nil
 		}
-		log.Printf("Cluster: received InitJoin from %v — sending InitJoinAck", remoteAddr.GetAddress())
+		slog.Info("cluster: received InitJoin", "from", remoteAddr.GetAddress())
 		ack := &gproto_cluster.InitJoinAck{
 			Address:     toClusterAddress(cm.LocalAddress.Address),
 			ConfigCheck: &gproto_cluster.ConfigCheck{Type: gproto_cluster.ConfigCheck_CompatibleConfig.Enum()},
@@ -535,13 +535,13 @@ func (cm *ClusterManager) HandleIncomingClusterMessage(ctx context.Context, payl
 		if err := proto.Unmarshal(payload, leave); err != nil {
 			return err
 		}
-		log.Printf("Cluster: received Leave from %s:%d", leave.GetHostname(), leave.GetPort())
+		slog.Info("cluster: received Leave", "host", leave.GetHostname(), "port", leave.GetPort())
 		cm.Mu.Lock()
 		cm.markMemberLeavingLocked(leave)
 		cm.Mu.Unlock()
 		return nil
 	default:
-		log.Printf("Cluster: unknown manifest %q", manifest)
+		slog.Debug("cluster: unknown manifest", "manifest", manifest)
 		return nil
 	}
 }
@@ -823,7 +823,7 @@ func (cm *ClusterManager) handleGossipStatus(payload []byte, manifest string) er
 	key := fmt.Sprintf("%s:%d-%d", faddr.GetHostname(), faddr.GetPort(), uid64)
 	cm.Fd.Heartbeat(key)
 
-	log.Printf("Cluster: handleGossipStatus from %v, ordering=%v localHashes=%v statusHashes=%v", status.GetFrom(), ordering, cm.State.AllHashes, status.AllHashes)
+	slog.Debug("cluster: handleGossipStatus", "from", status.GetFrom(), "ordering", ordering)
 
 	var statePayload []byte
 	var localVersion *gproto_cluster.VectorClock
@@ -1675,7 +1675,7 @@ func (cm *ClusterManager) CheckReachability() {
 		// Pekko Cluster logic: update ObserverReachability
 		if !cm.Fd.IsAvailable(key) {
 			// Mark as UNREACHABLE
-			log.Printf("FailureDetector: node %s is UNREACHABLE (phi=%.2f)", key, phi)
+			slog.Debug("cluster: failure detector marked node UNREACHABLE", "key", key, "phi", phi)
 			cm.Mu.Lock()
 			cm.updateReachability(int32(i), gproto_cluster.ReachabilityStatus_Unreachable)
 			cm.Mu.Unlock()

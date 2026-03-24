@@ -14,7 +14,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"log"
 	"log/slog"
 	"net"
 	"time"
@@ -65,11 +64,11 @@ func TcpArteryOutboundHandler(ctx context.Context, conn net.Conn, handler FrameH
 	if protocol == "pekko" || protocol == "artery" {
 		// Artery 2.0 (Pekko) preamble: ART (3) + version (1) + streamId (1) = 5 bytes total
 		magicHeader = []byte{'A', 'R', 'T', 1, byte(streamId)}
-		log.Printf("TcpArteryOutboundHandler: writing Pekko preamble [ART\\x01\\x%02x]", streamId)
+		slog.Info("artery: writing Pekko preamble", "streamId", streamId)
 	} else {
 		// Artery 1.0 (Akka) preamble: AKKA (4) + streamId (1) = 5 bytes total
 		magicHeader = []byte{'A', 'K', 'K', 'A', byte(streamId)}
-		log.Printf("TcpArteryOutboundHandler: writing Akka preamble [AKKA\\x%02x]", streamId)
+		slog.Info("artery: writing Akka preamble", "streamId", streamId)
 	}
 
 	if _, err := conn.Write(magicHeader); err != nil {
@@ -132,13 +131,16 @@ func tcpArteryReadLoop(ctx context.Context, conn net.Conn, handler FrameHandler,
 		// Decode the envelope.
 		meta, err := DecodeArteryEnvelope(targetBuf, ctm, remoteUid)
 		if err != nil {
-			log.Printf("TcpArteryHandler: failed to decode envelope: %v", err)
+			slog.Warn("artery: failed to decode envelope", "error", err)
 			continue
 		}
-		log.Printf("TcpArteryHandler: decoded frame: serializerId=%d manifest=%q seq=%d", meta.SerializerId, string(meta.MessageManifest), meta.SeqNo)
+		slog.Debug("artery: decoded frame",
+			"serializerId", meta.SerializerId,
+			"manifest", string(meta.MessageManifest),
+			"seq", meta.SeqNo)
 
 		if err := handler(ctx, meta); err != nil {
-			log.Printf("TcpArteryHandler: handler error: %v", err)
+			slog.Warn("artery: handler error", "error", err)
 			return fmt.Errorf("handler error: %w", err)
 		}
 	}
@@ -255,7 +257,7 @@ func WriteFrame(writer io.Writer, payload []byte) error {
 	if _, err := writer.Write(frame); err != nil {
 		return fmt.Errorf("failed to write frame: %w", err)
 	}
-	log.Printf("WriteFrame: wrote %d bytes (header+payload)", 4+len(payload))
+	slog.Debug("artery: wrote frame", "total_bytes", 4+len(payload))
 	return nil
 }
 
@@ -263,11 +265,11 @@ func WriteFrame(writer io.Writer, payload []byte) error {
 func ArteryDispatcher(ctx context.Context, meta *ArteryMetadata) error {
 	switch meta.SerializerId {
 	case 1: // Example: Java Serializer
-		log.Printf("ArteryDispatcher: routing to Java Serializer (seq: %d)", meta.SeqNo)
+		slog.Debug("artery: routing to Java Serializer", "seq", meta.SeqNo)
 	case 2: // Example: JSON Serializer
-		log.Printf("ArteryDispatcher: routing to JSON Serializer (seq: %d)", meta.SeqNo)
+		slog.Debug("artery: routing to JSON Serializer", "seq", meta.SeqNo)
 	default:
-		log.Printf("ArteryDispatcher: unrecognized serializerId: %d", meta.SerializerId)
+		slog.Debug("artery: unrecognized serializerId", "serializerId", meta.SerializerId)
 		return fmt.Errorf("unrecognized serializerId: %d", meta.SerializerId)
 	}
 	return nil

@@ -368,8 +368,21 @@ func main() {
 	// Redirect standard log and slog to Bubble Tea program
 	writer := &teaWriter{program: p}
 	log.SetOutput(writer)
+
+	var level slog.Level
+	switch strings.ToUpper(cfg.LogLevel) {
+	case "DEBUG":
+		level = slog.LevelDebug
+	case "WARN":
+		level = slog.LevelWarn
+	case "ERROR":
+		level = slog.LevelError
+	default:
+		level = slog.LevelInfo
+	}
+
 	slog.SetDefault(slog.New(slog.NewTextHandler(writer, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
+		Level: level,
 	})))
 
 	if _, err := p.Run(); err != nil {

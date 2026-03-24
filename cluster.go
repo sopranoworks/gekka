@@ -128,6 +128,10 @@ type ClusterConfig struct {
 	//	})
 	LogHandler slog.Handler
 
+	// LogLevel is the minimum logging level for the node.
+	// Defaults to "INFO". Can be "DEBUG", "INFO", "WARN", "ERROR".
+	LogLevel string `hocon:"gekka.logging.level"`
+
 	// Transport selects the Artery transport: "tcp" (default) or "tls-tcp".
 	// When "tls-tcp", the TLS field must be populated with valid PEM paths.
 	Transport string `hocon:"pekko.remote.artery.transport"`

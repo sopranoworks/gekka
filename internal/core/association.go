@@ -13,7 +13,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"strings"
 	"sync"
@@ -118,7 +118,7 @@ func (nm *NodeManager) MuteNode(host string, port uint32) {
 	nm.mutedMu.Lock()
 	nm.mutedNodes[key] = struct{}{}
 	nm.mutedMu.Unlock()
-	log.Printf("NodeManager: muted node %s (outbound dropped, inbound ignored)", key)
+	slog.Info("node manager: muted node", "address", key)
 }
 
 // UnmuteNode reverses a previous MuteNode call. Safe to call even if the node
@@ -128,7 +128,7 @@ func (nm *NodeManager) UnmuteNode(host string, port uint32) {
 	nm.mutedMu.Lock()
 	delete(nm.mutedNodes, key)
 	nm.mutedMu.Unlock()
-	log.Printf("NodeManager: unmuted node %s", key)
+	slog.Info("node manager: unmuted node", "address", key)
 }
 
 // isNodeMuted returns true when host:port has been muted.
@@ -202,7 +202,7 @@ func (nm *NodeManager) RoutePendingReply(path string, meta *ArteryMetadata) bool
 	select {
 	case ch <- meta:
 	default:
-		log.Printf("NodeManager: Ask reply channel full for path %s, dropping", path)
+		slog.Warn("node manager: Ask reply channel full, dropping", "path", path)
 	}
 	return true
 }
@@ -355,11 +355,11 @@ func (nm *NodeManager) RegisterAssociation(remote *gproto_remote.UniqueAddress, 
 			if strings.HasPrefix(k, hostPortKey) && !strings.Contains(k, fmt.Sprintf("-%d-s", remote.GetUid())) {
 				// Skip early registrations (UID=0 placeholders).
 				if strings.Contains(k, "-0-s") {
-					log.Printf("NodeManager: existing early registration %s found for host-port %s", k, hostPortKey)
+					slog.Debug("node manager: existing early registration found for host-port", "key", k, "hostPort", hostPortKey)
 					continue
 				}
 
-				log.Printf("NodeManager: detected node restart for %s. Old association %s being quarantined.", hostPortKey, k)
+				slog.Warn("node manager: detected node restart, quarantining old association", "hostPort", hostPortKey, "oldKey", k)
 				existing.mu.Lock()
 				existing.state = QUARANTINED
 				if existing.conn != nil {
@@ -381,14 +381,14 @@ func (nm *NodeManager) RegisterAssociation(remote *gproto_remote.UniqueAddress, 
 			existingIsOutbound := existing.role == OUTBOUND
 			existing.mu.RUnlock()
 			if existingIsOutbound {
-				log.Printf("NodeManager: INBOUND %p skipping registration %s — OUTBOUND %p already exists", assoc, newKey, existing)
+				slog.Debug("node manager: INBOUND skipping registration — OUTBOUND already exists", "key", newKey)
 				return
 			}
 		}
 	}
 
 	nm.associations[newKey] = assoc
-	log.Printf("NodeManager: registered association %p with key %s", assoc, newKey)
+	slog.Debug("node manager: registered association", "key", newKey)
 }
 
 // ProcessConnection is the unified entry point for both inbound and outbound connections.
@@ -416,7 +416,7 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 			}
 			streamId = int32(rest[1])
 			protocol = "pekko"
-			log.Printf("ProcessConnection: INBOUND Pekko preamble read, streamId=%d", streamId)
+			slog.Info("artery: INBOUND Pekko preamble read", "streamId", streamId)
 		} else {
 			// Artery 1.0 (Akka): AKKA (4) + streamId (1) = 5 bytes total
 			// magic3 already consumed "AKK"
@@ -429,7 +429,7 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 			}
 			streamId = int32(next[1])
 			protocol = "akka"
-			log.Printf("ProcessConnection: INBOUND Akka preamble read, streamId=%d", streamId)
+			slog.Info("artery: INBOUND Akka preamble read", "streamId", streamId)
 		}
 	}
 
@@ -474,9 +474,9 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 				if remoteAddr != nil && nm.isNodeMuted(remoteAddr.GetHostname(), remoteAddr.GetPort()) {
 					continue
 				}
-				log.Printf("Association %p: SENDING frame of %d bytes", assoc, len(msg))
+				slog.Debug("artery: sending frame", "total_bytes", len(msg))
 				if err := WriteFrame(assoc.conn, msg); err != nil {
-					log.Printf("Association %p: write error: %v", assoc, err)
+					slog.Error("artery: write error", "error", err)
 					// Close so the read loop also exits cleanly.
 					_ = assoc.conn.Close()
 					return
@@ -490,7 +490,7 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 			// Give handler a moment to start and send magic header
 			time.Sleep(200 * time.Millisecond)
 			if err := assoc.initiateHandshake(remote); err != nil {
-				log.Printf("Association %p: initiateHandshake error: %v", assoc, err)
+				slog.Error("artery: initiateHandshake error", "error", err)
 			}
 
 			// Start heartbeat loop.
@@ -516,7 +516,7 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 					assoc.mu.RUnlock()
 					if isAssociated && remoteUID != 0 {
 						if err := SendArteryHeartbeat(assoc); err != nil {
-							log.Printf("Association %p: failed to send heartbeat: %v", assoc, err)
+							slog.Debug("artery: failed to send heartbeat", "error", err)
 						}
 					}
 				}
@@ -575,7 +575,7 @@ func (assoc *GekkaAssociation) dispatch(ctx context.Context, meta *ArteryMetadat
 
 	if meta.SeqNo != 0 && meta.AckReplyTo != nil {
 		if err := assoc.sendSystemAck(meta.SeqNo, meta.AckReplyTo); err != nil {
-			log.Printf("Dispatcher: failed to send ACK for seq %d: %v", meta.SeqNo, err)
+			slog.Debug("artery: failed to send ACK", "seq", meta.SeqNo, "error", err)
 		}
 	}
 
@@ -624,14 +624,14 @@ func (assoc *GekkaAssociation) handleSystemMessage(meta *ArteryMetadata) error {
 	}
 	if env.GetSeqNo() != 0 && env.AckReplyTo != nil {
 		if err := assoc.sendSystemAck(env.GetSeqNo(), env.AckReplyTo); err != nil {
-			log.Printf("Association: failed to send ACK for seq %d: %v", env.GetSeqNo(), err)
+			slog.Debug("artery: failed to send ACK", "seq", env.GetSeqNo(), "error", err)
 		}
 	}
 	sm := &gproto_remote.SystemMessage{}
 	if err := proto.Unmarshal(env.Message, sm); err != nil {
 		return fmt.Errorf("failed to unmarshal inner SystemMessage: %w", err)
 	}
-	log.Printf("Association: received system message of type %v", sm.GetType())
+	slog.Debug("artery: received system message", "type", sm.GetType())
 	return nil
 }
 
@@ -648,7 +648,10 @@ func (assoc *GekkaAssociation) handleUserMessage(meta *ArteryMetadata) error {
 		if err == nil {
 			meta.DeserializedMessage = obj
 		} else {
-			log.Printf("Dispatcher: failed to deserialize payload (id=%d, manifest=%s): %v", meta.SerializerId, meta.MessageManifest, err)
+			slog.Debug("artery: failed to deserialize payload",
+				"serializerId", meta.SerializerId,
+				"manifest", meta.MessageManifest,
+				"error", err)
 		}
 	}
 
@@ -697,7 +700,7 @@ func (assoc *GekkaAssociation) SendWithSender(recipient, senderPath string, payl
 	if err != nil {
 		return err
 	}
-	log.Printf("Association %p: SendWithSender frame of %d bytes, sender=%q, recipient=%q", assoc, len(frame), senderPath, recipient)
+	slog.Debug("artery: SendWithSender frame", "total_bytes", len(frame), "sender", senderPath, "recipient", recipient)
 
 	assoc.mu.Lock()
 	defer assoc.mu.Unlock()
@@ -770,14 +773,13 @@ func (assoc *GekkaAssociation) Send(recipient string, payload []byte, serializer
 	if err != nil {
 		return err
 	}
-	log.Printf("Association %p: SENDING frame of %d bytes for remote UID %d, serializerId=%d manifest=%q payloadLen=%d",
-		assoc, len(frame), assoc.remote.GetUid(), serializerId, manifest, len(payload))
+	slog.Debug("artery: sending frame", "total_bytes", len(frame), "remote_uid", assoc.remote.GetUid(), "serializerId", serializerId, "manifest", manifest)
 
 	assoc.mu.Lock()
 	defer assoc.mu.Unlock()
 
 	if assoc.state != ASSOCIATED {
-		log.Printf("Association %p: buffering message (state=%v, isAssociated=%v)", assoc, assoc.state, assoc.state == ASSOCIATED)
+		slog.Debug("artery: buffering message", "state", assoc.state)
 		assoc.pending = append(assoc.pending, frame)
 		return nil
 	}
@@ -792,7 +794,7 @@ func (assoc *GekkaAssociation) Send(recipient string, payload []byte, serializer
 
 func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *ArteryMetadata) error {
 	manifest := string(meta.MessageManifest)
-	log.Printf("Association %p: handling control message with manifest %q", assoc, manifest)
+	slog.Debug("artery: handling control message", "manifest", manifest)
 	switch manifest {
 	case "d": // HandshakeReq
 		req := &gproto_remote.HandshakeReq{}
@@ -812,7 +814,7 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 		// ArteryHeartbeat is a Scala singleton with an empty payload.
 		// Reply immediately with ArteryHeartbeatRsp containing our local UID so
 		// Pekko's RemoteWatcher does not mark the Go node as unreachable.
-		log.Printf("Association %p: ArteryHeartbeat received — replying with ArteryHeartbeatRsp (uid=%d)", assoc, assoc.localUid)
+		slog.Debug("artery: ArteryHeartbeat received — replying with ArteryHeartbeatRsp", "uid", assoc.localUid)
 		rsp := &gproto_remote.ArteryHeartbeatRsp{Uid: proto.Uint64(assoc.localUid)}
 		payload, err := proto.Marshal(rsp)
 		if err != nil {
@@ -825,7 +827,7 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 		select {
 		case assoc.outbox <- frame:
 		default:
-			log.Printf("Association %p: ArteryHeartbeatRsp outbox full, dropping response", assoc)
+			slog.Debug("artery: ArteryHeartbeatRsp outbox full, dropping response")
 		}
 		return nil
 
@@ -837,9 +839,9 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 		assoc.mu.Lock()
 		if !assoc.lastHeartbeatSentAt.IsZero() {
 			assoc.lastRTT = time.Since(assoc.lastHeartbeatSentAt)
-			log.Printf("Association %p: ArteryHeartbeatRsp received (uid=%d) RTT=%v", assoc, hb.GetUid(), assoc.lastRTT)
+			slog.Debug("artery: ArteryHeartbeatRsp received", "uid", hb.GetUid(), "rtt", assoc.lastRTT)
 		} else {
-			log.Printf("Association %p: ArteryHeartbeatRsp received (uid=%d)", assoc, hb.GetUid())
+			slog.Debug("artery: ArteryHeartbeatRsp received", "uid", hb.GetUid())
 		}
 		assoc.mu.Unlock()
 		return nil
@@ -866,7 +868,7 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 		if err := proto.Unmarshal(meta.Payload, quar); err != nil {
 			return err
 		}
-		log.Printf("Association %p: received Quarantined from %v", assoc, quar.From)
+		slog.Warn("artery: received Quarantined", "from", quar.From)
 		assoc.mu.Lock()
 		assoc.state = QUARANTINED
 		assoc.mu.Unlock()
@@ -879,7 +881,7 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 		if err := proto.Unmarshal(meta.Payload, ack); err != nil {
 			return err
 		}
-		log.Printf("Association: Received compression table ack %s version %d from %v", manifest, ack.GetVersion(), ack.GetFrom())
+		slog.Debug("artery: received compression table ack", "manifest", manifest, "version", ack.GetVersion(), "from", ack.GetFrom())
 		return nil
 
 	default:
@@ -896,7 +898,7 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 						assoc.mu.RLock()
 						remote := assoc.remote
 						assoc.mu.RUnlock()
-						log.Printf("Association: forwarding actorSelection cluster message manifest=%q to clusterMgr", innerManifest)
+						slog.Debug("artery: forwarding actorSelection cluster message", "manifest", innerManifest)
 						return assoc.nodeMgr.clusterMgr.HandleIncomingClusterMessage(
 							ctx, env.GetEnclosedMessage(), innerManifest, ToClusterUniqueAddress(remote))
 					}
@@ -904,13 +906,13 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 			}
 			return nil
 		}
-		log.Printf("Association: unidentified control message with manifest %q (id=%d)", manifest, meta.SerializerId)
+		slog.Debug("artery: unidentified control message", "manifest", manifest, "serializerId", meta.SerializerId)
 		return nil
 	}
 }
 
 func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeReq) error {
-	log.Printf("Association %p: received HandshakeReq from %s (role=%v)", assoc, req.From.String(), assoc.role)
+	slog.Debug("artery: received HandshakeReq", "from", req.From.String(), "role", assoc.role)
 
 	// Validate that the 'To' address matches our local node (Pekko protocol requirement).
 	if toSys := req.GetTo().GetSystem(); toSys != "" {
@@ -956,7 +958,7 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 			}
 			a.mu.RUnlock()
 
-			log.Printf("handleHandshakeReq candidate: k=%s role=%v state=%v host=%s port=%d match=%v", k, a.role, a.state, aHost, aPort, hostMatch)
+			slog.Debug("artery: handleHandshakeReq candidate", "key", k, "role", a.role, "state", a.state, "host", aHost, "port", aPort, "match", hostMatch)
 
 			if isOutbound && hostMatch {
 				if outboundToRemote == nil {
@@ -964,7 +966,7 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 				}
 				if isWaiting && matched == nil {
 					matched = a
-					log.Printf("handleHandshakeReq: matched Key=%s Association=%p", k, a)
+					slog.Debug("artery: handleHandshakeReq matched association", "key", k)
 				}
 			}
 		}
@@ -985,15 +987,15 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 				if frame, err2 := BuildArteryFrame(int64(assoc.localUid), actor.ArteryInternalSerializerID, "", "", "e", rspPayload, true); err2 == nil {
 					target := outboundToRemote
 					if target != nil {
-						log.Printf("Association %p (INBOUND): sending HandshakeRsp via OUTBOUND %p", assoc, target)
+						slog.Debug("artery: sending HandshakeRsp via OUTBOUND association")
 					} else {
 						target = assoc
-						log.Printf("Association %p (INBOUND): no OUTBOUND found, sending HandshakeRsp via INBOUND (fallback)", assoc)
+						slog.Debug("artery: no OUTBOUND association found, sending HandshakeRsp via INBOUND association (fallback)")
 					}
 					select {
 					case target.outbox <- frame:
 					default:
-						log.Printf("Association %p (INBOUND): outbox full, dropping HandshakeRsp", assoc)
+						slog.Warn("artery: HandshakeRsp outbox full, dropping response")
 					}
 				}
 			}
@@ -1003,7 +1005,7 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 		// the same remote (e.g. both nodes dialled each other simultaneously),
 		// complete it directly without waiting for an extra round-trip.
 		if matched != nil {
-			log.Printf("Association %p (INBOUND): completing matching OUTBOUND association %p", assoc, matched)
+			slog.Info("artery: completing matching OUTBOUND association")
 			matched.mu.Lock()
 			matched.remote = req.From
 			matched.state = ASSOCIATED
@@ -1016,7 +1018,7 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 				select {
 				case matched.outbox <- msg:
 				default:
-					log.Printf("Association %p: outbox full, dropping pending frame during handshake flush", matched)
+					slog.Warn("artery: outbox full, dropping pending frame during handshake flush")
 				}
 			}
 			matched.pending = nil
@@ -1033,7 +1035,7 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 		select {
 		case assoc.outbox <- msg:
 		default:
-			log.Printf("Association %p: outbox full, dropping pending frame during handshake flush", assoc)
+			slog.Warn("artery: outbox full, dropping pending frame during handshake flush")
 		}
 	}
 	assoc.pending = nil
@@ -1051,17 +1053,17 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 	if err != nil {
 		return err
 	}
-	log.Printf("Association %p: sending HandshakeRsp (e) for UID %d", assoc, assoc.localUid)
+	slog.Debug("artery: sending HandshakeRsp (e)", "uid", assoc.localUid)
 	select {
 	case assoc.outbox <- frame:
 	default:
-		log.Printf("Association %p: outbox full, dropping HandshakeRsp frame", assoc)
+		slog.Warn("artery: outbox full, dropping HandshakeRsp frame")
 	}
 	return nil
 }
 
 func (assoc *GekkaAssociation) handleHandshakeRsp(mwa *gproto_remote.MessageWithAddress) error {
-	log.Printf("Association %p: received HandshakeRsp from %s", assoc, mwa.Address.String())
+	slog.Debug("artery: received HandshakeRsp", "from", mwa.Address.String())
 
 	assoc.nodeMgr.mu.RLock()
 	// Create a list of candidates to avoid holding nodeMgr lock while locking individuals
@@ -1089,16 +1091,14 @@ func (assoc *GekkaAssociation) handleHandshakeRsp(mwa *gproto_remote.MessageWith
 				return h
 			}
 			match = normalize(aHost) == normalize(mHost) && aPort == mPort
-			log.Printf("handleHandshakeRsp: Candidate %p: role=%v state=%v match=%v (A:%s:%d vs M:%s:%d)",
-				a, a.role, a.state, match, aHost, aPort, mHost, mPort)
+			slog.Debug("artery: handleHandshakeRsp candidate", "match", match, "host", aHost, "port", aPort)
 		} else {
-			log.Printf("handleHandshakeRsp: Candidate %p: role=%v state=%v match=false (a.remote=%v mwa.Address=%p)",
-				a, a.role, a.state, a.remote != nil, mwa.Address)
+			slog.Debug("artery: handleHandshakeRsp candidate", "match", false, "hasRemote", a.remote != nil, "hasMwaAddr", mwa.Address != nil)
 		}
 		a.mu.RUnlock()
 
 		if isOutbound && isWaiting && match {
-			log.Printf("handleHandshakeRsp: FOUND matching outbound association %p (state=%v)", a, a.state)
+			slog.Info("artery: found matching outbound association", "state", a.state)
 			matched = a
 			break
 		}
@@ -1122,7 +1122,7 @@ func (assoc *GekkaAssociation) handleHandshakeRsp(mwa *gproto_remote.MessageWith
 			select {
 			case matched.outbox <- msg:
 			default:
-				log.Printf("Association %p: outbox full, dropping pending frame during handshakeRsp flush", matched)
+				slog.Warn("artery: outbox full, dropping pending frame during handshakeRsp flush")
 			}
 		}
 		matched.pending = nil
@@ -1131,7 +1131,7 @@ func (assoc *GekkaAssociation) handleHandshakeRsp(mwa *gproto_remote.MessageWith
 		// Re-register with full UniqueAddress (including UID from Pekko)
 		assoc.nodeMgr.RegisterAssociation(mwa.Address, matched)
 	} else {
-		log.Printf("handleHandshakeRsp: WARNING - no matching outbound association found")
+		slog.Warn("artery: no matching outbound association found for HandshakeRsp")
 	}
 
 	return nil

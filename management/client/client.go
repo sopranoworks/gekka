@@ -30,6 +30,7 @@ type MemberInfo struct {
 	UpNumber   int32    `json:"upNumber"`
 	Reachable  bool     `json:"reachable"`
 	LatencyMs  int64    `json:"latency_ms"`
+	Self       bool     `json:"self"`
 }
 
 // Client is a thin HTTP client scoped to a single management API base URL.

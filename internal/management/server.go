@@ -132,6 +132,7 @@ type MemberInfo struct {
 	UpNumber   int32    `json:"upNumber"`
 	Reachable  bool     `json:"reachable"`
 	LatencyMs  int64    `json:"latency_ms"`
+	Self       bool     `json:"self"`
 }
 
 // ManagementServer hosts the Cluster HTTP Management API.
@@ -596,7 +597,7 @@ func (ms *ManagementServer) buildMemberList() []MemberInfo {
 
 	result := make([]MemberInfo, 0, len(gossip.GetMembers()))
 	for _, m := range gossip.GetMembers() {
-		result = append(result, memberInfoFromProto(gossip, m, unreachable, nm))
+		result = append(result, memberInfoFromProto(gossip, m, unreachable, nm, cm))
 	}
 	return result
 }
@@ -628,12 +629,14 @@ func memberInfoFromProto(
 	m *gproto_cluster.Member,
 	unreachable map[int32]struct{},
 	nm *core.NodeManager,
+	cm *cluster.ClusterManager,
 ) MemberInfo {
 	addrIdx := m.GetAddressIndex()
 
 	address := ""
 	var host string
 	var port uint32
+	isSelf := false
 	if int(addrIdx) < len(gossip.GetAllAddresses()) {
 		ua := gossip.GetAllAddresses()[addrIdx]
 		if a := ua.GetAddress(); a != nil {
@@ -649,6 +652,15 @@ func memberInfoFromProto(
 				host,
 				port,
 			)
+		}
+		if cm != nil && cm.LocalAddress != nil {
+			local := cm.LocalAddress
+			if ua.GetUid() == local.GetUid() &&
+				ua.GetUid2() == local.GetUid2() &&
+				ua.GetAddress().GetHostname() == local.GetAddress().GetHostname() &&
+				ua.GetAddress().GetPort() == local.GetAddress().GetPort() {
+				isSelf = true
+			}
 		}
 	}
 
@@ -678,11 +690,12 @@ func memberInfoFromProto(
 
 	return MemberInfo{
 		Address:    address,
-		Status:     m.GetStatus().String(),
+		Status:     strings.TrimPrefix(m.GetStatus().String(), "MemberStatus_"),
 		Roles:      roles,
 		DataCenter: dc,
 		UpNumber:   m.GetUpNumber(),
 		Reachable:  !isUnreachable,
 		LatencyMs:  latencyMs,
+		Self:       isSelf,
 	}
 }

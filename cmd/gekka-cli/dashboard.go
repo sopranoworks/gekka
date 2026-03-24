@@ -147,9 +147,16 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.fetchMembers()
 
 	case membersMsg:
-		m.members = msg.members
-		m.err = msg.err
-		if m.err == nil {
+		m.members = nil
+		if msg.err == nil {
+			// Task 2: Filter local node from member list using the Self field.
+			for _, mem := range msg.members {
+				if mem.Self {
+					continue
+				}
+				m.members = append(m.members, mem)
+			}
+
 			// Sorting logic:
 			// 1. Unreachable nodes at top.
 			// 2. Then descending RTT.
@@ -161,6 +168,7 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return mi.LatencyMs > mj.LatencyMs
 			})
 		}
+		m.err = msg.err
 		m.lastUpdate = time.Now()
 		return m, m.tick()
 
@@ -193,8 +201,8 @@ func (m dashboardModel) View() string {
 	c7 := lipgloss.Color("#F2AEFF")
 	c8 := lipgloss.Color("#FFC9FF")
 
-	// Icon Segments
-	iconTop := "  " + lipgloss.NewStyle().Foreground(c3).Render("▄") + lipgloss.NewStyle().Foreground(c4).Render("▀") + "  " + lipgloss.NewStyle().Foreground(c7).Render("▄") + lipgloss.NewStyle().Foreground(c8).Render("▀")
+	// Icon Segments (NO leading spaces)
+	iconTop := lipgloss.NewStyle().Foreground(c3).Render("▄") + lipgloss.NewStyle().Foreground(c4).Render("▀") + "  " + lipgloss.NewStyle().Foreground(c7).Render("▄") + lipgloss.NewStyle().Foreground(c8).Render("▀")
 	iconBottom := lipgloss.NewStyle().Foreground(c1).Render("▄") + lipgloss.NewStyle().Foreground(c2).Render("▀") + "  " + lipgloss.NewStyle().Foreground(c5).Render("▄") + lipgloss.NewStyle().Foreground(c6).Render("▀")
 
 	// Text Components
@@ -209,53 +217,82 @@ func (m dashboardModel) View() string {
 		lipgloss.JoinVertical(lipgloss.Left, topLine, bottomLine),
 	)
 
-	// Member List
-	var nodes string
+	// Member List (Task 3: Dynamic Table Alignment)
+	var memberListBlock string
 	if m.err != nil {
-		nodes = nodeDownStyle.Render(fmt.Sprintf("Error: %v", m.err))
+		memberListBlock = nodeDownStyle.Render(fmt.Sprintf("Error: %v", m.err))
 	} else if len(m.members) == 0 {
-		nodes = infoStyle.Render("No members found in cluster...")
+		memberListBlock = infoStyle.Render("No remote members found in cluster...")
 	} else {
+		// Calculate dynamic column widths
+		maxAddrLen := 7 // "ADDRESS"
+		for _, mem := range m.members {
+			if len(mem.Address) > maxAddrLen {
+				maxAddrLen = len(mem.Address)
+			}
+		}
+
 		headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("7"))
-		nodes = fmt.Sprintf("%-45s  %-10s  %-10s  %s\n", 
-			headerStyle.Render("ADDRESS"), 
-			headerStyle.Render("STATUS"), 
-			headerStyle.Render("REACHABLE"), 
-			headerStyle.Render("RTT"))
-		nodes += lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(fmt.Sprintf("%s\n", 
-			"---------------------------------------------  ----------  ----------  ------"))
+		// Styles with fixed widths for alignment. Width includes right padding.
+		addrStyle := lipgloss.NewStyle().Width(maxAddrLen + 4)
+		statusStyle := lipgloss.NewStyle().Width(16)
+		reachStyle := lipgloss.NewStyle().Width(16)
+		rttStyle := lipgloss.NewStyle().Width(10)
+
+		var rows []string
+
+		// 1. Render Header Row
+		rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top,
+			headerStyle.Copy().Inherit(addrStyle).Render("ADDRESS"),
+			headerStyle.Copy().Inherit(statusStyle).Render("STATUS"),
+			headerStyle.Copy().Inherit(reachStyle).Render("REACHABLE"),
+			headerStyle.Copy().Inherit(rttStyle).Render("RTT"),
+		))
+
+		// 2. Render Separator
+		separator := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(
+			strings.Repeat("-", maxAddrLen) + "    " + 
+			strings.Repeat("-", 12) + "    " + 
+			strings.Repeat("-", 12) + "    " + 
+			strings.Repeat("-", 8))
+		rows = append(rows, separator)
 		
-		for _, m := range m.members {
-			status := m.Status
-			if m.Status == "Up" {
-				status = nodeUpStyle.Render(m.Status)
+		// 3. Render Member Rows
+		for _, mem := range m.members {
+			status := mem.Status
+			if mem.Status == "Up" {
+				status = nodeUpStyle.Render(mem.Status)
 			}
 
 			reachable := "yes"
-			if !m.Reachable {
+			if !mem.Reachable {
 				reachable = nodeDownStyle.Render("NO")
 			}
 
-			rttStr := fmt.Sprintf("%dms", m.LatencyMs)
+			rttStr := fmt.Sprintf("%dms", mem.LatencyMs)
 			var rttRendered string
-			if !m.Reachable {
+			if !mem.Reachable {
 				rttRendered = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("timeout")
 			} else {
-				// Color logic: Red (>=500ms), Orange (>=200ms), Yellow (>=50ms)
-				if m.LatencyMs >= 500 {
+				if mem.LatencyMs >= 500 {
 					rttRendered = rttRedStyle.Render(rttStr)
-				} else if m.LatencyMs >= 200 {
+				} else if mem.LatencyMs >= 200 {
 					rttRendered = rttOrangeStyle.Render(rttStr)
-				} else if m.LatencyMs >= 50 {
+				} else if mem.LatencyMs >= 50 {
 					rttRendered = rttYellowStyle.Render(rttStr)
 				} else {
 					rttRendered = rttGreenStyle.Render(rttStr)
 				}
 			}
 
-			nodes += fmt.Sprintf("%-45s  %-10s  %-10s  %s\n", 
-				m.Address, status, reachable, rttRendered)
+			rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top,
+				addrStyle.Render(mem.Address),
+				statusStyle.Render(status),
+				reachStyle.Render(reachable),
+				rttStyle.Render(rttRendered),
+			))
 		}
+		memberListBlock = lipgloss.JoinVertical(lipgloss.Left, rows...)
 	}
 
 	// Status Bar
@@ -267,7 +304,7 @@ func (m dashboardModel) View() string {
 
 	ui := lipgloss.JoinVertical(lipgloss.Left,
 		header,
-		nodes,
+		memberListBlock,
 		"\n",
 		status,
 	)

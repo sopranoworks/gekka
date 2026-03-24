@@ -964,7 +964,10 @@ func (cm *ClusterManager) connectToNewMembers(gossip *gproto_cluster.Gossip) {
 func (cm *ClusterManager) CheckConvergence() bool {
 	cm.Mu.RLock()
 	defer cm.Mu.RUnlock()
+	return cm.CheckConvergenceLocked()
+}
 
+func (cm *ClusterManager) CheckConvergenceLocked() bool {
 	if cm.State.Overview == nil || len(cm.State.Overview.Seen) == 0 {
 		return true // single node
 	}
@@ -983,6 +986,7 @@ func (cm *ClusterManager) CheckConvergence() bool {
 
 	return len(upMembers) == 0
 }
+
 
 type ClockOrdering int
 
@@ -1585,14 +1589,19 @@ func (cm *ClusterManager) performLeaderActions() {
 			ma := memberAddressFromUA(ua)
 			switch m.GetStatus() {
 			case gproto_cluster.MemberStatus_Joining:
-				m.Status = gproto_cluster.MemberStatus_Up.Enum()
-				m.UpNumber = proto.Int32(int32(len(cm.State.Members))) // Simplified upNumber
-				events = append(events, MemberUp{Member: ma})
-				if cm.Metrics != nil {
-					cm.Metrics.IncrementMemberUp()
+				// Only promote Joining to Up if we have convergence (everyone has
+				// seen the state) or if it's the very first node (bootstrap).
+				// Pekko convergence check: all members in Overview.Seen.
+				if len(cm.State.Members) == 1 || cm.CheckConvergenceLocked() {
+					m.Status = gproto_cluster.MemberStatus_Up.Enum()
+					m.UpNumber = proto.Int32(int32(len(cm.State.Members))) // Simplified upNumber
+					events = append(events, MemberUp{Member: ma})
+					if cm.Metrics != nil {
+						cm.Metrics.IncrementMemberUp()
+					}
+					changed = true
+					log.Printf("Leader: transitioned member %s:%d Joining → Up (upNumber=%d)", ma.Host, ma.Port, m.GetUpNumber())
 				}
-				changed = true
-				log.Printf("Leader: transitioned member %s:%d Joining → Up (upNumber=%d)", ma.Host, ma.Port, m.GetUpNumber())
 			case gproto_cluster.MemberStatus_Leaving:
 				m.Status = gproto_cluster.MemberStatus_Exiting.Enum()
 				events = append(events, MemberExited{Member: ma})

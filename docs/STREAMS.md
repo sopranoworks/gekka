@@ -1,4 +1,4 @@
-# Gekka Streams — Developer Guide (v0.13.0)
+# Gekka Streams — Developer Guide (v0.14.0-dev)
 
 The `stream` package provides a pull-based reactive-streams DSL with demand-driven back-pressure.  Every pipeline is a chain of three primitive stages — **Source**, **Flow**, and **Sink** — connected through an internal `iterator` interface that lets the downstream drive throughput.  No element is ever produced unless the downstream has requested it.
 

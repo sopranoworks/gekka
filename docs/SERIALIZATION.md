@@ -1,4 +1,4 @@
-# Gekka Serialization Reference (v0.13.0)
+# Gekka Serialization Reference (v0.14.0-dev)
 
 This document covers the serialization subsystem: built-in serializer IDs, the
 `SerializationRegistry`, manifest mapping, and how to register custom types for

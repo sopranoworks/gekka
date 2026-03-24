@@ -1,4 +1,4 @@
-# v0.13.0 Refactoring — Ultra Thin Core Audit
+# v0.14.0-dev Refactoring — Ultra Thin Core Audit
 
 > **Local working document — DO NOT COMMIT.**
 > This file tracks the extraction of heavy SDKs from the core module.
@@ -76,18 +76,18 @@ Every entry in `go.mod` must be justified against the "Thin Core" rule:
 
 ## Extraction Order (recommended)
 
-1. **v0.13.0** (current): Fix OTel imports in core packages (journal, region, projection).  Create extension skeletons.
+1. **v0.14.0-dev** (current): Fix OTel imports in core packages (journal, region, projection).  Create extension skeletons.
 2. **v0.13.1-dev**: Move `persistence/spanner/` → `extensions/persistence/spanner/` with own `go.mod`. Remove `cloud.google.com/go/spanner` from root `go.mod`.
 3. **v0.13.2-dev**: Move `telemetry/otel/` → `extensions/telemetry/otel/` with own `go.mod`. Remove `go.opentelemetry.io/otel*` from root `go.mod`.
 4. **v0.13.3-dev**: Move `cluster/sbr/k8s_provider.go` + `discovery/kubernetes/` → `extensions/cluster/k8s/` with own `go.mod`. Remove `k8s.io/*` from root `go.mod`.
 5. **v0.13.4-dev**: Move `persistence/sql/` → `extensions/persistence/sql/`. Remove `github.com/jackc/pgx/v5` from root `go.mod`.
-6. **v0.13.0** (release): Root `go.mod` contains only: `google.golang.org/protobuf`, `gopkg.in/yaml.v3`, `github.com/sopranoworks/gekka-config`, `github.com/stretchr/testify`, `github.com/spf13/cobra`, Charmbracelet UI libs.
+6. **v0.14.0-dev** (release): Root `go.mod` contains only: `google.golang.org/protobuf`, `gopkg.in/yaml.v3`, `github.com/sopranoworks/gekka-config`, `github.com/stretchr/testify`, `github.com/spf13/cobra`, Charmbracelet UI libs.
 
 ---
 
-## Definition of Done for v0.13.0
+## Definition of Done for v0.14.0-dev
 
-- [x] `version.go` → `"0.13.0"`
+- [x] `version.go` → `"0.14.0-dev"`
 - [x] `persistence/journal.go` — no `go.opentelemetry.io` imports
 - [x] `cluster/sharding/region.go` — no `go.opentelemetry.io` imports
 - [x] `persistence/projection/projection.go` — no `go.opentelemetry.io` imports

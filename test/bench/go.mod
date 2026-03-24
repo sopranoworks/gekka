@@ -6,7 +6,7 @@ require (
 	cloud.google.com/go/spanner v1.88.0
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/redis/go-redis/v9 v9.17.3
-	github.com/sopranoworks/gekka v0.13.0
+	github.com/sopranoworks/gekka v0.14.0-dev
 	github.com/sopranoworks/gekka-extensions-persistence-redis v0.0.0
 	github.com/sopranoworks/gekka-extensions-persistence-spanner v0.0.0
 	github.com/testcontainers/testcontainers-go v0.41.0

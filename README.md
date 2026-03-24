@@ -1,18 +1,18 @@
-# gekka &nbsp;[![Version](https://img.shields.io/badge/version-0.13.0-blue)](https://github.com/sopranoworks/gekka)
-
- [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Go CI](https://github.com/sopranoworks/gekka/actions/workflows/go.yml/badge.svg)](https://github.com/sopranoworks/gekka/actions/workflows/go.yml)
-
-⚠️ Warning: Gekka is currently under active development. The public API and internal protocols are subject to change until v1.0.0 is released.
-
-A Go implementation of the Pekko/Akka actor protocol, with wire-level interoperability with [Apache Pekko](https://pekko.apache.org/) and [Lightbend Akka](https://www.lightbend.com/akka).
-
-Configuration is loaded via [`gekka-config`](https://github.com/sopranoworks/gekka-config), a HOCON engine that supports both automatic cluster formation and direct node-to-node communication using the standard `pekko://` and `akka://` URI schemes.
-
-**Requirement**: Go 1.26.1 or later.
-
----
-
-## What's New in v0.13.0
+# gekka &nbsp;[![Version](https://img.shields.io/badge/version-0.14.0--dev-orange)](https://github.com/sopranoworks/gekka)
+L2- 
+L3-  [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Go CI](https://github.com/sopranoworks/gekka/actions/workflows/go.yml/badge.svg)](https://github.com/sopranoworks/gekka/actions/workflows/go.yml)
+L4- 
+L5- ⚠️ Warning: Gekka is currently under active development. The public API and internal protocols are subject to change until v1.0.0 is released.
+L6- 
+L7- A Go implementation of the Pekko/Akka actor protocol, with wire-level interoperability with [Apache Pekko](https://pekko.apache.org/) and [Lightbend Akka](https://www.lightbend.com/akka).
+L8- 
+L9- Configuration is loaded via [`gekka-config`](https://github.com/sopranoworks/gekka-config), a HOCON engine that supports both automatic cluster formation and direct node-to-node communication using the standard `pekko://` and `akka://` URI schemes.
+L10- 
+L11- **Requirement**: Go 1.26.1 or later.
+L12- 
+L13- ---
+L14- 
+L15: ## What's New in v0.14.0-dev
 
 - **Artery TCP Wire Compatibility** — Full protocol alignment with Akka 2.6.x and Pekko 1.x, including preamble detection and manifest-based message routing.
 - **Auto-enable Management** — The Management Server now automatically enables itself if a `hostname` or `port` is defined in the configuration, simplifying bootstrap.

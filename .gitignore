@@ -14,13 +14,6 @@ debug_envelope.go
 /gekka-cli
 /gekka-metrics
 
-# Agent-specific files (local-only context, never committed)
-CLAUDE.md
-GEMINI.md
-.gemini/
-.claude/
-.antigravity.yaml
-.antigravity_root
 
 # Temporary files
 .!*

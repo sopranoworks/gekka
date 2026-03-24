@@ -267,11 +267,13 @@ func (ms *ManagementServer) handleMembers(w http.ResponseWriter, r *http.Request
 }
 
 // handleMemberByAddress routes requests to /cluster/members/{address} based
-// on the HTTP method:
+// on the HTTP method and sub-path:
 //
-//	GET    — return the member's current status (or 404)
-//	PUT    — initiate graceful leave for that member
-//	DELETE — mark that member as Down immediately
+//	GET    /cluster/members/{address}       — return the member's current status (or 404)
+//	PUT    /cluster/members/{address}       — initiate graceful leave for that member
+//	DELETE /cluster/members/{address}       — mark that member as Down immediately
+//	POST   /cluster/members/{address}/down  — mark that member as Down immediately
+//	POST   /cluster/members/{address}/leave — initiate graceful leave for that member
 func (ms *ManagementServer) handleMemberByAddress(w http.ResponseWriter, r *http.Request) {
 	// Strip the "/cluster/members/" prefix to get the address token.
 	// Use RawPath when available (preserves percent-encoding before mux cleans it),
@@ -281,6 +283,20 @@ func (ms *ManagementServer) handleMemberByAddress(w http.ResponseWriter, r *http
 		pathSrc = r.URL.Path
 	}
 	encoded := strings.TrimPrefix(pathSrc, "/cluster/members/")
+
+	// Handle sub-paths for POST actions: /members/{address}/down or /leave
+	isDownAction := false
+	isLeaveAction := false
+	if r.Method == http.MethodPost {
+		if strings.HasSuffix(encoded, "/down") {
+			isDownAction = true
+			encoded = strings.TrimSuffix(encoded, "/down")
+		} else if strings.HasSuffix(encoded, "/leave") {
+			isLeaveAction = true
+			encoded = strings.TrimSuffix(encoded, "/leave")
+		}
+	}
+
 	decoded, err := url.PathUnescape(encoded)
 	if err != nil {
 		http.Error(w, "bad request: invalid address encoding", http.StatusBadRequest)
@@ -293,12 +309,12 @@ func (ms *ManagementServer) handleMemberByAddress(w http.ResponseWriter, r *http
 		return
 	}
 
-	switch r.Method {
-	case http.MethodGet:
+	switch {
+	case r.Method == http.MethodGet:
 		ms.handleGetMember(w, raw)
-	case http.MethodPut:
+	case r.Method == http.MethodPut || isLeaveAction:
 		ms.handleLeaveMember(w, raw)
-	case http.MethodDelete:
+	case r.Method == http.MethodDelete || isDownAction:
 		ms.handleDownMember(w, raw)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

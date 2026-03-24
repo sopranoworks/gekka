@@ -24,6 +24,10 @@ const (
 	RawSerializerID      = 4
 	ClusterSerializerID  = 5
 	JSONSerializerID     = 9
+
+	// Pekko Distributed Data Serializers
+	DDataReplicatedSerializerID    = 11
+	DDataReplicatorMsgSerializerID = 12
 )
 
 // Serializer is an interface for serializing messages.

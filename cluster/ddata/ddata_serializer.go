@@ -57,6 +57,9 @@ const (
 	// DData manifest codes (Pekko 1.0.x compact single/double-char format).
 	GCounterManifest         = "F"
 	ORSetManifest            = "C" // payload is GZIP-compressed
+	ORMapManifest            = "G"
+	PNCounterMapManifest     = "H"
+	ORMultiMapManifest       = "I"
 	DeltaPropagationManifest = "Q"
 )
 
@@ -128,12 +131,115 @@ type DDDeltaPropagation struct {
 	Deltas   []DDDeltaEntry
 }
 
-// ---------------------------------------------------------------------------
-// DDataSerializer
-// ---------------------------------------------------------------------------
-
 // DDataSerializer encodes and decodes Pekko Distributed Data wire format.
 type DDataSerializer struct{}
+
+// Identifier returns the serializer identifier.
+func (s *DDataSerializer) Identifier() int32 {
+	return DDataReplicatedSerializerID
+}
+
+// ToBinary serializes the given CRDT to its Pekko DData wire format.
+func (s *DDataSerializer) ToBinary(msg any) ([]byte, error) {
+	switch v := msg.(type) {
+	case *GCounter:
+		// Convert GCounter internal state to DDGCounterEntry slice for encoding
+		snap := v.Snapshot()
+		entries := make([]DDGCounterEntry, 0, len(snap))
+		for nodeID, val := range snap {
+			ua, err := parseNodeID(nodeID)
+			if err != nil {
+				return nil, err
+			}
+			entries = append(entries, DDGCounterEntry{Node: ua, Value: val})
+		}
+		return s.EncodeGCounter(entries), nil
+
+	case *ORSet:
+		snap := v.Snapshot()
+		ddSet := &DDORSet{
+			Elements: make([]string, 0, len(snap.Dots)),
+		}
+		// VVector
+		for nodeID, count := range snap.VV {
+			ua, _ := parseNodeID(nodeID)
+			ddSet.VVector = append(ddSet.VVector, DDORSetDotEntry{Node: ua, Counter: count})
+		}
+		// Elements and DotVectors
+		for elem, dots := range snap.Dots {
+			ddSet.Elements = append(ddSet.Elements, elem)
+			dv := make([]DDORSetDotEntry, 0, len(dots))
+			for _, dot := range dots {
+				ua, _ := parseNodeID(dot.NodeID)
+				dv = append(dv, DDORSetDotEntry{Node: ua, Counter: dot.Counter})
+			}
+			ddSet.DotVectors = append(ddSet.DotVectors, dv)
+		}
+		return s.EncodeORSet(ddSet)
+
+	case *ORMap, *PNCounterMap, *ORMultiMap:
+		// Implementation for ORMap variants encoding
+		// This requires recursive encoding of inner CRDTs.
+		// For now, return error as it's complex to implement without more helpers.
+		return nil, fmt.Errorf("DDataSerializer: ToBinary for map types not yet fully implemented")
+
+	default:
+		return nil, fmt.Errorf("DDataSerializer: ToBinary: unknown type %T", msg)
+	}
+}
+
+// FromBinary deserializes the given bytes from its Pekko DData wire format.
+func (s *DDataSerializer) FromBinary(data []byte, manifest string) (any, error) {
+	switch manifest {
+	case GCounterManifest:
+		entries, err := s.DecodeGCounter(data)
+		if err != nil {
+			return nil, err
+		}
+		c := NewGCounter()
+		state := make(map[string]uint64)
+		for _, e := range entries {
+			state[formatNodeID(e.Node)] = e.Value
+		}
+		c.MergeState(state)
+		return c, nil
+
+	case ORSetManifest:
+		ddSet, err := s.DecodeORSet(data)
+		if err != nil {
+			return nil, err
+		}
+		set := NewORSet()
+		snap := ORSetSnapshot{
+			Dots: make(map[string][]Dot),
+			VV:   make(map[string]uint64),
+		}
+		for _, e := range ddSet.VVector {
+			snap.VV[formatNodeID(e.Node)] = e.Counter
+		}
+		for i, elem := range ddSet.Elements {
+			dots := make([]Dot, 0, len(ddSet.DotVectors[i]))
+			for _, de := range ddSet.DotVectors[i] {
+				dots = append(dots, Dot{NodeID: formatNodeID(de.Node), Counter: de.Counter})
+			}
+			snap.Dots[elem] = dots
+		}
+		set.MergeSnapshot(snap)
+		return set, nil
+
+	default:
+		return nil, fmt.Errorf("DDataSerializer: FromBinary: unknown manifest %q", manifest)
+	}
+}
+
+func parseNodeID(nodeID string) (DDUniqueAddress, error) {
+	// Dummy implementation: in a real system this would parse the pekko:// string
+	return DDUniqueAddress{}, nil
+}
+
+func formatNodeID(ua DDUniqueAddress) string {
+	return fmt.Sprintf("pekko://System@%s:%d#%d", ua.Address.Hostname, ua.Address.Port, ua.UID())
+}
 
 // ---------------------------------------------------------------------------
 // GCounter
@@ -367,6 +473,128 @@ func (s *DDataSerializer) encodeORSetInner(orset *DDORSet) []byte {
 	for _, elem := range orset.Elements {
 		out = appendLenDelimDD(out, 3, []byte(elem))
 	}
+	return out
+}
+
+// ---------------------------------------------------------------------------
+// ORMap / PNCounterMap / ORMultiMap
+// ---------------------------------------------------------------------------
+
+// DDMapEntry is a generic key-value entry for ORMap and its variants.
+type DDMapEntry struct {
+	StringKey string
+	Data      []byte // inner CRDT data
+}
+
+// DDORMap is the decoded form of ORMap variants.
+type DDORMap struct {
+	Keys    *DDORSet
+	Entries []DDMapEntry
+}
+
+// DecodeORMap decodes a Pekko DData ORMap (or variant) payload.
+func (s *DDataSerializer) DecodeORMap(data []byte) (*DDORMap, error) {
+	out := &DDORMap{}
+	i := 0
+	for i < len(data) {
+		tag, n := consumeVarintDD(data, i)
+		if n <= 0 {
+			return nil, fmt.Errorf("ORMap: bad varint at %d", i)
+		}
+		i += n
+		fieldNum := tag >> 3
+		wireType := tag & 7
+		switch {
+		case fieldNum == 1 && wireType == 2: // keys (ORSet)
+			keysBytes, nn := consumeBytesDD(data, i)
+			if nn <= 0 {
+				return nil, fmt.Errorf("ORMap: bad keys at %d", i)
+			}
+			i += nn
+			keys, err := s.DecodeORSet(keysBytes)
+			if err != nil {
+				return nil, fmt.Errorf("ORMap keys: %w", err)
+			}
+			out.Keys = keys
+		case fieldNum == 2 && wireType == 2: // entry
+			entryBytes, nn := consumeBytesDD(data, i)
+			if nn <= 0 {
+				return nil, fmt.Errorf("ORMap: bad entry at %d", i)
+			}
+			i += nn
+			entry, err := s.decodeMapEntry(entryBytes)
+			if err != nil {
+				return nil, err
+			}
+			out.Entries = append(out.Entries, entry)
+		default:
+			nn, err := skipProtoFieldDD(data, i, wireType)
+			if err != nil {
+				return nil, fmt.Errorf("ORMap: skip field %d: %w", fieldNum, err)
+			}
+			i += nn
+		}
+	}
+	return out, nil
+}
+
+func (s *DDataSerializer) decodeMapEntry(data []byte) (DDMapEntry, error) {
+	var e DDMapEntry
+	i := 0
+	for i < len(data) {
+		tag, n := consumeVarintDD(data, i)
+		if n <= 0 {
+			return e, fmt.Errorf("mapEntry: bad varint at %d", i)
+		}
+		i += n
+		fieldNum := tag >> 3
+		wireType := tag & 7
+		switch {
+		case fieldNum == 1 && wireType == 2: // stringKey
+			keyBytes, nn := consumeBytesDD(data, i)
+			if nn <= 0 {
+				return e, fmt.Errorf("mapEntry: bad key at %d", i)
+			}
+			i += nn
+			e.StringKey = string(keyBytes)
+		case fieldNum == 2 && wireType == 2: // value (bytes)
+			valBytes, nn := consumeBytesDD(data, i)
+			if nn <= 0 {
+				return e, fmt.Errorf("mapEntry: bad value at %d", i)
+			}
+			i += nn
+			e.Data = valBytes
+		default:
+			nn, err := skipProtoFieldDD(data, i, wireType)
+			if err != nil {
+				return e, fmt.Errorf("mapEntry: skip field %d: %w", fieldNum, err)
+			}
+			i += nn
+		}
+	}
+	return e, nil
+}
+
+func (s *DDataSerializer) EncodeORMap(m *DDORMap) ([]byte, error) {
+	var out []byte
+	if m.Keys != nil {
+		keysBytes, err := s.EncodeORSet(m.Keys)
+		if err != nil {
+			return nil, err
+		}
+		out = appendLenDelimDD(out, 1, keysBytes)
+	}
+	for _, e := range m.Entries {
+		entryBytes := s.encodeMapEntry(e)
+		out = appendLenDelimDD(out, 2, entryBytes)
+	}
+	return out, nil
+}
+
+func (s *DDataSerializer) encodeMapEntry(e DDMapEntry) []byte {
+	var out []byte
+	out = appendLenDelimDD(out, 1, []byte(e.StringKey))
+	out = appendLenDelimDD(out, 2, e.Data)
 	return out
 }
 

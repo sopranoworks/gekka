@@ -63,6 +63,8 @@ type state int
 const (
 	stateDashboard state = iota
 	stateStateExplorer
+	stateConfirmDown
+	stateConfirmLeave
 	stateConfirmExit
 )
 
@@ -93,6 +95,9 @@ type dashboardModel struct {
 	width         int
 	height        int
 	frame         int // for marquee animation
+
+	// Member selection
+	selectedIndex int
 
 	// State Explorer
 	persistenceID string
@@ -149,6 +154,34 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
+			// Navigation
+			if msg.String() == "j" || msg.Type == tea.KeyDown {
+				if m.selectedIndex < len(m.members)-1 {
+					m.selectedIndex++
+				}
+				return m, nil
+			}
+			if msg.String() == "k" || msg.Type == tea.KeyUp {
+				if m.selectedIndex > 0 {
+					m.selectedIndex--
+				}
+				return m, nil
+			}
+
+			// Cluster Ops
+			if msg.String() == "d" {
+				if len(m.members) > 0 {
+					m.state = stateConfirmDown
+				}
+				return m, nil
+			}
+			if msg.String() == "l" {
+				if len(m.members) > 0 {
+					m.state = stateConfirmLeave
+				}
+				return m, nil
+			}
+
 		case stateStateExplorer:
 			if msg.Type == tea.KeyEsc {
 				m.state = stateDashboard
@@ -165,6 +198,29 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if len(msg.String()) == 1 {
 				m.persistenceID += msg.String()
+				return m, nil
+			}
+
+		case stateConfirmDown, stateConfirmLeave:
+			switch strings.ToLower(msg.String()) {
+			case "y":
+				var cmd tea.Cmd
+				target := m.members[m.selectedIndex].Address
+				if m.state == stateConfirmDown {
+					cmd = func() tea.Msg {
+						err := m.mgmtClient.DownMember(target)
+						return membersMsg{err: err} // Reuse membersMsg to trigger refresh
+					}
+				} else {
+					cmd = func() tea.Msg {
+						err := m.mgmtClient.LeaveMember(target)
+						return membersMsg{err: err}
+					}
+				}
+				m.state = stateDashboard
+				return m, tea.Batch(cmd, m.fetchMembers())
+			case "n", "esc":
+				m.state = stateDashboard
 				return m, nil
 			}
 
@@ -220,6 +276,14 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return mi.LatencyMs > mj.LatencyMs
 			})
+
+			// Clamp selectedIndex
+			if m.selectedIndex >= len(m.members) {
+				m.selectedIndex = len(m.members) - 1
+			}
+			if m.selectedIndex < 0 {
+				m.selectedIndex = 0
+			}
 		}
 		m.err = msg.err
 		m.lastUpdate = time.Now()
@@ -305,11 +369,10 @@ func (m dashboardModel) View() string {
 		)
 	} else {
 		// Member List
-		var memberListBlock string
 		if m.err != nil {
-			memberListBlock = nodeDownStyle.Render(fmt.Sprintf("Error: %v", m.err))
+			mainBlock = nodeDownStyle.Render(fmt.Sprintf("Error: %v", m.err))
 		} else if len(m.members) == 0 {
-			memberListBlock = infoStyle.Render("No remote members found in cluster...")
+			mainBlock = infoStyle.Render("No remote members found in cluster...")
 		} else {
 			// Calculate dynamic column widths
 			maxAddrLen := 7 // "ADDRESS"
@@ -320,7 +383,6 @@ func (m dashboardModel) View() string {
 			}
 
 			headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("7"))
-			// Styles with fixed widths for alignment. Width includes right padding.
 			addrStyle := lipgloss.NewStyle().Width(maxAddrLen + 4)
 			statusStyle := lipgloss.NewStyle().Width(14)
 			roleStyle := lipgloss.NewStyle().Width(34)
@@ -328,9 +390,7 @@ func (m dashboardModel) View() string {
 			rttStyle := lipgloss.NewStyle().Width(10)
 
 			var rows []string
-
-			// 1. Render Header Row
-			rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top,
+			rows = append(rows, "  "+lipgloss.JoinHorizontal(lipgloss.Top,
 				headerStyle.Copy().Inherit(addrStyle).Render("ADDRESS"),
 				headerStyle.Copy().Inherit(statusStyle).Render("STATUS"),
 				headerStyle.Copy().Inherit(roleStyle).Render("ROLES"),
@@ -338,23 +398,20 @@ func (m dashboardModel) View() string {
 				headerStyle.Copy().Inherit(rttStyle).Render("RTT"),
 			))
 
-			// 2. Render Separator
 			separator := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(
-				strings.Repeat("-", maxAddrLen) + "    " +
+				"  "+strings.Repeat("-", maxAddrLen) + "    " +
 					strings.Repeat("-", 10) + "    " +
 					strings.Repeat("-", 30) + "    " +
 					strings.Repeat("-", 10) + "    " +
 					strings.Repeat("-", 6))
 			rows = append(rows, separator)
 
-			// 3. Render Member Rows
-			for _, mem := range m.members {
+			for i, mem := range m.members {
 				status := mem.Status
 				if mem.Status == "Up" {
 					status = nodeUpStyle.Render(mem.Status)
 				}
 
-				// Roles Marquee
 				rolesStr := strings.Join(mem.Roles, ",")
 				if rolesStr == "" {
 					rolesStr = "-"
@@ -389,17 +446,23 @@ func (m dashboardModel) View() string {
 					}
 				}
 
-				rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top,
+				row := lipgloss.JoinHorizontal(lipgloss.Top,
 					addrStyle.Render(mem.Address),
 					statusStyle.Render(status),
 					roleStyle.Render(displayRoles),
 					reachStyle.Render(reachable),
 					rttStyle.Render(rttRendered),
-				))
+				)
+
+				if i == m.selectedIndex {
+					row = lipgloss.NewStyle().Background(lipgloss.Color("236")).Foreground(lipgloss.Color("255")).Render("> " + row)
+				} else {
+					row = "  " + row
+				}
+				rows = append(rows, row)
 			}
-			memberListBlock = lipgloss.JoinVertical(lipgloss.Left, rows...)
+			mainBlock = lipgloss.JoinVertical(lipgloss.Left, rows...)
 		}
-		mainBlock = memberListBlock
 	}
 
 	// Status Bar
@@ -422,18 +485,38 @@ func (m dashboardModel) View() string {
 		status,
 	)
 
-	if m.state == stateConfirmExit {
+	// Help Text
+	helpText := "q:quit | s:explorer | d:down | l:leave | j/k:select"
+	if m.state == stateStateExplorer {
+		helpText = "esc:back | enter:fetch | backspace:edit"
+	}
+	ui = lipgloss.JoinVertical(lipgloss.Left,
+		ui,
+		lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(helpText),
+	)
+
+	if m.state == stateConfirmExit || m.state == stateConfirmDown || m.state == stateConfirmLeave {
 		overlayStyle := lipgloss.NewStyle().
 			Border(lipgloss.NormalBorder()).
-			BorderForeground(lipgloss.Color("#FF0000")).
 			Padding(1, 3).
 			Bold(true).
-			Foreground(lipgloss.Color("#FFFFFF")).
-			Background(lipgloss.Color("#880000"))
+			Foreground(lipgloss.Color("#FFFFFF"))
 
-		overlay := overlayStyle.Render("Exit? (Y/n)")
+		var msg string
+		switch m.state {
+		case stateConfirmExit:
+			overlayStyle = overlayStyle.BorderForeground(lipgloss.Color("#FF0000")).Background(lipgloss.Color("#880000"))
+			msg = "Exit? (Y/n)"
+		case stateConfirmDown:
+			overlayStyle = overlayStyle.BorderForeground(lipgloss.Color("#FF0000")).Background(lipgloss.Color("#880000"))
+			msg = fmt.Sprintf("DOWN node %s? (Y/n)", m.members[m.selectedIndex].Address)
+		case stateConfirmLeave:
+			overlayStyle = overlayStyle.BorderForeground(lipgloss.Color("#FFA500")).Background(lipgloss.Color("#884400"))
+			msg = fmt.Sprintf("LEAVE node %s? (Y/n)", m.members[m.selectedIndex].Address)
+		}
 
-		// Calculate available height for the middle section
+		overlay := overlayStyle.Render(msg)
+
 		occupiedHeight := lipgloss.Height(header) + lipgloss.Height(mainBlock) + 2
 		middleHeight := m.height - occupiedHeight
 		if middleHeight < 0 {

@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -129,6 +130,36 @@ func (c *Client) DurableState(persistenceID string) (*DurableStateResponse, erro
 		return nil, fmt.Errorf("client: parse response: %w", err)
 	}
 	return &res, nil
+}
+
+// DownMember calls POST /cluster/members/{address}/down.
+func (c *Client) DownMember(address string) error {
+	endpoint := c.baseURL + "/cluster/members/" + url.PathEscape(address) + "/down"
+	resp, err := c.httpClient.Post(endpoint, "application/json", nil)
+	if err != nil {
+		return fmt.Errorf("client: POST %s: %w", endpoint, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("client: server returned %s: %s", resp.Status, body)
+	}
+	return nil
+}
+
+// LeaveMember calls POST /cluster/members/{address}/leave.
+func (c *Client) LeaveMember(address string) error {
+	endpoint := c.baseURL + "/cluster/members/" + url.PathEscape(address) + "/leave"
+	resp, err := c.httpClient.Post(endpoint, "application/json", nil)
+	if err != nil {
+		return fmt.Errorf("client: POST %s: %w", endpoint, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("client: server returned %s: %s", resp.Status, body)
+	}
+	return nil
 }
 
 // RebalanceShard calls POST /cluster/sharding/{typeName}/rebalance and

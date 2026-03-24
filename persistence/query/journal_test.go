@@ -35,7 +35,7 @@ func (m *mockReadJournal) EventsByTag(tag string, offset Offset) stream.Source[E
 
 func TestReadJournalInterface(t *testing.T) {
 	var rj ReadJournal = &mockReadJournal{}
-	
+
 	src := rj.EventsByPersistenceId("p1", 1, 2)
 	assert.NotNil(t, src)
 

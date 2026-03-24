@@ -242,7 +242,7 @@ func WriteFrame(writer io.Writer, payload []byte) error {
 
 	// Trace-level hex dump of the first 64 bytes (header + start of Artery envelope).
 	// Enable with slog at Debug level to compare wire bytes against a real Pekko/Akka node.
-	if slog.Default().Enabled(nil, slog.LevelDebug) {
+	if slog.Default().Enabled(context.TODO(), slog.LevelDebug) {
 		end := 64
 		if end > len(frame) {
 			end = len(frame)

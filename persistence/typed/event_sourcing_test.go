@@ -37,7 +37,7 @@ func TestSpawnPersistent(t *testing.T) {
 	// Mock system and journal
 	sys := &typedMockContext{}
 	ref, err := SpawnPersistent(sys, behavior, "counter")
-	
+
 	assert.NoError(t, err)
 	assert.NotNil(t, ref.Untyped())
 }
@@ -45,7 +45,7 @@ func TestSpawnPersistent(t *testing.T) {
 func TestPersistentActor_Recovery(t *testing.T) {
 	journal := persistence.NewInMemoryJournal()
 	ctx := context.Background()
-	
+
 	// Pre-populate journal
 	_ = journal.AsyncWriteMessages(ctx, []persistence.PersistentRepr{
 		{PersistenceID: "p1", SequenceNr: 1, Payload: 10},
@@ -67,7 +67,7 @@ func TestPersistentActor_Recovery(t *testing.T) {
 	act := NewPersistentActor(behavior).(*persistentActor[int, int, counterState])
 	act.SetSystem(&typedMockContext{})
 	act.SetSelf(&typedMockRef{path: "/user/p1"})
-	
+
 	// Trigger recovery
 	act.PreStart()
 

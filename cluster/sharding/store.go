@@ -38,9 +38,9 @@ type ShardStore interface {
 // persisted.  Used when RememberEntities is false or no store is configured.
 type NoOpStore struct{}
 
-func (NoOpStore) AddEntity(ShardId, EntityId) error          { return nil }
-func (NoOpStore) RemoveEntity(ShardId, EntityId) error       { return nil }
-func (NoOpStore) GetEntities(ShardId) ([]EntityId, error)    { return nil, nil }
+func (NoOpStore) AddEntity(ShardId, EntityId) error       { return nil }
+func (NoOpStore) RemoveEntity(ShardId, EntityId) error    { return nil }
+func (NoOpStore) GetEntities(ShardId) ([]EntityId, error) { return nil, nil }
 
 // FileStore persists entity membership to a single JSON file on disk.
 //

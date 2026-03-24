@@ -32,11 +32,11 @@ func TestStashBuffer_Basic(t *testing.T) {
 func TestStashBuffer_Capacity(t *testing.T) {
 	self := &typedMockRef{path: "/user/test"}
 	stash := newStashBuffer[string](self, 2)
-	
+
 	// Manually fill
 	stash.Messages = append(stash.Messages, actor.Envelope{Payload: "1"})
 	stash.Messages = append(stash.Messages, actor.Envelope{Payload: "2"})
-	
+
 	err := stash.Stash()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "capacity exceeded")

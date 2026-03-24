@@ -26,7 +26,7 @@ func TestReceptionistGroupRouter(t *testing.T) {
 	}
 
 	router := NewReceptionistGroup[string]("test-service", &actor.RoundRobinRoutingLogic{})
-	
+
 	// Create router actor
 	rActor := typed.NewTypedActor(router.Behavior()).(*typed.TypedActor[any])
 	rActor.SetSystem(sys)

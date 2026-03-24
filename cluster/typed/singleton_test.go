@@ -28,12 +28,12 @@ func TestTypedSingleton(t *testing.T) {
 	// Mock environment
 	cm := &cluster.ClusterManager{}
 	cm.LocalAddress = &gproto_cluster.UniqueAddress{}
-	
+
 	s := NewTypedSingleton(cm, behavior, "")
 	props := s.Props()
-	
+
 	assert.NotNil(t, props.New)
-	
+
 	// Spawning and message passing would require a full cluster setup which is
 	// typically done in integration tests. Here we verify the structure.
 	mgr := props.New().(*singleton.ClusterSingletonManager)
@@ -43,7 +43,7 @@ func TestTypedSingleton(t *testing.T) {
 func TestTypedSingletonProxy(t *testing.T) {
 	cm := &cluster.ClusterManager{}
 	proxy := NewTypedSingletonProxy[string](cm, nil, "/user/singletonManager", "")
-	
+
 	assert.Equal(t, "/user/singletonManager", proxy.Path())
 	assert.NotNil(t, proxy.Untyped())
 }

@@ -56,12 +56,12 @@ func NewBackoffSupervisor[M any](options BackoffOptions, childProps actor.Props)
 			case actor.TerminatedMessage:
 				if state.child != nil && m.TerminatedActor().Path() == state.child.Path() {
 					state.child = nil
-					
+
 					// Reset failure count if child was running long enough
 					if time.Since(lastRestart) > options.ResetInterval {
 						state.failures = 0
 					}
-					
+
 					state.failures++
 					delay := options.NextDelay(state.failures)
 					ctx.Log().Info("BackoffSupervisor: child terminated, scheduling restart", "failures", state.failures, "delay", delay)

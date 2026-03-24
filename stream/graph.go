@@ -26,7 +26,7 @@ var ErrTooManySubstreams = errors.New("stream: groupBy exceeded maxSubstreams li
 // close simultaneously, so every consumer receives the error.
 type sharedError struct {
 	once sync.Once
-	val  atomic.Value // stores a non-nil error once set
+	val  atomic.Value  // stores a non-nil error once set
 	sig  chan struct{} // closed exactly once when an error is stored
 }
 

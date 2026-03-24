@@ -78,7 +78,7 @@ func newTestClusterManager() *cluster.ClusterManager {
 // expects the down to complete within 200 ms of publishing the
 // UnreachableMember event.
 func TestSelfHealing_ImmediateDownOnInfraDead(t *testing.T) {
-	const stableAfter = 5 * time.Second    // intentionally long: should NOT fire
+	const stableAfter = 5 * time.Second // intentionally long: should NOT fire
 	const fastDownDeadline = 200 * time.Millisecond
 
 	cm := newTestClusterManager()

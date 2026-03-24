@@ -11,17 +11,17 @@
 //
 // Phase 1 Protocol Overview:
 //
-//   1. A client sends a message to a ShardRegion on any node.
-//   2. The ShardRegion applies a ShardIdExtractor to determine the EntityID
-//      and ShardID for the message.
-//   3. If the ShardID's home is unknown, the ShardRegion sends GetShardHome
-//      to the ShardCoordinator (a cluster singleton).
-//   4. The ShardCoordinator allocates the shard using its ShardAllocationStrategy
-//      and replies with ShardHome.
-//   5. The ShardRegion caches the home and forwards the EntityEnvelope to the
-//      owning ShardRegion (which may be itself for local shards).
-//   6. The owning ShardRegion's Shard spawns the entity actor on first use and
-//      delivers the unwrapped message.
+//  1. A client sends a message to a ShardRegion on any node.
+//  2. The ShardRegion applies a ShardIdExtractor to determine the EntityID
+//     and ShardID for the message.
+//  3. If the ShardID's home is unknown, the ShardRegion sends GetShardHome
+//     to the ShardCoordinator (a cluster singleton).
+//  4. The ShardCoordinator allocates the shard using its ShardAllocationStrategy
+//     and replies with ShardHome.
+//  5. The ShardRegion caches the home and forwards the EntityEnvelope to the
+//     owning ShardRegion (which may be itself for local shards).
+//  6. The owning ShardRegion's Shard spawns the entity actor on first use and
+//     delivers the unwrapped message.
 package sharding
 
 // EntityID is a stable, unique identifier for a sharded entity.
@@ -38,8 +38,8 @@ type ShardID = ShardId
 //   - entityID: the stable identifier of the target entity,
 //   - shardID:  the shard bucket this entity belongs to,
 //   - msg:      the unwrapped payload that will be forwarded to the entity
-//               (often the same as the input, but may be an inner message
-//               when the original was wrapped in an application envelope).
+//     (often the same as the input, but may be an inner message
+//     when the original was wrapped in an application envelope).
 //
 // The extractor must be deterministic: the same entityID must always produce
 // the same shardID.  A common implementation hashes the entityID modulo the

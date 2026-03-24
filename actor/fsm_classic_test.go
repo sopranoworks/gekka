@@ -23,7 +23,7 @@ func newLockFSM() *lockFSM {
 	f := &lockFSM{
 		BaseFSM: *NewBaseFSM[string, int](),
 	}
-	
+
 	f.StartWith("Locked", 0)
 
 	f.When("Locked", func(e Event[int]) State[string, int] {
@@ -42,7 +42,7 @@ func newLockFSM() *lockFSM {
 
 func TestClassicFSM_Lifecycle(t *testing.T) {
 	f := newLockFSM()
-	
+
 	// Mock environment
 	f.SetSelf(&FunctionalMockRef{PathURI: "/user/fsm", Handler: func(m any) { f.Receive(m) }})
 	InjectSystem(f, &ScatterGatherTestSystem{T: t})
@@ -89,8 +89,8 @@ func TestClassicFSM_Timeout(t *testing.T) {
 		return f.Stay().Build()
 	})
 
-	f.SetSelf(&FunctionalMockRef{PathURI: "/user/fsm", Handler: func(m any) { 
-		f.Receive(m) 
+	f.SetSelf(&FunctionalMockRef{PathURI: "/user/fsm", Handler: func(m any) {
+		f.Receive(m)
 	}})
 	InjectSystem(f, &ScatterGatherTestSystem{T: t})
 	f.PreStart() // Manual call for mock test

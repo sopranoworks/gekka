@@ -42,7 +42,7 @@ type NodePressure struct {
 
 // MetricsCollector gathers local node metrics and calculates a pressure score.
 type MetricsCollector struct {
-	lastSample  time.Time
+	lastSample time.Time
 }
 
 // NewMetricsCollector creates a new MetricsCollector.
@@ -101,7 +101,7 @@ func (c *MetricsCollector) collectMailboxSize() int {
 func (c *MetricsCollector) calculateScore(cpu float64, heap uint64, mailbox int) float64 {
 	// Weighted average of normalized metrics.
 	// 40% CPU, 30% Heap, 30% Mailbox
-	
+
 	// Normalize Heap (assume 1GB is 'full' for scoring purposes if not configured)
 	const maxHeap = 1024 * 1024 * 1024
 	heapNorm := float64(heap) / maxHeap

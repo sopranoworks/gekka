@@ -28,7 +28,7 @@ type getValue struct {
 
 func TestDurableState_Counter(t *testing.T) {
 	stateStore := &mockStateStore{
-		states: make(map[string]any),
+		states:    make(map[string]any),
 		revisions: make(map[string]uint64),
 	}
 

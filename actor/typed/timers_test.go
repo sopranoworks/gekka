@@ -58,10 +58,10 @@ func TestTimerScheduler_PeriodicTimer(t *testing.T) {
 func TestTimerScheduler_Cancel(t *testing.T) {
 	self := &typedMockRef{}
 	timers := newTimerScheduler[string](self)
-	
+
 	timers.StartSingleTimer("key1", "msg1", 1*time.Second)
 	assert.True(t, timers.IsTimerActive("key1"))
-	
+
 	timers.Cancel("key1")
 	assert.False(t, timers.IsTimerActive("key1"))
 }

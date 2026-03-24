@@ -15,8 +15,8 @@ import (
 	"os"
 	"testing"
 
-	hocon "github.com/sopranoworks/gekka-config"
 	"github.com/sopranoworks/gekka"
+	hocon "github.com/sopranoworks/gekka-config"
 	"github.com/sopranoworks/gekka/discovery"
 	"github.com/sopranoworks/gekka/persistence"
 	"github.com/sopranoworks/gekka/telemetry"

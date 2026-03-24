@@ -28,7 +28,7 @@ func TestEntityRef_Tell(t *testing.T) {
 	}
 
 	ref := NewEntityRef[counterMsg]("Counter", "entity-1", region)
-	
+
 	ref.Tell(counterMsg{Value: 42})
 
 	select {
@@ -47,7 +47,7 @@ func TestEntityRef_Ask(t *testing.T) {
 	// Ask is currently a stub in entity_ref.go
 	region := &MockRegion{}
 	ref := NewEntityRef[string]("TestType", "entity-1", region)
-	
+
 	_, err := ref.Ask(context.Background(), 100*time.Millisecond, "ping")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not fully implemented")

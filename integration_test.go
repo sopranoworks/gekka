@@ -913,7 +913,6 @@ func TestCluster_GoDominantMixed(t *testing.T) {
 	// (DetermineLeader sorts by host:port; 2550 < any OS-assigned ephemeral port).
 	const goSeedPort = uint32(2550)
 
-
 	// ── Step 1: Start Go-Seed ──────────────────────────────────────────────
 	log.Printf("[SEED] Spawning Go-Seed on port %d...", goSeedPort)
 	goSeed, err := NewCluster(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: goSeedPort})
@@ -1207,7 +1206,6 @@ func TestCluster_CRDT_Consistency_Under_Failure(t *testing.T) {
 	const goSeedPort = uint32(2550)
 	const expectedTotal = uint64(100)
 
-
 	// ── Step 1: Go-Seed (self-join) ────────────────────────────────────────
 	log.Printf("[CRDT] Spawning Go-Seed on port %d...", goSeedPort)
 	goSeed, err := NewCluster(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: goSeedPort})
@@ -1391,7 +1389,6 @@ func (a *dummyActorTest) Receive(msg any) {}
 func TestAsk_PekkoEcho(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
-
 
 	// Start Scala PekkoServer (RemoteSystem@127.0.0.1:2552 with /user/echo).
 	cmd := exec.CommandContext(ctx, "sbt", "runMain com.example.PekkoServer")

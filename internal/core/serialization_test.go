@@ -18,7 +18,7 @@ import (
 func BenchmarkProtobuf(b *testing.B) {
 	registry := NewSerializationRegistry()
 	serializer, _ := registry.GetSerializer(ProtobufSerializerID)
-	
+
 	msg := &gproto_remote.ActorRefData{
 		Path: proto.String("pekko://System@127.0.0.1:2552/user/foo"),
 	}
@@ -37,7 +37,7 @@ func BenchmarkZeroCopy(b *testing.B) {
 	registry := NewSerializationRegistry()
 	serializer, _ := registry.GetSerializer(ProtobufSerializerID)
 	zcSerializer := serializer.(ZeroCopySerializer)
-	
+
 	msg := &gproto_remote.ActorRefData{
 		Path: proto.String("pekko://System@127.0.0.1:2552/user/foo"),
 	}
@@ -57,7 +57,7 @@ func BenchmarkZeroCopy(b *testing.B) {
 
 func BenchmarkBuildArteryFrame(b *testing.B) {
 	payload := make([]byte, 1024)
-	
+
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
@@ -71,7 +71,7 @@ func BenchmarkBuildArteryFrame(b *testing.B) {
 func BenchmarkArteryFrameBuilder(b *testing.B) {
 	builder := NewArteryFrameBuilder()
 	payload := make([]byte, 1024)
-	
+
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {

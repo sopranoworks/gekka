@@ -31,9 +31,9 @@ import (
 
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/cluster/pubsub"
+	"github.com/sopranoworks/gekka/cluster/sharding"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 	"github.com/sopranoworks/gekka/persistence"
-	"github.com/sopranoworks/gekka/cluster/sharding"
 )
 
 // scalaSignals collects the named signals emitted by PekkoIntegrationNode on

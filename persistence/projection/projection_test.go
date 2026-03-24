@@ -62,7 +62,7 @@ func TestProjection_Run(t *testing.T) {
 
 	sp := &mockSourceProvider{events: events}
 	os := &mockOffsetStore{}
-	
+
 	processedCount := 0
 	handler := func(envelope query.EventEnvelope) error {
 		processedCount++
@@ -82,7 +82,7 @@ func TestProjection_Run(t *testing.T) {
 
 	// 2. Add more events and run again
 	sp.events = append(sp.events, query.EventEnvelope{Offset: query.SequenceOffset(4), Event: "event-4"})
-	
+
 	processedCount = 0
 	err = p.Run(context.Background())
 	assert.NoError(t, err)
@@ -101,7 +101,7 @@ func TestProjection_Restart(t *testing.T) {
 
 	sp := &mockSourceProvider{events: events}
 	os := &mockOffsetStore{}
-	
+
 	// Pre-save offset
 	os.SaveOffset(context.Background(), "restart-proj", query.SequenceOffset(1))
 

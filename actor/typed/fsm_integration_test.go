@@ -1,3 +1,5 @@
+//go:build integration
+
 /*
  * fsm_integration_test.go
  * This file is part of the gekka project.
@@ -5,8 +7,6 @@
  * Copyright (c) 2026 Sopranoworks, Osamu Takahashi
  * SPDX-License-Identifier: MIT
  */
-
-//go:build integration
 
 package typed_test
 
@@ -31,7 +31,7 @@ func TestFSM_Integration(t *testing.T) {
 	// Since we are in package typed_test, we need to use types from package typed.
 	// But lockState and lockData are not exported in typed package.
 	// We'll define them here for the integration test.
-	
+
 	type lockState int
 	const (
 		Locked lockState = iota
@@ -62,11 +62,11 @@ func TestFSM_Integration(t *testing.T) {
 
 	// Integration test with Ask
 	_ = context.Background()
-	
+
 	// We don't have a way to query FSM state directly via messages unless we implement it.
 	// For this test, we just verify it doesn't crash and responds.
 	ref.Tell("5678")
-	
+
 	time.Sleep(100 * time.Millisecond)
 	// Should be unlocked now.
 }

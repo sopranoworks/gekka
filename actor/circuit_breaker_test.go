@@ -65,7 +65,7 @@ func TestCircuitBreaker_HalfOpenToOpen(t *testing.T) {
 	assert.Equal(t, Open, cb.state)
 
 	time.Sleep(150 * time.Millisecond)
-	
+
 	// Fail in HalfOpen -> should go back to Open
 	_ = cb.Call(func() error { return errors.New("fail") })
 	assert.Equal(t, Open, cb.state)

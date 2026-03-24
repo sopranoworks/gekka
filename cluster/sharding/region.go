@@ -28,11 +28,11 @@ type ShardRegion struct {
 	coordinator        actor.Ref
 	shardSettings      ShardSettings
 
-	shards             map[ShardId]actor.Ref    // Local shards
-	shardHomePaths     map[ShardId]string       // ShardId -> Region Path (cached)
-	pendingMessages    map[ShardId][]actor.Envelope
-	handoffInProgress  map[ShardId]struct{}     // shards being rebalanced away
-	drainPending       map[ShardId]struct{}     // shards awaiting ShardDrainResponse
+	shards            map[ShardId]actor.Ref // Local shards
+	shardHomePaths    map[ShardId]string    // ShardId -> Region Path (cached)
+	pendingMessages   map[ShardId][]actor.Envelope
+	handoffInProgress map[ShardId]struct{} // shards being rebalanced away
+	drainPending      map[ShardId]struct{} // shards awaiting ShardDrainResponse
 
 	// handoffDone is closed by Receive when a HandoffComplete message arrives
 	// from the coordinator.  PostStop blocks on this channel (with a timeout)

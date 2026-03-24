@@ -30,7 +30,7 @@ func (o BackoffOptions) NextDelay(failures int) time.Duration {
 
 	// backoff = min * 2^failures
 	backoff := float64(o.MinBackoff) * math.Pow(2, float64(failures))
-	
+
 	// clamp to MaxBackoff
 	if backoff > float64(o.MaxBackoff) {
 		backoff = float64(o.MaxBackoff)

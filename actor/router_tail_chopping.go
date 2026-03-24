@@ -52,7 +52,7 @@ func (l *TailChoppingRoutingLogic) Route(router *RouterActor, msg any) bool {
 }
 
 // TailChoppingFirstCompleted is a router implementation that sends a message
-// to one routee at a time with a 'Within' interval, providing the first 
+// to one routee at a time with a 'Within' interval, providing the first
 // response received back to the original sender.
 //
 // Deprecated: use NewGroupRouter or NewPoolRouter with TailChoppingRoutingLogic.

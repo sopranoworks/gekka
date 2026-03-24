@@ -30,7 +30,7 @@ type routingMockContext struct {
 func newRoutingMockContext(routes map[string]actor.Ref) *routingMockContext {
 	return &routingMockContext{
 		mockActorContext: newMockActorContext(),
-		routes:          routes,
+		routes:           routes,
 	}
 }
 

@@ -15,9 +15,9 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka/actor/typed"
+	"github.com/sopranoworks/gekka/cluster/sharding"
 	"github.com/sopranoworks/gekka/persistence"
 	ptyped "github.com/sopranoworks/gekka/persistence/typed"
-	"github.com/sopranoworks/gekka/cluster/sharding"
 )
 
 func TestClusterSharding_Rebalancing(t *testing.T) {

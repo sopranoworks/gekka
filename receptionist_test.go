@@ -21,12 +21,12 @@ import (
 func TestReceptionist_Register(t *testing.T) {
 	replicator := ddata.NewReplicator("node1", nil)
 	behavior := receptionist.Behavior(replicator)
-	
+
 	// Create typed actor manually for test
 	a := typed.NewTypedActor(behavior).(*typed.TypedActor[any])
-	
+
 	key := NewServiceKey[string]("test-service")
-	
+
 	// Mock ref
 	mref := &mockTypedRef{path: "/user/service1"}
 	typedServiceRef := typed.NewTypedActorRef[string](mref)
@@ -48,5 +48,5 @@ type mockTypedRef struct {
 	path string
 }
 
-func (r *mockTypedRef) Path() string { return r.path }
+func (r *mockTypedRef) Path() string                      { return r.path }
 func (r *mockTypedRef) Tell(msg any, sender ...actor.Ref) {}

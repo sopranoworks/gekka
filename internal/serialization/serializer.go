@@ -42,9 +42,9 @@ type Serializer interface {
 // ── Registry ──────────────────────────────────────────────────────────────────
 
 var (
-	registryMu  sync.RWMutex
-	byName      = make(map[string]Serializer)
-	byID        = make(map[int32]Serializer)
+	registryMu sync.RWMutex
+	byName     = make(map[string]Serializer)
+	byID       = make(map[int32]Serializer)
 )
 
 // Register adds s to the default registry under name.

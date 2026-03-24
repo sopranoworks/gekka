@@ -279,10 +279,10 @@ type tcpInIterator[T any] struct {
 	conn   net.Conn
 	decode Decoder[T]
 
-	buf      chan T         // bounded receive buffer
-	errCh    chan error     // at most one error from readLoop
-	notifyCh chan struct{}  // 1-slot channel: next() notifies writeLoop of demand change
-	stopCh   chan struct{}  // closed by stop() to terminate goroutines
+	buf      chan T        // bounded receive buffer
+	errCh    chan error    // at most one error from readLoop
+	notifyCh chan struct{} // 1-slot channel: next() notifies writeLoop of demand change
+	stopCh   chan struct{} // closed by stop() to terminate goroutines
 
 	demanded atomic.Int64 // monotonically-increasing cumulative demand
 	// stopOnce sync.Once

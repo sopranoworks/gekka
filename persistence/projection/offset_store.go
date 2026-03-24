@@ -56,7 +56,7 @@ func (s *sqlOffsetStore) CreateTable(ctx context.Context) error {
 func (s *sqlOffsetStore) ReadOffset(ctx context.Context, projectionName string) (query.Offset, error) {
 	var offsetType string
 	var offsetValue int64
-	
+
 	queryStr := fmt.Sprintf("SELECT offset_type, offset_value FROM %s WHERE projection_name = ?", s.table)
 	err := s.db.QueryRowContext(ctx, queryStr, projectionName).Scan(&offsetType, &offsetValue)
 	if err == sql.ErrNoRows {
@@ -96,12 +96,12 @@ func (s *sqlOffsetStore) SaveOffset(ctx context.Context, projectionName string, 
 	now := time.Now().UnixNano()
 	queryStr := fmt.Sprintf(`INSERT INTO %s (projection_name, offset_type, offset_value, updated_at)
 		VALUES (?, ?, ?, ?)
-		ON DUPLICATE KEY UPDATE offset_type = VALUES(offset_type), offset_value = VALUES(offset_value), updated_at = VALUES(updated_at)`, 
+		ON DUPLICATE KEY UPDATE offset_type = VALUES(offset_type), offset_value = VALUES(offset_value), updated_at = VALUES(updated_at)`,
 		s.table)
-	
+
 	// Implementation note: This UPSERT syntax is MySQL specific.
 	// In a real implementation we would use the Dialect to get the correct SQL.
-	
+
 	_, err := s.db.ExecContext(ctx, queryStr, projectionName, offsetType, offsetValue, now)
 	return err
 }

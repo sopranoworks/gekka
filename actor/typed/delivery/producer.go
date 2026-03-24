@@ -17,14 +17,14 @@ import (
 
 // producerState holds the mutable state of the ProducerController.
 type producerState struct {
-	producerID   string
-	selfRef      actor.Ref
-	consumerRef  actor.Ref
-	consumerPath string
-	nextSeqNr    int64
-	sentUpTo     int64
+	producerID    string
+	selfRef       actor.Ref
+	consumerRef   actor.Ref
+	consumerPath  string
+	nextSeqNr     int64
+	sentUpTo      int64
 	confirmedUpTo int64
-	requestUpTo  int64
+	requestUpTo   int64
 	// buffer holds messages waiting for window space or confirmation.
 	buffer []*SequencedMessage
 }

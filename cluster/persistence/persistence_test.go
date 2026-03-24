@@ -140,7 +140,7 @@ func (m *testActorContext) ActorOf(props actor.Props, name string) (actor.Ref, e
 	return ref, nil
 }
 
-func (m *testActorContext) Stop(_ actor.Ref) { m.stopped = true }
+func (m *testActorContext) Stop(_ actor.Ref)     { m.stopped = true }
 func (m *testActorContext) Watch(_, _ actor.Ref) {}
 
 type testActorRef struct {

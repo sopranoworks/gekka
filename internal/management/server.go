@@ -28,6 +28,7 @@
 //
 //	GET /dashboard
 //	    A minimal browser dashboard that renders all of the above in real time.
+//
 // Package management implements the Cluster HTTP Management API.
 //
 // It exposes REST endpoints that allow operators and tools to inspect and

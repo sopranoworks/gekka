@@ -76,8 +76,8 @@ const fullStateEvery = 10
 // messages on most rounds, and a full-state message every fullStateEvery rounds
 // to repair any dropped deltas.
 type Replicator struct {
-	mu       sync.RWMutex
-	nodeID   string
+	mu         sync.RWMutex
+	nodeID     string
 	counters   map[string]*GCounter
 	sets       map[string]*ORSet
 	maps       map[string]*LWWMap

@@ -30,20 +30,20 @@ const (
 //
 // A node is considered unavailable when φ exceeds the configured threshold.
 type PhiAccrualFailureDetector struct {
-	threshold        float64
-	maxSampleSize    int
-	minStdDeviation  time.Duration
-	history          []time.Duration // sliding window of inter-arrival times
-	lastHeartbeatAt  time.Time
-	hasFirstBeat     bool
-	mu               sync.Mutex
+	threshold       float64
+	maxSampleSize   int
+	minStdDeviation time.Duration
+	history         []time.Duration // sliding window of inter-arrival times
+	lastHeartbeatAt time.Time
+	hasFirstBeat    bool
+	mu              sync.Mutex
 }
 
 // New creates a PhiAccrualFailureDetector for a single remote node.
 //   - threshold:       φ value above which the node is declared unavailable (e.g. 10.0).
 //   - maxSampleSize:   maximum number of intervals retained in the sliding window (e.g. 1000).
 //   - minStdDeviation: lower bound on σ to prevent φ from exploding on perfectly
-//                      regular heartbeats or tiny windows (e.g. 200ms).
+//     regular heartbeats or tiny windows (e.g. 200ms).
 func New(threshold float64, maxSampleSize int, minStdDeviation time.Duration) *PhiAccrualFailureDetector {
 	return &PhiAccrualFailureDetector{
 		threshold:       threshold,

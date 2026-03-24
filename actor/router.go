@@ -244,6 +244,7 @@ func (r *RouterActor) Receive(msg any) {
 		}
 	}
 }
+
 // ── Pool router ───────────────────────────────────────────────────────────────
 
 // AdjustPoolSize is a management message sent to a PoolRouter to request a

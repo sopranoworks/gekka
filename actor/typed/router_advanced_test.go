@@ -18,7 +18,7 @@ import (
 
 func TestRouter_Broadcast(t *testing.T) {
 	received := make(chan string, 10)
-	
+
 	workerBehavior := func(ctx TypedContext[string], msg string) Behavior[string] {
 		received <- msg
 		return Same[string]()
@@ -26,12 +26,12 @@ func TestRouter_Broadcast(t *testing.T) {
 
 	w1 := NewTypedActorInternal(workerBehavior)
 	w1.SetSelf(&actor.FunctionalMockRef{Handler: func(m any) { w1.Receive(m) }, PathURI: "/user/w1"})
-	
+
 	w2 := NewTypedActorInternal(workerBehavior)
 	w2.SetSelf(&actor.FunctionalMockRef{Handler: func(m any) { w2.Receive(m) }, PathURI: "/user/w2"})
 
 	group := actor.NewGroupRouter(&actor.BroadcastRoutingLogic{}, []actor.Ref{w1.Self(), w2.Self()})
-	
+
 	rActor := NewTypedActorInternal(func(ctx TypedContext[any], msg any) Behavior[any] {
 		group.Receive(msg)
 		return Same[any]()
@@ -53,7 +53,7 @@ func TestRouter_Broadcast(t *testing.T) {
 
 func TestRouter_ScatterGather(t *testing.T) {
 	received := make(chan string, 10)
-	
+
 	sys := &actor.ScatterGatherTestSystem{
 		Received: received,
 		T:        t,
@@ -63,7 +63,7 @@ func TestRouter_ScatterGather(t *testing.T) {
 	slowWorker := &scatterGatherTestWorker{reply: "slow-reply", delay: 200 * time.Millisecond, t: t}
 
 	sg := actor.NewGroupRouter(&actor.ScatterGatherRoutingLogic{Within: 500 * time.Millisecond}, []actor.Ref{fastWorker, slowWorker})
-	
+
 	rActor := NewTypedActorInternal(RouterBehavior(&sg.RouterActor))
 	rActor.SetSelf(&typedMockRef{path: "/user/router"})
 	rActor.SetSystem(sys)
@@ -78,7 +78,7 @@ func TestRouter_ScatterGather(t *testing.T) {
 		},
 	}
 	actor.InjectSender(rActor, sender)
-	
+
 	rActor.Receive("query")
 
 	// First completed should be fast-reply
@@ -93,7 +93,7 @@ func TestRouter_ScatterGather(t *testing.T) {
 
 func TestRouter_TailChopping(t *testing.T) {
 	received := make(chan string, 10)
-	
+
 	sys := &actor.ScatterGatherTestSystem{
 		Received: received,
 		T:        t,
@@ -103,7 +103,7 @@ func TestRouter_TailChopping(t *testing.T) {
 	fastWorker := &scatterGatherTestWorker{reply: "fast-reply", delay: 0, t: t}
 
 	tc := actor.NewGroupRouter(&actor.TailChoppingRoutingLogic{Within: 100 * time.Millisecond}, []actor.Ref{slowWorker, fastWorker})
-	
+
 	rActor := NewTypedActorInternal(RouterBehavior(&tc.RouterActor))
 	rActor.SetSelf(&typedMockRef{path: "/user/router"})
 	rActor.SetSystem(sys)

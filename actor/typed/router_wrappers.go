@@ -53,10 +53,10 @@ func BridgeClassicToTyped(a actor.Actor, ctx TypedContext[any], msg any) {
 	if s, ok := a.(interface{ SetSelf(actor.Ref) }); ok {
 		s.SetSelf(ctx.Self().Untyped())
 	}
-	
+
 	// Inject current sender
 	actor.InjectSender(a, ctx.Sender())
-	
+
 	// Invoke Receive
 	a.Receive(msg)
 }

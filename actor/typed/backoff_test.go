@@ -80,7 +80,7 @@ func TestBackoffSupervisor_Lifecycle(t *testing.T) {
 
 	supBehavior := NewBackoffSupervisor[string](opts, childProps)
 	sup := NewTypedActorInternal(supBehavior)
-	
+
 	supRef := &actor.FunctionalMockRef{
 		PathURI: "/user/sup",
 		Handler: func(m any) {
@@ -88,10 +88,10 @@ func TestBackoffSupervisor_Lifecycle(t *testing.T) {
 		},
 	}
 	sup.SetSelf(supRef)
-	
+
 	sys := &backoffTestSystem{t: t}
 	sup.SetSystem(sys)
-	
+
 	actor.Start(sup)
 	supRef.Tell("trigger-setup")
 
@@ -100,10 +100,10 @@ func TestBackoffSupervisor_Lifecycle(t *testing.T) {
 	assert.Equal(t, int32(1), spawnCount.Load())
 
 	childRef := &typedMockRef{path: "/temp/child"}
-	
+
 	// 2. Simulate child termination (failure 1)
 	supRef.Tell(mockTerminated{actor: childRef})
-	
+
 	time.Sleep(50 * time.Millisecond)
 	assert.Equal(t, int32(1), spawnCount.Load())
 	time.Sleep(250 * time.Millisecond)

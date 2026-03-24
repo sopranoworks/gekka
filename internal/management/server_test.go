@@ -43,11 +43,11 @@ type mockProvider struct {
 	quarantined   bool  // simulates a quarantined Artery association
 
 	// Phase-13 extensions
-	services         map[string][]string
-	configEntries    map[string]any
-	configUpdated    map[string]any   // captures UpdateConfigEntry calls
-	shardDist        map[string]string
-	shardDistFound   bool
+	services       map[string][]string
+	configEntries  map[string]any
+	configUpdated  map[string]any // captures UpdateConfigEntry calls
+	shardDist      map[string]string
+	shardDistFound bool
 
 	// Phase-15 extensions
 	rebalanceCalled []rebalanceCall

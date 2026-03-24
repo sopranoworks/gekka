@@ -1712,7 +1712,6 @@ func (c *Cluster) LookupDeployment(path string) (core.DeploymentConfig, bool) {
 func (n *Cluster) SpawnActor(path string, a actor.Actor, props actor.Props) actor.Ref {
 	ref := ActorRef{fullPath: n.SelfPathURI(path), sys: n, local: a}
 
-
 	// Inject the actor's own reference so it can use Self() inside Receive.
 	type selfSetter interface{ SetSelf(actor.Ref) }
 	if ss, ok := a.(selfSetter); ok {
@@ -1788,7 +1787,7 @@ func (n *Cluster) SpawnActor(path string, a actor.Actor, props actor.Props) acto
 	return ref
 }
 
-// SubscribeToReceptionist allows internal components (like GroupRouter) to 
+// SubscribeToReceptionist allows internal components (like GroupRouter) to
 // subscribe to service updates without direct dependency on the receptionist protocol.
 func (c *Cluster) SubscribeToReceptionist(keyID string, subscriber typed.TypedActorRef[any], callback func([]string)) {
 	recept := Receptionist()

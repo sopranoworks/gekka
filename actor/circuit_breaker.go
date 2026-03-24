@@ -38,11 +38,11 @@ type CircuitBreakerSettings struct {
 
 // CircuitBreaker protects actor communications by failing fast when errors occur.
 type CircuitBreaker struct {
-	mu           sync.RWMutex
-	state        CircuitBreakerState
-	failures     int
-	lastFailure  time.Time
-	settings     CircuitBreakerSettings
+	mu            sync.RWMutex
+	state         CircuitBreakerState
+	failures      int
+	lastFailure   time.Time
+	settings      CircuitBreakerSettings
 	onStateChange func(state CircuitBreakerState)
 }
 
@@ -72,7 +72,7 @@ func (cb *CircuitBreaker) Call(f func() error) error {
 	// For HalfOpen or Closed, we attempt the call.
 	var err error
 	done := make(chan struct{})
-	
+
 	go func() {
 		err = f()
 		close(done)

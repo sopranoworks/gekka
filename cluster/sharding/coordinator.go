@@ -50,10 +50,10 @@ type rebalanceTick struct{}
 type ShardCoordinator struct {
 	actor.BaseActor
 	strategy            ShardAllocationStrategy
-	regions             map[string]actor.Ref    // RegionPath -> Ref
-	shards              map[ShardId]string      // ShardId -> RegionPath
-	rebalanceInProgress map[ShardId]struct{}    // shards currently being rebalanced
-	forcedTarget        map[ShardId]string      // ShardId -> RegionPath for manual rebalance
+	regions             map[string]actor.Ref // RegionPath -> Ref
+	shards              map[ShardId]string   // ShardId -> RegionPath
+	rebalanceInProgress map[ShardId]struct{} // shards currently being rebalanced
+	forcedTarget        map[ShardId]string   // ShardId -> RegionPath for manual rebalance
 	// RebalanceInterval overrides the default 10 s period between rebalance
 	// checks.  Zero means 10 s.  Exposed for testing (set before PreStart).
 	RebalanceInterval time.Duration

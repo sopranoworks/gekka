@@ -65,7 +65,7 @@ func (l *AdaptiveLoadBalancingRoutingLogic) Select(message any, routees []Ref) R
 		} else {
 			// In Cluster, nodeID was host:port.
 			nodeID := path.Address.Host + ":" + itoa_val(path.Address.Port)
-			
+
 			pressure, ok := pressureMap[nodeID]
 			if !ok {
 				pressure = 0.5 // Unknown node, assume medium pressure

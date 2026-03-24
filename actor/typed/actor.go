@@ -240,14 +240,14 @@ func NewTypedActorGeneric(behavior any) actor.Actor {
 	if val.Kind() != reflect.Func {
 		panic(fmt.Sprintf("typed: behavior must be a function, got %T", behavior))
 	}
-	
+
 	// Extraction of T from func(TypedContext[T], T) Behavior[T]
 	tType := val.Type().In(1)
-	
+
 	// Create a generic TypedActor using reflection to instantiate the generic type.
 	// Since TypedActor[T] is a struct, we need to use reflect.New and some magic.
 	// A simpler way is to have a factory function.
-	
+
 	return createTypedActorReflection(behavior, tType)
 }
 
@@ -264,7 +264,7 @@ type genericTypedActor struct {
 	actor.BaseActor
 	behavior reflect.Value // Behavior[T]
 	tType    reflect.Type
-	ctx      any                  // TypedContext[T]
+	ctx      any                 // TypedContext[T]
 	timers   TimerScheduler[any] // Use local interface
 	stash    StashBuffer[any]    // Use local interface
 	stopped  bool
@@ -274,7 +274,7 @@ func (a *genericTypedActor) PreStart() {
 	// We need a TypedContext[T]. We can't easily create one without generics.
 	// But we can create a proxy context that implements the interface.
 	a.ctx = createProxyContext(a)
-	
+
 	// Initialize timers/stash
 	a.timers = actor.NewTimerScheduler[any](a.Self())
 	a.stash = actor.NewStashBuffer[any](a.Self(), actor.DefaultStashCapacity)
@@ -290,19 +290,19 @@ func (a *genericTypedActor) Receive(msg any) {
 	if a.stopped {
 		return
 	}
-	
+
 	// Check if msg is of type T
 	mVal := reflect.ValueOf(msg)
 	if !mVal.Type().AssignableTo(a.tType) {
 		return
 	}
-	
+
 	// Call behavior(ctx, msg)
 	results := a.behavior.Call([]reflect.Value{
 		reflect.ValueOf(a.ctx),
 		mVal,
 	})
-	
+
 	next := results[0]
 	if !next.IsNil() {
 		// Check if next is Stopped[T]
@@ -328,7 +328,7 @@ func isStoppedGeneric(behavior any, tType reflect.Type) bool {
 func createProxyContext(a *genericTypedActor) any {
 	// This is complex. Let's provide a simpler implementation for now
 	// that works for the most common cases or rethink the generic spawner.
-	return nil 
+	return nil
 }
 
 // Receive implements the Actor interface for TypedActor[T].

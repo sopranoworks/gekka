@@ -27,8 +27,8 @@ func makeMembers(n int) []Member {
 func TestStaticQuorum_5NodeCluster_3Unreachable(t *testing.T) {
 	s := &StaticQuorumStrategy{QuorumSize: 3}
 
-	all := makeMembers(5)          // 5-node cluster
-	unreachable := all[2:]         // last 3 are unreachable → local side sees 2 reachable
+	all := makeMembers(5)  // 5-node cluster
+	unreachable := all[2:] // last 3 are unreachable → local side sees 2 reachable
 
 	action := s.Decide(all, unreachable)
 	if action != Down {
@@ -41,8 +41,8 @@ func TestStaticQuorum_5NodeCluster_3Unreachable(t *testing.T) {
 func TestStaticQuorum_5NodeCluster_2Unreachable(t *testing.T) {
 	s := &StaticQuorumStrategy{QuorumSize: 3}
 
-	all := makeMembers(5)          // 5-node cluster
-	unreachable := all[3:]         // last 2 are unreachable → local side sees 3 reachable
+	all := makeMembers(5)  // 5-node cluster
+	unreachable := all[3:] // last 2 are unreachable → local side sees 3 reachable
 
 	action := s.Decide(all, unreachable)
 	if action != Keep {
@@ -55,8 +55,8 @@ func TestStaticQuorum_5NodeCluster_2Unreachable(t *testing.T) {
 func TestStaticQuorum_3NodeCluster_1Unreachable(t *testing.T) {
 	s := &StaticQuorumStrategy{QuorumSize: 2}
 
-	all := makeMembers(3)          // 3-node cluster
-	unreachable := all[2:]         // last 1 is unreachable → local side sees 2 reachable
+	all := makeMembers(3)  // 3-node cluster
+	unreachable := all[2:] // last 1 is unreachable → local side sees 2 reachable
 
 	action := s.Decide(all, unreachable)
 	if action != Keep {
@@ -69,8 +69,8 @@ func TestStaticQuorum_3NodeCluster_1Unreachable(t *testing.T) {
 func TestStaticQuorum_ClusterTooSmall(t *testing.T) {
 	s := &StaticQuorumStrategy{QuorumSize: 5}
 
-	all := makeMembers(3)       // only 3 members — can never reach quorum of 5
-	unreachable := []Member{}   // even with all reachable, total < QuorumSize
+	all := makeMembers(3)     // only 3 members — can never reach quorum of 5
+	unreachable := []Member{} // even with all reachable, total < QuorumSize
 
 	action := s.Decide(all, unreachable)
 	if action != Down {

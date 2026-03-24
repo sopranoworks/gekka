@@ -13,6 +13,7 @@ import (
 	"sort"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/sopranoworks/gekka/stream"
 )
@@ -49,7 +50,7 @@ func TestZip_EqualLength(t *testing.T) {
 func TestZip_LeftShorter(t *testing.T) {
 	result, err := stream.RunWith(
 		stream.Zip(
-			stream.FromSlice([]int{1, 2}),      // shorter
+			stream.FromSlice([]int{1, 2}),       // shorter
 			stream.FromSlice([]int{10, 20, 30}), // longer
 		),
 		stream.Collect[stream.Pair[int, int]](),
@@ -69,7 +70,7 @@ func TestZip_RightShorter(t *testing.T) {
 	result, err := stream.RunWith(
 		stream.Zip(
 			stream.FromSlice([]int{1, 2, 3, 4}), // longer
-			stream.FromSlice([]int{10}),           // shorter
+			stream.FromSlice([]int{10}),         // shorter
 		),
 		stream.Collect[stream.Pair[int, int]](),
 		stream.ActorMaterializer{},
@@ -500,7 +501,7 @@ func TestBalance_DistributesAcrossBranches(t *testing.T) {
 		wg.Add(1)
 		go func(idx int, src stream.Source[int, stream.NotUsed]) {
 			defer wg.Done()
-			res, _ := stream.RunWith(src, stream.Collect[int](), stream.ActorMaterializer{})
+			res, _ := stream.RunWith(src.Delay(time.Millisecond), stream.Collect[int](), stream.ActorMaterializer{})
 			mu.Lock()
 			counts[idx] = len(res)
 			mu.Unlock()

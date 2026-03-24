@@ -294,7 +294,6 @@ func (m *SBRManager) checkAutoDown(ctx context.Context) {
 	}
 }
 
-
 // hasUnreachable returns true if any Up/WeaklyUp member is still unreachable.
 func (m *SBRManager) hasUnreachable() bool {
 	_, unreachable := m.classifyMembers()

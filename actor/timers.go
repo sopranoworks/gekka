@@ -37,7 +37,7 @@ func (s *TimerSchedulerImpl[T]) StartSingleTimer(key any, msg T, delay time.Dura
 		s.mu.Lock()
 		delete(s.timers, key)
 		s.mu.Unlock()
-		
+
 		// Send message to self.
 		s.self.Tell(msg)
 	})

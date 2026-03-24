@@ -29,17 +29,17 @@ type ORSet struct {
 	vv   map[string]uint64           // version vector: nodeID -> max counter seen
 
 	// delta accumulator
-	deltaAdded    map[string][]Dot // new dots since last ResetDelta
-	deltaRemoved  []string         // elements explicitly removed since last ResetDelta
-	deltaVV       map[string]uint64
+	deltaAdded   map[string][]Dot // new dots since last ResetDelta
+	deltaRemoved []string         // elements explicitly removed since last ResetDelta
+	deltaVV      map[string]uint64
 }
 
 func NewORSet() *ORSet {
 	return &ORSet{
-		dots:         make(map[string]map[Dot]struct{}),
-		vv:           make(map[string]uint64),
-		deltaAdded:   make(map[string][]Dot),
-		deltaVV:      make(map[string]uint64),
+		dots:       make(map[string]map[Dot]struct{}),
+		vv:         make(map[string]uint64),
+		deltaAdded: make(map[string][]Dot),
+		deltaVV:    make(map[string]uint64),
 	}
 }
 

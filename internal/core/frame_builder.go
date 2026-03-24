@@ -62,12 +62,12 @@ func (b *ArteryFrameBuilder) BuildToBuffers(
 	// but the payload remains as is.
 	res := make(net.Buffers, 3)
 	res[0] = b.header[:]
-	
+
 	// Create a copy of the literals to avoid subsequent overwrites
 	litsCopy := make([]byte, len(b.lits))
 	copy(litsCopy, b.lits)
 	res[1] = litsCopy
-	
+
 	res[2] = payload
 
 	return res, nil

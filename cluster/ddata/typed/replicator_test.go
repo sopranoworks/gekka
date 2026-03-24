@@ -21,10 +21,10 @@ import (
 func TestTypedReplicator_GCounter(t *testing.T) {
 	// Mock environment
 	repl := ddata.NewReplicator("node1", nil)
-	
+
 	counter := repl.GCounter("count")
 	assert.Equal(t, uint64(0), counter.Value())
-	
+
 	update := Update[*ddata.GCounter]{
 		Key: "count",
 		Modify: func(c *ddata.GCounter) *ddata.GCounter {
@@ -32,22 +32,22 @@ func TestTypedReplicator_GCounter(t *testing.T) {
 			return c
 		},
 	}
-	
+
 	update.handle(repl, nil)
 	assert.Equal(t, uint64(5), counter.Value())
-	
+
 	// Test Get
 	replyTo := &mockGetResponseRef[*ddata.GCounter]{
 		replyCh: make(chan GetResponse[*ddata.GCounter], 1),
 	}
-	
+
 	get := Get[*ddata.GCounter]{
 		Key:     "count",
 		ReplyTo: typed.NewTypedActorRef[GetResponse[*ddata.GCounter]](replyTo),
 	}
-	
+
 	get.handle(repl, nil)
-	
+
 	select {
 	case res := <-replyTo.replyCh:
 		assert.True(t, res.Found)

@@ -987,7 +987,6 @@ func (cm *ClusterManager) CheckConvergenceLocked() bool {
 	return len(upMembers) == 0
 }
 
-
 type ClockOrdering int
 
 const (

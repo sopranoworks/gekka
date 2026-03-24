@@ -98,8 +98,8 @@ func TestIntegration_ConfigAndServiceDiscovery(t *testing.T) {
 	}
 
 	// ── Manual gossip round ───────────────────────────────────────────────
-	gossipLWWMap(t, rA, rB, cfgA.MapKey())         // A→B: config
-	gossipORSet(t, rB, rA, "order-processor")       // B→A: service
+	gossipLWWMap(t, rA, rB, cfgA.MapKey())    // A→B: config
+	gossipORSet(t, rB, rA, "order-processor") // B→A: service
 
 	// ── Post-gossip: convergence assertions ───────────────────────────────
 	val, ok := cfgB.GetConfig("log-level")

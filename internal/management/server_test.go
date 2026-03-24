@@ -24,6 +24,7 @@ import (
 	"github.com/sopranoworks/gekka/internal/management"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
+	"github.com/sopranoworks/gekka/persistence"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -132,6 +133,8 @@ func (p *mockProvider) RebalanceShard(typeName, shardID, targetRegion string) er
 	p.rebalanceCalled = append(p.rebalanceCalled, rebalanceCall{typeName, shardID, targetRegion})
 	return nil
 }
+
+func (p *mockProvider) DurableStateStore() persistence.DurableStateStore { return nil }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

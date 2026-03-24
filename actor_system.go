@@ -10,10 +10,12 @@ package gekka
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"reflect"
 	"sync/atomic"
 
+	hocon "github.com/sopranoworks/gekka-config"
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/actor/typed"
 	"github.com/sopranoworks/gekka/internal/core"
@@ -146,6 +148,15 @@ type ActorSystem interface {
 	// SnapshotStore returns the SnapshotStore provisioned for this system.
 	// By default this is an InMemorySnapshotStore.
 	SnapshotStore() persistence.SnapshotStore
+
+	// DurableStateStore returns the DurableStateStore provisioned for this system.
+	DurableStateStore() persistence.DurableStateStore
+
+	// ProvideDurableStateStore wires a config-driven state store backend.
+	ProvideDurableStateStore(name string, cfg hocon.Config) error
+
+	// ProvideDurableStateStoreDB wires a SQL-backed state store backend.
+	ProvideDurableStateStoreDB(plugin string, db *sql.DB) error
 }
 
 // internalSystem is an unexported interface used by ActorRef and ActorSelection

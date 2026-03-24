@@ -72,6 +72,7 @@ import (
 
 	"github.com/sopranoworks/gekka/cluster"
 	"github.com/sopranoworks/gekka/internal/core"
+	"github.com/sopranoworks/gekka/persistence"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 )
 
@@ -121,6 +122,9 @@ type ClusterStateProvider interface {
 	// Returns an error when typeName has no registered coordinator, or when
 	// shardId / targetRegion validation fails inside the coordinator.
 	RebalanceShard(typeName, shardId, targetRegion string) error
+
+	// DurableStateStore returns the DurableStateStore provisioned for this system.
+	DurableStateStore() persistence.DurableStateStore
 }
 
 // MemberInfo is the JSON representation of a single cluster member returned by
@@ -188,6 +192,7 @@ func NewManagementServer(provider ClusterStateProvider, hostname string, port in
 	mux.HandleFunc("/cluster/services", ms.handleServices)
 	mux.HandleFunc("/cluster/config", ms.handleConfig)
 	mux.HandleFunc("/cluster/sharding/", ms.handleSharding)
+	mux.HandleFunc("/durable-state/", ms.handleDurableState)
 	mux.HandleFunc("/dashboard", ms.handleDashboard)
 
 	if enableHealth {
@@ -471,6 +476,55 @@ func (ms *ManagementServer) handleShardingRebalance(w http.ResponseWriter, r *ht
 }
 
 // ── Dashboard handler ─────────────────────────────────────────────────────────
+
+// handleDurableState serves GET /durable-state/{persistenceId}.
+func (ms *ManagementServer) handleDurableState(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	pid := strings.TrimPrefix(r.URL.Path, "/durable-state/")
+	if pid == "" {
+		http.Error(w, "bad request: persistenceId is required", http.StatusBadRequest)
+		return
+	}
+
+	store := ms.provider.DurableStateStore()
+	if store == nil {
+		http.Error(w, "durable state store not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	state, revision, err := store.Get(r.Context(), pid)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("error fetching state: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	if state == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprintf(w, `{"error":"state not found","persistence_id":%q}`+"\n", pid)
+		return
+	}
+
+	response := struct {
+		PersistenceID string `json:"persistence_id"`
+		Revision      uint64 `json:"revision"`
+		State         any    `json:"state"`
+	}{
+		PersistenceID: pid,
+		Revision:      revision,
+		State:         state,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	enc.Encode(response) //nolint:errcheck
+}
 
 // handleDashboard serves GET /dashboard — returns the embedded HTML dashboard.
 func (ms *ManagementServer) handleDashboard(w http.ResponseWriter, r *http.Request) {

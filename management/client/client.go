@@ -97,6 +97,40 @@ func (c *Client) ShardDistribution(typeName string) (map[string]string, error) {
 	return dist, nil
 }
 
+// DurableStateResponse is the JSON structure returned by GET /durable-state/{persistenceId}.
+type DurableStateResponse struct {
+	PersistenceID string `json:"persistence_id"`
+	Revision      uint64 `json:"revision"`
+	State         any    `json:"state"`
+}
+
+// DurableState calls GET /durable-state/{persistenceId} and returns the current state.
+func (c *Client) DurableState(persistenceID string) (*DurableStateResponse, error) {
+	endpoint := c.baseURL + "/durable-state/" + persistenceID
+	resp, err := c.httpClient.Get(endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("client: GET %s: %w", endpoint, err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("client: read response: %w", err)
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil // not found
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("client: server returned %s: %s", resp.Status, body)
+	}
+
+	var res DurableStateResponse
+	if err := json.Unmarshal(body, &res); err != nil {
+		return nil, fmt.Errorf("client: parse response: %w", err)
+	}
+	return &res, nil
+}
+
 // RebalanceShard calls POST /cluster/sharding/{typeName}/rebalance and
 // requests that shardID be moved to targetRegion.
 func (c *Client) RebalanceShard(typeName, shardID, targetRegion string) error {

@@ -10,6 +10,7 @@ package gekka
 
 import (
 	"context"
+	"database/sql"
 	_ "embed"
 	"fmt"
 	"log/slog"
@@ -37,15 +38,16 @@ type localActorSystem struct {
 	actors        map[string]actor.Actor
 	actorsMu      sync.RWMutex
 	logHandler    slog.Handler
-	sched         *systemScheduler
-	journal       persistence.Journal
-	snapshotStore persistence.SnapshotStore
+	sched             *systemScheduler
+	journal           persistence.Journal
+	snapshotStore     persistence.SnapshotStore
+	durableStateStore persistence.DurableStateStore
 }
 
 // NewActorSystem creates and returns a local-only ActorSystem.
 // It manages actors within the same process without networking or cluster features.
 //
-// A Journal, SnapshotStore, and Telemetry provider are provisioned automatically
+// A Journal, SnapshotStore, DurableStateStore and Telemetry provider are provisioned automatically
 // from the plugin registry. Defaults are defined in reference.conf (in-memory /
 // no-op). Override via HOCON:
 //
@@ -53,6 +55,7 @@ type localActorSystem struct {
 //	  persistence {
 //	    journal.plugin        = "postgres"
 //	    snapshot-store.plugin = "postgres"
+//	    durable-state-store.plugin = "postgres"
 //	  }
 //	  telemetry {
 //	    provider.plugin = "otel"
@@ -91,16 +94,20 @@ func NewActorSystem(name string, config ...*hocon.Config) (ActorSystem, error) {
 
 	journalPlugin, journalFallback := pluginWithFallback("gekka.persistence.journal.plugin")
 	snapshotPlugin, snapshotFallback := pluginWithFallback("gekka.persistence.snapshot-store.plugin")
+	durableStatePlugin, durableStateFallback := pluginWithFallback("gekka.persistence.durable-state-store.plugin")
 	telemetryPlugin, telemetryFallback := pluginWithFallback("gekka.telemetry.provider.plugin")
 
 	// Resolve optional provider-settings sub-configs.
-	var journalCfg, snapshotCfg, telemetryCfg hocon.Config
+	var journalCfg, snapshotCfg, durableStateCfg, telemetryCfg hocon.Config
 	if userCfg != nil {
 		if sc, err := userCfg.GetConfig("gekka.persistence.journal.settings"); err == nil {
 			journalCfg = sc
 		}
 		if sc, err := userCfg.GetConfig("gekka.persistence.snapshot-store.settings"); err == nil {
 			snapshotCfg = sc
+		}
+		if sc, err := userCfg.GetConfig("gekka.persistence.durable-state-store.settings"); err == nil {
+			durableStateCfg = sc
 		}
 		if sc, err := userCfg.GetConfig("gekka.telemetry.settings"); err == nil {
 			telemetryCfg = sc
@@ -119,6 +126,7 @@ func NewActorSystem(name string, config ...*hocon.Config) (ActorSystem, error) {
 	}
 	logProvider("journal", journalPlugin, journalFallback)
 	logProvider("snapshot-store", snapshotPlugin, snapshotFallback)
+	logProvider("durable-state-store", durableStatePlugin, durableStateFallback)
 	logProvider("telemetry", telemetryPlugin, telemetryFallback)
 
 	j, err := persistence.NewJournal(journalPlugin, journalCfg)
@@ -128,6 +136,10 @@ func NewActorSystem(name string, config ...*hocon.Config) (ActorSystem, error) {
 	ss, err := persistence.NewSnapshotStore(snapshotPlugin, snapshotCfg)
 	if err != nil {
 		return nil, fmt.Errorf("actor system: provision snapshot store %q: %w", snapshotPlugin, err)
+	}
+	ds, err := persistence.NewDurableStateStore(durableStatePlugin, durableStateCfg)
+	if err != nil {
+		return nil, fmt.Errorf("actor system: provision durable state store %q: %w", durableStatePlugin, err)
 	}
 
 	if tp, err := telemetry.GetProvider(telemetryPlugin, telemetryCfg); err == nil {
@@ -145,15 +157,20 @@ func NewActorSystem(name string, config ...*hocon.Config) (ActorSystem, error) {
 		cancel()
 		return nil, fmt.Errorf("actor system: start snapshot store lifecycle: %w", err)
 	}
+	if err := persistence.StartLifecycle(ctx, ds); err != nil {
+		cancel()
+		return nil, fmt.Errorf("actor system: start durable state store lifecycle: %w", err)
+	}
 
 	s := &localActorSystem{
-		name:          name,
-		ctx:           ctx,
-		cancel:        cancel,
-		actors:        make(map[string]actor.Actor),
-		sched:         newSystemScheduler(),
-		journal:       j,
-		snapshotStore: ss,
+		name:              name,
+		ctx:               ctx,
+		cancel:            cancel,
+		actors:            make(map[string]actor.Actor),
+		sched:             newSystemScheduler(),
+		journal:           j,
+		snapshotStore:     ss,
+		durableStateStore: ds,
 	}
 	// Terminate the scheduler when the system context is cancelled.
 	go func() {
@@ -168,6 +185,31 @@ func (s *localActorSystem) Journal() persistence.Journal { return s.journal }
 
 // SnapshotStore implements ActorSystem.
 func (s *localActorSystem) SnapshotStore() persistence.SnapshotStore { return s.snapshotStore }
+
+// DurableStateStore implements ActorSystem.
+func (s *localActorSystem) DurableStateStore() persistence.DurableStateStore {
+	return s.durableStateStore
+}
+
+// ProvideDurableStateStore implements ActorSystem.
+func (s *localActorSystem) ProvideDurableStateStore(name string, cfg hocon.Config) error {
+	ds, err := persistence.NewDurableStateStore(name, cfg)
+	if err != nil {
+		return err
+	}
+	s.durableStateStore = ds
+	return nil
+}
+
+// ProvideDurableStateStoreDB implements ActorSystem.
+func (s *localActorSystem) ProvideDurableStateStoreDB(plugin string, db *sql.DB) error {
+	ds, err := persistence.NewDurableStateStoreFromDB(plugin, db)
+	if err != nil {
+		return err
+	}
+	s.durableStateStore = ds
+	return nil
+}
 
 // ProvideJournal replaces the journal backend at runtime.  Call before spawning
 // any persistent actors.  Idiomatic for tests that want a real SQL backend:

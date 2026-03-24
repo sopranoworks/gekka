@@ -22,6 +22,56 @@ func init() {
 	RegisterSnapshotStoreProvider("in-memory", func(_ hocon.Config) (SnapshotStore, error) {
 		return NewInMemorySnapshotStore(), nil
 	})
+	RegisterDurableStateStoreProvider("in-memory", func(_ hocon.Config) (DurableStateStore, error) {
+		return NewInMemoryDurableStateStore(), nil
+	})
+}
+
+// InMemoryDurableStateStore is an in-memory implementation of the DurableStateStore interface.
+type InMemoryDurableStateStore struct {
+	mu     sync.RWMutex
+	states map[string]inMemoryState
+}
+
+type inMemoryState struct {
+	state    any
+	revision uint64
+}
+
+func NewInMemoryDurableStateStore() *InMemoryDurableStateStore {
+	return &InMemoryDurableStateStore{
+		states: make(map[string]inMemoryState),
+	}
+}
+
+func (s *InMemoryDurableStateStore) Get(ctx context.Context, persistenceID string) (any, uint64, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	res, ok := s.states[persistenceID]
+	if !ok {
+		return nil, 0, nil
+	}
+	return res.state, res.revision, nil
+}
+
+func (s *InMemoryDurableStateStore) Upsert(ctx context.Context, persistenceID string, seqNr uint64, state any, tag string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.states[persistenceID] = inMemoryState{
+		state:    state,
+		revision: seqNr,
+	}
+	return nil
+}
+
+func (s *InMemoryDurableStateStore) Delete(ctx context.Context, persistenceID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	delete(s.states, persistenceID)
+	return nil
 }
 
 // InMemoryJournal is an in-memory implementation of the Journal interface.

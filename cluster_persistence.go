@@ -13,15 +13,17 @@ import (
 	"fmt"
 	"sync"
 
+	hocon "github.com/sopranoworks/gekka-config"
 	"github.com/sopranoworks/gekka/persistence"
 )
 
 // persistenceState is embedded in Cluster to hold the optionally-provisioned
 // Journal and SnapshotStore backends.
 type persistenceState struct {
-	mu            sync.RWMutex
-	journal       persistence.Journal
-	snapshotStore persistence.SnapshotStore
+	mu                sync.RWMutex
+	journal           persistence.Journal
+	snapshotStore     persistence.SnapshotStore
+	durableStateStore persistence.DurableStateStore
 }
 
 // ── Cluster methods ───────────────────────────────────────────────────────────
@@ -77,6 +79,40 @@ func (c *Cluster) ProvideSnapshotStoreDB(plugin string, db *sql.DB) error {
 	return nil
 }
 
+// ProvideDurableStateStore creates a DurableStateStore using the provider
+// registered under name (via persistence.RegisterDurableStateStoreProvider)
+// and stores it on the Cluster.  Retrieve it later with node.DurableStateStore().
+func (c *Cluster) ProvideDurableStateStore(name string, cfg hocon.Config) error {
+	ds, err := persistence.NewDurableStateStore(name, cfg)
+	if err != nil {
+		return err
+	}
+	if err := persistence.StartLifecycle(c.ctx, ds); err != nil {
+		return fmt.Errorf("gekka: start durable state store lifecycle: %w", err)
+	}
+	c.ps.mu.Lock()
+	c.ps.durableStateStore = ds
+	c.ps.mu.Unlock()
+	return nil
+}
+
+// ProvideDurableStateStoreDB creates a DurableStateStore using the factory
+// registered under plugin (via persistence.RegisterDurableStateStore) and
+// stores it on the Cluster.
+func (c *Cluster) ProvideDurableStateStoreDB(plugin string, db *sql.DB) error {
+	ds, err := persistence.NewDurableStateStoreFromDB(plugin, db)
+	if err != nil {
+		return err
+	}
+	if err := persistence.StartLifecycle(c.ctx, ds); err != nil {
+		return fmt.Errorf("gekka: start durable state store lifecycle: %w", err)
+	}
+	c.ps.mu.Lock()
+	c.ps.durableStateStore = ds
+	c.ps.mu.Unlock()
+	return nil
+}
+
 // Journal returns the Journal provisioned by ProvideJournalDB, falling back to
 // an in-memory journal when no durable backend has been wired up yet.
 func (c *Cluster) Journal() persistence.Journal {
@@ -99,4 +135,17 @@ func (c *Cluster) SnapshotStore() persistence.SnapshotStore {
 		return ss
 	}
 	return persistence.NewInMemorySnapshotStore()
+}
+
+// DurableStateStore returns the DurableStateStore provisioned for this system.
+// By default this returns an in-memory store; use ProvideDurableStateStoreDB
+// to wire up a durable backend.
+func (c *Cluster) DurableStateStore() persistence.DurableStateStore {
+	c.ps.mu.RLock()
+	ss := c.ps.durableStateStore
+	c.ps.mu.RUnlock()
+	if ss != nil {
+		return ss
+	}
+	return persistence.NewInMemoryDurableStateStore()
 }

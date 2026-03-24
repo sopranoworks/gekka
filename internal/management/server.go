@@ -168,6 +168,7 @@ func NewManagementServer(provider ClusterStateProvider, hostname string, port in
 	if err != nil {
 		return nil, fmt.Errorf("management: listen on %s:%d: %w", hostname, port, err)
 	}
+	slog.Info("gekka: management server listening", "address", ln.Addr().String())
 
 	enableHealth := len(healthChecks) == 0 || healthChecks[0] // default true
 	ms := &ManagementServer{
@@ -209,7 +210,6 @@ func (ms *ManagementServer) Addr() net.Addr {
 // shutdown when ctx is cancelled. It returns immediately.
 func (ms *ManagementServer) Start(ctx context.Context) {
 	addr := ms.listener.Addr().String()
-	slog.Info("gekka: management server starting", "address", addr)
 
 	// Start the server in a background goroutine immediately.
 	go func() {

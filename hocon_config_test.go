@@ -545,3 +545,37 @@ gekka.management.http {
 		t.Errorf("HealthChecksEnabled = true, want false")
 	}
 }
+
+func TestHOCON_ManagementConfig_AutoEnable(t *testing.T) {
+	// Case 1: port defined, enabled absent -> should be true
+	cfg1, err := parseHOCONString(`gekka.management.http.port = 8558`)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if !cfg1.Management.Enabled {
+		t.Error("expected Enabled=true when port is defined")
+	}
+
+	// Case 2: hostname defined, enabled absent -> should be true
+	cfg2, err := parseHOCONString(`gekka.management.http.hostname = "127.0.0.1"`)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if !cfg2.Management.Enabled {
+		t.Error("expected Enabled=true when hostname is defined")
+	}
+
+	// Case 3: port defined, but enabled explicitly false -> should be false
+	cfg3, err := parseHOCONString(`
+gekka.management.http {
+  port = 8558
+  enabled = false
+}
+`)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if cfg3.Management.Enabled {
+		t.Error("expected Enabled=false when explicitly set to false, even if port is defined")
+	}
+}

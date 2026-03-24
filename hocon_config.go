@@ -344,6 +344,16 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 
 	// ── Management HTTP API ───────────────────────────────────────────────────
 	mgmtPrefix := "gekka.management.http"
+
+	// Task 1: Auto-enable Management Server if port or hostname is defined.
+	// We check for presence in HOCON to establish the default, which can
+	// still be overridden by an explicit .enabled = false.
+	_, errH := cfg.GetString(mgmtPrefix + ".hostname")
+	_, errP := cfg.GetInt(mgmtPrefix + ".port")
+	if errH == nil || errP == nil {
+		nodeCfg.Management.Enabled = true
+	}
+
 	if v, err := cfg.GetString(mgmtPrefix + ".enabled"); err == nil {
 		v = strings.ToLower(strings.TrimSpace(v))
 		nodeCfg.Management.Enabled = v == "true" || v == "on"

@@ -181,7 +181,13 @@ gekka-cli dashboard
 gekka-cli dashboard --url http://staging-node:8558
 ```
 
-Press `q` or `Ctrl+C` to exit.
+Features:
+- **Automatic Alignment** — Dynamic column widths ensure Artery addresses and RTTs are perfectly aligned.
+- **Roles Marquee** — Member roles exceeding 20 characters automatically scroll within their cell to preserve layout.
+- **Local Filter** — The dashboard automatically identifies and hides the local node to focus on remote peers.
+
+**Exit Behavior:**
+Pressing `q` or `ESC` triggers a confirmation overlay. Press `y` to exit or `n` to return to the dashboard. The overlay automatically clears after 5 seconds of inactivity.
 
 ---
 
@@ -252,6 +258,9 @@ and singleton managers exclude this node from hosting production workloads.
 
 When no OTLP endpoint is configured the process still joins the cluster and
 displays a live TUI view of membership state.
+
+**Log Verbosity:**
+By default, `gekka-metrics` suppresses high-frequency protocol logs (heartbeats, gossip status, etc.) to keep the TUI clear. To enable detailed protocol tracing, set `gekka.logging.level = "DEBUG"` in your HOCON configuration.
 
 ---
 

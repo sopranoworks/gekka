@@ -17,7 +17,25 @@ Configuration is loaded via [`gekka-config`](https://github.com/sopranoworks/gek
 - **Ultra Thin Core** — Heavy third-party SDKs (Cloud Spanner, OpenTelemetry, Kubernetes client) are being extracted from the core module into independent extension sub-modules under `/extensions/`.
 - **Plugin-based Persistence** — `JournalStore` and `SnapshotStore` interfaces are now pure Go standard-library definitions; all backends (Spanner, SQL, in-memory) are supplied via dependency injection.
 - **Telemetry Middleware Pattern** — The core actor and cluster logic uses the `telemetry` abstraction package exclusively; direct OpenTelemetry SDK imports are removed from all core packages.
-- **Extension Skeletons** — `/extensions/persistence/spanner` and `/extensions/telemetry/otel` are ready to graduate to independent Go modules, keeping `go.mod` lean.
+- **Auto-enable Management** — The Management Server now automatically enables itself if a `hostname` or `port` is defined in the configuration, simplifying bootstrap.
+- **Improved Logging** — High-frequency protocol traces are suppressed by default; use `gekka.logging.level = "DEBUG"` for deep inspection.
+- **Interactive Dashboard** — `gekka-cli dashboard` now features auto-scrolling for long member roles and an improved layout.
+
+## Configuration
+
+Gekka uses HOCON for flexible, layered configuration. Below are the key Gekka-specific settings:
+
+| Key | Default | Description |
+|---|---|---|
+| `gekka.logging.level` | `INFO` | Minimum log level (`DEBUG`, `INFO`, `WARN`, `ERROR`) |
+| `gekka.management.http.port` | `8558` | TCP port for the HTTP Management API |
+| `gekka.management.http.hostname` | `127.0.0.1` | Binding interface for the Management API |
+| `gekka.telemetry.exporter.otlp.endpoint` | `""` | OTLP/HTTP collector endpoint for metrics/traces |
+
+### Auto-Enable Logic
+If either `gekka.management.http.hostname` or `gekka.management.http.port` is explicitly defined in your configuration, the Management Server will be enabled automatically (`enabled = true`).
+
+---
 
 ## What's New in v0.12.0
 

@@ -9,41 +9,41 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbletea"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/sopranoworks/gekka"
-	_ "github.com/sopranoworks/gekka-extensions-cluster-k8s"
-	"github.com/sopranoworks/gekka/management/client"
 	"github.com/spf13/cobra"
+	gekka "github.com/sopranoworks/gekka"
+	"github.com/sopranoworks/gekka/management/client"
 )
-
-// ── Styles ──────────────────────────────────────────────────────────────────
 
 var (
 	headerBoxStyle = lipgloss.NewStyle().
+			Padding(1, 0).
 			MarginBottom(1)
 
+	statusBarStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FFFFFF")).
+			Background(lipgloss.Color("#6A4CFF")).
+			Padding(0, 1).
+			MarginTop(1)
+
 	nodeUpStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("10"))
+			Foreground(lipgloss.Color("10")) // Green
 
 	nodeDownStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("9"))
-
-	statusBarStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("7")).
-			Background(lipgloss.Color("235")).
-			Padding(0, 1)
+			Foreground(lipgloss.Color("9")) // Red
 
 	infoStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("14"))
+			Foreground(lipgloss.Color("12")) // Blue
 
 	rttRedStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("1")) // Red
+			Foreground(lipgloss.Color("9")) // Red
 
 	rttOrangeStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("208")) // Orange
@@ -85,6 +85,7 @@ type dashboardModel struct {
 	confirmExitID int
 	width         int
 	height        int
+	frame         int // for marquee animation
 }
 
 func (m dashboardModel) Init() tea.Cmd {
@@ -94,15 +95,21 @@ func (m dashboardModel) Init() tea.Cmd {
 	)
 }
 
-func (m dashboardModel) fetchMembers() tea.Cmd {
+func (m *dashboardModel) fetchMembers() tea.Cmd {
 	return func() tea.Msg {
+		// Use a short timeout for API polling
+		_, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		
+		// The client.Members() method currently doesn't take a context, 
+		// but we can add one if needed. For now, we use the default.
 		members, err := m.mgmtClient.Members()
 		return membersMsg{members: members, err: err}
 	}
 }
 
 func (m dashboardModel) tick() tea.Cmd {
-	return tea.Every(2*time.Second, func(t time.Time) tea.Msg {
+	return tea.Every(250*time.Millisecond, func(t time.Time) tea.Msg {
 		return tickMsg(t)
 	})
 }
@@ -136,7 +143,7 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.state = stateDashboard
 				return m, nil
 			}
-			return m, resetCmd // swallow all other keys but reset timer
+			return m, resetCmd
 		}
 
 	case tea.WindowSizeMsg:
@@ -144,12 +151,17 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 
 	case tickMsg:
-		return m, m.fetchMembers()
+		m.frame++
+		var cmd tea.Cmd
+		if m.frame%8 == 0 {
+			cmd = m.fetchMembers()
+		}
+		return m, tea.Batch(cmd, m.tick())
 
 	case membersMsg:
 		m.members = nil
 		if msg.err == nil {
-			// Task 2: Filter local node from member list using the Self field.
+			// Filter local node from member list using the Self field.
 			for _, mem := range msg.members {
 				if mem.Self {
 					continue
@@ -170,7 +182,7 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.err = msg.err
 		m.lastUpdate = time.Now()
-		return m, m.tick()
+		return m, nil
 
 	case timeoutMsg:
 		if m.state == stateConfirmExit && msg.id == m.confirmExitID {
@@ -201,8 +213,8 @@ func (m dashboardModel) View() string {
 	c7 := lipgloss.Color("#F2AEFF")
 	c8 := lipgloss.Color("#FFC9FF")
 
-	// Icon Segments (NO leading spaces)
-	iconTop := lipgloss.NewStyle().Foreground(c3).Render("▄") + lipgloss.NewStyle().Foreground(c4).Render("▀") + "  " + lipgloss.NewStyle().Foreground(c7).Render("▄") + lipgloss.NewStyle().Foreground(c8).Render("▀")
+	// Icon Segments (Restored stagger from gekka-metrics)
+	iconTop := "  " + lipgloss.NewStyle().Foreground(c3).Render("▄") + lipgloss.NewStyle().Foreground(c4).Render("▀") + "  " + lipgloss.NewStyle().Foreground(c7).Render("▄") + lipgloss.NewStyle().Foreground(c8).Render("▀")
 	iconBottom := lipgloss.NewStyle().Foreground(c1).Render("▄") + lipgloss.NewStyle().Foreground(c2).Render("▀") + "  " + lipgloss.NewStyle().Foreground(c5).Render("▄") + lipgloss.NewStyle().Foreground(c6).Render("▀")
 
 	// Text Components
@@ -217,7 +229,7 @@ func (m dashboardModel) View() string {
 		lipgloss.JoinVertical(lipgloss.Left, topLine, bottomLine),
 	)
 
-	// Member List (Task 3: Dynamic Table Alignment)
+	// Member List
 	var memberListBlock string
 	if m.err != nil {
 		memberListBlock = nodeDownStyle.Render(fmt.Sprintf("Error: %v", m.err))
@@ -235,8 +247,9 @@ func (m dashboardModel) View() string {
 		headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("7"))
 		// Styles with fixed widths for alignment. Width includes right padding.
 		addrStyle := lipgloss.NewStyle().Width(maxAddrLen + 4)
-		statusStyle := lipgloss.NewStyle().Width(16)
-		reachStyle := lipgloss.NewStyle().Width(16)
+		statusStyle := lipgloss.NewStyle().Width(14)
+		roleStyle := lipgloss.NewStyle().Width(24)
+		reachStyle := lipgloss.NewStyle().Width(14)
 		rttStyle := lipgloss.NewStyle().Width(10)
 
 		var rows []string
@@ -245,6 +258,7 @@ func (m dashboardModel) View() string {
 		rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top,
 			headerStyle.Copy().Inherit(addrStyle).Render("ADDRESS"),
 			headerStyle.Copy().Inherit(statusStyle).Render("STATUS"),
+			headerStyle.Copy().Inherit(roleStyle).Render("ROLES"),
 			headerStyle.Copy().Inherit(reachStyle).Render("REACHABLE"),
 			headerStyle.Copy().Inherit(rttStyle).Render("RTT"),
 		))
@@ -252,9 +266,10 @@ func (m dashboardModel) View() string {
 		// 2. Render Separator
 		separator := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(
 			strings.Repeat("-", maxAddrLen) + "    " + 
-			strings.Repeat("-", 12) + "    " + 
-			strings.Repeat("-", 12) + "    " + 
-			strings.Repeat("-", 8))
+			strings.Repeat("-", 10) + "    " + 
+			strings.Repeat("-", 20) + "    " + 
+			strings.Repeat("-", 10) + "    " + 
+			strings.Repeat("-", 6))
 		rows = append(rows, separator)
 		
 		// 3. Render Member Rows
@@ -262,6 +277,20 @@ func (m dashboardModel) View() string {
 			status := mem.Status
 			if mem.Status == "Up" {
 				status = nodeUpStyle.Render(mem.Status)
+			}
+
+			// Roles Marquee
+			rolesStr := strings.Join(mem.Roles, ",")
+			if rolesStr == "" {
+				rolesStr = "-"
+			}
+			displayRoles := rolesStr
+			if len(rolesStr) > 20 {
+				padding := "    "
+				marquee := rolesStr + padding
+				shift := m.frame % len(marquee)
+				displayRoles = marquee[shift:] + marquee[:shift]
+				displayRoles = displayRoles[:20]
 			}
 
 			reachable := "yes"
@@ -288,6 +317,7 @@ func (m dashboardModel) View() string {
 			rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top,
 				addrStyle.Render(mem.Address),
 				statusStyle.Render(status),
+				roleStyle.Render(displayRoles),
 				reachStyle.Render(reachable),
 				rttStyle.Render(rttRendered),
 			))
@@ -320,7 +350,8 @@ func (m dashboardModel) View() string {
 
 		overlay := overlayStyle.Render("Exit? (Y/n)")
 		
-		occupiedHeight := lipgloss.Height(header) + lipgloss.Height(status) + 1
+		// Calculate available height for the middle section
+		occupiedHeight := lipgloss.Height(header) + lipgloss.Height(memberListBlock) + 2
 		middleHeight := m.height - occupiedHeight
 		if middleHeight < 0 {
 			middleHeight = 0
@@ -342,25 +373,17 @@ func (m dashboardModel) View() string {
 	return ui
 }
 
-// ── CLI Integration ─────────────────────────────────────────────────────────
-
 func newDashboardCmd(root *rootState) *cobra.Command {
-	var flagURL string
-
+	var url string
 	cmd := &cobra.Command{
 		Use:   "dashboard",
 		Short: "Launch interactive cluster monitoring dashboard",
-		Long: `Starts a full-screen terminal UI for monitoring Gekka cluster status,
-including member reachability and heartbeat RTT latency.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			mgmtURL := root.resolveURL(flagURL)
-			return runDashboard(mgmtURL)
+			mURL := root.resolveURL(url)
+			return runDashboard(mURL)
 		},
 	}
-
-	cmd.Flags().StringVar(&flagURL, "url", "",
-		"Base URL of the management API (overrides config file)")
-
+	cmd.Flags().StringVar(&url, "url", "", "Management API base URL")
 	return cmd
 }
 

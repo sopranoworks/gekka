@@ -44,20 +44,23 @@ const (
 )
 
 type tickMsg time.Time
-type timeoutMsg struct{}
+type timeoutMsg struct {
+	id int
+}
 type logMsg string
 
 type model struct {
-	cm           *gcluster.ClusterManager
-	otlpEndpoint string
-	lastUpdate   time.Time
-	upCount      int
-	totalCount   int
-	state        state
-	viewport     viewport.Model
-	logs         []string
-	width        int
-	height       int
+	cm            *gcluster.ClusterManager
+	otlpEndpoint  string
+	lastUpdate    time.Time
+	upCount       int
+	totalCount    int
+	state         state
+	confirmExitID int
+	viewport      viewport.Model
+	logs          []string
+	width         int
+	height        int
 }
 
 func (m model) Init() tea.Cmd {
@@ -99,13 +102,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch m.state {
 		case stateMetrics:
-			if msg.String() == "q" || msg.Type == tea.KeyEsc {
+			if msg.Type == tea.KeyEsc || msg.String() == "q" {
 				m.state = stateConfirmExit
-				return m, tea.Tick(30*time.Second, func(_ time.Time) tea.Msg {
-					return timeoutMsg{}
+				m.confirmExitID++
+				id := m.confirmExitID
+				return m, tea.Tick(5*time.Second, func(_ time.Time) tea.Msg {
+					return timeoutMsg{id: id}
 				})
 			}
 		case stateConfirmExit:
+			// Reset timer on any key press
+			m.confirmExitID++
+			id := m.confirmExitID
+			resetCmd := tea.Tick(5*time.Second, func(_ time.Time) tea.Msg {
+				return timeoutMsg{id: id}
+			})
+
 			switch strings.ToLower(msg.String()) {
 			case "y":
 				return m, tea.Quit
@@ -113,6 +125,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.state = stateMetrics
 				return m, nil
 			}
+			return m, resetCmd // swallow all other keys but reset timer
 		}
 
 	case tea.WindowSizeMsg:
@@ -139,7 +152,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.GotoBottom()
 
 	case timeoutMsg:
-		if m.state == stateConfirmExit {
+		if m.state == stateConfirmExit && msg.id == m.confirmExitID {
 			m.state = stateMetrics
 		}
 		return m, nil
@@ -179,14 +192,6 @@ func (m model) View() string {
 	bottomLine := lipgloss.JoinHorizontal(lipgloss.Bottom, iconBottom, "      ", version)
 	header := lipgloss.JoinVertical(lipgloss.Left, topLine, bottomLine)
 
-	if m.state == stateConfirmExit {
-		return lipgloss.JoinVertical(lipgloss.Left,
-			header,
-			"\n",
-			lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFF00")).Render("Are you sure you want to quit? (Y/n)"),
-		)
-	}
-
 	// Metrics Info
 	metrics := lipgloss.NewStyle().Foreground(lipgloss.Color("#00897B")).Render(
 		fmt.Sprintf("OTLP: %s | %d Up / %d Total | Last Update: %s",
@@ -203,13 +208,45 @@ func (m model) View() string {
 
 	hint := lipgloss.NewStyle().Foreground(lipgloss.Color("#666666")).Render("Press 'q' or 'ESC' to quit")
 
-	return lipgloss.JoinVertical(lipgloss.Left,
+	ui := lipgloss.JoinVertical(lipgloss.Left,
 		header,
 		metrics,
 		logView,
 		footerBorder,
 		hint,
 	)
+
+	if m.state == stateConfirmExit {
+		overlayStyle := lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(lipgloss.Color("#FF0000")).
+			Padding(1, 3).
+			Bold(true).
+			Foreground(lipgloss.Color("#FFFFFF")).
+			Background(lipgloss.Color("#880000"))
+
+		overlay := overlayStyle.Render("Exit? (Y/n)")
+		
+		// Calculate available height for the middle section
+		occupiedHeight := lipgloss.Height(header) + lipgloss.Height(metrics)
+		middleHeight := m.height - occupiedHeight
+		if middleHeight < 0 {
+			middleHeight = 0
+		}
+
+		return lipgloss.JoinVertical(lipgloss.Left,
+			header,
+			metrics,
+			lipgloss.Place(m.width, middleHeight,
+				lipgloss.Center, lipgloss.Center,
+				overlay,
+				lipgloss.WithWhitespaceChars(" "),
+				lipgloss.WithWhitespaceForeground(lipgloss.Color("0")),
+			),
+		)
+	}
+
+	return ui
 }
 
 // ── Custom Log Writer ───────────────────────────────────────────────────────

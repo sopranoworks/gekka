@@ -11,6 +11,7 @@ package main
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbletea"
@@ -56,7 +57,17 @@ var (
 
 // ── Model ───────────────────────────────────────────────────────────────────
 
+type state int
+
+const (
+	stateDashboard state = iota
+	stateConfirmExit
+)
+
 type tickMsg time.Time
+type timeoutMsg struct {
+	id int
+}
 
 type membersMsg struct {
 	members []client.MemberInfo
@@ -64,12 +75,16 @@ type membersMsg struct {
 }
 
 type dashboardModel struct {
-	mgmtURL    string
-	mgmtClient *client.Client
-	members    []client.MemberInfo
-	lastUpdate time.Time
-	err        error
-	quitting   bool
+	mgmtURL       string
+	mgmtClient    *client.Client
+	members       []client.MemberInfo
+	lastUpdate    time.Time
+	err           error
+	quitting      bool
+	state         state
+	confirmExitID int
+	width         int
+	height        int
 }
 
 func (m dashboardModel) Init() tea.Cmd {
@@ -95,10 +110,38 @@ func (m dashboardModel) tick() tea.Cmd {
 func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		if msg.Type == tea.KeyCtrlC || msg.String() == "q" {
-			m.quitting = true
-			return m, tea.Quit
+		switch m.state {
+		case stateDashboard:
+			if msg.Type == tea.KeyEsc || msg.String() == "q" || msg.Type == tea.KeyCtrlC {
+				m.state = stateConfirmExit
+				m.confirmExitID++
+				id := m.confirmExitID
+				return m, tea.Tick(5*time.Second, func(_ time.Time) tea.Msg {
+					return timeoutMsg{id: id}
+				})
+			}
+		case stateConfirmExit:
+			// Reset timer on any key press
+			m.confirmExitID++
+			id := m.confirmExitID
+			resetCmd := tea.Tick(5*time.Second, func(_ time.Time) tea.Msg {
+				return timeoutMsg{id: id}
+			})
+
+			switch strings.ToLower(msg.String()) {
+			case "y":
+				m.quitting = true
+				return m, tea.Quit
+			case "n", "esc":
+				m.state = stateDashboard
+				return m, nil
+			}
+			return m, resetCmd // swallow all other keys but reset timer
 		}
+
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
 
 	case tickMsg:
 		return m, m.fetchMembers()
@@ -120,6 +163,12 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.lastUpdate = time.Now()
 		return m, m.tick()
+
+	case timeoutMsg:
+		if m.state == stateConfirmExit && msg.id == m.confirmExitID {
+			m.state = stateDashboard
+		}
+		return m, nil
 	}
 
 	return m, nil
@@ -128,6 +177,10 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m dashboardModel) View() string {
 	if m.quitting {
 		return "Shutting down dashboard...\n"
+	}
+
+	if m.width == 0 || m.height == 0 {
+		return "Initialising..."
 	}
 
 	// Nebula Parallel-Slash Icon Colors
@@ -212,12 +265,44 @@ func (m dashboardModel) View() string {
 			m.lastUpdate.Format("15:04:05")),
 	)
 
-	return lipgloss.JoinVertical(lipgloss.Left,
+	ui := lipgloss.JoinVertical(lipgloss.Left,
 		header,
 		nodes,
 		"\n",
 		status,
 	)
+
+	if m.state == stateConfirmExit {
+		overlayStyle := lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(lipgloss.Color("#FF0000")).
+			Padding(1, 3).
+			Bold(true).
+			Foreground(lipgloss.Color("#FFFFFF")).
+			Background(lipgloss.Color("#880000"))
+
+		overlay := overlayStyle.Render("Exit? (Y/n)")
+		
+		occupiedHeight := lipgloss.Height(header) + lipgloss.Height(status) + 1
+		middleHeight := m.height - occupiedHeight
+		if middleHeight < 0 {
+			middleHeight = 0
+		}
+
+		return lipgloss.JoinVertical(lipgloss.Left,
+			header,
+			lipgloss.Place(m.width, middleHeight,
+				lipgloss.Center, lipgloss.Center,
+				overlay,
+				lipgloss.WithWhitespaceChars(" "),
+				lipgloss.WithWhitespaceForeground(lipgloss.Color("0")),
+			),
+			"\n",
+			status,
+		)
+	}
+
+	return ui
 }
 
 // ── CLI Integration ─────────────────────────────────────────────────────────

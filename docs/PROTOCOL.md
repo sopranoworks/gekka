@@ -78,6 +78,26 @@ partition containing the oldest node.
 
 ---
 
+## Pending Coverage & Prioritization (v0.14.x)
+
+To achieve full Artery TCP parity, the following areas are prioritized for the next development cycle:
+
+### 1. Remote Death Watch (System Messages)
+Current implementation handles Artery-level `RemoteWatcher` heartbeats (ID 17), but lacks full support for **System Messages** (Reliable delivery of Watch/Unwatch).
+- **Goal**: Implement `SystemMessage` envelope processing for `Watch` (ID 2), `Unwatch` (ID 3), and `DeathWatchNotification` (ID 7).
+- **Focus**: Ensure `SystemMessage` sequence numbering and acknowledgement (ID 1) are strictly followed for exactly-once delivery of lifecycle events.
+
+### 2. Actor Selection
+While direct `ActorRef` messaging is stable, `ActorSelection` (path-based lookups) requires explicit integration.
+- **Protocol**: `MessageContainerSerializer` (ID 6) with manifest `"sel"`.
+- **Payload**: `ActorSelectionMessage` containing the path elements and the original message.
+
+### 3. Protobuf (ID 2) Serialization Coverage
+The `ProtobufSerializer` is currently used for internal Artery/Cluster control, but needs to be promoted for general user-level message serialization.
+- **Requirement**: Register common Pekko/Akka system Protobuf types to avoid falling back to expensive JSON/Java serialization.
+
+---
+
 ## Serialization
 
 The serialization subsystem is covered in full detail in
@@ -85,6 +105,7 @@ The serialization subsystem is covered in full detail in
 
 - **ID 2** — Protobuf (`proto.Message`)
 - **ID 4** — Raw bytes (`[]byte`, empty manifest)
+- **ID 6** — Message Container (`ActorSelection`, `Identification`)
 - **ID 9** — JSON; manifest = registered Go/Java type name
 - **ID 5, 17** — Handled at the transport layer; not exposed via `SerializationRegistry`
 

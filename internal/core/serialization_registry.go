@@ -20,12 +20,14 @@ import (
 
 // Artery Control Serializer ID
 const (
-	ProtobufSerializerID = 2
-	RawSerializerID      = 4
-	ClusterSerializerID  = 5
-	JSONSerializerID     = 9
+        ProtobufSerializerID = 2
+        RawSerializerID      = 4
+        ClusterSerializerID  = 5
+        JSONSerializerID     = 9
+        StringSerializerID   = 20
 
-	// Pekko Distributed Data Serializers
+        // Pekko Distributed Data Serializers
+
 	DDataReplicatedSerializerID    = 11
 	DDataReplicatorMsgSerializerID = 12
 )
@@ -61,9 +63,9 @@ func NewSerializationRegistry() *SerializationRegistry {
 	r.serializers[JSONSerializerID] = r.jsonSerializer
 	r.serializers[RawSerializerID] = r.rawSerializer
 	r.serializers[ProtobufSerializerID] = r.protobufSerializer
+	r.serializers[StringSerializerID] = &StringSerializer{}
 	return r
-}
-
+	}
 func (r *SerializationRegistry) RegisterManifest(manifest string, typ reflect.Type) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -107,6 +109,50 @@ func (r *SerializationRegistry) DeserializePayload(serializerId int32, manifest 
 		return nil, err
 	}
 	return s.FromBinary(data, manifest)
+}
+
+// StringSerializer handles plain string messages.
+type StringSerializer struct{}
+
+func (s *StringSerializer) Identifier() int32 {
+        return StringSerializerID
+}
+
+func (s *StringSerializer) ToBinary(msg interface{}) ([]byte, error) {
+        if str, ok := msg.(string); ok {
+                return []byte(str), nil
+        }
+        return nil, fmt.Errorf("StringSerializer: msg is not string")
+}
+
+func (s *StringSerializer) FromBinary(data []byte, manifest string) (interface{}, error) {
+        return string(data), nil
+}
+
+func (s *StringSerializer) WriteTo(w io.Writer, msg interface{}) (int64, error) {
+        if str, ok := msg.(string); ok {
+                n, err := w.Write([]byte(str))
+                return int64(n), err
+        }
+        return 0, fmt.Errorf("StringSerializer: msg is not string")
+}
+
+func (s *StringSerializer) MarshalTo(buf []byte, msg interface{}) (int, error) {
+        if str, ok := msg.(string); ok {
+                if len(buf) < len(str) {
+                        return 0, io.ErrShortBuffer
+                }
+                n := copy(buf, []byte(str))
+                return n, nil
+        }
+        return 0, fmt.Errorf("StringSerializer: msg is not string")
+}
+
+func (s *StringSerializer) Size(msg interface{}) int {
+        if str, ok := msg.(string); ok {
+                return len(str)
+        }
+        return 0
 }
 
 // JSONSerializer handles JSON serialization for types registered in the registry.

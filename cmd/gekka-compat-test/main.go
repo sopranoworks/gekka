@@ -49,117 +49,161 @@ import (
 	"github.com/sopranoworks/gekka/internal/core"
 )
 
+// EchoActor increments a counter and responds to specific steps in the echo chain.
+type EchoActor struct {
+        actor.BaseActor
+        count int
+}
+
+func (a *EchoActor) Receive(msg any) {
+        switch m := msg.(type) {
+        case string:
+                a.count++
+                fmt.Printf("STATUS: ECHO_RECEIVED:%s (count=%d)\n", m, a.count)
+                if m == "Step-2" {
+                        fmt.Println("STATUS: ECHO_STEP_2_RECEIVED")
+                        a.Sender().Tell("Step-3", a.Self())
+                } else if m == "Step-4" {
+                        fmt.Println("STATUS: ECHO_STEP_4_RECEIVED")
+                }
+        }
+}
+
 func main() {
-	systemName := flag.String("system", "GekkaSystem", "Akka actor system name shared by all cluster members")
-	seedHost := flag.String("seed-host", "127.0.0.1", "Akka seed node hostname")
-	seedPort := flag.Int("seed-port", 2551, "Akka seed node port")
-	localPort := flag.Int("port", 2552, "Local Artery TCP port")
-	mgmtPort := flag.Int("mgmt-port", 8558, "Management HTTP port to expose and query")
-	timeout := flag.Duration("timeout", 60*time.Second, "Maximum time to wait for cluster membership")
-	flag.Parse()
+        systemName := flag.String("system", "GekkaSystem", "Akka actor system name shared by all cluster members")
+        seedHost := flag.String("seed-host", "127.0.0.1", "Akka seed node hostname")
+        seedPort := flag.Int("seed-port", 2551, "Akka seed node port")
+        localPort := flag.Int("port", 2552, "Local Artery TCP port")
+        mgmtPort := flag.Int("mgmt-port", 8558, "Management HTTP port to expose and query")
+        echoTarget := flag.String("echo-target", "", "Full Akka actor path of the target EchoActor (e.g. akka://GekkaSystem@127.0.0.1:2551/user/echo)")
+        timeout := flag.Duration("timeout", 60*time.Second, "Maximum time to wait for cluster membership")
+        flag.Parse()
 
-	cfg := gekka.ClusterConfig{
-		SystemName: *systemName,
-		Host:       "127.0.0.1",
-		Port:       uint32(*localPort),
-		Provider:   gekka.ProviderAkka,
-		SeedNodes: []actor.Address{
-			{
-				Protocol: "akka",
-				System:   *systemName,
-				Host:     *seedHost,
-				Port:     *seedPort,
-			},
-		},
-		Management: core.ManagementConfig{
-			Enabled:             true,
-			Hostname:            "127.0.0.1",
-			Port:                *mgmtPort,
-			HealthChecksEnabled: true,
-		},
-	}
+        cfg := gekka.ClusterConfig{
+                SystemName: *systemName,
+                Host:       "127.0.0.1",
+                Port:       uint32(*localPort),
+                Provider:   gekka.ProviderAkka,
+                SeedNodes: []actor.Address{
+                        {
+                                Protocol: "akka",
+                                System:   *systemName,
+                                Host:     *seedHost,
+                                Port:     *seedPort,
+                        },
+                },
+                Management: core.ManagementConfig{
+                        Enabled:             true,
+                        Hostname:            "127.0.0.1",
+                        Port:                *mgmtPort,
+                        HealthChecksEnabled: true,
+                },
+        }
 
-	node, err := gekka.NewCluster(cfg)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "NewCluster: %v\n", err)
-		os.Exit(1)
-	}
-	defer node.Shutdown()
+        node, err := gekka.NewCluster(cfg)
+        if err != nil {
+                fmt.Fprintf(os.Stderr, "NewCluster: %v\n", err)
+                os.Exit(1)
+        }
+        defer node.Shutdown()
 
-	// Subscribe to cluster domain events so we can detect our own MemberUp
-	// and detect failures (unreachable/down/removed).
-	eventCh := make(chan any, 16)
-	watcherRef, err := node.System.ActorOf(gekka.Props{
-		New: func() actor.Actor {
-			return &memberWatcher{BaseActor: actor.NewBaseActor(), ch: eventCh}
-		},
-	}, "compatWatcher")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ActorOf: %v\n", err)
-		os.Exit(1)
-	}
-	node.Subscribe(watcherRef,
-		cluster.EventMemberUp,
-		cluster.EventUnreachableMember,
-		cluster.EventMemberDowned,
-		cluster.EventMemberRemoved,
-	)
-	defer node.Unsubscribe(watcherRef)
+        // Subscribe to cluster domain events so we can detect our own MemberUp
+        // and detect failures (unreachable/down/removed).
+        eventCh := make(chan any, 16)
+        watcherRef, err := node.System.ActorOf(gekka.Props{
+                New: func() actor.Actor {
+                        return &memberWatcher{BaseActor: actor.NewBaseActor(), ch: eventCh}
+                },
+        }, "compatWatcher")
+        if err != nil {
+                fmt.Fprintf(os.Stderr, "ActorOf: %v\n", err)
+                os.Exit(1)
+        }
+        node.Subscribe(watcherRef,
+                cluster.EventMemberUp,
+                cluster.EventUnreachableMember,
+                cluster.EventMemberDowned,
+                cluster.EventMemberRemoved,
+        )
+        defer node.Unsubscribe(watcherRef)
 
-	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
-	defer cancel()
+        // Spawn EchoActor
+        echoRef, err := node.System.ActorOf(gekka.Props{
+                New: func() actor.Actor {
+                        return &EchoActor{BaseActor: actor.NewBaseActor()}
+                },
+        }, "echo")
+        if err != nil {
+                fmt.Fprintf(os.Stderr, "ActorOf echo: %v\n", err)
+                os.Exit(1)
+        }
 
-	// ── Join the cluster ──────────────────────────────────────────────────────
-	proto := "akka"
-	if cfg.Provider == gekka.ProviderPekko {
-		proto = "pekko"
-	}
-	log.Printf("gekka-compat-test: joining %s://%s@%s:%d via seed %s:%d",
-		proto, *systemName, cfg.Host, *localPort, *seedHost, *seedPort)
+        ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+        defer cancel()
 
-	if err := node.JoinSeeds(); err != nil {
-		fmt.Fprintf(os.Stderr, "JoinSeeds: %v\n", err)
-		os.Exit(1)
-	}
+        // ── Join the cluster ──────────────────────────────────────────────────────
+        proto := "akka"
+        if cfg.Provider == gekka.ProviderPekko {
+                proto = "pekko"
+        }
+        log.Printf("gekka-compat-test: joining %s://%s@%s:%d via seed %s:%d",
+                proto, *systemName, cfg.Host, *localPort, *seedHost, *seedPort)
 
-	// ── Wait for Artery handshake ─────────────────────────────────────────────
-	if err := node.WaitForHandshake(ctx, *seedHost, uint32(*seedPort)); err != nil {
-		fmt.Printf("FAIL: HANDSHAKE_TIMEOUT %s:%d\n", *seedHost, *seedPort)
-		os.Exit(1)
-	}
-	fmt.Println("STATUS: ARTERY_ASSOCIATED")
+        if err := node.JoinSeeds(); err != nil {
+                fmt.Fprintf(os.Stderr, "JoinSeeds: %v\n", err)
+                os.Exit(1)
+        }
 
-	// ── Wait for MemberUp ─────────────────────────────────────────────────────
-	for {
-		select {
-		case evt := <-eventCh:
-			switch e := evt.(type) {
-			case cluster.MemberUp:
-				if e.Member.Host == cfg.Host && e.Member.Port == cfg.Port {
-					fmt.Printf("STATUS: MEMBER_UP:%s\n", e.Member.String())
-					goto memberUp
-				}
-			case cluster.UnreachableMember:
-				fmt.Printf("FAIL: CLUSTER_UNREACHABLE %s\n", e.Member.String())
-				os.Exit(1)
-			case cluster.MemberDowned:
-				fmt.Printf("FAIL: CLUSTER_MEMBER_DOWN %s\n", e.Member.String())
-				os.Exit(1)
-			case cluster.MemberRemoved:
-				if e.Member.Host == cfg.Host && e.Member.Port == cfg.Port {
-					fmt.Printf("FAIL: LOCAL_MEMBER_REMOVED %s\n", e.Member.String())
-					os.Exit(1)
-				}
-			}
-		case <-ctx.Done():
-			fmt.Println("FAIL: TIMEOUT")
-			os.Exit(1)
-		}
-	}
+        // ── Wait for Artery handshake ─────────────────────────────────────────────
+        if err := node.WaitForHandshake(ctx, *seedHost, uint32(*seedPort)); err != nil {
+                fmt.Printf("FAIL: HANDSHAKE_TIMEOUT %s:%d\n", *seedHost, *seedPort)
+                os.Exit(1)
+        }
+        fmt.Println("STATUS: ARTERY_ASSOCIATED")
+
+        // ── Wait for MemberUp ─────────────────────────────────────────────────────
+        for {
+                select {
+                case evt := <-eventCh:
+                        switch e := evt.(type) {
+                        case cluster.MemberUp:
+                                if e.Member.Host == cfg.Host && e.Member.Port == cfg.Port {
+                                        fmt.Printf("STATUS: MEMBER_UP:%s\n", e.Member.String())
+                                        goto memberUp
+                                }
+                        case cluster.UnreachableMember:
+                                fmt.Printf("FAIL: CLUSTER_UNREACHABLE %s\n", e.Member.String())
+                                os.Exit(1)
+                        case cluster.MemberDowned:
+                                fmt.Printf("FAIL: CLUSTER_MEMBER_DOWN %s\n", e.Member.String())
+                                os.Exit(1)
+                        case cluster.MemberRemoved:
+                                if e.Member.Host == cfg.Host && e.Member.Port == cfg.Port {
+                                        fmt.Printf("FAIL: LOCAL_MEMBER_REMOVED %s\n", e.Member.String())
+                                        os.Exit(1)
+                                }
+                        }
+                case <-ctx.Done():
+                        fmt.Println("FAIL: TIMEOUT")
+                        os.Exit(1)
+                }
+        }
 
 memberUp:
-	// ── Query management API ──────────────────────────────────────────────────
-	time.Sleep(500 * time.Millisecond)
+        // ── Start Echo Chain ──────────────────────────────────────────────────────
+        if *echoTarget != "" {
+                targetRef, err := node.ActorSelection(*echoTarget).Resolve(context.Background())
+                if err != nil {
+                        fmt.Printf("FAIL: ECHO_TARGET_RESOLVE_ERROR %v\n", err)
+                        os.Exit(1)
+                }
+                fmt.Printf("STATUS: ECHO_STARTING to %s\n", *echoTarget)
+                targetRef.Tell("Step-1", echoRef)
+        }
+
+        // ── Query management API ──────────────────────────────────────────────────
+        time.Sleep(500 * time.Millisecond)
+
 	mgmtURL := fmt.Sprintf("http://127.0.0.1:%d/cluster/members", *mgmtPort)
 	resp, err := http.Get(mgmtURL) //nolint:gosec
 	if err != nil {

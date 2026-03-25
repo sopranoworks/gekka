@@ -100,7 +100,10 @@ const (
 
 	// ClusterSerializerID is the Pekko ClusterMessageSerializer ID.
 	ClusterSerializerID int32 = 5
-)
+
+	// StringSerializerID is the Akka/Pekko serializer ID for java.lang.String.
+	StringSerializerID int32 = 20
+	)
 
 // AssociationState represents the state of a connection to a remote node.
 type AssociationState int
@@ -727,11 +730,14 @@ func (r *Router) prepareMessage(msg any) ([]byte, int32, string, error) {
 			sid = 2
 			manifest = msgType.String()
 		} else if _, isBytes := msg.([]byte); isBytes {
-			sid = 4
-			manifest = ""
+		        sid = 4
+		        manifest = ""
+		} else if msgType.Kind() == reflect.String {
+		        sid = StringSerializerID
+		        manifest = ""
 		} else {
-			sid = JSONSerializerID
-			manifest = msgType.String()
+		        sid = JSONSerializerID
+		        manifest = msgType.String()
 		}
 	}
 

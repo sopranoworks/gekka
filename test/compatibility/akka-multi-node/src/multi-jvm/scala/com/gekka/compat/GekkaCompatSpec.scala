@@ -13,7 +13,7 @@ import scala.sys.process._
 import scala.util.Try
 
 import com.typesafe.config.ConfigFactory
-import akka.actor.Address
+import akka.actor.{Actor, Address, Props}
 import akka.cluster.{Cluster, MemberStatus}
 import akka.cluster.ClusterEvent._
 import akka.remote.testconductor.RoleName
@@ -22,6 +22,22 @@ import akka.testkit.{ImplicitSender, TestProbe}
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpecLike
+
+// ── Echo Actor for Multi-Hop Test ───────────────────────────────────────────
+class EchoActor(probe: akka.actor.ActorRef) extends Actor {
+  var count = 0
+  def receive: Receive = {
+    case msg: String =>
+      count += 1
+      println(s"[akka] EchoActor received: $msg (count=$count)")
+      probe ! msg
+      if (msg == "Step-1") {
+        sender() ! "Step-2"
+      } else if (msg == "Step-3") {
+        sender() ! "Step-4"
+      }
+  }
+}
 
 // ── MultiNodeConfig ──────────────────────────────────────────────────────────
 //
@@ -141,6 +157,11 @@ abstract class GekkaSystem
         // Drain the CurrentClusterState snapshot (contains seed itself).
         memberProbe.expectMsgType[CurrentClusterState](5.seconds)
 
+        // ── Echo Test Setup ───────────────────────────────────────────────
+        val echoProbe = TestProbe()
+        val echoActor = system.actorOf(Props(classOf[EchoActor], echoProbe.ref), "echo")
+        enterBarrier("echo-ready")
+
         // ── Spawn Go binary ───────────────────────────────────────────────
         val binary  = findGoBinary
         val goLogs  = ListBuffer.empty[String]
@@ -172,6 +193,7 @@ abstract class GekkaSystem
           "--seed-port", "2551",
           "--port",      "2552",
           "--mgmt-port", "8558",
+          "--echo-target", s"akka://GekkaSystem@127.0.0.1:2551/user/echo"
         )).run(logger)
 
         try {
@@ -201,6 +223,33 @@ abstract class GekkaSystem
 
           println(s"IDENTITY_OK: $joinerAddr")
           Console.flush()
+
+          // ── Echo Test Verification ────────────────────────────────────────
+          echoProbe.expectMsg(30.seconds, "Step-1")
+          println("STATUS: AKKA_RECEIVED_STEP_1")
+
+          echoProbe.expectMsg(30.seconds, "Step-3")
+          println("STATUS: AKKA_RECEIVED_STEP_3")
+
+          // Wait for Go node to report Step-2 received
+          awaitAssert({
+            if (goLogs.exists(_.contains("STATUS: ECHO_STEP_2_RECEIVED"))) {
+               println("STATUS: GO_RECEIVED_STEP_2")
+            } else {
+               fail("Go node has not received Step-2 yet")
+            }
+          }, 30.seconds, 1.second)
+
+          // Wait for Go node to report Step-4 received
+          awaitAssert({
+            if (goLogs.exists(_.contains("STATUS: ECHO_STEP_4_RECEIVED"))) {
+               println("STATUS: GO_RECEIVED_STEP_4")
+            } else {
+               fail("Go node has not received Step-4 yet")
+            }
+          }, 30.seconds, 1.second)
+
+          enterBarrier("echo-done")
 
           // ── 60-second stability phase ─────────────────────────────────────
           // Monitor for UnreachableMember events targeting the Go node.

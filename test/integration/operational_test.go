@@ -25,6 +25,7 @@ import (
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/internal/core"
 	"github.com/sopranoworks/gekka/management/client"
+	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 )
 
 // freePort returns an available TCP port on localhost by briefly listening
@@ -222,6 +223,24 @@ func TestMetricsNodeAndCLISynergy(t *testing.T) {
 
 	// Assertion 4: management client returns the same JSON used by gekka-cli.
 	// Verify reachability flag is set (both nodes should see each other as reachable).
+	// Gossip reachability tables converge in the background; poll until all members
+	// are reachable or the deadline is exceeded.
+	var allReachable bool
+	reachDeadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(reachDeadline) {
+		members = waitMembers(t, c, 2, 5*time.Second)
+		allReachable = true
+		for _, m := range members {
+			if !m.Reachable {
+				allReachable = false
+				break
+			}
+		}
+		if allReachable {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
 	for _, m := range members {
 		if !m.Reachable {
 			t.Errorf("member %s is not reachable", m.Address)
@@ -229,19 +248,28 @@ func TestMetricsNodeAndCLISynergy(t *testing.T) {
 	}
 
 	// Assertion 5: the gossip observed by the metrics node itself also shows
-	// 2 Up members (verifies the direct gossip read path used by gekka-metrics).
-	cm := metricsNode.ClusterManager()
-	cm.Mu.RLock()
-	gossip := cm.State
-	cm.Mu.RUnlock()
-
-	upInGossip := 0
-	if gossip != nil {
-		for _, m := range gossip.GetMembers() {
-			if m.GetStatus().String() == "Up" {
-				upInGossip++
+	// >= 2 Up members (verifies the direct gossip read path used by gekka-metrics).
+	// The metrics node's gossip state lags  the seed by up to one gossip cycle;
+	// poll until convergence rather than reading the state only once.
+	mcm := metricsNode.ClusterManager()
+	var upInGossip int
+	gossipDeadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(gossipDeadline) {
+		mcm.Mu.RLock()
+		gossip := mcm.State
+		upInGossip = 0
+		if gossip != nil {
+			for _, m := range gossip.GetMembers() {
+				if m.GetStatus() == gproto_cluster.MemberStatus_Up {
+					upInGossip++
+				}
 			}
 		}
+		mcm.Mu.RUnlock()
+		if upInGossip >= 2 {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
 	}
 	if upInGossip < 2 {
 		t.Errorf("metrics node gossip shows %d Up members, want >= 2", upInGossip)

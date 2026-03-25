@@ -15,6 +15,7 @@ import (
 	"reflect"
 	"sync"
 
+	"github.com/fxamacker/cbor/v2"
 	"github.com/sopranoworks/gekka/internal/proto/remote"
 	"google.golang.org/protobuf/proto"
 )
@@ -26,6 +27,7 @@ const (
         ClusterSerializerID  = 5
         JSONSerializerID     = 9
         StringSerializerID   = 20
+        CBORSerializerID     = 33
 
         // Pekko Distributed Data Serializers
 
@@ -50,6 +52,7 @@ type SerializationRegistry struct {
 	jsonSerializer     *JSONSerializer
 	rawSerializer      *RawSerializer
 	protobufSerializer *ProtobufSerializer
+	cborSerializer     *CBORSerializer
 }
 
 func NewSerializationRegistry() *SerializationRegistry {
@@ -61,10 +64,12 @@ func NewSerializationRegistry() *SerializationRegistry {
 	r.jsonSerializer = &JSONSerializer{registry: r}
 	r.rawSerializer = &RawSerializer{}
 	r.protobufSerializer = &ProtobufSerializer{registry: r}
+	r.cborSerializer = &CBORSerializer{registry: r}
 	r.serializers[JSONSerializerID] = r.jsonSerializer
 	r.serializers[RawSerializerID] = r.rawSerializer
 	r.serializers[ProtobufSerializerID] = r.protobufSerializer
 	r.serializers[StringSerializerID] = &StringSerializer{}
+	r.serializers[CBORSerializerID] = r.cborSerializer
 
 	// Registration of Artery control types (v0.14.x alignment)
 	r.RegisterManifest("d", reflect.TypeOf((*remote.HandshakeReq)(nil)))
@@ -314,4 +319,37 @@ func (s *ProtobufSerializer) Size(msg interface{}) int {
 		return proto.Size(pmsg)
 	}
 	return 0
+}
+
+// CBORSerializer handles CBOR serialization.
+type CBORSerializer struct {
+	registry *SerializationRegistry
+}
+
+func (s *CBORSerializer) Identifier() int32 {
+	return CBORSerializerID
+}
+
+func (s *CBORSerializer) ToBinary(msg interface{}) ([]byte, error) {
+	return cbor.Marshal(msg)
+}
+
+func (s *CBORSerializer) FromBinary(data []byte, manifest string) (interface{}, error) {
+	typ, ok := s.registry.GetTypeByManifest(manifest)
+	if !ok {
+		return nil, fmt.Errorf("CBORSerializer: no type registered for manifest %q", manifest)
+	}
+	var ptr reflect.Value
+	if typ.Kind() == reflect.Ptr {
+		ptr = reflect.New(typ.Elem())
+	} else {
+		ptr = reflect.New(typ)
+	}
+	if err := cbor.Unmarshal(data, ptr.Interface()); err != nil {
+		return nil, fmt.Errorf("CBORSerializer: unmarshal into %v: %w", typ, err)
+	}
+	if typ.Kind() == reflect.Ptr {
+		return ptr.Interface(), nil
+	}
+	return ptr.Elem().Interface(), nil
 }

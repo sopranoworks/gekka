@@ -54,3 +54,7 @@ target/
 
 # OS
 .DS_Store
+gekka-compat-test
+*.log
+*.pid
+bin/

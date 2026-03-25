@@ -15,6 +15,7 @@ import (
 	"reflect"
 	"sync"
 
+	"github.com/sopranoworks/gekka/internal/proto/remote"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -59,13 +60,24 @@ func NewSerializationRegistry() *SerializationRegistry {
 	}
 	r.jsonSerializer = &JSONSerializer{registry: r}
 	r.rawSerializer = &RawSerializer{}
-	r.protobufSerializer = &ProtobufSerializer{}
+	r.protobufSerializer = &ProtobufSerializer{registry: r}
 	r.serializers[JSONSerializerID] = r.jsonSerializer
 	r.serializers[RawSerializerID] = r.rawSerializer
 	r.serializers[ProtobufSerializerID] = r.protobufSerializer
 	r.serializers[StringSerializerID] = &StringSerializer{}
+
+	// Registration of Artery control types (v0.14.x alignment)
+	r.RegisterManifest("d", reflect.TypeOf((*remote.HandshakeReq)(nil)))
+	r.RegisterManifest("e", reflect.TypeOf((*remote.MessageWithAddress)(nil)))
+	r.RegisterManifest("n", reflect.TypeOf((*remote.ArteryHeartbeatRsp)(nil)))
+	r.RegisterManifest("q", reflect.TypeOf((*remote.Quarantined)(nil)))
+	r.RegisterManifest("ct", reflect.TypeOf((*remote.CompressionTableAdvertisement)(nil)))
+	r.RegisterManifest("cta", reflect.TypeOf((*remote.CompressionTableAdvertisementAck)(nil)))
+	r.RegisterManifest("SystemMessage", reflect.TypeOf((*remote.SystemMessageEnvelope)(nil)))
+	r.RegisterManifest("h", reflect.TypeOf((*remote.SystemMessageDeliveryAck)(nil)))
+
 	return r
-	}
+}
 func (r *SerializationRegistry) RegisterManifest(manifest string, typ reflect.Type) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -234,7 +246,9 @@ func (s *RawSerializer) Size(msg interface{}) int {
 }
 
 // ProtobufSerializer handles Protobuf serialization.
-type ProtobufSerializer struct{}
+type ProtobufSerializer struct {
+	registry *SerializationRegistry
+}
 
 func (s *ProtobufSerializer) Identifier() int32 {
 	return ProtobufSerializerID
@@ -248,7 +262,27 @@ func (s *ProtobufSerializer) ToBinary(msg interface{}) ([]byte, error) {
 }
 
 func (s *ProtobufSerializer) FromBinary(data []byte, manifest string) (interface{}, error) {
-	return nil, fmt.Errorf("ProtobufSerializer: FromBinary not implemented (requires type registry for Protobuf types)")
+	typ, ok := s.registry.GetTypeByManifest(manifest)
+	if !ok {
+		return nil, fmt.Errorf("ProtobufSerializer: no type registered for manifest %q", manifest)
+	}
+	var ptr reflect.Value
+	if typ.Kind() == reflect.Ptr {
+		ptr = reflect.New(typ.Elem())
+	} else {
+		ptr = reflect.New(typ)
+	}
+	m, ok := ptr.Interface().(proto.Message)
+	if !ok {
+		return nil, fmt.Errorf("ProtobufSerializer: %v is not proto.Message", typ)
+	}
+	if err := proto.Unmarshal(data, m); err != nil {
+		return nil, fmt.Errorf("ProtobufSerializer: unmarshal into %v: %w", typ, err)
+	}
+	if typ.Kind() == reflect.Ptr {
+		return m, nil
+	}
+	return ptr.Elem().Interface(), nil
 }
 
 func (s *ProtobufSerializer) WriteTo(w io.Writer, msg interface{}) (int64, error) {

@@ -20,6 +20,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
@@ -461,7 +462,16 @@ type Cluster struct {
 	// node addr "host:port" → target full path → slice of watcher references
 	remoteWatchers map[string]map[string][]ActorRef
 
+	// localWatchers tracks remote actors watching local actors.
+	// local path → remote node unique address string → slice of remote actor refs
+	localWatchersMu sync.Mutex
+	localWatchers   map[string]map[string][]*gproto_remote.ProtoActorRef
+
+	// lastSystemSeqNo is the last sequence number used for outbound system messages.
+	lastSystemSeqNo atomic.Uint64
+
 	// System is the ActorSystem for this node. Use it to create and register
+
 	// actors by name:
 	//
 	//	ref, err := node.System.ActorOf(gekka.Props{New: func() actor.Actor {
@@ -626,10 +636,13 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 		metrics:        metrics,
 		actors:         make(map[string]actor.Actor),
 		remoteWatchers: make(map[string]map[string][]ActorRef),
+		localWatchers:  make(map[string]map[string][]*gproto_remote.ProtoActorRef),
 		logHandler:     cfg.LogHandler,
 		deployments:    cfg.Deployments,
 		sched:          newSystemScheduler(),
 	}
+	nm.SystemMessageCallback = cluster.HandleSystemMessage
+
 	// Terminate the scheduler when the cluster context is cancelled.
 	go func() {
 		<-ctx.Done()
@@ -1765,6 +1778,7 @@ func (n *Cluster) SpawnActor(path string, a actor.Actor, props actor.Props) acto
 		}
 
 		n.UnregisterActor(path)
+		n.triggerLocalActorDeath(path, ref)
 		terminatedMsg := Terminated{Actor: ref}
 		for _, w := range a.Watchers() {
 			if watcherRef, ok := w.(ActorRef); ok {

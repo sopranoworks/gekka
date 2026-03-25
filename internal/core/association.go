@@ -78,6 +78,7 @@ type NodeManager struct {
 	compressionMgr      *CompressionTableManager
 	SerializerRegistry  *SerializationRegistry
 	UserMessageCallback func(ctx context.Context, meta *ArteryMetadata) error
+	SystemMessageCallback func(remote *gproto_remote.UniqueAddress, env *gproto_remote.SystemMessageEnvelope, msg *gproto_remote.SystemMessage) error
 
 	pendingRepliesMu sync.RWMutex
 	pendingReplies   map[string]chan *ArteryMetadata // keyed by temp actor path
@@ -214,6 +215,11 @@ func (nm *NodeManager) LocalAddress() *gproto_remote.Address {
 }
 
 func (nm *NodeManager) GetAssociationByHost(host string, port uint32) (actor.RemoteAssociation, bool) {
+	return nm.GetGekkaAssociationByHost(host, port)
+}
+
+// GetGekkaAssociationByHost returns a *GekkaAssociation for a remote node specified by host and port.
+func (nm *NodeManager) GetGekkaAssociationByHost(host string, port uint32) (*GekkaAssociation, bool) {
 	nm.mu.RLock()
 	defer nm.mu.RUnlock()
 
@@ -251,7 +257,6 @@ func (nm *NodeManager) GetAssociationByHost(host string, port uint32) (actor.Rem
 	}
 	return nil, false
 }
-
 func (nm *NodeManager) DialRemote(ctx context.Context, target *gproto_remote.Address) (actor.RemoteAssociation, error) {
 	addrStr := fmt.Sprintf("%s:%d", target.GetHostname(), target.GetPort())
 
@@ -333,6 +338,29 @@ func (nm *NodeManager) GetAssociation(remote *gproto_remote.UniqueAddress, strea
 	defer nm.mu.RUnlock()
 	assoc, ok := nm.associations[key]
 	return assoc, ok
+}
+
+// GetAssociationByRemote returns an association for a specific remote node by its UID string.
+func (nm *NodeManager) GetAssociationByRemote(remoteID string, streamId int32) (*GekkaAssociation, bool) {
+	nm.mu.RLock()
+	defer nm.mu.RUnlock()
+	// The key format in RegisterAssociation is host:port-uid-sStreamId
+	// We scan for the -uid-sStreamId suffix.
+	suffix := fmt.Sprintf("-%s-s%d", remoteID, streamId)
+	for k, assoc := range nm.associations {
+		if strings.HasSuffix(k, suffix) {
+			return assoc, true
+		}
+	}
+	return nil, false
+}
+
+// UniqueAddressToString converts a UniqueAddress to a stable string identifier for maps.
+func UniqueAddressToString(ua *gproto_remote.UniqueAddress) string {
+	if ua == nil {
+		return ""
+	}
+	return fmt.Sprintf("%d", ua.GetUid())
 }
 
 // RegisterAssociation stores an association in the registry.
@@ -527,6 +555,14 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 	return assoc.Process(assocCtx, protocol)
 }
 
+func (assoc *GekkaAssociation) LocalUid() uint64 {
+	return assoc.localUid
+}
+
+func (assoc *GekkaAssociation) Outbox() chan []byte {
+	return assoc.outbox
+}
+
 func (assoc *GekkaAssociation) initiateHandshake(to *gproto_remote.Address) error {
 	assoc.mu.Lock()
 	assoc.state = WAITING_FOR_HANDSHAKE
@@ -632,6 +668,10 @@ func (assoc *GekkaAssociation) handleSystemMessage(meta *ArteryMetadata) error {
 		return fmt.Errorf("failed to unmarshal inner SystemMessage: %w", err)
 	}
 	slog.Debug("artery: received system message", "type", sm.GetType())
+
+	if assoc.nodeMgr.SystemMessageCallback != nil {
+		return assoc.nodeMgr.SystemMessageCallback(assoc.remote, env, sm)
+	}
 	return nil
 }
 

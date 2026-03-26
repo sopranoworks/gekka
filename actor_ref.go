@@ -309,16 +309,6 @@ func (s ActorSelection) Ask(ctx context.Context, msg any) (any, error) {
 // ActorSelection returns a handle to one or more actors, local or remote,
 // identified by path.
 //
-// path can be a local suffix ("/user/myActor") or a full remote URI
-// ("pekko://System@host:port/user/myActor"). Call Resolve on the returned
-// ActorSelection to obtain a concrete ActorRef:
-//
-//	ref, err := node.ActorSelection("/user/myActor").Resolve(ctx)
-//	ref.Tell("Hello")
-func (n *Cluster) ActorSelection(path string) ActorSelection {
-	return ActorSelection{rawPath: path, sys: n}
-}
-
 // ToTyped converts an untyped Ref to a TypedActorRef[T].
 func ToTyped[T any](ref actor.Ref) typed.TypedActorRef[T] {
 	return typed.ToTyped[T](ref)

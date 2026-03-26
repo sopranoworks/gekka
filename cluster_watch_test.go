@@ -104,7 +104,8 @@ func TestRemoteDeathWatch(t *testing.T) {
 	}
 
 	// Watch the remote target
-	node1.System.Watch(watcherRef, resolvedTarget)
+	node1.System.Watch(watcherRef, resolvedTarget.(ActorRef))
+
 
 	// Simulate node2 failure explicitly by synthesising the cluster event logic
 	// directly onto node1.

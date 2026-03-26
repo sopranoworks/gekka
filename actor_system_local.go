@@ -430,11 +430,67 @@ func (s *localActorSystem) GetTypeByManifest(manifest string) (reflect.Type, boo
 }
 
 // ActorSelection implements ActorSystem.
-func (s *localActorSystem) ActorSelection(path string) ActorSelection {
-	return ActorSelection{rawPath: path, sys: s}
+func (s *localActorSystem) ActorSelection(path string) actor.ActorSelection {
+	return actor.ActorSelection{
+		Anchor: ActorRef{fullPath: s.SelfPathURI("/"), sys: s},
+		Path:   actor.ParseSelectionElements(path),
+		System: s,
+	}
 }
 
-// SendWithSender implements internalSystem.
+func (s *localActorSystem) Resolve(path string) (ActorRef, error) {
+	ref, err := s.ActorSelection(path).Resolve(context.Background())
+	if err != nil {
+		return ActorRef{}, err
+	}
+	return ref.(ActorRef), nil
+}
+
+func (s *localActorSystem) DeliverSelection(sel actor.ActorSelection, msg any, sender ...actor.Ref) {
+	ref, err := s.ResolveSelection(sel, context.Background())
+	if err == nil {
+		ref.Tell(msg, sender...)
+	}
+}
+
+func (s *localActorSystem) ResolveSelection(sel actor.ActorSelection, ctx context.Context) (actor.Ref, error) {
+	// Build path string
+	path := ""
+	for _, e := range sel.Path {
+		if e.Type == 0 { // Parent
+			// Not easily supported in localActorSystem without anchor context
+		} else {
+			if !strings.HasSuffix(path, "/") && path != "" {
+				path += "/"
+			}
+			path += e.Matcher
+		}
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+
+	s.actorsMu.RLock()
+	a, found := s.actors[path]
+	s.actorsMu.RUnlock()
+
+	if found {
+		return ActorRef{fullPath: s.SelfPathURI(path), sys: s, local: a}, nil
+	}
+	return nil, fmt.Errorf("actor not found: %s", path)
+}
+
+func (s *localActorSystem) AskSelection(sel actor.ActorSelection, ctx context.Context, msg any) (any, error) {
+	ref, err := s.ResolveSelection(sel, ctx)
+	if err != nil {
+		return nil, err
+	}
+	if ar, ok := ref.(ActorRef); ok {
+		return s.Ask(ctx, ar, msg)
+	}
+	return nil, fmt.Errorf("AskSelection: resolved ref is not ActorRef: %T", ref)
+}
+
 func (s *localActorSystem) SendWithSender(ctx context.Context, path string, senderPath string, msg any) error {
 	s.actorsMu.RLock()
 	a, found := s.actors[path]

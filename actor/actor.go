@@ -196,6 +196,74 @@ type ActorContext interface {
 	// hook is called after all queued messages have been processed.
 	// It is a no-op when ref does not point to a local actor.
 	Stop(ref Ref)
+
+	// ActorSelection returns a handle to one or more actors, local or remote,
+	// identified by path.
+	ActorSelection(path string) ActorSelection
+}
+
+// Selection represents a single path element in an ActorSelection.
+type Selection struct {
+	Type    int32  // 0: Parent, 1: ChildName, 2: ChildPattern
+	Matcher string // Name or pattern
+}
+
+// ActorSelection identifies one or more actors by a path pattern.
+type ActorSelection struct {
+	Anchor Ref
+	Path   []Selection
+	// System allows the selection to perform delivery without an import cycle.
+	System interface {
+		DeliverSelection(s ActorSelection, msg any, sender ...Ref)
+		ResolveSelection(s ActorSelection, ctx context.Context) (Ref, error)
+		AskSelection(s ActorSelection, ctx context.Context, msg any) (any, error)
+	}
+}
+
+// Tell delivers msg to the actors identified by this selection.
+func (s ActorSelection) Tell(msg any, sender ...Ref) {
+	if s.System != nil {
+		s.System.DeliverSelection(s, msg, sender...)
+	}
+}
+
+// Ask sends msg and blocks until a reply is received or ctx is cancelled.
+func (s ActorSelection) Ask(ctx context.Context, msg any) (any, error) {
+	if s.System != nil {
+		return s.System.AskSelection(s, ctx, msg)
+	}
+	return nil, fmt.Errorf("actor: selection system is nil")
+}
+
+// Resolve returns a concrete Ref for this selection.
+func (s ActorSelection) Resolve(ctx context.Context) (Ref, error) {
+	if s.System != nil {
+		return s.System.ResolveSelection(s, ctx)
+	}
+	return nil, fmt.Errorf("actor: selection system is nil")
+}
+
+// ParseSelectionElements converts a path string into a slice of Selection elements.
+func ParseSelectionElements(path string) []Selection {
+	if path == "" {
+		return nil
+	}
+	trimmed := strings.Trim(path, "/")
+	if trimmed == "" {
+		return nil
+	}
+	parts := strings.Split(trimmed, "/")
+	res := make([]Selection, len(parts))
+	for i, p := range parts {
+		if p == ".." {
+			res[i] = Selection{Type: 0}
+		} else if strings.ContainsAny(p, "*?") {
+			res[i] = Selection{Type: 2, Matcher: p}
+		} else {
+			res[i] = Selection{Type: 1, Matcher: p}
+		}
+	}
+	return res
 }
 
 // Address identifies an actor system on the network.

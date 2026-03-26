@@ -1548,6 +1548,168 @@ func (c *Cluster) Terminate() {
 	_ = c.Shutdown()
 }
 
+// Resolve looks up and returns the ActorRef for an already-registered actor
+// at path.
+func (c *Cluster) Resolve(path string) (ActorRef, error) {
+	// For Resolve we can use ActorSelection and return an ActorRef
+	ref, err := c.ActorSelection(path).Resolve(context.Background())
+	if err != nil {
+		return ActorRef{}, err
+	}
+	if ar, ok := ref.(ActorRef); ok {
+		return ar, nil
+	}
+	return ActorRef{}, fmt.Errorf("resolved ref is not ActorRef: %T", ref)
+}
+
+// ActorSelection returns a handle to one or more actors identified by path.
+func (c *Cluster) ActorSelection(path string) actor.ActorSelection {
+	if strings.Contains(path, "://") {
+		ap, err := actor.ParseActorPath(path)
+		if err == nil {
+			// Anchor at the system root of the URI
+			anchorPath := ap.Address.String() + "/"
+			return actor.ActorSelection{
+				Anchor: ActorRef{fullPath: anchorPath, sys: c},
+				Path:   actor.ParseSelectionElements(ap.Path()),
+				System: c,
+			}
+		}
+	}
+
+	return actor.ActorSelection{
+		Anchor: ActorRef{fullPath: c.SelfPathURI("/"), sys: c},
+		Path:   actor.ParseSelectionElements(path),
+		System: c,
+	}
+}
+
+// DeliverSelection delivers msg to the actors identified by selection.
+func (c *Cluster) DeliverSelection(s actor.ActorSelection, msg any, sender ...actor.Ref) {
+	if s.Anchor == nil {
+		return
+	}
+
+	var senderPath string
+	if len(sender) > 0 && sender[0] != nil {
+		senderPath = sender[0].Path()
+	}
+
+	ap, err := actor.ParseActorPath(s.Anchor.Path())
+	if err != nil {
+		return
+	}
+
+	self := c.SelfAddress()
+	isLocal := ap.Address.System == self.System && ap.Address.Host == self.Host && ap.Address.Port == self.Port
+
+	if isLocal {
+		// Resolve and deliver locally
+		ref, err := c.ResolveSelection(s, context.Background())
+		if err == nil {
+			ref.Tell(msg, sender...)
+		}
+		return
+	}
+
+	// Remote delivery via SelectionEnvelope (ID 6)
+	targetAddr := ap.Address.ToProto()
+	assoc, ok := c.nm.GetGekkaAssociationByHost(targetAddr.GetHostname(), targetAddr.GetPort())
+	if !ok {
+		var err error
+		rawAssoc, err := c.nm.DialRemote(context.Background(), targetAddr)
+		if err != nil {
+			return
+		}
+		assoc = rawAssoc.(*core.GekkaAssociation)
+	}
+
+	elements := make([]*gproto_remote.Selection, len(s.Path))
+	for i, p := range s.Path {
+		elements[i] = &gproto_remote.Selection{
+			Type:    gproto_remote.PatternType(p.Type).Enum(),
+			Matcher: proto.String(p.Matcher),
+		}
+	}
+
+	selMsg := &core.ActorSelectionMessage{
+		Message:  msg,
+		Elements: elements,
+	}
+
+	ser, err := c.nm.SerializerRegistry.GetSerializer(core.MessageContainerSerializerID)
+	if err != nil {
+		return
+	}
+	payload, err := ser.ToBinary(selMsg)
+	if err != nil {
+		return
+	}
+
+	recipient := ap.Path()
+	if senderPath != "" {
+		_ = assoc.SendWithSender(recipient, senderPath, payload, core.MessageContainerSerializerID, "sel")
+	} else {
+		_ = assoc.Send(recipient, payload, core.MessageContainerSerializerID, "sel")
+	}
+}
+
+// ResolveSelection resolves a selection to a concrete Ref.
+func (c *Cluster) ResolveSelection(s actor.ActorSelection, ctx context.Context) (actor.Ref, error) {
+	// Build full path string from anchor and elements
+	path := s.Anchor.Path()
+	if !strings.HasSuffix(path, "/") {
+		path += "/"
+	}
+	for i, e := range s.Path {
+		if e.Type == 0 { // Parent
+			lastSlash := strings.LastIndex(strings.TrimSuffix(path, "/"), "/")
+			if lastSlash != -1 {
+				path = path[:lastSlash+1]
+			}
+		} else {
+			path += e.Matcher
+			if i < len(s.Path)-1 {
+				path += "/"
+			}
+		}
+	}
+
+	// Check if path is absolute URI or local path
+	if strings.Contains(path, "://") {
+		ap, err := actor.ParseActorPath(path)
+		if err != nil {
+			return nil, err
+		}
+		self := c.SelfAddress()
+		if ap.Address.System == self.System && ap.Address.Host == self.Host && ap.Address.Port == self.Port {
+			localPath := ap.Path()
+			if a, found := c.GetLocalActor(localPath); found {
+				return ActorRef{fullPath: path, sys: c, local: a}, nil
+			}
+			return nil, fmt.Errorf("actor not found: %s", localPath)
+		}
+		return ActorRef{fullPath: path, sys: c}, nil
+	}
+
+	// Local path
+	if a, found := c.GetLocalActor(path); found {
+		return ActorRef{fullPath: c.SelfPathURI(path), sys: c, local: a}, nil
+	}
+	return nil, fmt.Errorf("actor not found: %s", path)
+}
+
+func (c *Cluster) AskSelection(s actor.ActorSelection, ctx context.Context, msg any) (any, error) {
+	ref, err := c.ResolveSelection(s, ctx)
+	if err != nil {
+		return nil, err
+	}
+	if ar, ok := ref.(ActorRef); ok {
+		return c.Ask(ctx, ar, msg)
+	}
+	return nil, fmt.Errorf("AskSelection: resolved ref is not ActorRef: %T", ref)
+}
+
 // WhenTerminated implements ActorSystem.
 func (c *Cluster) WhenTerminated() <-chan struct{} {
 	return c.ctx.Done()

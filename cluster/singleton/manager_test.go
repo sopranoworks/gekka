@@ -79,6 +79,25 @@ func (c *singletonTestContext) Resolve(path string) (actor.Ref, error) {
 	return &singletonTestRef{path: path}, nil
 }
 
+func (c *singletonTestContext) ActorSelection(path string) actor.ActorSelection {
+	return actor.ActorSelection{
+		Anchor: &singletonTestRef{path: "/"},
+		Path:   actor.ParseSelectionElements(path),
+		System: c,
+	}
+}
+
+func (c *singletonTestContext) DeliverSelection(s actor.ActorSelection, msg any, sender ...actor.Ref) {
+}
+
+func (c *singletonTestContext) ResolveSelection(s actor.ActorSelection, ctx context.Context) (actor.Ref, error) {
+	return &singletonTestRef{path: "/test"}, nil
+}
+
+func (c *singletonTestContext) AskSelection(s actor.ActorSelection, ctx context.Context, msg any) (any, error) {
+	return nil, nil
+}
+
 func (c *singletonTestContext) Context() context.Context {
 	return context.Background()
 }

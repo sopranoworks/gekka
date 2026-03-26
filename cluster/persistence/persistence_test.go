@@ -9,6 +9,7 @@
 package persistence
 
 import (
+	"context"
 	"encoding/json"
 	"path/filepath"
 	"testing"
@@ -142,6 +143,25 @@ func (m *testActorContext) ActorOf(props actor.Props, name string) (actor.Ref, e
 
 func (m *testActorContext) Stop(_ actor.Ref)     { m.stopped = true }
 func (m *testActorContext) Watch(_, _ actor.Ref) {}
+
+func (m *testActorContext) ActorSelection(path string) actor.ActorSelection {
+	return actor.ActorSelection{
+		Anchor: &testActorRef{path: "/"},
+		Path:   actor.ParseSelectionElements(path),
+		System: m,
+	}
+}
+
+func (m *testActorContext) DeliverSelection(s actor.ActorSelection, msg any, sender ...actor.Ref) {
+}
+
+func (m *testActorContext) ResolveSelection(s actor.ActorSelection, ctx context.Context) (actor.Ref, error) {
+	return &testActorRef{path: "/test"}, nil
+}
+
+func (m *testActorContext) AskSelection(s actor.ActorSelection, ctx context.Context, msg any) (any, error) {
+	return nil, nil
+}
 
 type testActorRef struct {
 	path  string

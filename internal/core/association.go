@@ -616,12 +616,57 @@ func (assoc *GekkaAssociation) dispatch(ctx context.Context, meta *ArteryMetadat
 	}
 
 	switch meta.SerializerId {
-	case actor.ArteryInternalSerializerID, 6: // 17 or 6
+	case actor.ArteryInternalSerializerID:
 		manifest := string(meta.MessageManifest)
 		if manifest == "SystemMessage" {
 			return assoc.handleSystemMessage(meta)
 		}
 		return assoc.handleControlMessage(ctx, meta)
+
+	case 6: // MessageContainerSerializer
+		env := &gproto_remote.SelectionEnvelope{}
+		if err := proto.Unmarshal(meta.Payload, env); err != nil {
+			return fmt.Errorf("failed to unmarshal SelectionEnvelope: %w", err)
+		}
+
+		// 1. Resolve target path from Pattern
+		path := "/"
+		for _, e := range env.Pattern {
+			if e.GetType() == gproto_remote.PatternType_PARENT {
+				lastSlash := strings.LastIndex(strings.TrimSuffix(path, "/"), "/")
+				if lastSlash != -1 {
+					path = path[:lastSlash+1]
+				}
+			} else {
+				if !strings.HasSuffix(path, "/") {
+					path += "/"
+				}
+				path += e.GetMatcher()
+			}
+		}
+
+		// 2. Deserialize inner message
+		innerMsg, err := assoc.nodeMgr.SerializerRegistry.DeserializePayload(env.GetSerializerId(), string(env.GetMessageManifest()), env.GetEnclosedMessage())
+		if err != nil {
+			slog.Debug("artery: selection failed to deserialize inner message", "error", err)
+			return err
+		}
+
+		// 3. Update meta and route
+		meta.DeserializedMessage = innerMsg
+		meta.Recipient = &gproto_remote.ActorRefData{Path: proto.String(path)}
+
+		if env.GetSerializerId() == actor.ClusterSerializerID {
+			if assoc.nodeMgr.clusterMgr != nil {
+				assoc.mu.RLock()
+				remote := assoc.remote
+				assoc.mu.RUnlock()
+				return assoc.nodeMgr.clusterMgr.HandleIncomingClusterMessage(ctx, env.GetEnclosedMessage(), string(env.GetMessageManifest()), ToClusterUniqueAddress(remote))
+			}
+			return nil
+		}
+
+		return assoc.handleUserMessage(meta)
 
 	case actor.ClusterSerializerID:
 		if assoc.nodeMgr.clusterMgr != nil {

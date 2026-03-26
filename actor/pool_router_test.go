@@ -71,6 +71,26 @@ func (c *testActorContext) Stop(ref Ref) {
 	// no-op in test context
 }
 
+func (c *testActorContext) ActorSelection(path string) ActorSelection {
+	return ActorSelection{
+		Anchor: &testNodeRef{path: "/"},
+		Path:   ParseSelectionElements(path),
+		System: c,
+	}
+}
+
+func (c *testActorContext) DeliverSelection(s ActorSelection, msg any, sender ...Ref) {
+	// no-op
+}
+
+func (c *testActorContext) ResolveSelection(s ActorSelection, ctx context.Context) (Ref, error) {
+	return &testNodeRef{path: "/test"}, nil
+}
+
+func (c *testActorContext) AskSelection(s ActorSelection, ctx context.Context, msg any) (any, error) {
+	return nil, nil
+}
+
 func (c *testActorContext) Spawn(behavior any, name string) (Ref, error) {
 	return nil, nil
 }

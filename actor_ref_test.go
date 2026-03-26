@@ -23,8 +23,13 @@ import (
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
+var testPortCounter atomic.Uint32
+
 func newTestNode(t *testing.T, system, host string, port uint32) *Cluster {
 	t.Helper()
+	if port == 0 {
+		port = 2552 + testPortCounter.Add(1)
+	}
 	addr := &gproto_remote.Address{
 		Protocol: proto.String("pekko"),
 		System:   proto.String(system),
@@ -150,7 +155,7 @@ func TestActorSelection_Resolve_LocalPath(t *testing.T) {
 	if ref.Path() != wantPath {
 		t.Errorf("path = %q, want %q", ref.Path(), wantPath)
 	}
-	if ref.local != a {
+	if ref.(ActorRef).local != a {
 		t.Error("Resolve returned wrong local actor")
 	}
 }
@@ -175,7 +180,7 @@ func TestActorSelection_Resolve_RemoteURI(t *testing.T) {
 	if ref.Path() != remoteURI {
 		t.Errorf("path = %q, want %q", ref.Path(), remoteURI)
 	}
-	if ref.local != nil {
+	if ref.(ActorRef).local != nil {
 		t.Error("remote ActorRef should have nil local")
 	}
 }
@@ -192,7 +197,7 @@ func TestActorSelection_Resolve_SelfAbsoluteURI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve failed: %v", err)
 	}
-	if ref.local != a {
+	if ref.(ActorRef).local != a {
 		t.Error("self-URI should resolve to a local actor ref")
 	}
 }
@@ -216,7 +221,7 @@ func TestActorSelection_Resolve_NilContext(t *testing.T) {
 	if ref.Path() != wantPath {
 		t.Errorf("path = %q, want %q", ref.Path(), wantPath)
 	}
-	if ref.local != a {
+	if ref.(ActorRef).local != a {
 		t.Error("Resolve(nil) returned wrong local actor")
 	}
 }

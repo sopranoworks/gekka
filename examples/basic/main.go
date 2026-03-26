@@ -189,7 +189,7 @@ func main() {
 	askPing := func() {
 		askCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
-		reply, err := remoteRef.Ask(askCtx, []byte("Ping"))
+		reply, err := remoteRef.(gekka.ActorRef).Ask(askCtx, []byte("Ping"))
 		if err != nil {
 			log.Printf("[gekka] Ask error: %v", err)
 			return

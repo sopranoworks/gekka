@@ -122,7 +122,11 @@ type ActorSystem interface {
 
 	// ActorSelection returns a handle to one or more actors, local or remote,
 	// identified by path.
-	ActorSelection(path string) ActorSelection
+	ActorSelection(path string) actor.ActorSelection
+
+	// Resolve looks up and returns the ActorRef for an already-registered actor
+	// at path.
+	Resolve(path string) (ActorRef, error)
 
 	// Scheduler returns the system-level task scheduler.
 	// Scheduled tasks run in their own goroutines and are automatically
@@ -164,6 +168,9 @@ type ActorSystem interface {
 type internalSystem interface {
 	ActorSystem
 	SendWithSender(ctx context.Context, path string, senderPath string, msg any) error
+	DeliverSelection(s actor.ActorSelection, msg any, sender ...actor.Ref)
+	ResolveSelection(s actor.ActorSelection, ctx context.Context) (actor.Ref, error)
+	AskSelection(s actor.ActorSelection, ctx context.Context, msg any) (any, error)
 	SelfAddress() actor.Address
 	SerializationRegistry() *core.SerializationRegistry
 	GetLocalActor(path string) (actor.Actor, bool)
@@ -258,16 +265,30 @@ func (b *actorContextBridge) Stop(ref actor.Ref) {
 	}
 }
 
+func (b *actorContextBridge) ActorSelection(path string) actor.ActorSelection {
+	return b.sys.ActorSelection(path)
+}
+
+func (b *actorContextBridge) DeliverSelection(s actor.ActorSelection, msg any, sender ...actor.Ref) {
+	if is, ok := b.sys.(internalSystem); ok {
+		is.DeliverSelection(s, msg, sender...)
+	}
+}
+
+func (b *actorContextBridge) ResolveSelection(s actor.ActorSelection, ctx context.Context) (actor.Ref, error) {
+	if is, ok := b.sys.(internalSystem); ok {
+		return is.ResolveSelection(s, ctx)
+	}
+	return nil, fmt.Errorf("system does not support ResolveSelection")
+}
+
+func (b *actorContextBridge) AskSelection(s actor.ActorSelection, ctx context.Context, msg any) (any, error) {
+	if is, ok := b.sys.(internalSystem); ok {
+		return is.AskSelection(s, ctx, msg)
+	}
+	return nil, fmt.Errorf("system does not support AskSelection")
+}
+
 func (b *actorContextBridge) Resolve(path string) (actor.Ref, error) {
-	type resolver interface {
-		ActorSelection(path string) ActorSelection
-	}
-	if r, ok := b.sys.(resolver); ok {
-		ref, err := r.ActorSelection(path).Resolve(context.Background())
-		if err != nil {
-			return nil, err
-		}
-		return ref, nil
-	}
-	return nil, fmt.Errorf("system does not support ActorSelection")
+	return b.ActorSelection(path).Resolve(context.Background())
 }

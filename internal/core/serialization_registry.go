@@ -25,6 +25,7 @@ const (
         ProtobufSerializerID = 2
         RawSerializerID      = 4
         ClusterSerializerID  = 5
+        MessageContainerSerializerID = 6
         JSONSerializerID     = 9
         StringSerializerID   = 20
         CBORSerializerID     = 33
@@ -53,6 +54,7 @@ type SerializationRegistry struct {
 	rawSerializer      *RawSerializer
 	protobufSerializer *ProtobufSerializer
 	cborSerializer     *CBORSerializer
+	messageContainerSerializer *MessageContainerSerializer
 }
 
 func NewSerializationRegistry() *SerializationRegistry {
@@ -65,11 +67,13 @@ func NewSerializationRegistry() *SerializationRegistry {
 	r.rawSerializer = &RawSerializer{}
 	r.protobufSerializer = &ProtobufSerializer{registry: r}
 	r.cborSerializer = &CBORSerializer{registry: r}
+	r.messageContainerSerializer = &MessageContainerSerializer{registry: r}
 	r.serializers[JSONSerializerID] = r.jsonSerializer
 	r.serializers[RawSerializerID] = r.rawSerializer
 	r.serializers[ProtobufSerializerID] = r.protobufSerializer
 	r.serializers[StringSerializerID] = &StringSerializer{}
 	r.serializers[CBORSerializerID] = r.cborSerializer
+	r.serializers[MessageContainerSerializerID] = r.messageContainerSerializer
 
 	// Registration of Artery control types (v0.14.x alignment)
 	r.RegisterManifest("d", reflect.TypeOf((*remote.HandshakeReq)(nil)))
@@ -80,6 +84,7 @@ func NewSerializationRegistry() *SerializationRegistry {
 	r.RegisterManifest("cta", reflect.TypeOf((*remote.CompressionTableAdvertisementAck)(nil)))
 	r.RegisterManifest("SystemMessage", reflect.TypeOf((*remote.SystemMessageEnvelope)(nil)))
 	r.RegisterManifest("h", reflect.TypeOf((*remote.SystemMessageDeliveryAck)(nil)))
+	r.RegisterManifest("sel", reflect.TypeOf((*remote.SelectionEnvelope)(nil)))
 
 	return r
 }
@@ -352,4 +357,93 @@ func (s *CBORSerializer) FromBinary(data []byte, manifest string) (interface{}, 
 		return ptr.Interface(), nil
 	}
 	return ptr.Elem().Interface(), nil
+}
+
+// ActorSelectionMessage is an internal representation of a message being sent
+// via ActorSelection.
+type ActorSelectionMessage struct {
+	Message  interface{}
+	Elements []*remote.Selection
+	Wildcard bool
+}
+
+// MessageContainerSerializer handles SelectionEnvelope (ID 6).
+type MessageContainerSerializer struct {
+	registry *SerializationRegistry
+}
+
+func (s *MessageContainerSerializer) Identifier() int32 {
+	return MessageContainerSerializerID
+}
+
+func (s *MessageContainerSerializer) ToBinary(msg interface{}) ([]byte, error) {
+	sel, ok := msg.(*ActorSelectionMessage)
+	if !ok {
+		return nil, fmt.Errorf("MessageContainerSerializer: expected *ActorSelectionMessage, got %T", msg)
+	}
+
+	payload, sid, manifest, err := s.registry.SerializePayload(sel.Message)
+	if err != nil {
+		return nil, err
+	}
+
+	env := &remote.SelectionEnvelope{
+		EnclosedMessage: payload,
+		SerializerId:    proto.Int32(sid),
+		Pattern:         sel.Elements,
+		MessageManifest: []byte(manifest),
+		WildcardFanOut:  proto.Bool(sel.Wildcard),
+	}
+
+	return proto.Marshal(env)
+}
+
+func (s *MessageContainerSerializer) FromBinary(data []byte, manifest string) (interface{}, error) {
+	env := &remote.SelectionEnvelope{}
+	if err := proto.Unmarshal(data, env); err != nil {
+		return nil, err
+	}
+	return env, nil
+}
+
+// SerializePayload determines the correct serializer and returns the serialized bytes.
+func (r *SerializationRegistry) SerializePayload(msg interface{}) ([]byte, int32, string, error) {
+	if msg == nil {
+		return nil, 0, "", nil
+	}
+
+	var sid int32
+	var manifest string
+
+	// Standard types
+	switch m := msg.(type) {
+	case []byte:
+		sid = RawSerializerID
+	case string:
+		sid = StringSerializerID
+	case proto.Message:
+		sid = ProtobufSerializerID
+		manifest = reflect.TypeOf(m).String()
+	default:
+		// Fallback to JSON or CBOR? We'll use JSON for now as default application serializer
+		sid = JSONSerializerID
+		manifest = reflect.TypeOf(m).String()
+	}
+
+	// Override manifest if registered
+	if m, ok := r.GetManifestByType(reflect.TypeOf(msg)); ok {
+		manifest = m
+	}
+
+	s, err := r.GetSerializer(sid)
+	if err != nil {
+		return nil, 0, "", err
+	}
+
+	payload, err := s.ToBinary(msg)
+	if err != nil {
+		return nil, 0, "", err
+	}
+
+	return payload, sid, manifest, nil
 }

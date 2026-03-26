@@ -572,7 +572,7 @@ func (s *localActorSystem) SpawnActor(path string, a actor.Actor, props actor.Pr
 
 	// Inject the ActorContext so actors can spawn peers and access the
 	// node lifecycle context via a.System().
-	actor.InjectSystem(a, asActorContext(s, path))
+	actor.InjectSystem(a, AsActorContext(s, path))
 
 	// Inject SupervisorStrategy from Props
 	actor.InjectSupervisorStrategy(a, props.SupervisorStrategy)

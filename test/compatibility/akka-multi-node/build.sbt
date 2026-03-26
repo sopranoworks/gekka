@@ -35,5 +35,9 @@ lazy val root = (project in file("."))
     MultiJvm / parallelExecution := false,
 
     // Pass env variables through to the forked JVMs
-    MultiJvm / jvmOptions += "-Xmx512m",
+    MultiJvm / jvmOptions ++= Seq(
+      "-Xmx512m",
+      "--add-opens=java.base/java.nio=ALL-UNNAMED",
+      "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED"
+    ),
   )

@@ -97,6 +97,11 @@ func (r ActorRef) Tell(msg any, sender ...actor.Ref) {
 	}
 
 	if r.local != nil {
+		defer func() {
+			if r := recover(); r != nil {
+				// Mailbox closed or other panic — drop silently
+			}
+		}()
 		env := actor.Envelope{Payload: msg, Sender: s}
 		select {
 		case r.local.Mailbox() <- env:
@@ -150,6 +155,11 @@ func (r ActorRef) TellCtx(ctx context.Context, msg any, sender ...actor.Ref) {
 	}
 
 	if r.local != nil {
+		defer func() {
+			if r := recover(); r != nil {
+				// Mailbox closed or other panic — drop silently
+			}
+		}()
 		// Inject current span into the trace-context map.
 		var tc map[string]string
 		tracer := telemetry.GetTracer("github.com/sopranoworks/gekka")

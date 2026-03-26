@@ -240,7 +240,7 @@ func SystemActorOf[T any, S Spawner](spawner S, behavior Behavior[T], name strin
 
 // SpawnPersistent creates a new persistent typed actor.
 func SpawnPersistent[Command any, Event any, State any](sys ActorSystem, behavior *EventSourcedBehavior[Command, Event, State], name string, props ...actor.Props) (TypedActorRef[Command], error) {
-	ref, err := ptyped.SpawnPersistent(asActorContext(sys, ""), behavior, name, props...)
+	ref, err := ptyped.SpawnPersistent(AsActorContext(sys, ""), behavior, name, props...)
 	return ref, err
 }
 

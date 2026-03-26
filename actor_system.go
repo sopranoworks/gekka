@@ -190,10 +190,10 @@ func (b *actorContextBridge) SubscribeToReceptionist(keyID string, subscriber ty
 // when ActorOf is called with an empty name.
 var autoNameCounter atomic.Uint64
 
-// asActorContext returns a bridge that satisfies actor.ActorContext, allowing
+// AsActorContext returns a bridge that satisfies actor.ActorContext, allowing
 // an ActorSystem to be injected into BaseActor without an import cycle.
 // The bridge adapts the richer ActorRef return type down to actor.Ref.
-func asActorContext(sys ActorSystem, parentPath string) actor.ActorContext {
+func AsActorContext(sys ActorSystem, parentPath string) actor.ActorContext {
 	return &actorContextBridge{sys: sys, parentPath: parentPath}
 }
 

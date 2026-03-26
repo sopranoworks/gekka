@@ -649,7 +649,7 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 		cluster.sched.terminate()
 	}()
 	cluster.System = cluster
-	cluster.cm.Sys = asActorContext(cluster, "")
+	cluster.cm.Sys = AsActorContext(cluster, "")
 	actor.SetMailboxLengthProvider(cluster)
 	actor.SetClusterMetricsProvider(cluster)
 
@@ -800,6 +800,16 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 			}
 		}
 	}()
+
+	// Register built-in serializers
+	nm.SerializerRegistry.RegisterSerializer(stream.StreamRefSerializerID, &stream.StreamRefSerializer{})
+	nm.SerializerRegistry.RegisterManifest("A", reflect.TypeOf((*stream.SequencedOnNext)(nil)), stream.StreamRefSerializerID)
+	nm.SerializerRegistry.RegisterManifest("B", reflect.TypeOf((*stream.CumulativeDemand)(nil)), stream.StreamRefSerializerID)
+	nm.SerializerRegistry.RegisterManifest("C", reflect.TypeOf((*stream.RemoteStreamFailure)(nil)), stream.StreamRefSerializerID)
+	nm.SerializerRegistry.RegisterManifest("D", reflect.TypeOf((*stream.RemoteStreamCompleted)(nil)), stream.StreamRefSerializerID)
+	nm.SerializerRegistry.RegisterManifest("E", reflect.TypeOf((*stream.SourceRef)(nil)), stream.StreamRefSerializerID)
+	nm.SerializerRegistry.RegisterManifest("F", reflect.TypeOf((*stream.SinkRef)(nil)), stream.StreamRefSerializerID)
+	nm.SerializerRegistry.RegisterManifest("G", reflect.TypeOf((*stream.OnSubscribeHandshake)(nil)), stream.StreamRefSerializerID)
 
 	return cluster, nil
 }
@@ -1903,7 +1913,7 @@ func (n *Cluster) SpawnActor(path string, a actor.Actor, props actor.Props) acto
 	// Inject the ActorContext so actors can spawn peers and access the
 	// node lifecycle context via a.System(). Uses actor.InjectSystem so that
 	// the package-local type assertion reaches the unexported setSystem method.
-	actor.InjectSystem(a, asActorContext(n, path))
+	actor.InjectSystem(a, AsActorContext(n, path))
 
 	// Inject SupervisorStrategy from Props
 	actor.InjectSupervisorStrategy(a, props.SupervisorStrategy)

@@ -460,23 +460,25 @@ func (r *SerializationRegistry) SerializePayload(msg interface{}) ([]byte, int32
 	var sid int32
 	var manifest string
 
+	t := reflect.TypeOf(msg)
+
 	// Standard types
-	switch m := msg.(type) {
+	switch msg.(type) {
 	case []byte:
 		sid = RawSerializerID
 	case string:
 		sid = StringSerializerID
 	case proto.Message:
 		sid = ProtobufSerializerID
-		manifest = reflect.TypeOf(m).String()
+		manifest = t.String()
 	default:
 		// Fallback to JSON or CBOR? We'll use JSON for now as default application serializer
 		sid = JSONSerializerID
-		manifest = reflect.TypeOf(m).String()
+		manifest = t.String()
 	}
 
 	// Override manifest and sid if registered
-	if m, ok := r.GetManifestByType(reflect.TypeOf(msg)); ok {
+	if m, ok := r.GetManifestByType(t); ok {
 		manifest = m
 		if sidOver, ok := r.GetSerializerIdByManifest(manifest); ok {
 			sid = sidOver

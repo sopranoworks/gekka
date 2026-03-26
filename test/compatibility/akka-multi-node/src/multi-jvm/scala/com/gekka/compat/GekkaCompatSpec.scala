@@ -88,10 +88,33 @@ abstract class GekkaSystem
 
   import GekkaCompatSpecConfig._
 
+  // Capture standard error to detect JVM warnings
+  private val stderrCapture = new java.io.ByteArrayOutputStream()
+  private val originalErr   = System.err
+
   override def initialParticipants: Int = roles.size
 
-  override def beforeAll(): Unit = multiNodeSpecBeforeAll()
-  override def afterAll(): Unit  = multiNodeSpecAfterAll()
+  override def beforeAll(): Unit = {
+    System.setErr(new java.io.PrintStream(new java.io.OutputStream {
+      override def write(b: Int): Unit = {
+        originalErr.write(b)
+        stderrCapture.write(b)
+      }
+    }))
+    multiNodeSpecBeforeAll()
+  }
+
+  override def afterAll(): Unit = {
+    multiNodeSpecAfterAll()
+    System.setErr(originalErr)
+  }
+
+  protected def checkJvmWarnings(): Unit = {
+    val errOutput = stderrCapture.toString("UTF-8")
+    if (errOutput.contains("WARNING") || errOutput.contains("Illegal reflective access")) {
+      fail(s"Test failed due to JVM warnings in stderr:\n$errOutput")
+    }
+  }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -318,6 +341,8 @@ abstract class GekkaSystem
           println("STATUS: COMPAT_TEST_PASSED")
           Console.flush()
 
+          // Final check for JVM reflective access warnings
+          checkJvmWarnings()
         } finally {
           cluster.unsubscribe(memberProbe.ref)
           proc.destroy()

@@ -22,6 +22,11 @@ type Flow[In, Out, Mat any] struct {
 	attach func(upstream iterator[In]) (iterator[Out], Mat)
 }
 
+// Shape returns the [FlowShape] of this Flow.
+func (f Flow[In, Out, Mat]) Shape() FlowShape[In, Out] {
+	return FlowShape[In, Out]{In: Inlet[In]{}, Out: Outlet[Out]{}}
+}
+
 // ─── Constructors ─────────────────────────────────────────────────────────
 
 // Map creates a Flow that transforms each element using fn.

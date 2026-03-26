@@ -18,6 +18,11 @@ import (
 // keys exceeds the configured maxSubstreams limit.
 var ErrTooManySubstreams = errors.New("stream: groupBy exceeded maxSubstreams limit")
 
+// Graph[S Shape, Mat] is the interface for all stream graphs.
+type Graph[S Shape, Mat any] interface {
+	Shape() S
+}
+
 // ─── sharedError ──────────────────────────────────────────────────────────
 
 // sharedError lets one goroutine broadcast a failure to any number of

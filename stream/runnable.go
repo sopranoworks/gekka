@@ -20,6 +20,11 @@ type RunnableGraph[Mat any] struct {
 	run func(m Materializer) (Mat, error)
 }
 
+// Shape returns the [ClosedShape] of this RunnableGraph.
+func (g RunnableGraph[Mat]) Shape() ClosedShape {
+	return ClosedShape{}
+}
+
 // Run materializes and executes the graph using m.  It returns the
 // materialized value and any stream-level error.
 //

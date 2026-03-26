@@ -25,6 +25,11 @@ type Source[T, Mat any] struct {
 	factory func() (iterator[T], Mat)
 }
 
+// Shape returns the [SourceShape] of this Source.
+func (s Source[T, Mat]) Shape() SourceShape[T] {
+	return SourceShape[T]{Out: Outlet[T]{}}
+}
+
 // ─── Constructors ─────────────────────────────────────────────────────────
 
 // FromSlice creates a Source that emits all elements from s in order, then

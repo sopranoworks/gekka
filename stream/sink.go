@@ -18,6 +18,11 @@ type Sink[In, Mat any] struct {
 	runWith func(upstream iterator[In]) (Mat, error)
 }
 
+// Shape returns the [SinkShape] of this Sink.
+func (s Sink[In, Mat]) Shape() SinkShape[In] {
+	return SinkShape[In]{In: Inlet[In]{}}
+}
+
 // ─── sinkConnector implementation ─────────────────────────────────────────
 
 // connect implements [sinkConnector], allowing Sink to be passed to [Source.To].

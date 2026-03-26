@@ -51,3 +51,9 @@ gekka-compat-test
 *.log
 *.pid
 bin/
+
+.claude/
+.gemini/
+CLAUDE.md
+GEMINI.md
+

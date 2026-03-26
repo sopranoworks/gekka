@@ -21,6 +21,27 @@ var ErrTooManySubstreams = errors.New("stream: groupBy exceeded maxSubstreams li
 // Graph[S Shape, Mat] is the interface for all stream graphs.
 type Graph[S Shape, Mat any] interface {
 	Shape() S
+	materialize(m Materializer, shape Shape) materializedStage
+}
+
+type materializedStage struct {
+	outIters map[int]any
+	inConns  map[int]func(any)
+	runners  []func() error
+	mat      any
+}
+
+// lazyIterator is a placeholder for an iterator that will be provided later.
+type lazyIterator[T any] struct {
+	inner iterator[T]
+}
+
+func (l *lazyIterator[T]) next() (T, bool, error) {
+	if l.inner == nil {
+		var zero T
+		return zero, false, errors.New("stream: pulling from uninitialized lazy iterator")
+	}
+	return l.inner.next()
 }
 
 // ─── sharedError ──────────────────────────────────────────────────────────

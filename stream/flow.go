@@ -24,7 +24,22 @@ type Flow[In, Out, Mat any] struct {
 
 // Shape returns the [FlowShape] of this Flow.
 func (f Flow[In, Out, Mat]) Shape() FlowShape[In, Out] {
-	return FlowShape[In, Out]{In: Inlet[In]{}, Out: Outlet[Out]{}}
+	return FlowShape[In, Out]{In: &Inlet[In]{}, Out: &Outlet[Out]{}}
+}
+
+func (f Flow[In, Out, Mat]) materialize(m Materializer, shape Shape) materializedStage {
+	lazyIn := &lazyIterator[In]{}
+	lazyOut := &lazyIterator[Out]{}
+	return materializedStage{
+		outIters: map[int]any{shape.(FlowShape[In, Out]).Out.id: lazyOut},
+		inConns: map[int]func(any){
+			shape.(FlowShape[In, Out]).In.id: func(up any) {
+				lazyIn.inner = up.(iterator[In])
+				down, _ := f.attach(lazyIn)
+				lazyOut.inner = down
+			},
+		},
+	}
 }
 
 // ─── Constructors ─────────────────────────────────────────────────────────

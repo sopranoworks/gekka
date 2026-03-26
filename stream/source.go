@@ -27,7 +27,15 @@ type Source[T, Mat any] struct {
 
 // Shape returns the [SourceShape] of this Source.
 func (s Source[T, Mat]) Shape() SourceShape[T] {
-	return SourceShape[T]{Out: Outlet[T]{}}
+	return SourceShape[T]{Out: &Outlet[T]{}}
+}
+
+func (s Source[T, Mat]) materialize(m Materializer, shape Shape) materializedStage {
+	iter, mat := s.factory()
+	return materializedStage{
+		outIters: map[int]any{shape.(SourceShape[T]).Out.id: iter},
+		mat:      mat,
+	}
 }
 
 // ─── Constructors ─────────────────────────────────────────────────────────

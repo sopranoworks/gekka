@@ -25,6 +25,17 @@ func (g RunnableGraph[Mat]) Shape() ClosedShape {
 	return ClosedShape{}
 }
 
+func (g RunnableGraph[Mat]) materialize(m Materializer, shape Shape) materializedStage {
+	return materializedStage{
+		runners: []func() error{
+			func() error {
+				_, err := g.run(m)
+				return err
+			},
+		},
+	}
+}
+
 // Run materializes and executes the graph using m.  It returns the
 // materialized value and any stream-level error.
 //

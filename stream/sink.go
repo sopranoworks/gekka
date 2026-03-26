@@ -20,7 +20,24 @@ type Sink[In, Mat any] struct {
 
 // Shape returns the [SinkShape] of this Sink.
 func (s Sink[In, Mat]) Shape() SinkShape[In] {
-	return SinkShape[In]{In: Inlet[In]{}}
+	return SinkShape[In]{In: &Inlet[In]{}}
+}
+
+func (s Sink[In, Mat]) materialize(m Materializer, shape Shape) materializedStage {
+	lazy := &lazyIterator[In]{}
+	return materializedStage{
+		inConns: map[int]func(any){
+			shape.(SinkShape[In]).In.id: func(up any) {
+				lazy.inner = up.(iterator[In])
+			},
+		},
+		runners: []func() error{
+			func() error {
+				_, err := s.runWith(lazy)
+				return err
+			},
+		},
+	}
 }
 
 // ─── sinkConnector implementation ─────────────────────────────────────────

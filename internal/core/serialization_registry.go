@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	"github.com/fxamacker/cbor/v2"
+	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 	"github.com/sopranoworks/gekka/internal/proto/remote"
 	"google.golang.org/protobuf/proto"
 )
@@ -27,6 +28,7 @@ const (
         ClusterSerializerID  = 5
         MessageContainerSerializerID = 6
         JSONSerializerID     = 9
+        ArteryInternalSerializerID   = 17
         StringSerializerID   = 20
         CBORSerializerID     = 33
 
@@ -49,6 +51,7 @@ type SerializationRegistry struct {
 	mu                 sync.RWMutex
 	manifestsToType    map[string]reflect.Type
 	typeToManifests    map[reflect.Type]string
+	manifestToSerializerId map[string]int32
 	serializers        map[int32]Serializer
 	jsonSerializer     *JSONSerializer
 	rawSerializer      *RawSerializer
@@ -59,9 +62,10 @@ type SerializationRegistry struct {
 
 func NewSerializationRegistry() *SerializationRegistry {
 	r := &SerializationRegistry{
-		manifestsToType: make(map[string]reflect.Type),
-		typeToManifests: make(map[reflect.Type]string),
-		serializers:     make(map[int32]Serializer),
+		manifestsToType:        make(map[string]reflect.Type),
+		typeToManifests:        make(map[reflect.Type]string),
+		manifestToSerializerId: make(map[string]int32),
+		serializers:            make(map[int32]Serializer),
 	}
 	r.jsonSerializer = &JSONSerializer{registry: r}
 	r.rawSerializer = &RawSerializer{}
@@ -75,24 +79,41 @@ func NewSerializationRegistry() *SerializationRegistry {
 	r.serializers[CBORSerializerID] = r.cborSerializer
 	r.serializers[MessageContainerSerializerID] = r.messageContainerSerializer
 
-	// Registration of Artery control types (v0.14.x alignment)
-	r.RegisterManifest("d", reflect.TypeOf((*remote.HandshakeReq)(nil)))
-	r.RegisterManifest("e", reflect.TypeOf((*remote.MessageWithAddress)(nil)))
-	r.RegisterManifest("n", reflect.TypeOf((*remote.ArteryHeartbeatRsp)(nil)))
-	r.RegisterManifest("q", reflect.TypeOf((*remote.Quarantined)(nil)))
-	r.RegisterManifest("ct", reflect.TypeOf((*remote.CompressionTableAdvertisement)(nil)))
-	r.RegisterManifest("cta", reflect.TypeOf((*remote.CompressionTableAdvertisementAck)(nil)))
-	r.RegisterManifest("SystemMessage", reflect.TypeOf((*remote.SystemMessageEnvelope)(nil)))
-	r.RegisterManifest("h", reflect.TypeOf((*remote.SystemMessageDeliveryAck)(nil)))
-	r.RegisterManifest("sel", reflect.TypeOf((*remote.SelectionEnvelope)(nil)))
+	// Artery Control Manifests (Serializer ID 17)
+	r.RegisterManifest("d", reflect.TypeOf((*remote.HandshakeReq)(nil)), ArteryInternalSerializerID)
+	r.RegisterManifest("e", reflect.TypeOf((*remote.MessageWithAddress)(nil)), ArteryInternalSerializerID)
+	r.RegisterManifest("n", reflect.TypeOf((*remote.ArteryHeartbeatRsp)(nil)), ArteryInternalSerializerID)
+	r.RegisterManifest("q", reflect.TypeOf((*remote.Quarantined)(nil)), ArteryInternalSerializerID)
+	r.RegisterManifest("ct", reflect.TypeOf((*remote.CompressionTableAdvertisement)(nil)), ArteryInternalSerializerID)
+	r.RegisterManifest("cta", reflect.TypeOf((*remote.CompressionTableAdvertisementAck)(nil)), ArteryInternalSerializerID)
+	r.RegisterManifest("SystemMessage", reflect.TypeOf((*remote.SystemMessageEnvelope)(nil)), ArteryInternalSerializerID)
+	r.RegisterManifest("h", reflect.TypeOf((*remote.SystemMessageDeliveryAck)(nil)), ArteryInternalSerializerID)
+	r.RegisterManifest("sel", reflect.TypeOf((*remote.SelectionEnvelope)(nil)), ArteryInternalSerializerID)
+
+	// Cluster Message Manifests (Serializer ID 5)
+	r.RegisterManifest("IJ", reflect.TypeOf((*gproto_cluster.InitJoin)(nil)), ClusterSerializerID)
+	r.RegisterManifest("IJA", reflect.TypeOf((*gproto_cluster.InitJoinAck)(nil)), ClusterSerializerID)
+	r.RegisterManifest("J", reflect.TypeOf((*gproto_cluster.Join)(nil)), ClusterSerializerID)
+	r.RegisterManifest("W", reflect.TypeOf((*gproto_cluster.Welcome)(nil)), ClusterSerializerID)
+	r.RegisterManifest("GE", reflect.TypeOf((*gproto_cluster.GossipEnvelope)(nil)), ClusterSerializerID)
+	r.RegisterManifest("GS", reflect.TypeOf((*gproto_cluster.GossipStatus)(nil)), ClusterSerializerID)
+	r.RegisterManifest("HB", reflect.TypeOf((*gproto_cluster.Heartbeat)(nil)), ClusterSerializerID)
+	r.RegisterManifest("HBR", reflect.TypeOf((*gproto_cluster.HeartBeatResponse)(nil)), ClusterSerializerID)
+	r.RegisterManifest("L", reflect.TypeOf((*gproto_cluster.Address)(nil)), ClusterSerializerID)
+
+	// Gekka Internal CBOR Manifests (Serializer ID 33)
+	r.RegisterManifest("GCM", reflect.TypeOf((*GekkaControlMessage)(nil)), CBORSerializerID)
 
 	return r
 }
-func (r *SerializationRegistry) RegisterManifest(manifest string, typ reflect.Type) {
+func (r *SerializationRegistry) RegisterManifest(manifest string, typ reflect.Type, sid ...int32) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.manifestsToType[manifest] = typ
 	r.typeToManifests[typ] = manifest
+	if len(sid) > 0 {
+		r.manifestToSerializerId[manifest] = sid[0]
+	}
 }
 
 func (r *SerializationRegistry) GetTypeByManifest(manifest string) (reflect.Type, bool) {
@@ -100,6 +121,23 @@ func (r *SerializationRegistry) GetTypeByManifest(manifest string) (reflect.Type
 	defer r.mu.RUnlock()
 	typ, ok := r.manifestsToType[manifest]
 	return typ, ok
+}
+
+func (r *SerializationRegistry) GetSerializerIdByManifest(manifest string) (int32, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	sid, ok := r.manifestToSerializerId[manifest]
+	return sid, ok
+}
+
+func (r *SerializationRegistry) GetManifests() map[string]reflect.Type {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	res := make(map[string]reflect.Type, len(r.manifestsToType))
+	for k, v := range r.manifestsToType {
+		res[k] = v
+	}
+	return res
 }
 
 func (r *SerializationRegistry) GetManifestByType(typ reflect.Type) (string, bool) {
@@ -326,7 +364,7 @@ func (s *ProtobufSerializer) Size(msg interface{}) int {
 	return 0
 }
 
-// CBORSerializer handles CBOR serialization.
+// CBORSerializer handles CBOR encoded messages (ID 33).
 type CBORSerializer struct {
 	registry *SerializationRegistry
 }
@@ -335,7 +373,14 @@ func (s *CBORSerializer) Identifier() int32 {
 	return CBORSerializerID
 }
 
+// GekkaControlMessage is a generic internal control message for Gekka components.
+type GekkaControlMessage struct {
+	Command string
+	Args    map[string]string
+}
+
 func (s *CBORSerializer) ToBinary(msg interface{}) ([]byte, error) {
+
 	return cbor.Marshal(msg)
 }
 
@@ -430,9 +475,12 @@ func (r *SerializationRegistry) SerializePayload(msg interface{}) ([]byte, int32
 		manifest = reflect.TypeOf(m).String()
 	}
 
-	// Override manifest if registered
+	// Override manifest and sid if registered
 	if m, ok := r.GetManifestByType(reflect.TypeOf(msg)); ok {
 		manifest = m
+		if sidOver, ok := r.GetSerializerIdByManifest(manifest); ok {
+			sid = sidOver
+		}
 	}
 
 	s, err := r.GetSerializer(sid)

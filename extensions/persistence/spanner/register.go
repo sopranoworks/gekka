@@ -61,4 +61,16 @@ func init() {
 		}
 		return NewSpannerSnapshotStore(client, NewJSONCodec()), nil
 	})
+
+	persistence.RegisterReadJournalProvider("spanner", func(cfg hocon.Config) (any, error) {
+		if err := ValidateConfig(cfg); err != nil {
+			return nil, err
+		}
+		dsn := spannerDSN(cfg)
+		client, err := spanner.NewClient(context.Background(), dsn)
+		if err != nil {
+			return nil, fmt.Errorf("spannerstore: open spanner client for %s: %w", dsn, err)
+		}
+		return NewSpannerReadJournal(client, NewJSONCodec()), nil
+	})
 }

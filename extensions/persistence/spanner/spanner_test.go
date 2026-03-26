@@ -120,7 +120,9 @@ func getFixture(t *testing.T) *emulatorFixture {
 			CreateStatement: fmt.Sprintf("CREATE DATABASE `%s`", testDatabase),
 			ExtraStatements: []string{
 				spannerstore.JournalDDL,
+				spannerstore.EventTagDDL,
 				spannerstore.SnapshotsDDL,
+				spannerstore.OffsetsDDL,
 			},
 		})
 		if err != nil {

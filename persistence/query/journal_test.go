@@ -17,6 +17,8 @@ import (
 
 type mockReadJournal struct{}
 
+func (m *mockReadJournal) IsReadJournal() {}
+
 func (m *mockReadJournal) EventsByPersistenceId(persistenceId string, fromSequenceNr, toSequenceNr int64) stream.Source[EventEnvelope, stream.NotUsed] {
 	events := []EventEnvelope{
 		{Offset: SequenceOffset(1), PersistenceID: persistenceId, SequenceNr: 1, Event: "event-1"},
@@ -36,9 +38,17 @@ func (m *mockReadJournal) EventsByTag(tag string, offset Offset) stream.Source[E
 func TestReadJournalInterface(t *testing.T) {
 	var rj ReadJournal = &mockReadJournal{}
 
-	src := rj.EventsByPersistenceId("p1", 1, 2)
-	assert.NotNil(t, src)
+	if ep, ok := rj.(EventsByPersistenceIdQuery); ok {
+		src := ep.EventsByPersistenceId("p1", 1, 2)
+		assert.NotNil(t, src)
+	} else {
+		t.Fatal("mockReadJournal should implement EventsByPersistenceIdQuery")
+	}
 
-	srcTag := rj.EventsByTag("tag1", NoOffset{})
-	assert.NotNil(t, srcTag)
+	if et, ok := rj.(EventsByTagQuery); ok {
+		srcTag := et.EventsByTag("tag1", NoOffset{})
+		assert.NotNil(t, srcTag)
+	} else {
+		t.Fatal("mockReadJournal should implement EventsByTagQuery")
+	}
 }

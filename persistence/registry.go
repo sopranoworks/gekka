@@ -76,6 +76,9 @@ type SnapshotStoreProvider func(cfg hocon.Config) (SnapshotStore, error)
 // configuration.  Self-contained backends may ignore it.
 type DurableStateStoreProvider func(cfg hocon.Config) (DurableStateStore, error)
 
+// ReadJournalProvider creates a ReadJournal from a HOCON sub-config.
+type ReadJournalProvider func(cfg hocon.Config) (any, error)
+
 var (
 	registryMu      sync.RWMutex
 	journalReg      = make(map[string]JournalFactory)
@@ -85,6 +88,7 @@ var (
 	journalProviders      = make(map[string]JournalProvider)
 	snapshotProviders     = make(map[string]SnapshotStoreProvider)
 	durableStateProviders = make(map[string]DurableStateStoreProvider)
+	readJournalProviders  = make(map[string]ReadJournalProvider)
 )
 
 // RegisterJournal registers a JournalFactory under name.
@@ -226,6 +230,13 @@ func RegisterDurableStateStoreProvider(name string, provider DurableStateStorePr
 	registryMu.Unlock()
 }
 
+// RegisterReadJournalProvider registers a config-driven ReadJournalProvider under name.
+func RegisterReadJournalProvider(name string, provider ReadJournalProvider) {
+	registryMu.Lock()
+	readJournalProviders[name] = provider
+	registryMu.Unlock()
+}
+
 // NewJournal looks up the JournalProvider registered under name, passes cfg to
 // it, and returns the resulting Journal.  cfg is the HOCON sub-config at
 // persistence.journal.settings; backends that need no configuration may ignore it.
@@ -307,6 +318,20 @@ func NewDurableStateStore(name string, cfg hocon.Config) (DurableStateStore, err
 	}
 	return nil, fmt.Errorf("persistence: durable state store provider %q not found — available providers: [%s]. Did you forget a blank import?",
 		name, strings.Join(available, ", "))
+}
+
+// NewReadJournal looks up the ReadJournalProvider registered under name,
+// passes cfg to it, and returns the resulting ReadJournal instance.
+// The return type is any because concrete journals might implement different
+// subsets of query interfaces.
+func NewReadJournal(name string, cfg hocon.Config) (any, error) {
+	registryMu.RLock()
+	p, ok := readJournalProviders[name]
+	registryMu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("persistence: read journal provider %q not found", name)
+	}
+	return p(cfg)
 }
 
 // DurableStateStoreProviderNames returns the names of all registered config-driven DurableStateStore providers.

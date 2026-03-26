@@ -37,6 +37,8 @@ func NewSQLReadJournal(db *sql.DB, dialect Dialect, codec PayloadCodec, config C
 	}
 }
 
+func (j *SQLReadJournal) IsReadJournal() {}
+
 // EventsByPersistenceId provides a stream of events for a specific persistent actor.
 func (j *SQLReadJournal) EventsByPersistenceId(persistenceId string, fromSequenceNr, toSequenceNr int64) stream.Source[query.EventEnvelope, stream.NotUsed] {
 	return stream.FromIteratorFunc(func() (query.EventEnvelope, bool, error) {
@@ -167,4 +169,8 @@ func (j *SQLReadJournal) EventsByTag(tag string, offset query.Offset) stream.Sou
 	})
 }
 
-var _ query.ReadJournal = (*SQLReadJournal)(nil)
+var (
+	_ query.ReadJournal                = (*SQLReadJournal)(nil)
+	_ query.EventsByPersistenceIdQuery = (*SQLReadJournal)(nil)
+	_ query.EventsByTagQuery           = (*SQLReadJournal)(nil)
+)

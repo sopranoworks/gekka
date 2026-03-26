@@ -36,7 +36,7 @@ func (j *SpannerJournal) AsyncWriteMessages(ctx context.Context, messages []pers
 		return nil
 	}
 	now := time.Now().UnixNano()
-	muts := make([]*spanner.Mutation, 0, len(messages))
+	muts := make([]*spanner.Mutation, 0, len(messages)*2)
 	for _, msg := range messages {
 		manifest, data, err := j.codec.Encode(msg.Payload)
 		if err != nil {
@@ -44,7 +44,7 @@ func (j *SpannerJournal) AsyncWriteMessages(ctx context.Context, messages []pers
 		}
 		muts = append(muts, spanner.InsertOrUpdate("journal",
 			[]string{"persistence_id", "sequence_nr", "payload", "manifest",
-				"sender_path", "deleted", "written_at", "tags"},
+				"sender_path", "deleted", "written_at", "tags", "commit_timestamp"},
 			[]any{
 				msg.PersistenceID,
 				int64(msg.SequenceNr),
@@ -54,8 +54,20 @@ func (j *SpannerJournal) AsyncWriteMessages(ctx context.Context, messages []pers
 				msg.Deleted,
 				now,
 				strings.Join(msg.Tags, ","),
+				spanner.CommitTimestamp,
 			},
 		))
+		for _, tag := range msg.Tags {
+			muts = append(muts, spanner.InsertOrUpdate("event_tag",
+				[]string{"tag", "commit_timestamp", "persistence_id", "sequence_nr"},
+				[]any{
+					tag,
+					spanner.CommitTimestamp,
+					msg.PersistenceID,
+					int64(msg.SequenceNr),
+				},
+			))
+		}
 	}
 	_, err := j.client.Apply(ctx, muts)
 	if err != nil {

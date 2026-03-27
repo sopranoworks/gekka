@@ -11,6 +11,7 @@ package sharding
 import (
 	"fmt"
 
+	"github.com/sopranoworks/gekka-config"
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/cluster"
 	cpersistence "github.com/sopranoworks/gekka/cluster/persistence"
@@ -101,7 +102,15 @@ func StartSharding(
 ) (actor.Ref, error) {
 	strategy := cfg.Strategy
 	if strategy == nil {
-		strategy = NewLeastShardAllocationStrategy(1, 1)
+		fallback := NewLeastShardAllocationStrategy(1, 1)
+		type configProvider interface {
+			Config() config.Config
+		}
+		if cp, ok := sys.(configProvider); ok {
+			strategy = LoadAllocationStrategy(cp.Config(), cm, fallback)
+		} else {
+			strategy = fallback
+		}
 	}
 
 	// ── Step 1: ShardCoordinator as ClusterSingleton ─────────────────────

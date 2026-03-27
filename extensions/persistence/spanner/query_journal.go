@@ -251,8 +251,82 @@ func (j *SpannerReadJournal) readHighest(persistenceId string) (uint64, error) {
 	return uint64(highest), err
 }
 
+func (j *SpannerReadJournal) CurrentPersistenceIds() stream.Source[string, stream.NotUsed] {
+	var iter *spanner.RowIterator
+	return stream.FromIteratorFunc(func() (string, bool, error) {
+		if iter == nil {
+			stmt := spanner.Statement{
+				SQL: `SELECT DISTINCT persistence_id FROM journal`,
+			}
+			iter = j.client.Single().Query(context.Background(), stmt)
+		}
+
+		row, err := iter.Next()
+		if err == iterator.Done {
+			iter.Stop()
+			return "", false, nil
+		}
+		if err != nil {
+			iter.Stop()
+			return "", false, err
+		}
+
+		var pid string
+		if err := row.Columns(&pid); err != nil {
+			iter.Stop()
+			return "", false, err
+		}
+
+		return pid, true, nil
+	})
+}
+
+func (j *SpannerReadJournal) PersistenceIds() stream.Source[string, stream.NotUsed] {
+	seen := make(map[string]struct{})
+	var iter *spanner.RowIterator
+
+	return stream.FromIteratorFunc(func() (string, bool, error) {
+		for {
+			if iter == nil {
+				stmt := spanner.Statement{
+					SQL: `SELECT DISTINCT persistence_id FROM journal`,
+				}
+				iter = j.client.Single().Query(context.Background(), stmt)
+			}
+
+			row, err := iter.Next()
+			if err == iterator.Done {
+				iter.Stop()
+				iter = nil
+				time.Sleep(j.refreshInterval)
+				continue
+			}
+			if err != nil {
+				iter.Stop()
+				iter = nil
+				return "", false, err
+			}
+
+			var pid string
+			if err := row.Columns(&pid); err != nil {
+				iter.Stop()
+				iter = nil
+				return "", false, err
+			}
+
+			if _, exists := seen[pid]; !exists {
+				seen[pid] = struct{}{}
+				return pid, true, nil
+			}
+			// if already seen, immediately loop and pull next row
+		}
+	})
+}
+
 var (
 	_ query.EventsByPersistenceIdQuery        = (*SpannerReadJournal)(nil)
 	_ query.EventsByTagQuery                  = (*SpannerReadJournal)(nil)
 	_ query.CurrentEventsByPersistenceIdQuery = (*SpannerReadJournal)(nil)
+	_ query.PersistenceIdsQuery               = (*SpannerReadJournal)(nil)
+	_ query.CurrentPersistenceIdsQuery        = (*SpannerReadJournal)(nil)
 )

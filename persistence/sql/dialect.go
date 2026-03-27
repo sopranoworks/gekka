@@ -51,6 +51,13 @@ type Dialect interface {
 	// Bind order: tag, offset_seq_nr, limit.
 	JournalEventsByTagSQL(table string) string
 
+	// JournalCurrentPersistenceIdsSQL returns the SELECT statement for current persistence IDs.
+	JournalCurrentPersistenceIdsSQL(table string) string
+
+	// JournalPersistenceIdsSQL returns the SELECT statement for continuous persistence IDs.
+	// Bind order: offset_ordering, limit.
+	JournalPersistenceIdsSQL(table string) string
+
 	// SnapshotUpsertSQL returns the INSERT/UPSERT statement for a snapshot.
 	// Bind order: persistence_id, sequence_nr, created_at,
 	//             snapshot_payload, snapshot_manifest.
@@ -154,6 +161,19 @@ WHERE tags LIKE '%' || $1 || '%'
   AND deleted = false
 ORDER BY ordering ASC
 LIMIT $3`
+}
+
+func (PostgresDialect) JournalCurrentPersistenceIdsSQL(table string) string {
+	return `SELECT DISTINCT persistence_id FROM ` + table
+}
+
+func (PostgresDialect) JournalPersistenceIdsSQL(table string) string {
+	return `SELECT persistence_id, MAX(ordering) as max_ord
+FROM ` + table + `
+GROUP BY persistence_id
+HAVING MAX(ordering) > $1
+ORDER BY max_ord ASC
+LIMIT $2`
 }
 
 func (PostgresDialect) JournalDeleteSQL(table string) string {
@@ -292,6 +312,19 @@ WHERE tags LIKE CONCAT('%', ?, '%')
   AND ordering > ?
   AND deleted = 0
 ORDER BY ordering ASC
+LIMIT ?`
+}
+
+func (MySQLDialect) JournalCurrentPersistenceIdsSQL(table string) string {
+	return `SELECT DISTINCT persistence_id FROM ` + table
+}
+
+func (MySQLDialect) JournalPersistenceIdsSQL(table string) string {
+	return `SELECT persistence_id, MAX(ordering) as max_ord
+FROM ` + table + `
+GROUP BY persistence_id
+HAVING MAX(ordering) > ?
+ORDER BY max_ord ASC
 LIMIT ?`
 }
 

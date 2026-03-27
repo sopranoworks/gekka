@@ -169,8 +169,106 @@ func (j *SQLReadJournal) EventsByTag(tag string, offset query.Offset) stream.Sou
 	})
 }
 
+func (j *SQLReadJournal) CurrentPersistenceIds() stream.Source[string, stream.NotUsed] {
+	return stream.FromIteratorFunc(func() (string, bool, error) {
+		// Just run it once and buffer the results in memory? No we need an iterator
+		// But stream.FromIteratorFunc evaluates per element! We can't query db per element
+		// Instead we use a local context variable and execute query on first iteration
+		var rows *sql.Rows
+		var queryErr error
+		var done bool
+
+		if !done && rows == nil {
+			ctx := context.Background()
+			rows, queryErr = j.db.QueryContext(ctx, j.dialect.JournalCurrentPersistenceIdsSQL(j.table))
+			if queryErr != nil {
+				return "", false, queryErr
+			}
+		}
+
+		if rows != nil && rows.Next() {
+			var pid string
+			if err := rows.Scan(&pid); err != nil {
+				rows.Close()
+				return "", false, err
+			}
+			return pid, true, nil
+		}
+
+		if rows != nil {
+			queryErr = rows.Err()
+			rows.Close()
+			rows = nil
+		}
+		done = true
+
+		if queryErr != nil {
+			return "", false, queryErr
+		}
+		return "", false, nil
+	})
+}
+
+func (j *SQLReadJournal) PersistenceIds() stream.Source[string, stream.NotUsed] {
+	var currentOrdering int64
+	var rows *sql.Rows
+	var queryErr error
+
+	return stream.FromIteratorFunc(func() (string, bool, error) {
+		for {
+			if rows == nil && queryErr == nil {
+				ctx := context.Background()
+				rows, queryErr = j.db.QueryContext(ctx,
+					j.dialect.JournalPersistenceIdsSQL(j.table),
+					currentOrdering,
+					100, // fetch batches of 100 at a time
+				)
+				if queryErr != nil {
+					return "", false, queryErr
+				}
+			}
+
+			if rows != nil && rows.Next() {
+				var pid string
+				var maxOrd int64
+				if err := rows.Scan(&pid, &maxOrd); err != nil {
+					rows.Close()
+					rows = nil
+					return "", false, err
+				}
+				// We don't advance currentOrdering until we process all locally
+				// Wait! If we fetch 100 maxOrds, each row has a different maxOrd
+				// To paginate correctly, currentOrdering MUST be strictly increasing for the query?
+				// But GROUP BY persistence_id orders by max_ord ASC!
+				// So we just advance currentOrdering to the highest max_ord we've yielded!
+				if maxOrd > currentOrdering {
+					currentOrdering = maxOrd
+				}
+				return pid, true, nil
+			}
+
+			if rows != nil {
+				queryErr = rows.Err()
+				rows.Close()
+				rows = nil
+			}
+
+			if queryErr != nil {
+				err := queryErr
+				queryErr = nil // reset for polling
+				return "", false, err
+			}
+
+			// We reached the end of the batch; wait and poll again
+			time.Sleep(j.refreshInterval)
+		}
+	})
+}
+
 var (
 	_ query.ReadJournal                = (*SQLReadJournal)(nil)
 	_ query.EventsByPersistenceIdQuery = (*SQLReadJournal)(nil)
 	_ query.EventsByTagQuery           = (*SQLReadJournal)(nil)
+	_ query.PersistenceIdsQuery        = (*SQLReadJournal)(nil)
+	_ query.CurrentPersistenceIdsQuery = (*SQLReadJournal)(nil)
 )

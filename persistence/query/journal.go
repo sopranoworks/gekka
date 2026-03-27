@@ -92,3 +92,18 @@ type CurrentEventsByPersistenceIdQuery interface {
 	// the current state is exhausted.
 	CurrentEventsByPersistenceId(persistenceId string, fromSequenceNr, toSequenceNr int64) stream.Source[EventEnvelope, stream.NotUsed]
 }
+
+// PersistenceIdsQuery provides a stream of all unique persistence_ids ever used.
+type PersistenceIdsQuery interface {
+	ReadJournal
+	// PersistenceIds returns a live stream of all unique persistence_ids ever used.
+	PersistenceIds() stream.Source[string, stream.NotUsed]
+}
+
+// CurrentPersistenceIdsQuery provides a non-streaming query of all current unique persistence_ids.
+type CurrentPersistenceIdsQuery interface {
+	ReadJournal
+	// CurrentPersistenceIds returns a stream of all unique persistence_ids ever used,
+	// completing when the currently known IDs are exhausted.
+	CurrentPersistenceIds() stream.Source[string, stream.NotUsed]
+}

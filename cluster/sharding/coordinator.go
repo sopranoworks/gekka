@@ -44,8 +44,8 @@ func LookupCoordinator(typeName string) (*ShardCoordinator, bool) {
 	return c, ok
 }
 
-// rebalanceTick is a periodic self-message that triggers a rebalance check.
-type rebalanceTick struct{}
+// RebalanceTick is a periodic self-message that triggers a rebalance check.
+type RebalanceTick struct{}
 
 type ShardCoordinator struct {
 	actor.BaseActor
@@ -116,7 +116,7 @@ func (c *ShardCoordinator) scheduleRebalanceTick() {
 	if self == nil {
 		return // not yet registered (unit tests that skip PreStart)
 	}
-	time.AfterFunc(interval, func() { self.Tell(rebalanceTick{}) })
+	time.AfterFunc(interval, func() { self.Tell(RebalanceTick{}) })
 }
 
 // doRebalance asks the strategy which shards to move and sends BeginHandOff to
@@ -220,7 +220,7 @@ func (c *ShardCoordinator) Receive(msg any) {
 			"region", regionPath, "released", released)
 		c.Sender().Tell(HandoffComplete{RegionPath: regionPath}, c.Self())
 
-	case rebalanceTick:
+	case RebalanceTick:
 		c.doRebalance()
 		c.scheduleRebalanceTick()
 

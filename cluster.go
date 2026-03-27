@@ -202,7 +202,7 @@ type ClusterConfig struct {
 	//	    passivation.idle-timeout = 2m
 	//	    remember-entities = on
 	//	}
-	Sharding ShardingConfig
+	Sharding ShardingConfig `hocon:"gekka.cluster.sharding"`
 
 	// DataCenter identifies which data center this node belongs to.
 	// Corresponds to pekko.cluster.multi-data-center.self-data-center.
@@ -392,6 +392,41 @@ type ShardingConfig struct {
 	//
 	// HOCON: gekka.cluster.sharding.handoff-timeout
 	HandoffTimeout time.Duration
+
+	// AdaptiveRebalancing, when enabled, rebalances shards based on real-time
+	// node metrics (CPU, Memory, Mailbox size).
+	AdaptiveRebalancing AdaptiveRebalancingConfig
+}
+
+// AdaptiveRebalancingConfig holds settings for the adaptive rebalancing strategy.
+type AdaptiveRebalancingConfig struct {
+	// Enabled, when true, activates the adaptive rebalancing strategy.
+	// HOCON: gekka.cluster.sharding.adaptive-rebalancing.enabled
+	Enabled bool
+
+	// LoadWeight is the blend factor [0.0, 1.0] between load and shard-count.
+	// HOCON: gekka.cluster.sharding.adaptive-rebalancing.load-weight
+	LoadWeight float64
+
+	// CPUWeight is the relative weight of CPU pressure in load calculation.
+	// HOCON: gekka.cluster.sharding.adaptive-rebalancing.cpu-weight
+	CPUWeight float64
+
+	// MemoryWeight is the relative weight of memory pressure in load calculation.
+	// HOCON: gekka.cluster.sharding.adaptive-rebalancing.memory-weight
+	MemoryWeight float64
+
+	// MailboxWeight is the relative weight of mailbox size in load calculation.
+	// HOCON: gekka.cluster.sharding.adaptive-rebalancing.mailbox-weight
+	MailboxWeight float64
+
+	// RebalanceThreshold is the minimum score spread that triggers a rebalance.
+	// HOCON: gekka.cluster.sharding.adaptive-rebalancing.rebalance-threshold
+	RebalanceThreshold float64
+
+	// MaxSimultaneousRebalance is the maximum number of shards being moved at once.
+	// HOCON: gekka.cluster.sharding.adaptive-rebalancing.max-simultaneous-rebalance
+	MaxSimultaneousRebalance int
 }
 
 // resolve returns the effective (scheme, system, host, port) for this config.
@@ -431,6 +466,11 @@ type IncomingMessage struct {
 
 	// DeserializedMessage is the decoded object. If nil, only Payload is available.
 	DeserializedMessage any
+}
+
+// GetPayload returns the raw message payload.
+func (m *IncomingMessage) GetPayload() []byte {
+	return m.Payload
 }
 
 // Cluster is the single entry point for the gekka library. It wires together
@@ -733,6 +773,35 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 		} else {
 			log.Printf("gekka: failed to spawn typed ddata replicator: %v", err)
 		}
+
+		// Automatically manage replicator peers based on cluster membership.
+		go func() {
+			sub := cm.SubscribeChannel()
+			defer sub.Cancel()
+			for {
+				select {
+				case <-cluster.ctx.Done():
+					return
+				case evt, ok := <-sub.C:
+					if !ok {
+						return
+					}
+					if up, ok := evt.(gcluster.MemberUp); ok {
+						la := cluster.localAddr
+						laStr := fmt.Sprintf("%s://%s@%s:%d", la.GetProtocol(), la.GetSystem(), la.GetHostname(), la.GetPort())
+						if up.Member.String() != laStr {
+							// Convert MemberAddress string to actor.Address
+							addr, err := actor.ParseAddress(up.Member.String())
+							if err == nil {
+								peerPath := addr.WithRoot("user").Child("ddataReplicator")
+								fmt.Printf("Cluster: adding replicator peer: %s\n", peerPath.String())
+								repl.AddPeer(peerPath.String())
+							}
+						}
+					}
+				}
+			}
+		}()
 	}
 
 	// ── Receptionist ────────────────────────────────────────────────────────
@@ -881,6 +950,11 @@ func (c *Cluster) Port() uint32 {
 //	ref, err := node.ActorSelection("/user/myActor").Resolve(node.Context())
 func (c *Cluster) Context() context.Context {
 	return c.ctx
+}
+
+// MetricsGossip returns the internal metrics gossip service.
+func (c *Cluster) MetricsGossip() *gcluster.MetricsGossip {
+	return c.mg
 }
 
 // OnMessage registers a callback that is invoked for every user-level Artery
@@ -1997,6 +2071,6 @@ func (c *Cluster) GetMailboxLengths() map[string]int {
 }
 
 // GetClusterPressure implements actor.ClusterMetricsProvider.
-func (c *Cluster) GetClusterPressure() map[string]float64 {
+func (c *Cluster) GetClusterPressure() map[string]actor.NodePressure {
 	return c.mg.ClusterPressure()
 }

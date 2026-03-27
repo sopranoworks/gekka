@@ -13,9 +13,9 @@ import (
 	"sync"
 )
 
-// ClusterMetricsProvider provides cluster-wide pressure scores for adaptive routing.
+// ClusterMetricsProvider provides cluster-wide pressure status for adaptive routing.
 type ClusterMetricsProvider interface {
-	GetClusterPressure() map[string]float64
+	GetClusterPressure() map[string]NodePressure
 }
 
 var (
@@ -66,9 +66,10 @@ func (l *AdaptiveLoadBalancingRoutingLogic) Select(message any, routees []Ref) R
 			// In Cluster, nodeID was host:port.
 			nodeID := path.Address.Host + ":" + itoa_val(path.Address.Port)
 
-			pressure, ok := pressureMap[nodeID]
-			if !ok {
-				pressure = 0.5 // Unknown node, assume medium pressure
+			pressureInfo, ok := pressureMap[nodeID]
+			pressure := 0.5 // Default unknown node
+			if ok {
+				pressure = pressureInfo.Score
 			}
 			weight := 1.0 - pressure
 			if weight < 0.05 {

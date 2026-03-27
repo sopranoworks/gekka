@@ -387,7 +387,7 @@ func TestCoordinator_RebalanceTwoNodes(t *testing.T) {
 	// At this point: A=4 shards, B=0 shards → imbalance of 4 > threshold 1.
 
 	// ── Rebalance round 1 ─────────────────────────────────────────────────
-	coord.Receive(rebalanceTick{})
+	coord.Receive(RebalanceTick{})
 
 	// Coordinator should have sent exactly 1 BeginHandOff to A.
 	var handoffShards []ShardId
@@ -430,7 +430,7 @@ func TestCoordinator_RebalanceTwoNodes(t *testing.T) {
 
 	// ── Rebalance round 2 ─────────────────────────────────────────────────
 	// A=3 shards, B=0 shards — still imbalanced.
-	coord.Receive(rebalanceTick{})
+	coord.Receive(RebalanceTick{})
 
 	var newHandoffShards []ShardId
 	for _, msg := range regionA.messages {

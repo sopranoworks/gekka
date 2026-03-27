@@ -270,6 +270,41 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		}
 	}
 
+	// ── Sharding Adaptive Rebalancing (gekka-native) ────────────────────────
+	adaptivePrefix := "gekka.cluster.sharding.adaptive-rebalancing"
+	if v, err := cfg.GetString(adaptivePrefix + ".enabled"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		nodeCfg.Sharding.AdaptiveRebalancing.Enabled = v == "on" || v == "true"
+	}
+	if v, err := cfg.GetString(adaptivePrefix + ".load-weight"); err == nil {
+		if f, parseErr := strconv.ParseFloat(strings.TrimSpace(v), 64); parseErr == nil {
+			nodeCfg.Sharding.AdaptiveRebalancing.LoadWeight = f
+		}
+	}
+	if v, err := cfg.GetString(adaptivePrefix + ".cpu-weight"); err == nil {
+		if f, parseErr := strconv.ParseFloat(strings.TrimSpace(v), 64); parseErr == nil {
+			nodeCfg.Sharding.AdaptiveRebalancing.CPUWeight = f
+		}
+	}
+	if v, err := cfg.GetString(adaptivePrefix + ".memory-weight"); err == nil {
+		if f, parseErr := strconv.ParseFloat(strings.TrimSpace(v), 64); parseErr == nil {
+			nodeCfg.Sharding.AdaptiveRebalancing.MemoryWeight = f
+		}
+	}
+	if v, err := cfg.GetString(adaptivePrefix + ".mailbox-weight"); err == nil {
+		if f, parseErr := strconv.ParseFloat(strings.TrimSpace(v), 64); parseErr == nil {
+			nodeCfg.Sharding.AdaptiveRebalancing.MailboxWeight = f
+		}
+	}
+	if v, err := cfg.GetString(adaptivePrefix + ".rebalance-threshold"); err == nil {
+		if f, parseErr := strconv.ParseFloat(strings.TrimSpace(v), 64); parseErr == nil {
+			nodeCfg.Sharding.AdaptiveRebalancing.RebalanceThreshold = f
+		}
+	}
+	if v, err := cfg.GetInt(adaptivePrefix + ".max-simultaneous-rebalance"); err == nil {
+		nodeCfg.Sharding.AdaptiveRebalancing.MaxSimultaneousRebalance = v
+	}
+
 	// ── Failure Detector (gekka-native) ─────────────────────────────────────
 	fdPrefix := "gekka.cluster.failure-detector"
 	if v, err := cfg.GetString(fdPrefix + ".threshold"); err == nil {

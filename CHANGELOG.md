@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+- 🚀 **Adaptive Cluster Rebalancing**: Shards are now automatically migrated from high-pressure nodes to low-pressure nodes based on real-time CPU, Memory, and Mailbox metrics.
+- 🚀 **Gossip Metrics Infrastructure**: Enhanced cluster gossip to propagate normalized node pressure scores across the system.
+- 🚀 **Advanced Routing Logic**: Integrated adaptive placement scores into the cluster router for biasing traffic toward healthier nodes.
 
 ## [0.13.0] - 2026-03-24
 

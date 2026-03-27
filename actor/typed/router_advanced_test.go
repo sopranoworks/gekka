@@ -135,9 +135,9 @@ func TestRouter_TailChopping(t *testing.T) {
 func TestRouter_ClassicAdaptive(t *testing.T) {
 	// Mock metrics provider
 	mockProvider := &mockClusterMetricsProvider{
-		pressure: map[string]float64{
-			"node1:2552": 0.9,
-			"node2:2552": 0.1,
+		pressure: map[string]actor.NodePressure{
+			"node1:2552": {Score: 0.9},
+			"node2:2552": {Score: 0.1},
 		},
 	}
 	actor.SetClusterMetricsProvider(mockProvider)
@@ -183,9 +183,9 @@ func (w *scatterGatherTestWorker) Tell(msg any, sender ...actor.Ref) {
 func (w *scatterGatherTestWorker) Path() string { return "/user/worker" }
 
 type mockClusterMetricsProvider struct {
-	pressure map[string]float64
+	pressure map[string]actor.NodePressure
 }
 
-func (m *mockClusterMetricsProvider) GetClusterPressure() map[string]float64 {
+func (m *mockClusterMetricsProvider) GetClusterPressure() map[string]actor.NodePressure {
 	return m.pressure
 }

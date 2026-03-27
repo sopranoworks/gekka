@@ -81,16 +81,47 @@ func StartSharding[Command any, Event any, State any](
 	sys.RegisterType("sharding.GetShardHome", reflect.TypeOf(sharding.GetShardHome{}))
 	sys.RegisterType("sharding.ShardHome", reflect.TypeOf(sharding.ShardHome{}))
 	sys.RegisterType("sharding.ShardingEnvelope", reflect.TypeOf(sharding.ShardingEnvelope{}))
+	sys.RegisterType("sharding.ShardHomes", reflect.TypeOf(sharding.ShardHomes{}))
+	sys.RegisterType("sharding.RegionHandoffRequest", reflect.TypeOf(sharding.RegionHandoffRequest{}))
+	sys.RegisterType("sharding.HandoffComplete", reflect.TypeOf(sharding.HandoffComplete{}))
+	sys.RegisterType("sharding.BeginHandOff", reflect.TypeOf(sharding.BeginHandOff{}))
+	sys.RegisterType("sharding.BeginHandOffAck", reflect.TypeOf(sharding.BeginHandOffAck{}))
+	sys.RegisterType("sharding.HandOff", reflect.TypeOf(sharding.HandOff{}))
+	sys.RegisterType("sharding.ShardStopped", reflect.TypeOf(sharding.ShardStopped{}))
+	sys.RegisterType("sharding.ShardBeginHandoff", reflect.TypeOf(sharding.ShardBeginHandoff{}))
+	sys.RegisterType("sharding.ShardDrainRequest", reflect.TypeOf(sharding.ShardDrainRequest{}))
+	sys.RegisterType("sharding.ShardDrainResponse", reflect.TypeOf(sharding.ShardDrainResponse{}))
+	sys.RegisterType("sharding.RebalanceShard", reflect.TypeOf(sharding.RebalanceShard{}))
+	sys.RegisterType("string", reflect.TypeOf(""))
 
 	// 1. Start ShardCoordinator as a singleton
 	strategy := settings.AllocationStrategy
 	if strategy == nil {
-		strategy = sharding.NewLeastShardAllocationStrategy(3, 1)
+		cluster, ok := sys.(*Cluster)
+		if ok && cluster.cfg.Sharding.AdaptiveRebalancing.Enabled {
+			cfg := cluster.cfg.Sharding.AdaptiveRebalancing
+			reader := sharding.NewGossipMetricsReader(
+				cluster.mg,
+				cfg.CPUWeight,
+				cfg.MemoryWeight,
+				cfg.MailboxWeight,
+			)
+			strategy = sharding.NewAdaptiveAllocationStrategy(
+				reader,
+				cfg.LoadWeight,
+				cfg.RebalanceThreshold,
+				cfg.MaxSimultaneousRebalance,
+			)
+		} else {
+			strategy = sharding.NewLeastShardAllocationStrategy(3, 1)
+		}
 	}
 
 	coordinatorProps := actor.Props{
 		New: func() actor.Actor {
-			return sharding.NewShardCoordinator(strategy)
+			c := sharding.NewShardCoordinator(strategy)
+			sharding.RegisterCoordinator(typeName, c)
+			return c
 		},
 	}
 
@@ -104,7 +135,14 @@ func StartSharding[Command any, Event any, State any](
 		if ua != nil && localUA != nil && ua.GetAddress().GetHostname() == localUA.GetAddress().GetHostname() &&
 			ua.GetAddress().GetPort() == localUA.GetAddress().GetPort() &&
 			ua.GetUid() == localUA.GetUid() {
-			_, _ = sys.ActorOf(coordinatorProps, typeName+"Coordinator")
+			_, err := sys.ActorOf(coordinatorProps, typeName+"Coordinator")
+			if err != nil {
+				fmt.Printf("Sharding: failed to spawn coordinator: %v\n", err)
+			} else {
+				fmt.Printf("Sharding: spawned coordinator on %s:%d\n", localUA.GetAddress().GetHostname(), localUA.GetAddress().GetPort())
+			}
+		} else {
+			fmt.Printf("Sharding: NOT spawning coordinator (ua=%v, localUA=%v)\n", ua, localUA)
 		}
 
 		// Always use a proxy to reach the coordinator

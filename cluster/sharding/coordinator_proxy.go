@@ -39,6 +39,7 @@ func NewShardCoordinatorProxy(sender CoordinatorSender) *ShardCoordinatorProxy {
 func (p *ShardCoordinatorProxy) Receive(msg any) {
 	switch msg.(type) {
 	case retryFlush:
+		p.timer = nil
 		p.flushStash()
 		return
 	}

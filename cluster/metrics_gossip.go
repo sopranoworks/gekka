@@ -10,6 +10,7 @@ package cluster
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
@@ -36,6 +37,11 @@ func NewMetricsGossip(nodeID string, repl *ddata.Replicator, interval time.Durat
 	}
 }
 
+// Collector returns the internal metrics collector.
+func (g *MetricsGossip) Collector() *actor.MetricsCollector {
+	return g.collector
+}
+
 // Start begins the metrics collection and gossip loop.
 func (g *MetricsGossip) Start(ctx context.Context) {
 	ticker := time.NewTicker(g.interval)
@@ -47,20 +53,27 @@ func (g *MetricsGossip) Start(ctx context.Context) {
 				return
 			case <-ticker.C:
 				pressure := g.collector.Collect()
-				g.repl.PutInMap(MetricsMapKey, g.nodeID, pressure.Score, ddata.WriteLocal)
+				g.repl.PutInMap(MetricsMapKey, g.nodeID, pressure, ddata.WriteLocal)
 			}
 		}
 	}()
 }
 
-// ClusterPressure returns a map of node IDs to their pressure scores.
-func (g *MetricsGossip) ClusterPressure() map[string]float64 {
+// ClusterPressure returns a map of node IDs to their pressure status.
+func (g *MetricsGossip) ClusterPressure() map[string]actor.NodePressure {
 	m := g.repl.LWWMap(MetricsMapKey)
 	entries := m.Entries()
-	res := make(map[string]float64, len(entries))
+	res := make(map[string]actor.NodePressure, len(entries))
 	for k, v := range entries {
-		if score, ok := v.(float64); ok {
-			res[k] = score
+		if p, ok := v.(actor.NodePressure); ok {
+			res[k] = p
+		} else if m, ok := v.(map[string]any); ok {
+			// Handle unmarshaled JSON object
+			data, _ := json.Marshal(m)
+			var np actor.NodePressure
+			if err := json.Unmarshal(data, &np); err == nil {
+				res[k] = np
+			}
 		}
 	}
 	return res

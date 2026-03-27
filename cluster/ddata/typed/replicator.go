@@ -122,8 +122,20 @@ func (s Subscribe[L]) handle(replicator *ddata.Replicator, ctx typed.TypedContex
 
 func (Replicator) Behavior(untypedReplicator *ddata.Replicator) typed.Behavior[any] {
 	return func(ctx typed.TypedContext[any], msg any) typed.Behavior[any] {
-		if cmd, ok := msg.(Command); ok {
-			cmd.handle(untypedReplicator, ctx)
+		switch m := msg.(type) {
+		case Command:
+			m.handle(untypedReplicator, ctx)
+		case interface{ GetPayload() []byte }:
+			// Handle raw JSON gossip from Artery (IncomingMessage)
+			p := m.GetPayload()
+			if len(p) > 0 && p[0] == '{' {
+				_ = untypedReplicator.HandleIncoming(p)
+			}
+		case []byte:
+			// Handle raw bytes directly
+			if len(m) > 0 && m[0] == '{' {
+				_ = untypedReplicator.HandleIncoming(m)
+			}
 		}
 		return typed.Same[any]()
 	}

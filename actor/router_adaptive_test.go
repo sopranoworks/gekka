@@ -15,10 +15,10 @@ import (
 )
 
 type mockClusterMetricsProvider struct {
-	pressure map[string]float64
+	pressure map[string]NodePressure
 }
 
-func (m *mockClusterMetricsProvider) GetClusterPressure() map[string]float64 {
+func (m *mockClusterMetricsProvider) GetClusterPressure() map[string]NodePressure {
 	return m.pressure
 }
 
@@ -31,9 +31,9 @@ func TestRouter_Adaptive(t *testing.T) {
 
 	// 1. High pressure on node1, low on node2
 	mockProvider := &mockClusterMetricsProvider{
-		pressure: map[string]float64{
-			"node1:2552": 0.9,
-			"node2:2552": 0.1,
+		pressure: map[string]NodePressure{
+			"node1:2552": {Score: 0.9},
+			"node2:2552": {Score: 0.1},
 		},
 	}
 	SetClusterMetricsProvider(mockProvider)
@@ -54,9 +54,9 @@ func TestRouter_Adaptive(t *testing.T) {
 	assert.True(t, counts[w2.Path()] > counts[w1.Path()]*2, "w2 should have more traffic than w1")
 
 	// 2. High pressure on node2, low on node1
-	mockProvider.pressure = map[string]float64{
-		"node1:2552": 0.1,
-		"node2:2552": 0.9,
+	mockProvider.pressure = map[string]NodePressure{
+		"node1:2552": {Score: 0.1},
+		"node2:2552": {Score: 0.9},
 	}
 
 	counts = make(map[string]int)

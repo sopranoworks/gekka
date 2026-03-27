@@ -42,7 +42,9 @@ type NodePressure struct {
 
 // MetricsCollector gathers local node metrics and calculates a pressure score.
 type MetricsCollector struct {
-	lastSample time.Time
+	mu           sync.RWMutex
+	lastSample   time.Time
+	MockPressure *NodePressure // For testing
 }
 
 // NewMetricsCollector creates a new MetricsCollector.
@@ -54,6 +56,14 @@ func NewMetricsCollector() *MetricsCollector {
 
 // Collect returns a snapshot of the current node pressure.
 func (c *MetricsCollector) Collect() NodePressure {
+	c.mu.RLock()
+	if c.MockPressure != nil {
+		p := *c.MockPressure
+		c.mu.RUnlock()
+		return p
+	}
+	c.mu.RUnlock()
+
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
 
@@ -66,6 +76,13 @@ func (c *MetricsCollector) Collect() NodePressure {
 		MailboxSize: mailboxSize,
 		Score:       c.calculateScore(cpu, ms.HeapAlloc, mailboxSize),
 	}
+}
+
+// SetMockPressure overrides the collected metrics with a fixed value.
+func (c *MetricsCollector) SetMockPressure(p *NodePressure) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.MockPressure = p
 }
 
 func (c *MetricsCollector) calculateCPUUsage() float64 {

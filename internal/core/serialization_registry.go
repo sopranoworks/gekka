@@ -15,7 +15,6 @@ import (
 	"reflect"
 	"sync"
 
-	"github.com/fxamacker/cbor/v2"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 	"github.com/sopranoworks/gekka/internal/proto/remote"
 	"google.golang.org/protobuf/proto"
@@ -30,7 +29,6 @@ const (
         JSONSerializerID     = 9
         ArteryInternalSerializerID   = 17
         StringSerializerID   = 20
-        CBORSerializerID     = 33
 
         // Pekko Distributed Data Serializers
 
@@ -56,7 +54,6 @@ type SerializationRegistry struct {
 	jsonSerializer     *JSONSerializer
 	rawSerializer      *RawSerializer
 	protobufSerializer *ProtobufSerializer
-	cborSerializer     *CBORSerializer
 	messageContainerSerializer *MessageContainerSerializer
 }
 
@@ -70,13 +67,11 @@ func NewSerializationRegistry() *SerializationRegistry {
 	r.jsonSerializer = &JSONSerializer{registry: r}
 	r.rawSerializer = &RawSerializer{}
 	r.protobufSerializer = &ProtobufSerializer{registry: r}
-	r.cborSerializer = &CBORSerializer{registry: r}
 	r.messageContainerSerializer = &MessageContainerSerializer{registry: r}
 	r.serializers[JSONSerializerID] = r.jsonSerializer
 	r.serializers[RawSerializerID] = r.rawSerializer
 	r.serializers[ProtobufSerializerID] = r.protobufSerializer
 	r.serializers[StringSerializerID] = &StringSerializer{}
-	r.serializers[CBORSerializerID] = r.cborSerializer
 	r.serializers[MessageContainerSerializerID] = r.messageContainerSerializer
 
 	// Artery Control Manifests (Serializer ID 17)
@@ -101,8 +96,8 @@ func NewSerializationRegistry() *SerializationRegistry {
 	r.RegisterManifest("HBR", reflect.TypeOf((*gproto_cluster.HeartBeatResponse)(nil)), ClusterSerializerID)
 	r.RegisterManifest("L", reflect.TypeOf((*gproto_cluster.Address)(nil)), ClusterSerializerID)
 
-	// Gekka Internal CBOR Manifests (Serializer ID 33)
-	r.RegisterManifest("GCM", reflect.TypeOf((*GekkaControlMessage)(nil)), CBORSerializerID)
+	// Gekka Internal Manifests
+	r.RegisterManifest("GCM", reflect.TypeOf((*GekkaControlMessage)(nil)), JSONSerializerID)
 
 	return r
 }
@@ -364,44 +359,10 @@ func (s *ProtobufSerializer) Size(msg interface{}) int {
 	return 0
 }
 
-// CBORSerializer handles CBOR encoded messages (ID 33).
-type CBORSerializer struct {
-	registry *SerializationRegistry
-}
-
-func (s *CBORSerializer) Identifier() int32 {
-	return CBORSerializerID
-}
-
 // GekkaControlMessage is a generic internal control message for Gekka components.
 type GekkaControlMessage struct {
 	Command string
 	Args    map[string]string
-}
-
-func (s *CBORSerializer) ToBinary(msg interface{}) ([]byte, error) {
-
-	return cbor.Marshal(msg)
-}
-
-func (s *CBORSerializer) FromBinary(data []byte, manifest string) (interface{}, error) {
-	typ, ok := s.registry.GetTypeByManifest(manifest)
-	if !ok {
-		return nil, fmt.Errorf("CBORSerializer: no type registered for manifest %q", manifest)
-	}
-	var ptr reflect.Value
-	if typ.Kind() == reflect.Ptr {
-		ptr = reflect.New(typ.Elem())
-	} else {
-		ptr = reflect.New(typ)
-	}
-	if err := cbor.Unmarshal(data, ptr.Interface()); err != nil {
-		return nil, fmt.Errorf("CBORSerializer: unmarshal into %v: %w", typ, err)
-	}
-	if typ.Kind() == reflect.Ptr {
-		return ptr.Interface(), nil
-	}
-	return ptr.Elem().Interface(), nil
 }
 
 // ActorSelectionMessage is an internal representation of a message being sent
@@ -472,7 +433,7 @@ func (r *SerializationRegistry) SerializePayload(msg interface{}) ([]byte, int32
 		sid = ProtobufSerializerID
 		manifest = t.String()
 	default:
-		// Fallback to JSON or CBOR? We'll use JSON for now as default application serializer
+		// Fallback to JSON as default application serializer
 		sid = JSONSerializerID
 		manifest = t.String()
 	}

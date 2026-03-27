@@ -12,7 +12,6 @@ package integration_test
 
 import (
 	"fmt"
-	"net"
 	"testing"
 	"time"
 
@@ -209,8 +208,3 @@ func contains(s, substr string) bool {
 	}()
 }
 
-func freePort(t *testing.T) uint32 {
-	l, _ := net.Listen("tcp", "127.0.0.1:0")
-	defer l.Close()
-	return uint32(l.Addr().(*net.TCPAddr).Port)
-}

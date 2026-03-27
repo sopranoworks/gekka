@@ -122,3 +122,19 @@ func (s ClosedShape) Inlets() []Port {
 func (s ClosedShape) Outlets() []Port {
 	return nil
 }
+
+// FanIn2Shape[T0, T1, Out] has two distinct Inlets and one Outlet.
+type FanIn2Shape[T0, T1, Out any] struct {
+	In0 *Inlet[T0]
+	In1 *Inlet[T1]
+	Out *Outlet[Out]
+}
+
+func (s FanIn2Shape[T0, T1, Out]) Inlets() []Port {
+	return []Port{s.In0, s.In1}
+}
+
+func (s FanIn2Shape[T0, T1, Out]) Outlets() []Port {
+	return []Port{s.Out}
+}
+

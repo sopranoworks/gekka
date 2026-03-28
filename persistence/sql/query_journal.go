@@ -176,9 +176,8 @@ func (j *SQLReadJournal) CurrentPersistenceIds() stream.Source[string, stream.No
 		// Instead we use a local context variable and execute query on first iteration
 		var rows *sql.Rows
 		var queryErr error
-		var done bool
 
-		if !done && rows == nil {
+		if rows == nil {
 			ctx := context.Background()
 			rows, queryErr = j.db.QueryContext(ctx, j.dialect.JournalCurrentPersistenceIdsSQL(j.table))
 			if queryErr != nil {
@@ -200,8 +199,6 @@ func (j *SQLReadJournal) CurrentPersistenceIds() stream.Source[string, stream.No
 			rows.Close()
 			rows = nil
 		}
-		done = true
-
 		if queryErr != nil {
 			return "", false, queryErr
 		}

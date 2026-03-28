@@ -65,7 +65,7 @@
 - **Plugin-based Persistence**: Unified standard-library interfaces for Journal and Snapshot storage with support for dependency-injected backends (Spanner, SQL, Redis).
 - **Structured Logging (slog)**: Integrated granular log level control for high-frequency protocol events, significantly reducing default terminal noise.
 
-### v0.14.0-dev (2026-03-28)
+### v0.14.0 (2026-03-28) ✅ Released
 - **Native Aeron UDP Transport**: Wire-level Go implementation of the Aeron 1.30.0 framing protocol. Enables hybrid Go/JVM clusters over `aeron-udp` without a JVM Media Driver. Three Artery logical streams (Control=1, Ordinary=2, Large=3) are multiplexed over a single UDP port. Reliability via NACK-based retransmission and SM flow control. Verified by full `sbt multi-jvm:test` with 60-second stability window against Akka 2.6.21.
 - **GraphDSL Builder API**: Explicit graph wiring DSL (`NewBuilder`, `Add`, `Connect`) for constructing non-linear stream topologies such as diamond graphs and multi-branch fan-out/fan-in pipelines.
 - **Junction Stages** (`stream` package): `NewBroadcast[T](n)`, `NewMerge[T](n)`, `NewZip[A, B]()` — first-class `Graph` components with full back-pressure semantics, verified through the complete test suite.

@@ -99,7 +99,7 @@ func (r ActorRef) Tell(msg any, sender ...actor.Ref) {
 	if r.local != nil {
 		defer func() {
 			if r := recover(); r != nil {
-				// Mailbox closed or other panic — drop silently
+				_ = r // Mailbox closed or other panic — drop silently
 			}
 		}()
 		env := actor.Envelope{Payload: msg, Sender: s}
@@ -157,7 +157,7 @@ func (r ActorRef) TellCtx(ctx context.Context, msg any, sender ...actor.Ref) {
 	if r.local != nil {
 		defer func() {
 			if r := recover(); r != nil {
-				// Mailbox closed or other panic — drop silently
+				_ = r // Mailbox closed or other panic — drop silently
 			}
 		}()
 		// Inject current span into the trace-context map.

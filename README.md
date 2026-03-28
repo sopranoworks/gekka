@@ -1,4 +1,4 @@
-# gekka &nbsp;[![Version](https://img.shields.io/badge/version-0.14.0--dev-orange)](https://github.com/sopranoworks/gekka)
+# gekka &nbsp;[![Version](https://img.shields.io/badge/version-0.14.0-blue)](https://github.com/sopranoworks/gekka)
 
  [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Go CI](https://github.com/sopranoworks/gekka/actions/workflows/go.yml/badge.svg)](https://github.com/sopranoworks/gekka/actions/workflows/go.yml)
 
@@ -12,7 +12,7 @@ Configuration is loaded via [`gekka-config`](https://github.com/sopranoworks/gek
 
 ---
 
-## What's New in v0.14.0-dev
+## What's New in v0.14.0
 
 - **Native Aeron UDP Transport** — Wire-level compatibility with Akka 2.6.x and Pekko 1.x over the Aeron UDP protocol. Go nodes now participate in hybrid Go/Scala clusters using the same low-latency, lock-free media-driver framing as JVM nodes. Three logical Artery streams are multiplexed over a single UDP port: Stream 1 (control/handshake), Stream 2 (ordinary messages), and Stream 3 (large/fragmented messages). Verified by a full multi-node `sbt multi-jvm:test` suite including a 60-second stability window against a live Akka 2.6.21 seed node. Enable with `pekko.remote.artery.transport = aeron-udp`.
 - **GraphDSL Builder API** — Explicit graph wiring via `stream.NewBuilder()`, `stream.Add[S, Mat]()`, and `stream.Connect()`. Complex fan-out/fan-in topologies (e.g., diamond graphs, multi-path pipelines) can now be assembled without linear `Via`/`To` chaining.

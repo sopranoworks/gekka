@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.14.0-dev] - 2026-03-28
+## [0.14.0] - 2026-03-28
 
 ### Added
 
@@ -288,8 +288,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Message Dispatch**: Fixed a critical bug where messages were not correctly routed to registered actors by default when incoming envelopes contained full URIs.
 
 
-[Unreleased]: https://github.com/sopranoworks/gekka/compare/v0.14.0-dev...HEAD
-[0.14.0-dev]: https://github.com/sopranoworks/gekka/compare/v0.13.0...v0.14.0-dev
+[Unreleased]: https://github.com/sopranoworks/gekka/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/sopranoworks/gekka/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/sopranoworks/gekka/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/sopranoworks/gekka/compare/v0.11.0...v0.12.0
 [0.10.0]: https://github.com/sopranoworks/gekka/compare/v0.9.0...v0.10.0

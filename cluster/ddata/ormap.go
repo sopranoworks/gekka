@@ -172,7 +172,11 @@ func (m *PNCounterMap) Merge(other ReplicatedData) ReplicatedData {
 }
 
 func (m *PNCounterMap) Copy() ReplicatedData {
-	return &PNCounterMap{ORMap: *m.ORMap.Copy().(*ORMap)}
+	copied := m.ORMap.Copy().(*ORMap)
+	result := &PNCounterMap{}
+	result.keys = copied.keys
+	result.data = copied.data
+	return result
 }
 
 // ORMultiMap is a specialized ORMap where values are ORSets.
@@ -220,7 +224,11 @@ func (m *ORMultiMap) Merge(other ReplicatedData) ReplicatedData {
 }
 
 func (m *ORMultiMap) Copy() ReplicatedData {
-	return &ORMultiMap{ORMap: *m.ORMap.Copy().(*ORMap)}
+	copied := m.ORMap.Copy().(*ORMap)
+	result := &ORMultiMap{}
+	result.keys = copied.keys
+	result.data = copied.data
+	return result
 }
 
 // Ensure implementations satisfy ReplicatedData

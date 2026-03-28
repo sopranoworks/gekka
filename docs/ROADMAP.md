@@ -78,6 +78,15 @@
 
 ## Upcoming
 
+### v0.15.0 — Extensibility and Advanced Patterns
+
+- **User-Defined Serializer API**: Support for registering custom serializers via HOCON configuration, enabling pluggable wire formats without modifying core transport code.
+- **Persistent FSM**: Support for state-machine-based persistence with event-driven transitions, combining FSM behavior with the event sourcing journal.
+- **Event Adapters**: Transformation hooks for migrating events between the journal representation and the actor domain model, enabling schema evolution without data migration.
+- **Stream Operators**: `GroupBy` for dynamic sub-stream dispatching by key, and `BidiFlow` for composable bidirectional protocol stacking (framing, codec, encryption layers).
+
+---
+
 ### v1.0.0 — Production Readiness & Stability
 
 **Target:** 2027

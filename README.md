@@ -1,4 +1,4 @@
-# gekka &nbsp;[![Version](https://img.shields.io/badge/version-0.14.0-blue)](https://github.com/sopranoworks/gekka)
+# gekka &nbsp;[![Version](https://img.shields.io/badge/version-0.15.0--dev-orange)](https://github.com/sopranoworks/gekka)
 
  [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Go CI](https://github.com/sopranoworks/gekka/actions/workflows/go.yml/badge.svg)](https://github.com/sopranoworks/gekka/actions/workflows/go.yml)
 
@@ -11,6 +11,12 @@ Configuration is loaded via [`gekka-config`](https://github.com/sopranoworks/gek
 **Requirement**: Go 1.26.1 or later.
 
 ---
+
+## What's New in v0.15.0-dev
+
+- **Extensible Serialization** — HOCON-based registration for user-defined serializers, enabling custom wire formats without modifying core transport code.
+- **Persistence Enhancements** — Introduction of Persistent FSM for state-machine-based persistence with event-driven transitions, and Event Adapters for schema evolution between journal and actor representations.
+- **Advanced Streams** — Sub-stream dispatching via `GroupBy` for dynamic fan-out by key, and `BidiFlow` for composable protocol stacking (e.g., framing + codec layers).
 
 ## What's New in v0.14.0
 

@@ -434,6 +434,38 @@ func GroupBy[T any](src Source[T, NotUsed], maxSubstreams int, key func(T) strin
 	}
 }
 
+// GroupBySubFlow is the [SubFlow]-returning variant of [GroupBy].
+// It distributes elements from src to keyed sub-streams using a streaming
+// implementation that propagates back-pressure from sub-stream consumers
+// to the upstream source, and returns a [SubFlow] that supports per-sub-stream
+// operators such as [SubFlow.Filter] and [SubFlow.MergeSubstreams].
+//
+// maxSubstreams caps the number of distinct keys; the stream fails with
+// [ErrTooManySubstreams] if more keys are observed.
+//
+// Go generics prohibit methods with additional type parameters and also
+// prohibit methods whose return type creates an instantiation cycle, which
+// is why this is a package-level function rather than a method on [Source] or
+// [Flow].
+//
+// Example — group integers by odd/even, filter negatives, then re-merge:
+//
+//	result := stream.GroupBySubFlow(src, 2, func(n int) string {
+//	    if n%2 == 0 { return "even" }
+//	    return "odd"
+//	}).Filter(func(n int) bool { return n > 0 }).MergeSubstreams()
+func GroupBySubFlow[T any](src Source[T, NotUsed], maxSubstreams int, key func(T) string) SubFlow[T] {
+	return SubFlow[T]{
+		src: Source[SubStream[T], NotUsed]{
+			factory: func() (iterator[SubStream[T]], NotUsed) {
+				up, _ := src.factory()
+				return newGroupByStreamingIterator(up, maxSubstreams, key), NotUsed{}
+			},
+		},
+		maxSubstreams: maxSubstreams,
+	}
+}
+
 // ─── FlattenMerge ─────────────────────────────────────────────────────────
 
 // FlattenMerge flattens a stream of streams into a single stream, merging

@@ -138,3 +138,23 @@ func (s FanIn2Shape[T0, T1, Out]) Outlets() []Port {
 	return []Port{s.Out}
 }
 
+// BidiShape[I1, O1, I2, O2] has two Inlets and two Outlets, representing a
+// bidirectional flow stage such as a protocol codec or framing layer.
+//
+//	I1 → [BidiFlow] → O1
+//	O2 ← [BidiFlow] ← I2
+type BidiShape[I1, O1, I2, O2 any] struct {
+	In1  *Inlet[I1]
+	Out1 *Outlet[O1]
+	In2  *Inlet[I2]
+	Out2 *Outlet[O2]
+}
+
+func (s BidiShape[I1, O1, I2, O2]) Inlets() []Port {
+	return []Port{s.In1, s.In2}
+}
+
+func (s BidiShape[I1, O1, I2, O2]) Outlets() []Port {
+	return []Port{s.Out1, s.Out2}
+}
+

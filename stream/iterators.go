@@ -667,6 +667,88 @@ func newGroupByIterator[T any](upstream iterator[T], maxSubstreams int, key func
 	return &sliceIterator[SubStream[T]]{elems: substreams}
 }
 
+// newGroupByStreamingIterator creates a streaming GroupBy iterator that routes
+// elements to per-key buffered channels without pre-collecting the upstream.
+// Sub-streams are emitted as new keys are first observed; back-pressure from
+// sub-stream consumers propagates to the upstream because the goroutine blocks
+// when a per-key channel is full.
+//
+// Unlike [newGroupByIterator] this implementation never buffers all elements
+// in memory simultaneously; it is suitable for large or unbounded upstreams.
+func newGroupByStreamingIterator[T any](upstream iterator[T], maxSubstreams int, key func(T) string) iterator[SubStream[T]] {
+	subCh := make(chan SubStream[T], maxSubstreams)
+	sharedErr := newSharedError()
+
+	go func() {
+		defer close(subCh)
+
+		groups := make(map[string]chan T)
+
+		for {
+			// Honour error/cancellation before pulling.
+			select {
+			case <-sharedErr.sig:
+				return
+			default:
+			}
+
+			elem, ok, err := upstream.next()
+			if err != nil {
+				sharedErr.fail(err)
+				return
+			}
+			if !ok {
+				// Upstream exhausted — close every per-key channel so sub-stream
+				// consumers see a normal completion.
+				for _, ch := range groups {
+					close(ch)
+				}
+				return
+			}
+
+			k := key(elem)
+			ch, exists := groups[k]
+			if !exists {
+				if len(groups) >= maxSubstreams {
+					sharedErr.fail(ErrTooManySubstreams)
+					return
+				}
+				newCh := make(chan T, DefaultAsyncBufSize)
+				groups[k] = newCh
+				ch = newCh
+
+				// Build the SubStream with a factory that reads from the channel.
+				// newCh is captured by value so each closure references its own
+				// channel, independent of future loop iterations.
+				sub := SubStream[T]{
+					Key: k,
+					Source: Source[T, NotUsed]{
+						factory: func() (iterator[T], NotUsed) {
+							return &channelIterator[T]{ch: newCh, err: sharedErr}, NotUsed{}
+						},
+					},
+				}
+				select {
+				case subCh <- sub:
+				case <-sharedErr.sig:
+					return
+				}
+			}
+
+			// Route element to the per-key channel.  This is the back-pressure
+			// point: if the channel is full the goroutine blocks, preventing the
+			// upstream from advancing until the consumer drains the sub-stream.
+			select {
+			case ch <- elem:
+			case <-sharedErr.sig:
+				return
+			}
+		}
+	}()
+
+	return &channelIterator[SubStream[T]]{ch: subCh, err: sharedErr}
+}
+
 // ─── flattenMergeIterator ──────────────────────────────────────────────────
 
 type flattenMergeIterator[T any] struct {

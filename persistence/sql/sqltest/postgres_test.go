@@ -352,3 +352,59 @@ func TestPostgres_SnapshotStore_DeleteSnapshot(t *testing.T) {
 		t.Errorf("LoadSnapshot after delete = %v, want nil", snap)
 	}
 }
+
+func TestPostgres_SnapshotStore_DeleteSnapshots(t *testing.T) {
+	db := openDB(t)
+	defer db.Close()
+
+	type State struct{ V int }
+	codec := sqlstore.NewJSONCodec()
+	codec.Register(State{})
+
+	cfg := sqlstore.Config{JournalTable: "journal_delrange", SnapshotTable: "snapshots_delrange"}
+	setupSchema(t, db, cfg)
+	sqlstore.RegisterPostgresBackend("pg-delrange", codec, cfg)
+
+	ss, err := persistence.NewSnapshotStoreFromDB("pg-delrange", db)
+	if err != nil {
+		t.Fatalf("NewSnapshotStoreFromDB: %v", err)
+	}
+
+	ctx := context.Background()
+	const pid = "delrange-actor"
+
+	// Save 5 snapshots at seqNr 1..5.
+	for i := 1; i <= 5; i++ {
+		meta := persistence.SnapshotMetadata{PersistenceID: pid, SequenceNr: uint64(i)}
+		if err := ss.SaveSnapshot(ctx, meta, State{V: i}); err != nil {
+			t.Fatalf("SaveSnapshot(%d): %v", i, err)
+		}
+	}
+
+	// Delete seqNr 1..3 (keep 4 and 5).
+	criteria := persistence.SnapshotSelectionCriteria{MaxSequenceNr: 3, MaxTimestamp: 1<<62 - 1}
+	if err := ss.DeleteSnapshots(ctx, pid, criteria); err != nil {
+		t.Fatalf("DeleteSnapshots: %v", err)
+	}
+
+	// seqNr <= 3 must be gone.
+	snap, err := ss.LoadSnapshot(ctx, pid, persistence.SnapshotSelectionCriteria{MaxSequenceNr: 3, MaxTimestamp: 1<<62 - 1})
+	if err != nil {
+		t.Fatalf("LoadSnapshot after delete range: %v", err)
+	}
+	if snap != nil {
+		t.Errorf("expected no snapshot with seqNr <= 3, got seqNr=%d", snap.Metadata.SequenceNr)
+	}
+
+	// Latest snapshot must be seqNr 5.
+	snap, err = ss.LoadSnapshot(ctx, pid, persistence.LatestSnapshotCriteria())
+	if err != nil {
+		t.Fatalf("LoadSnapshot latest: %v", err)
+	}
+	if snap == nil {
+		t.Fatal("expected snapshot at seqNr=5, got nil")
+	}
+	if snap.Metadata.SequenceNr != 5 {
+		t.Errorf("latest seqNr = %d, want 5", snap.Metadata.SequenceNr)
+	}
+}

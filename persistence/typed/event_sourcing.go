@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"sync/atomic"
 	"time"
 
@@ -33,6 +34,10 @@ type EventSourcedBehavior[Command any, Event any, State any] struct {
 	SnapshotCriteria persistence.SnapshotSelectionCriteria
 	// SnapshotInterval: if > 0, save a snapshot every N events
 	SnapshotInterval uint64
+	// MaxSnapshots: if > 0, retain only the latest N snapshot checkpoints and
+	// delete older ones after each save.  Requires SnapshotInterval > 0.
+	// Example: SnapshotInterval=1, MaxSnapshots=2 keeps the two most recent snapshots.
+	MaxSnapshots int
 }
 
 // WithPersistenceID returns a copy of the behavior with a new persistence ID.
@@ -332,13 +337,26 @@ func (p *persistentActor[Command, Event, State]) persist(events []Event, then fu
 	// Check if snapshot is needed
 	if p.behavior.SnapshotStore != nil && p.behavior.SnapshotInterval > 0 &&
 		p.seqNr%p.behavior.SnapshotInterval == 0 {
-		err := p.behavior.SnapshotStore.SaveSnapshot(ctx, persistence.SnapshotMetadata{
+		snapErr := p.behavior.SnapshotStore.SaveSnapshot(ctx, persistence.SnapshotMetadata{
 			PersistenceID: p.behavior.PersistenceID,
 			SequenceNr:    p.seqNr,
 			Timestamp:     time.Now().Unix(),
 		}, p.state)
-		if err == nil {
+		if snapErr == nil {
 			p.lastSnapSeqNr = p.seqNr
+			// Automated cleanup: remove old snapshots beyond the MaxSnapshots limit.
+			if p.behavior.MaxSnapshots > 0 {
+				keepCount := uint64(p.behavior.MaxSnapshots) * p.behavior.SnapshotInterval
+				if p.seqNr > keepCount {
+					deleteUpTo := p.seqNr - keepCount
+					if delErr := p.behavior.SnapshotStore.DeleteSnapshots(ctx, p.behavior.PersistenceID, persistence.SnapshotSelectionCriteria{
+						MaxSequenceNr: deleteUpTo,
+						MaxTimestamp:  math.MaxInt64,
+					}); delErr != nil {
+						p.Log().Error("snapshot cleanup failed", "error", delErr, "deleteUpTo", deleteUpTo)
+					}
+				}
+			}
 		}
 	}
 

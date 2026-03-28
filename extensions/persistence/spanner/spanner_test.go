@@ -240,3 +240,78 @@ func TestSpanner_SnapshotStore_SaveAndLoad(t *testing.T) {
 		t.Errorf("Counter = %d, want 99", st.Counter)
 	}
 }
+
+func TestSpanner_SnapshotStore_DeleteSnapshot(t *testing.T) {
+	f := getFixture(t)
+	client := newClient(t, f)
+
+	codec := spannerstore.NewJSONCodec()
+	codec.Register(State{})
+
+	ss := spannerstore.NewSpannerSnapshotStore(client, codec)
+	ctx := context.Background()
+	const pid = "spanner-delsnap-actor"
+
+	meta := persistence.SnapshotMetadata{PersistenceID: pid, SequenceNr: 7}
+	if err := ss.SaveSnapshot(ctx, meta, State{Counter: 7}); err != nil {
+		t.Fatalf("SaveSnapshot: %v", err)
+	}
+	if err := ss.DeleteSnapshot(ctx, meta); err != nil {
+		t.Fatalf("DeleteSnapshot: %v", err)
+	}
+
+	snap, err := ss.LoadSnapshot(ctx, pid, persistence.LatestSnapshotCriteria())
+	if err != nil {
+		t.Fatalf("LoadSnapshot after delete: %v", err)
+	}
+	if snap != nil {
+		t.Errorf("LoadSnapshot after delete = %v, want nil", snap)
+	}
+}
+
+func TestSpanner_SnapshotStore_DeleteSnapshots(t *testing.T) {
+	f := getFixture(t)
+	client := newClient(t, f)
+
+	codec := spannerstore.NewJSONCodec()
+	codec.Register(State{})
+
+	ss := spannerstore.NewSpannerSnapshotStore(client, codec)
+	ctx := context.Background()
+	const pid = "spanner-delrange-actor"
+
+	// Save 5 snapshots at seqNr 1..5.
+	for i := 1; i <= 5; i++ {
+		meta := persistence.SnapshotMetadata{PersistenceID: pid, SequenceNr: uint64(i)}
+		if err := ss.SaveSnapshot(ctx, meta, State{Counter: i}); err != nil {
+			t.Fatalf("SaveSnapshot(%d): %v", i, err)
+		}
+	}
+
+	// Delete seqNr 1..3.
+	criteria := persistence.SnapshotSelectionCriteria{MaxSequenceNr: 3, MaxTimestamp: 1<<62 - 1}
+	if err := ss.DeleteSnapshots(ctx, pid, criteria); err != nil {
+		t.Fatalf("DeleteSnapshots: %v", err)
+	}
+
+	// seqNr <= 3 must be gone.
+	snap, err := ss.LoadSnapshot(ctx, pid, persistence.SnapshotSelectionCriteria{MaxSequenceNr: 3, MaxTimestamp: 1<<62 - 1})
+	if err != nil {
+		t.Fatalf("LoadSnapshot after delete range: %v", err)
+	}
+	if snap != nil {
+		t.Errorf("expected no snapshot with seqNr <= 3, got seqNr=%d", snap.Metadata.SequenceNr)
+	}
+
+	// Latest snapshot must be seqNr 5.
+	snap, err = ss.LoadSnapshot(ctx, pid, persistence.LatestSnapshotCriteria())
+	if err != nil {
+		t.Fatalf("LoadSnapshot latest: %v", err)
+	}
+	if snap == nil {
+		t.Fatal("expected snapshot at seqNr=5, got nil")
+	}
+	if snap.Metadata.SequenceNr != 5 {
+		t.Errorf("latest seqNr = %d, want 5", snap.Metadata.SequenceNr)
+	}
+}

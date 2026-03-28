@@ -192,7 +192,7 @@ func TestCluster_RegisterSerializer_OverridesExisting(t *testing.T) {
 
 	// Replace JSON serializer with a custom one keyed by its identifier.
 	custom := &customTestSerializer{}
-	node.RegisterSerializer(custom)
+	node.RegisterSerializer(custom.Identifier(), custom)
 
 	got, err := node.Serialization().GetSerializer(custom.Identifier())
 	if err != nil {

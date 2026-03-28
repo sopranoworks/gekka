@@ -469,6 +469,10 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		nodeCfg.Discovery.Config.Config["port"] = v
 	}
 
+	// Preserve the raw config so NewCluster can call LoadFromConfig for
+	// user-defined serializers declared under pekko.actor.serializers.
+	nodeCfg.HOCON = cfg
+
 	return nodeCfg, nil
 }
 

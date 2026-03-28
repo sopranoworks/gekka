@@ -23,6 +23,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	hocon "github.com/sopranoworks/gekka-config"
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/actor/typed"
 	"github.com/sopranoworks/gekka/actor/typed/receptionist"
@@ -289,6 +290,13 @@ type ClusterConfig struct {
 
 	// DistributedData configures the Distributed Data Replicator (v0.10.0).
 	DistributedData DistributedDataConfig
+
+	// HOCON holds the raw parsed configuration. When non-nil, NewCluster calls
+	// SerializationRegistry.LoadFromConfig on it to register any user-defined
+	// serializers declared under pekko.actor.serializers and
+	// pekko.actor.serialization-bindings.
+	// Populated automatically by ParseHOCONString / LoadConfig / NewClusterFromConfig.
+	HOCON *hocon.Config
 }
 
 // DiscoveryConfig holds dynamic seed discovery settings.
@@ -619,6 +627,14 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 		}
 	}
 	nm.TLSConfig = tlsCfg
+
+	// Load user-defined serializers from HOCON config when provided.
+	if cfg.HOCON != nil {
+		if err := nm.SerializerRegistry.LoadFromConfig(*cfg.HOCON); err != nil {
+			cancel()
+			return nil, fmt.Errorf("gekka: serialization config: %w", err)
+		}
+	}
 
 	server, err := core.NewTcpServer(core.TcpServerConfig{
 		Addr: fmt.Sprintf("%s:%d", host, port),
@@ -1504,13 +1520,27 @@ func (c *Cluster) Serialization() *core.SerializationRegistry {
 	return c.nm.SerializerRegistry
 }
 
+// RegisterSerializer implements ActorSystem. It registers s under its
+// Identifier() in this node's SerializationRegistry, replacing any existing
+// entry for the same ID.
+func (c *Cluster) RegisterSerializer(id int32, s core.Serializer) {
+	c.nm.SerializerRegistry.RegisterSerializer(id, s)
+}
+
 // RegisterSerializer registers a custom core.Serializer with this node's
 // core.SerializationRegistry, keyed by s.Identifier(). Overwrites any existing
 // entry for the same ID.
 //
-//	cluster.RegisterSerializer(&MyJSONSerializer{})
-func (c *Cluster) RegisterSerializer(s core.Serializer) {
+//	cluster.RegisterSerializerByValue(&MyJSONSerializer{})
+func (c *Cluster) RegisterSerializerByValue(s core.Serializer) {
 	c.nm.SerializerRegistry.RegisterSerializer(s.Identifier(), s)
+}
+
+// RegisterSerializationBinding implements ActorSystem. It binds manifest to
+// serializerID in this node's SerializationRegistry so that outbound messages
+// matching manifest are encoded with the given serializer.
+func (c *Cluster) RegisterSerializationBinding(manifest string, serializerID int32) {
+	c.nm.SerializerRegistry.RegisterBinding(manifest, serializerID)
 }
 
 // RegisterType binds a manifest string to a Go reflect.Type so that

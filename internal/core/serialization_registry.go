@@ -14,12 +14,38 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"strings"
 	"sync"
 
+	hocon "github.com/sopranoworks/gekka-config"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 	"github.com/sopranoworks/gekka/internal/proto/remote"
 	"google.golang.org/protobuf/proto"
 )
+
+// SerializerFactory is a constructor function used by LoadFromConfig to
+// instantiate user-defined serializers referenced by name in HOCON config.
+// Register factories before ActorSystem initialization via RegisterSerializerFactory.
+type SerializerFactory func() Serializer
+
+// serializerFactories is the package-level registry of named serializer factories.
+var (
+	serializerFactoriesMu sync.RWMutex
+	serializerFactories   = map[string]SerializerFactory{}
+)
+
+// RegisterSerializerFactory registers a factory function under name so that
+// LoadFromConfig can instantiate the serializer when it appears in the
+// pekko.actor.serializers HOCON section.
+//
+// Call this once at program startup, before creating any ActorSystem or Cluster.
+//
+//	core.RegisterSerializerFactory("rot13", func() core.Serializer { return &Rot13Serializer{} })
+func RegisterSerializerFactory(name string, factory SerializerFactory) {
+	serializerFactoriesMu.Lock()
+	defer serializerFactoriesMu.Unlock()
+	serializerFactories[name] = factory
+}
 
 // Artery Control Serializer ID
 const (
@@ -122,6 +148,105 @@ func (r *SerializationRegistry) RegisterManifest(manifest string, typ reflect.Ty
 	if len(sid) > 0 {
 		r.manifestToSerializerId[manifest] = sid[0]
 	}
+}
+
+// RegisterBinding binds a manifest string to a serializer ID without requiring
+// a Go reflect.Type. Use this when the user-defined serializer resolves types
+// internally in its own FromBinary method.
+func (r *SerializationRegistry) RegisterBinding(manifest string, serializerID int32) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.manifestToSerializerId[manifest] = serializerID
+}
+
+// LoadFromConfig reads the "pekko.actor.serializers" and
+// "pekko.actor.serialization-bindings" sections from cfg to register
+// user-defined serializers and their manifest bindings.
+//
+// Because Go cannot load classes at runtime, each logical serializer name
+// referenced in the config must be pre-registered via RegisterSerializerFactory.
+// Built-in names (e.g. "java", "proto") that have no registered factory are
+// silently skipped.
+//
+// Example HOCON:
+//
+//	pekko.actor {
+//	  serializers {
+//	    rot13 = "com.example.Rot13Serializer"  // class name is unused in Go
+//	  }
+//	  serialization-bindings {
+//	    "com.example.Secret" = rot13
+//	  }
+//	}
+func (r *SerializationRegistry) LoadFromConfig(cfg hocon.Config) error {
+	serializerFactoriesMu.RLock()
+	factories := make(map[string]SerializerFactory, len(serializerFactories))
+	for k, v := range serializerFactories {
+		factories[k] = v
+	}
+	serializerFactoriesMu.RUnlock()
+
+	// --- pekko.actor.serializers ---
+	serializersCfg, err := cfg.GetConfig("pekko.actor.serializers")
+	if err != nil {
+		// Section absent; nothing to load.
+		return nil
+	}
+
+	namedSerializers := map[string]Serializer{}
+	for _, name := range serializersCfg.Keys() {
+		factory, ok := factories[name]
+		if !ok {
+			// No factory registered for this name — skip.
+			continue
+		}
+		s := factory()
+		if s == nil {
+			return fmt.Errorf("serialization LoadFromConfig: factory for %q returned nil", name)
+		}
+		r.RegisterSerializer(s.Identifier(), s)
+		namedSerializers[name] = s
+	}
+
+	// --- pekko.actor.serialization-bindings ---
+	bindingsCfg, err := cfg.GetConfig("pekko.actor.serialization-bindings")
+	if err != nil {
+		// No bindings section — done.
+		return nil
+	}
+
+	// collectBindings recursively walks the bindings sub-config, building dotted
+	// manifest keys as it descends. The HOCON library treats "com.example.Foo" as
+	// nested keys com → example → Foo rather than a literal dotted key, so we
+	// must reconstruct the full path by joining intermediate keys with ".".
+	var collectBindings func(sub hocon.Config, prefix string) error
+	collectBindings = func(sub hocon.Config, prefix string) error {
+		for _, key := range sub.Keys() {
+			fullKey := key
+			if prefix != "" {
+				fullKey = prefix + "." + key
+			}
+			// Try to read as a leaf string (the serializer name).
+			if val, e := sub.GetString(key); e == nil {
+				serializerName := strings.TrimSpace(val)
+				s, ok := namedSerializers[serializerName]
+				if !ok {
+					return fmt.Errorf("serialization LoadFromConfig: binding %q references unknown serializer %q (register a factory first)", fullKey, serializerName)
+				}
+				r.RegisterBinding(fullKey, s.Identifier())
+				continue
+			}
+			// Otherwise descend into the nested object.
+			if child, e := sub.GetConfig(key); e == nil {
+				if err := collectBindings(child, fullKey); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
+	return collectBindings(bindingsCfg, "")
 }
 
 func (r *SerializationRegistry) GetTypeByManifest(manifest string) (reflect.Type, bool) {

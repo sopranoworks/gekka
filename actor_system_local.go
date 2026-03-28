@@ -429,6 +429,12 @@ func (s *localActorSystem) GetTypeByManifest(manifest string) (reflect.Type, boo
 	return nil, false
 }
 
+// RegisterSerializer implements ActorSystem. No-op for local-only systems.
+func (s *localActorSystem) RegisterSerializer(_ int32, _ core.Serializer) {}
+
+// RegisterSerializationBinding implements ActorSystem. No-op for local-only systems.
+func (s *localActorSystem) RegisterSerializationBinding(_ string, _ int32) {}
+
 // ActorSelection implements ActorSystem.
 func (s *localActorSystem) ActorSelection(path string) actor.ActorSelection {
 	return actor.ActorSelection{

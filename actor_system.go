@@ -120,6 +120,15 @@ type ActorSystem interface {
 	// GetTypeByManifest returns the reflect.Type registered for manifest.
 	GetTypeByManifest(manifest string) (reflect.Type, bool)
 
+	// RegisterSerializer registers a custom Serializer under its ID.
+	// Replaces any existing serializer with the same ID.
+	RegisterSerializer(id int32, serializer core.Serializer)
+
+	// RegisterSerializationBinding binds a manifest string to a serializer ID.
+	// Messages whose outbound type resolves to manifest will be encoded with
+	// the serializer registered under serializerID.
+	RegisterSerializationBinding(manifest string, serializerID int32)
+
 	// ActorSelection returns a handle to one or more actors, local or remote,
 	// identified by path.
 	ActorSelection(path string) actor.ActorSelection

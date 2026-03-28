@@ -1,8 +1,144 @@
 # Gekka Protocol Details (v0.14.0-dev)
 
-This document covers technical details of the Artery TCP protocol implementation
-and Gekka's internal mechanics. For the serialization subsystem see
+This document covers technical details of the Artery TCP and Aeron UDP protocol
+implementations and Gekka's internal mechanics. For the serialization subsystem see
 [SERIALIZATION.md](SERIALIZATION.md).
+
+---
+
+## Aeron (UDP) Framing
+
+Gekka implements the Aeron 1.30.0 wire protocol natively in Go (`internal/core/aeron_proto.go`,
+`internal/core/udp_artery_handler.go`). No JVM Media Driver is required. The implementation
+is verified against Akka 2.6.21 via `sbt multi-jvm:test`.
+
+### Frame Types
+
+All multi-byte fields use **little-endian** encoding.
+
+| Type Code | Name | Size | Direction |
+|-----------|------|------|-----------|
+| `0x0000` | PAD | — | — |
+| `0x0001` | DATA | 32-byte header + payload | publisher → subscriber |
+| `0x0002` | NAK | 28 bytes | subscriber → publisher |
+| `0x0003` | SM (Status Message) | 36 bytes | subscriber → publisher |
+| `0x0004` | ERROR | — | — |
+| `0x0005` | SETUP | 40 bytes | publisher → subscriber |
+| `0x0006` | RTT | — | measurement |
+
+### DATA Frame Layout (32 bytes)
+
+```
+Offset  Size  Field            Description
+──────  ────  ───────────────  ───────────────────────────────────────────────
+ 0– 3    4    frameLength      Total bytes including this header (little-endian)
+  4      1    version          Always 0 (AeronVersion)
+  5      1    flags            0x80=BEGIN_FRAG, 0x40=END_FRAG, 0xC0=COMPLETE
+ 6– 7    2    frameType        0x0001 = DATA
+ 8–11    4    termOffset       Byte offset within the active term buffer
+12–15    4    sessionId        Publisher session identifier
+16–19    4    streamId         Artery logical stream (see below)
+20–23    4    termId           Active term identifier
+24–31    8    reservedValue    Must be 0
+```
+
+### Artery Logical Streams
+
+| Stream ID | Name | Purpose |
+|-----------|------|---------|
+| `1` | Control | Artery handshake (`HandshakeReq`/`HandshakeRsp`), cluster heartbeats, compression advertisements |
+| `2` | Ordinary | User-level actor messages |
+| `3` | Large | Large messages fragmented across multiple DATA frames |
+
+### SETUP Frame Layout (40 bytes)
+
+Sent once by the publisher at session start. Informs the subscriber of term-buffer
+parameters so it can allocate matching state.
+
+```
+Offset  Size  Field          Description
+──────  ────  ─────────────  ───────────────────────────────────────
+ 0– 3    4    frameLength    = 40
+ 6– 7    2    frameType      = 0x0005
+ 8–11    4    termOffset     = 0
+12–15    4    sessionId
+16–19    4    streamId
+20–23    4    initialTermId  Term ID at session start
+24–27    4    activeTermId   Current active term
+28–31    4    termLength     Term-buffer size (default: 16 MiB)
+32–35    4    mtu            Max DATA payload per frame (default: 1408 bytes)
+36–39    4    ttl            Multicast TTL (0 for unicast)
+```
+
+### Status Message (SM) Frame Layout (36 bytes)
+
+SM frames flow subscriber → publisher to advertise consumption position and
+available receiver window. Aeron 1.30.0 includes an 8-byte `receiverId` field
+(`StatusMessageFlyweight.HEADER_LENGTH = 36`).
+
+```
+Offset  Size  Field                  Description
+──────  ────  ─────────────────────  ─────────────────────────────────────
+ 0– 3    4    frameLength            = 36
+ 6– 7    2    frameType              = 0x0003
+ 8–11    4    sessionId
+12–15    4    streamId
+16–19    4    consumptionTermId      Last fully consumed term
+20–23    4    consumptionTermOffset  Byte offset consumed within that term
+24–27    4    receiverWindowLength   Remaining receive buffer (flow control)
+28–35    8    receiverId             Unique subscriber identifier (int64)
+```
+
+### NAK Frame Layout (28 bytes)
+
+Sent by the subscriber when it detects a sequence gap (lost DATA frame). The
+publisher re-transmits the requested range.
+
+```
+Offset  Size  Field        Description
+──────  ────  ───────────  ─────────────────────────────────────
+ 0– 3    4    frameLength  = 28
+ 6– 7    2    frameType    = 0x0002
+ 8–11    4    sessionId
+12–15    4    streamId
+16–19    4    termId       Term containing the missing data
+20–23    4    termOffset   Start of the missing byte range
+24–27    4    length       Byte length of the missing range
+```
+
+### Reliability Mechanism
+
+Aeron uses **NACK-based selective retransmission** rather than cumulative ACKs:
+
+1. The publisher maintains a circular **term buffer** (default 16 MiB).  Each DATA
+   frame is placed at a monotonically increasing `termOffset`.
+2. The subscriber tracks the highest contiguous `termOffset` it has received.
+   On detecting a gap it sends a **NAK** frame identifying the missing range.
+3. The publisher re-sends the requested range from its term buffer.
+4. The subscriber periodically sends **SM** frames to report its consumption
+   position and available window.  The publisher pauses when the window is exhausted
+   (back-pressure).
+
+### Transport Parameters (Gekka defaults)
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| `termLength` | 16 MiB | Circular term-buffer size |
+| `mtu` | 1408 bytes | Max DATA payload (fits in 1500-byte Ethernet MTU) |
+| `windowLength` | 256 KiB | Initial receiver window advertised in SM |
+| Frame alignment | 32 bytes | All term offsets are multiples of 32 |
+
+### HOCON Configuration
+
+```hocon
+pekko.remote.artery {
+  transport = aeron-udp          # "tcp" | "tls-tcp" | "aeron-udp"
+  canonical {
+    hostname = "127.0.0.1"
+    port     = 2552
+  }
+}
+```
 
 ---
 
@@ -19,6 +155,7 @@ and Gekka's internal mechanics. For the serialization subsystem see
 | Serializer ID 5 | ClusterMessageSerializer | Short manifests: `"IJ"`, `"W"`, `"GE"`, `"HB"`, … |
 | Serializer ID 9 | JSONSerializer | Jackson-compatible JSON; manifest = fully-qualified type name |
 | Serializer ID 17 | ArteryMessageSerializer | Artery transport frames; handshake (`"d"`/`"e"`) and `RemoteWatcher` heartbeats (`"Heartbeat"` / `"HeartbeatRsp"`) |
+| Serializer ID 20 | StringSerializer | `java.lang.String` as raw UTF-8 bytes (Akka 2.6 built-in; **not** Java ObjectOutputStream format) |
 | Welcome payload | GZIP-compressed | |
 | GossipEnvelope.serializedGossip | GZIP-compressed | |
 

@@ -14,12 +14,12 @@ Configuration is loaded via [`gekka-config`](https://github.com/sopranoworks/gek
 
 ## What's New in v0.14.0-dev
 
-- **Artery TCP Wire Compatibility** — Full protocol alignment with Akka 2.6.x and Pekko 1.x, including preamble detection and manifest-based message routing.
-- **Auto-enable Management** — The Management Server now automatically enables itself if a `hostname` or `port` is defined in the configuration, simplifying bootstrap.
-- **Enhanced TUI Dashboard** — Interactive `gekka-cli dashboard` with dynamic column alignment, a scrolling marquee for long member roles, and standardized exit confirmation (ESC -> Y/n).
-- **Granular Logging (slog)** — Integrated structured logging with configurable levels via HOCON (`gekka.logging.level`), significantly reducing default noise while preserving critical protocol traces.
-- **Ultra Thin Core** — Strategic extraction of heavy third-party SDKs (Cloud Spanner, OpenTelemetry, Kubernetes) into independent extension sub-modules under `/extensions/`.
-- **Plugin-based Persistence** — Standard library-first interfaces for `JournalStore` and `SnapshotStore`, enabling dependency-injected backends without core bloat.
+- **Native Aeron UDP Transport** — Wire-level compatibility with Akka 2.6.x and Pekko 1.x over the Aeron UDP protocol. Go nodes now participate in hybrid Go/Scala clusters using the same low-latency, lock-free media-driver framing as JVM nodes. Three logical Artery streams are multiplexed over a single UDP port: Stream 1 (control/handshake), Stream 2 (ordinary messages), and Stream 3 (large/fragmented messages). Verified by a full multi-node `sbt multi-jvm:test` suite including a 60-second stability window against a live Akka 2.6.21 seed node. Enable with `pekko.remote.artery.transport = aeron-udp`.
+- **GraphDSL Builder API** — Explicit graph wiring via `stream.NewBuilder()`, `stream.Add[S, Mat]()`, and `stream.Connect()`. Complex fan-out/fan-in topologies (e.g., diamond graphs, multi-path pipelines) can now be assembled without linear `Via`/`To` chaining.
+- **Junction Stages** — Three new first-class `Graph` components for non-linear topologies: `NewBroadcast[T](n)` (fan-out to n outlets), `NewMerge[T](n)` (fan-in from n inlets), and `NewZip[A, B]()` (pair-wise combination with back-pressure on both inputs).
+- **PersistenceId Discovery** — New `ReadJournal` DSL with `CurrentPersistenceIds()` and `EventsByPersistenceId()` queries backed by both Cloud Spanner and SQL (PostgreSQL) stores. Enables CQRS projections without full table scans.
+- **Custom Shard Allocation DSL** — A `ShardAllocationStrategy` interface and external strategy hook allow you to plug in custom placement logic (e.g., geo-aware, latency-weighted) without modifying core sharding code.
+- **Ultra Thin Core (CBOR removal)** — The `fxamacker/cbor` dependency has been removed from the core module. The core now satisfies a strict zero-non-stdlib-dependency policy for transport and serialization primitives, in alignment with the Ultra Thin Core architecture.
 
 ## Configuration
 
@@ -46,7 +46,7 @@ If either `gekka.management.http.hostname` or `gekka.management.http.port` is ex
 - **Timers & Stash** — Built-in `TimerScheduler` for scheduled tasks and `StashBuffer` for message deferral.
 
 ### 🌐 Clustering & Distribution
-- **Artery TCP Transport** — High-performance, Pekko-compatible wire protocol with full preamble and manifest support.
+- **Artery TCP & Aeron UDP Transport** — High-performance, Pekko/Akka-compatible wire protocols. TCP transport with full preamble and manifest support; native Aeron UDP transport for low-latency, lock-free messaging across hybrid Go/JVM clusters.
 - **Cluster Sharding** — Automated, load-aware actor placement with manual rebalancing support via CLI.
 - **Kubernetes-native Discovery** — Automated cluster formation using the Kubernetes API or DNS SRV.
 - **Split Brain Resolver (SBR)** — Resilient partition resolution with configurable strategies (static-quorum, keep-oldest).
@@ -59,7 +59,7 @@ If either `gekka.management.http.hostname` or `gekka.management.http.port` is ex
 - **Distributed Data (CRDTs)** — Eventually consistent shared state with bandwidth-efficient Delta-propagation.
 
 ### 🔌 Ecosystem & Connectivity
-- **Pekko/Akka Interoperability** — Verified wire-level compatibility with JVM nodes via standard Artery TCP.
+- **Pekko/Akka Interoperability** — Verified wire-level compatibility with JVM nodes via Artery TCP and native Aeron UDP. Hybrid clusters (Go + Scala) are tested with `sbt multi-jvm:test` including Ping/Pong message exchange and 60-second stability windows.
 - **HOCON Configuration** — Flexible, layered configuration powered by the `gekka-config` engine.
 - **Gekka Streams** — Backpressure-aware reactive streams aligned with the Akka Streams model.
 
@@ -248,6 +248,43 @@ func main() {
 ```
 
 More examples — local actors, reactive streams, pub/sub, CRDTs, persistence, singletons, coordinated shutdown, and reliable delivery — are in [docs/EXAMPLES.md](docs/EXAMPLES.md).
+
+---
+
+## Aeron UDP Transport
+
+`gekka` supports the native Aeron UDP transport, providing wire-level compatibility with Akka 2.6.x and Pekko 1.x `aeron-udp` nodes. The Go implementation speaks the Aeron 1.30.0 framing protocol directly — no JVM Media Driver required.
+
+### HOCON Configuration
+
+```hocon
+pekko.remote.artery {
+  transport = aeron-udp
+  canonical {
+    hostname = "127.0.0.1"
+    port     = 2553
+  }
+}
+
+pekko.cluster {
+  seed-nodes = ["akka://MySystem@127.0.0.1:2551"]
+  downing-provider-class = "akka.cluster.sbr.SplitBrainResolverProvider"
+  split-brain-resolver {
+    active-strategy = keep-oldest
+    stable-after    = 5s
+  }
+}
+```
+
+### Transport Details
+
+| Stream | Aeron Stream ID | Purpose |
+|--------|----------------|---------|
+| Control | 1 | Artery handshake, cluster heartbeats, compression advertisements |
+| Ordinary | 2 | User-level actor messages |
+| Large | 3 | Large messages (fragmented across multiple DATA frames) |
+
+All Aeron frames use a **32-byte header** (DATA frames) with little-endian encoding. Reliability is achieved via NACK-based retransmission: subscribers send NAK frames when they detect sequence gaps, and Status Message (SM) frames to advertise receiver window capacity.
 
 ---
 

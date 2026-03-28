@@ -12,10 +12,11 @@ The `stream` package provides a pull-based reactive-streams DSL with demand-driv
 4. [Supervision & Error Handling](#4-supervision--error-handling)
 5. [Flow Control](#5-flow-control)
 6. [Graph Operators](#6-graph-operators)
-7. [Resilience](#7-resilience)
-8. [File IO](#8-file-io)
-9. [Remote Streaming — StreamRefs](#9-remote-streaming--streamrefs)
-10. [Wire Protocol Reference](#10-wire-protocol-reference)
+7. [GraphDSL Builder — Custom Topologies](#7-graphdsl-builder--custom-topologies)
+8. [Resilience](#8-resilience)
+9. [File IO](#9-file-io)
+10. [Remote Streaming — StreamRefs](#10-remote-streaming--streamrefs)
+11. [Wire Protocol Reference](#11-wire-protocol-reference)
 
 ---
 
@@ -329,7 +330,105 @@ Each element of `substreams` is a `SubStream[T]{Key string, Source Source[T, Not
 
 ---
 
-## 7. Resilience
+## 7. GraphDSL Builder — Custom Topologies
+
+The `stream.Builder` API enables explicit port-wiring for graph topologies that cannot be
+expressed as a linear `Via`/`To` chain.  Use it when you need fan-out/fan-in structures
+such as diamond graphs, multi-path pipelines, or composite junction stages.
+
+### API
+
+| Function | Description |
+|----------|-------------|
+| `stream.NewBuilder()` | Create an empty builder |
+| `stream.Add[S, Mat](b, g)` | Import a `Graph[S, Mat]` and return its `Shape` for port access |
+| `stream.Connect[T](b, out, in)` | Wire an `*Outlet[T]` to an `*Inlet[T]` |
+| `b.Build()` | Finalize into a `RunnableGraph[NotUsed]` |
+
+### Junction Stages
+
+| Constructor | Shape | Description |
+|-------------|-------|-------------|
+| `stream.NewBroadcast[T](n)` | `FanOutShape[T]` | Copy each element to all n outlets; back-pressures until the slowest consumer has consumed |
+| `stream.NewMerge[T](n)` | `FanInShape[T]` | Merge n inlets concurrently into one outlet; emission order is non-deterministic |
+| `stream.NewZip[A, B]()` | `FanIn2Shape[A, B, Pair[A,B]]` | Emit `Pair{A, B}` once an element is available on **both** inlets (slower inlet drives pace) |
+
+### Example: Diamond Graph (Broadcast → two transforms → Merge)
+
+```go
+package main
+
+import (
+    "fmt"
+
+    "github.com/sopranoworks/gekka/stream"
+)
+
+func main() {
+    m := stream.ActorMaterializer{}
+
+    b := stream.NewBuilder()
+
+    // Source: integers 1..5
+    src := stream.FromSlice([]int{1, 2, 3, 4, 5})
+
+    // Stages
+    bcast := stream.Add(b, stream.NewBroadcast[int](2))
+    double := stream.Add(b, stream.Map(func(n int) int { return n * 2 }))
+    triple := stream.Add(b, stream.Map(func(n int) int { return n * 3 }))
+    merge  := stream.Add(b, stream.NewMerge[int](2))
+
+    // Source feeds the broadcast inlet
+    stream.Connect(b, src.Outlet(), bcast.In)
+    // Each broadcast outlet goes to its own transform
+    stream.Connect(b, bcast.Outlets_[0], double.In())
+    stream.Connect(b, bcast.Outlets_[1], triple.In())
+    // Both transforms feed the merge inlets
+    stream.Connect(b, double.Out(), merge.Inlets_[0])
+    stream.Connect(b, triple.Out(), merge.Inlets_[1])
+
+    // Sink consumes the merged output
+    sink := stream.Foreach(func(n int) { fmt.Println(n) })
+    stream.Connect(b, merge.Out, sink.Inlet())
+
+    graph, _ := b.Build()
+    graph.Run(m)
+    // Prints doubled and tripled values in non-deterministic order.
+}
+```
+
+### Example: Zip two sources into pairs
+
+```go
+b := stream.NewBuilder()
+
+srcA := stream.FromSlice([]string{"a", "b", "c"})
+srcB := stream.FromSlice([]int{1, 2, 3})
+
+zip := stream.Add(b, stream.NewZip[string, int]())
+stream.Connect(b, srcA.Outlet(), zip.In0)
+stream.Connect(b, srcB.Outlet(), zip.In1)
+
+sink := stream.Foreach(func(p stream.Pair[string, int]) {
+    fmt.Printf("%s=%d\n", p.First, p.Second)
+})
+stream.Connect(b, zip.Out, sink.Inlet())
+
+graph, _ := b.Build()
+graph.Run(stream.SyncMaterializer{})
+// a=1  b=2  c=3
+```
+
+### Materializer Behaviour
+
+| Materializer | GraphDSL behaviour |
+|---|---|
+| `SyncMaterializer` | Runners execute sequentially on the calling goroutine |
+| `ActorMaterializer` | Each runner launches in its own goroutine via `GraphInterpreter`; wires are channel-buffered |
+
+---
+
+## 8. Resilience
 
 ### RestartSource / RestartFlow
 
@@ -346,7 +445,7 @@ settings := stream.RestartSettings{
 
 ---
 
-## 8. File IO
+## 9. File IO
 
 ### SourceFromFile
 
@@ -377,7 +476,7 @@ func (f *Future[T]) Get() (T, error)
 
 ---
 
-## 9. Remote Streaming — StreamRefs
+## 10. Remote Streaming — StreamRefs
 
 StreamRefs allow a `Source` or `Sink` to be shared across the network using the Artery StreamRef wire protocol.  Back-pressure is preserved end-to-end.
 
@@ -450,7 +549,7 @@ func jsonEncode[T any](v T) ([]byte, int32, []byte, error) {
 
 ---
 
-## 10. Wire Protocol Reference
+## 11. Wire Protocol Reference
 
 StreamRefs use a binary framing format compatible with Pekko's `StreamRefSerializer` (serializer ID 36).
 

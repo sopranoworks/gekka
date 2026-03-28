@@ -6,10 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.14.0-dev] - 2026-03-28
+
 ### Added
-- 🚀 **Adaptive Cluster Rebalancing**: Shards are now automatically migrated from high-pressure nodes to low-pressure nodes based on real-time CPU, Memory, and Mailbox metrics.
-- 🚀 **Gossip Metrics Infrastructure**: Enhanced cluster gossip to propagate normalized node pressure scores across the system.
-- 🚀 **Advanced Routing Logic**: Integrated adaptive placement scores into the cluster router for biasing traffic toward healthier nodes.
+
+- 🚀 **Native Aeron UDP Transport**: Full wire-level compatibility with Akka 2.6.x and Pekko 1.x `aeron-udp` transport. Go nodes join hybrid Go/Scala clusters over the Aeron 1.30.0 UDP framing protocol without a JVM Media Driver. Three logical Artery streams are multiplexed over a single UDP port: Stream 1 (Control), Stream 2 (Ordinary), Stream 3 (Large). Verified by `sbt multi-jvm:test` with a 60-second stability window and Ping/Pong message exchange against a live Akka 2.6.21 seed node.
+- 🚀 **Aeron Protocol Primitives** (`internal/core/aeron_proto.go`): Type-safe Go structs (`AeronDataHeader`, `AeronSetupHeader`, `AeronStatusMessage`, `AeronNak`) with little-endian `Encode`/`Decode` methods matching Aeron 1.30.0 frame layouts. Frame type constants, stream IDs, and MTU/term-length defaults are derived from the canonical Aeron spec.
+- 🚀 **GraphDSL Builder API** (`stream.NewBuilder`, `stream.Add`, `stream.Connect`): Explicit port-wiring DSL for constructing non-linear stream topologies. Supports both `SyncMaterializer` and `ActorMaterializer` execution contexts.
+- 🚀 **Junction Stages**: Three new `Graph` components — `NewBroadcast[T](n)` (fan-out to n outlets with back-pressure), `NewMerge[T](n)` (concurrent fan-in from n inlets), and `NewZip[A, B]()` (pair-wise combination blocking on both inputs).
+- 🚀 **PersistenceId Discovery** (`ReadJournal` DSL): `CurrentPersistenceIds()` and `EventsByPersistenceId()` queries implemented for both Cloud Spanner and SQL (PostgreSQL) backends, enabling CQRS read-side projections without full table scans.
+- 🚀 **Custom Shard Allocation DSL**: `ShardAllocationStrategy` interface and external strategy hook for plugging in custom entity-placement logic (geo-aware, latency-weighted, etc.) at configuration time.
+- 🚀 **Adaptive Cluster Rebalancing**: Shards are automatically migrated from high-pressure nodes to low-pressure nodes using real-time CPU, Memory, and Mailbox pressure scores propagated via cluster gossip.
+
+### Changed
+
+- 🔄 **Ultra Thin Core — CBOR Removal**: The `fxamacker/cbor` dependency has been removed from the core module. Artery wire compatibility is maintained without CBOR; the core now carries zero non-stdlib transport dependencies.
+- 🔄 **String Serializer ID corrected to 20**: Akka 2.6's built-in `StringSerializer` uses ID 20 with raw UTF-8 encoding (not ID 1 / Java ObjectOutputStream). The serialization registry now correctly handles `java.lang.String` messages from Akka nodes over both TCP and Aeron UDP transports.
+
+### Bug Fixes
+
+- 🐛 **UDP Source Address Tracking** (`udpSrcAssoc` map): Fixed repeated inbound association creation. When `handleHandshakeReq` updated `assoc.remote` to the canonical Akka address, subsequent frames from the ephemeral media-driver port could not be matched to the existing association. The `udpSrcAssoc` map permanently binds the physical UDP source address to the association, surviving any `assoc.remote` mutation.
+- 🐛 **MessageContainerSerializer (ID 6) dispatch ordering**: Cluster message deserialization now checks for `ClusterSerializerID` before calling `SerializerRegistry.DeserializePayload`, preventing "unknown serializer ID 5" errors.
+- 🐛 **Aeron DATA frame bounds check**: Added frame-length validation before slicing the receive buffer in `handleData`, preventing a runtime panic on short or malformed UDP datagrams.
+
+### Tests
+
+- 🧪 **Multi-JVM Aeron Compatibility Test** (`AeronClusterSpec.scala`): New `sbt multi-jvm:test` spec that launches a Go binary as a second cluster member via `aeron-udp`, verifies `MemberUp`, exercises a Step-1→Step-2→Step-3→Step-4 Ping/Pong echo chain, and asserts 60-second reachability.
+- 🧪 **`gekka-aeron-compat-test` binary** (`cmd/gekka-aeron-compat-test/main.go`): Standalone test harness for the multi-JVM Aeron UDP compatibility spec.
 
 ## [0.13.0] - 2026-03-24
 
@@ -264,7 +288,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Message Dispatch**: Fixed a critical bug where messages were not correctly routed to registered actors by default when incoming envelopes contained full URIs.
 
 
-[Unreleased]: https://github.com/sopranoworks/gekka/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/sopranoworks/gekka/compare/v0.14.0-dev...HEAD
+[0.14.0-dev]: https://github.com/sopranoworks/gekka/compare/v0.13.0...v0.14.0-dev
 [0.13.0]: https://github.com/sopranoworks/gekka/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/sopranoworks/gekka/compare/v0.11.0...v0.12.0
 [0.10.0]: https://github.com/sopranoworks/gekka/compare/v0.9.0...v0.10.0

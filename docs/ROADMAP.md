@@ -65,6 +65,15 @@
 - **Plugin-based Persistence**: Unified standard-library interfaces for Journal and Snapshot storage with support for dependency-injected backends (Spanner, SQL, Redis).
 - **Structured Logging (slog)**: Integrated granular log level control for high-frequency protocol events, significantly reducing default terminal noise.
 
+### v0.14.0-dev (2026-03-28)
+- **Native Aeron UDP Transport**: Wire-level Go implementation of the Aeron 1.30.0 framing protocol. Enables hybrid Go/JVM clusters over `aeron-udp` without a JVM Media Driver. Three Artery logical streams (Control=1, Ordinary=2, Large=3) are multiplexed over a single UDP port. Reliability via NACK-based retransmission and SM flow control. Verified by full `sbt multi-jvm:test` with 60-second stability window against Akka 2.6.21.
+- **GraphDSL Builder API**: Explicit graph wiring DSL (`NewBuilder`, `Add`, `Connect`) for constructing non-linear stream topologies such as diamond graphs and multi-branch fan-out/fan-in pipelines.
+- **Junction Stages** (`stream` package): `NewBroadcast[T](n)`, `NewMerge[T](n)`, `NewZip[A, B]()` — first-class `Graph` components with full back-pressure semantics, verified through the complete test suite.
+- **PersistenceId Discovery**: `ReadJournal` DSL with `CurrentPersistenceIds()` and `EventsByPersistenceId()` backed by Spanner and SQL stores for CQRS projection support.
+- **Custom Shard Allocation DSL**: `ShardAllocationStrategy` interface for external placement strategies (geo-aware, latency-weighted).
+- **Adaptive Cluster Rebalancing**: Automatic shard migration driven by node-level pressure scores (CPU, Memory, Mailbox).
+- **Ultra Thin Core (CBOR removal)**: Removed `fxamacker/cbor` from core to comply with the zero-non-stdlib-dependency policy for transport and serialization primitives.
+
 ---
 
 ## Upcoming

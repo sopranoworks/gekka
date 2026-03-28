@@ -486,6 +486,7 @@ type Cluster struct {
 	repl       *ddata.Replicator
 	mg         *gcluster.MetricsGossip
 	server     *core.TcpServer
+	udpHandler *core.UdpArteryHandler // non-nil when transport == "aeron-udp"
 	ctx        context.Context
 	cancel     context.CancelFunc
 	localAddr  *gproto_remote.Address
@@ -657,6 +658,19 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 		}
 	}
 
+	// Aeron-UDP transport: start native UDP handler and override DialRemote.
+	var udpH *core.UdpArteryHandler
+	if strings.EqualFold(cfg.Transport, "aeron-udp") {
+		udpAddr := fmt.Sprintf("%s:%d", host, actualPort)
+		udpH, err = core.NewUdpArteryHandler(ctx, udpAddr, nm, nil)
+		if err != nil {
+			cancel()
+			return nil, fmt.Errorf("gekka: aeron-udp handler: %w", err)
+		}
+		nm.UDPHandler = udpH
+		log.Printf("gekka: aeron-udp transport active on %s", udpAddr)
+	}
+
 	nodeID := fmt.Sprintf("%s:%d", host, actualPort)
 	repl := ddata.NewReplicator(nodeID, router)
 	mg := gcluster.NewMetricsGossip(nodeID, repl, 5*time.Second)
@@ -669,6 +683,7 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 		repl:           repl,
 		mg:             mg,
 		server:         server,
+		udpHandler:     udpH,
 		ctx:            ctx,
 		cancel:         cancel,
 		localAddr:      localAddr,
@@ -1589,6 +1604,9 @@ func (c *Cluster) registerBuiltinShutdownTasks() {
 	c.cs.AddTask("actor-system-terminate", "close-transport", func(_ context.Context) error {
 		if c.cancel != nil {
 			c.cancel()
+		}
+		if c.udpHandler != nil {
+			c.udpHandler.Close()
 		}
 		if c.server != nil {
 			return c.server.Shutdown()

@@ -9,6 +9,7 @@
 package core
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -28,7 +29,16 @@ const (
         MessageContainerSerializerID = 6
         JSONSerializerID     = 9
         ArteryInternalSerializerID   = 17
-        StringSerializerID   = 20
+        // JavaStringSerializerID is Akka's classic JavaSerializer (ID=1).
+        // Used only for DECODING inbound strings serialised with Java Object
+        // Serialization (AC ED 00 05 74 ...).
+        JavaStringSerializerID = 1
+
+        // StringSerializerID is Akka 2.6's built-in StringSerializer (ID=20).
+        // Akka uses this for java.lang.String messages in Artery: the payload
+        // is simply the raw UTF-8 bytes, with no Java-serialization overhead.
+        // Go uses this ID when sending strings to Akka nodes.
+        StringSerializerID = 20
 
         // Pekko Distributed Data Serializers
 
@@ -71,7 +81,10 @@ func NewSerializationRegistry() *SerializationRegistry {
 	r.serializers[JSONSerializerID] = r.jsonSerializer
 	r.serializers[RawSerializerID] = r.rawSerializer
 	r.serializers[ProtobufSerializerID] = r.protobufSerializer
+	// ID=20: Akka 2.6 StringSerializer — raw UTF-8 bytes (used by default for java.lang.String in Artery)
 	r.serializers[StringSerializerID] = &StringSerializer{}
+	// ID=1: Java ObjectOutputStream format — kept for receiving from systems that use JavaSerializer
+	r.serializers[JavaStringSerializerID] = &JavaStringSerializer{}
 	r.serializers[MessageContainerSerializerID] = r.messageContainerSerializer
 
 	// Artery Control Manifests (Serializer ID 17)
@@ -166,48 +179,128 @@ func (r *SerializationRegistry) DeserializePayload(serializerId int32, manifest 
 	return s.FromBinary(data, manifest)
 }
 
-// StringSerializer handles plain string messages.
+// StringSerializer handles java.lang.String messages using Akka 2.6's built-in
+// StringSerializer wire format (SerializerID=20): the payload is simply the
+// raw UTF-8 bytes of the string.  Akka uses this serializer by default for
+// java.lang.String in Artery (aeron-udp and tcp) regardless of whether
+// allow-java-serialization is enabled.
 type StringSerializer struct{}
 
-func (s *StringSerializer) Identifier() int32 {
-        return StringSerializerID
-}
+func (s *StringSerializer) Identifier() int32 { return StringSerializerID }
 
 func (s *StringSerializer) ToBinary(msg interface{}) ([]byte, error) {
-        if str, ok := msg.(string); ok {
-                return []byte(str), nil
-        }
-        return nil, fmt.Errorf("StringSerializer: msg is not string")
+	str, ok := msg.(string)
+	if !ok {
+		return nil, fmt.Errorf("StringSerializer: msg is not string, got %T", msg)
+	}
+	return []byte(str), nil
 }
 
 func (s *StringSerializer) FromBinary(data []byte, manifest string) (interface{}, error) {
-        return string(data), nil
+	return string(data), nil
 }
 
 func (s *StringSerializer) WriteTo(w io.Writer, msg interface{}) (int64, error) {
-        if str, ok := msg.(string); ok {
-                n, err := w.Write([]byte(str))
-                return int64(n), err
-        }
-        return 0, fmt.Errorf("StringSerializer: msg is not string")
+	b, err := s.ToBinary(msg)
+	if err != nil {
+		return 0, err
+	}
+	n, err := w.Write(b)
+	return int64(n), err
 }
 
 func (s *StringSerializer) MarshalTo(buf []byte, msg interface{}) (int, error) {
-        if str, ok := msg.(string); ok {
-                if len(buf) < len(str) {
-                        return 0, io.ErrShortBuffer
-                }
-                n := copy(buf, []byte(str))
-                return n, nil
-        }
-        return 0, fmt.Errorf("StringSerializer: msg is not string")
+	b, err := s.ToBinary(msg)
+	if err != nil {
+		return 0, err
+	}
+	if len(buf) < len(b) {
+		return 0, io.ErrShortBuffer
+	}
+	return copy(buf, b), nil
 }
 
 func (s *StringSerializer) Size(msg interface{}) int {
-        if str, ok := msg.(string); ok {
-                return len(str)
-        }
-        return 0
+	if str, ok := msg.(string); ok {
+		return len([]byte(str))
+	}
+	return 0
+}
+
+// JavaStringSerializer handles java.lang.String messages encoded with Java
+// ObjectOutputStream format (SerializerID=1, used when a remote node has
+// akka.actor.allow-java-serialization=on and no explicit StringSerializer).
+//
+// Wire format:
+//
+//	[0–1]  0xAC 0xED — STREAM_MAGIC
+//	[2–3]  0x00 0x05 — STREAM_VERSION
+//	[4]    0x74      — TC_STRING
+//	[5–6]  uint16 BE — UTF-8 byte length
+//	[7…]             — UTF-8 bytes
+type JavaStringSerializer struct{}
+
+func (s *JavaStringSerializer) Identifier() int32 { return JavaStringSerializerID }
+
+func (s *JavaStringSerializer) ToBinary(msg interface{}) ([]byte, error) {
+	str, ok := msg.(string)
+	if !ok {
+		return nil, fmt.Errorf("JavaStringSerializer: msg is not string, got %T", msg)
+	}
+	utf8 := []byte(str)
+	if len(utf8) > 65535 {
+		return nil, fmt.Errorf("JavaStringSerializer: string too long (%d bytes, max 65535)", len(utf8))
+	}
+	buf := make([]byte, 7+len(utf8))
+	buf[0] = 0xAC
+	buf[1] = 0xED
+	buf[2] = 0x00
+	buf[3] = 0x05
+	buf[4] = 0x74
+	binary.BigEndian.PutUint16(buf[5:7], uint16(len(utf8)))
+	copy(buf[7:], utf8)
+	return buf, nil
+}
+
+func (s *JavaStringSerializer) FromBinary(data []byte, manifest string) (interface{}, error) {
+	if len(data) < 7 {
+		return nil, fmt.Errorf("JavaStringSerializer: payload too short (%d bytes)", len(data))
+	}
+	if data[0] != 0xAC || data[1] != 0xED || data[2] != 0x00 || data[3] != 0x05 || data[4] != 0x74 {
+		return nil, fmt.Errorf("JavaStringSerializer: invalid Java serialisation header %X", data[:5])
+	}
+	length := int(binary.BigEndian.Uint16(data[5:7]))
+	if len(data) < 7+length {
+		return nil, fmt.Errorf("JavaStringSerializer: truncated payload (need %d, have %d)", 7+length, len(data))
+	}
+	return string(data[7 : 7+length]), nil
+}
+
+func (s *JavaStringSerializer) WriteTo(w io.Writer, msg interface{}) (int64, error) {
+	b, err := s.ToBinary(msg)
+	if err != nil {
+		return 0, err
+	}
+	n, err := w.Write(b)
+	return int64(n), err
+}
+
+func (s *JavaStringSerializer) MarshalTo(buf []byte, msg interface{}) (int, error) {
+	b, err := s.ToBinary(msg)
+	if err != nil {
+		return 0, err
+	}
+	if len(buf) < len(b) {
+		return 0, io.ErrShortBuffer
+	}
+	return copy(buf, b), nil
+}
+
+func (s *JavaStringSerializer) Size(msg interface{}) int {
+	if str, ok := msg.(string); ok {
+		return 7 + len([]byte(str))
+	}
+	return 0
 }
 
 // JSONSerializer handles JSON serialization for types registered in the registry.

@@ -101,7 +101,9 @@ const (
 	// ClusterSerializerID is the Pekko ClusterMessageSerializer ID.
 	ClusterSerializerID int32 = 5
 
-	// StringSerializerID is the Akka/Pekko serializer ID for java.lang.String.
+	// StringSerializerID matches Akka 2.6's built-in StringSerializer (ID=20)
+	// which encodes java.lang.String as raw UTF-8 bytes (no Java-serialisation
+	// overhead).  Go uses this ID when sending strings to Akka nodes.
 	StringSerializerID int32 = 20
 	)
 

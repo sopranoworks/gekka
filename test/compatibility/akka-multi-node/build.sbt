@@ -25,7 +25,17 @@ lazy val root = (project in file("."))
       "com.typesafe.akka" %% "akka-testkit"            % AkkaVersion % "multi-jvm,test",
       "org.scalatest"     %% "scalatest"               % "3.2.17"    % "multi-jvm,test",
       "com.typesafe"       % "config"                  % "1.4.3",
+      // Aeron UDP transport — must be added explicitly when artery.transport = aeron-udp
+      // (akka-remote does not pull them in transitively).
+      // Pin to 1.30.0 (Java 8/11 compatible) and force agrona 1.9.0 which is
+      // also Java 11 compatible (class file 55.0).
+      "io.aeron"           % "aeron-driver"            % "1.30.0",
+      "io.aeron"           % "aeron-client"            % "1.30.0",
+      "org.agrona"         % "agrona"                  % "1.9.0",
     ),
+
+    // Force agrona to 1.9.0 so the Aeron driver jars stay Java 11 compatible.
+    dependencyOverrides += "org.agrona" % "agrona" % "1.9.0",
 
     // Multi-JVM source directory
     MultiJvm / sourceDirectory := baseDirectory.value / "src" / "multi-jvm",

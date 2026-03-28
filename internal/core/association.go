@@ -65,6 +65,17 @@ type GekkaAssociation struct {
 
 	lastHeartbeatSentAt time.Time
 	lastRTT             time.Duration
+
+	// UDP transport fields — set when this association uses the Aeron-UDP
+	// transport instead of a TCP connection.  When udpHandler is non-nil the
+	// outbox drainer sends frames via udpHandler.SendFrame rather than
+	// WriteFrame(conn, …).
+	udpHandler        *UdpArteryHandler
+	udpDst            *net.UDPAddr
+	// udpOrdinaryOutbox carries user messages destined for Aeron stream 2
+	// (OrdinaryStream).  Control/cluster/artery-internal messages continue to
+	// use the primary outbox (stream 1).  Nil for TCP associations.
+	udpOrdinaryOutbox chan []byte
 }
 
 var _ actor.RemoteAssociation = (*GekkaAssociation)(nil)
@@ -98,6 +109,18 @@ type NodeManager struct {
 	// NodeMetrics is the shared NodeMetrics instance (set by Cluster.Spawn).
 	// Nil-safe: all callers check before touching.
 	NodeMetrics *NodeMetrics
+
+	// UDPHandler is set when the Aeron-UDP transport is active.  When non-nil,
+	// DialRemote switches to the UDP path automatically.
+	UDPHandler *UdpArteryHandler
+
+	// udpSrcAssoc maps the physical UDP source address (e.g. "127.0.0.1:62159")
+	// to an association.  This is separate from `associations` because
+	// handleHandshakeReq overwrites assoc.remote with the canonical Akka
+	// address (port 2561), making the port-based lookup in getAnyAssociationByHost
+	// fail for subsequent frames from the ephemeral media-driver port.
+	// Guarded by mu.
+	udpSrcAssoc map[string]*GekkaAssociation
 }
 
 func NewNodeManager(local *gproto_remote.Address, uid uint64) *NodeManager {
@@ -108,6 +131,7 @@ func NewNodeManager(local *gproto_remote.Address, uid uint64) *NodeManager {
 		SerializerRegistry: NewSerializationRegistry(),
 		pendingReplies:     make(map[string]chan *ArteryMetadata),
 		mutedNodes:         make(map[string]struct{}),
+		udpSrcAssoc:        make(map[string]*GekkaAssociation),
 	}
 }
 
@@ -258,6 +282,11 @@ func (nm *NodeManager) GetGekkaAssociationByHost(host string, port uint32) (*Gek
 	return nil, false
 }
 func (nm *NodeManager) DialRemote(ctx context.Context, target *gproto_remote.Address) (actor.RemoteAssociation, error) {
+	// Aeron-UDP path: delegate to the UDP handler when configured.
+	if nm.UDPHandler != nil {
+		return nm.DialRemoteUDP(ctx, nm.UDPHandler, target.GetHostname(), target.GetPort())
+	}
+
 	addrStr := fmt.Sprintf("%s:%d", target.GetHostname(), target.GetPort())
 
 	client, err := NewTcpClient(TcpClientConfig{
@@ -503,6 +532,18 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 					continue
 				}
 				slog.Debug("artery: sending frame", "total_bytes", len(msg))
+				// UDP path: wrap in Aeron DATA frame and send via UDP socket.
+				assoc.mu.RLock()
+				udpH := assoc.udpHandler
+				udpDst := assoc.udpDst
+				assoc.mu.RUnlock()
+				if udpH != nil && udpDst != nil {
+					if err := udpH.SendFrame(udpDst, AeronStreamControl, msg); err != nil {
+						slog.Warn("aeron-udp: outbox send error", "error", err)
+					}
+					continue
+				}
+				// TCP path: prepend 4-byte length and write to the connection.
 				if err := WriteFrame(assoc.conn, msg); err != nil {
 					slog.Error("artery: write error", "error", err)
 					// Close so the read loop also exits cleanly.
@@ -579,6 +620,35 @@ func (assoc *GekkaAssociation) initiateHandshake(to *gproto_remote.Address) erro
 	}
 	// Pekko ArteryMessageSerializer (17) uses "d" for HandshakeReq.
 	// We use 0 (UnknownUid) because we don't know the remote UID yet.
+
+	// For UDP associations (conn == nil) build the frame and route it through
+	// the outbox so the correct transport layer (Aeron DATA frame) is used.
+	assoc.mu.RLock()
+	isUDP := assoc.udpHandler != nil
+	assoc.mu.RUnlock()
+
+	if isUDP {
+		senderPath := fmt.Sprintf("%s://%s@%s:%d",
+			req.From.GetAddress().GetProtocol(),
+			req.From.GetAddress().GetSystem(),
+			req.From.GetAddress().GetHostname(),
+			req.From.GetAddress().GetPort())
+		msgPayload, err := proto.Marshal(req)
+		if err != nil {
+			return fmt.Errorf("artery: marshal HandshakeReq: %w", err)
+		}
+		frame, err := BuildArteryFrame(int64(uid), actor.ArteryInternalSerializerID, senderPath, "", "d", msgPayload, true)
+		if err != nil {
+			return err
+		}
+		select {
+		case assoc.outbox <- frame:
+			return nil
+		default:
+			return fmt.Errorf("artery: outbox full during HandshakeReq (UDP)")
+		}
+	}
+
 	return SendArteryMessageWithAck(assoc.conn, int64(uid), actor.ArteryInternalSerializerID, "d", req, req.From, true)
 }
 
@@ -645,17 +715,8 @@ func (assoc *GekkaAssociation) dispatch(ctx context.Context, meta *ArteryMetadat
 			}
 		}
 
-		// 2. Deserialize inner message
-		innerMsg, err := assoc.nodeMgr.SerializerRegistry.DeserializePayload(env.GetSerializerId(), string(env.GetMessageManifest()), env.GetEnclosedMessage())
-		if err != nil {
-			slog.Debug("artery: selection failed to deserialize inner message", "error", err)
-			return err
-		}
-
-		// 3. Update meta and route
-		meta.DeserializedMessage = innerMsg
-		meta.Recipient = &gproto_remote.ActorRefData{Path: proto.String(path)}
-
+		// 2. Route cluster messages directly — ClusterSerializer (ID=5) is not
+		// registered in SerializerRegistry, so calling DeserializePayload would fail.
 		if env.GetSerializerId() == actor.ClusterSerializerID {
 			if assoc.nodeMgr.clusterMgr != nil {
 				assoc.mu.RLock()
@@ -665,6 +726,17 @@ func (assoc *GekkaAssociation) dispatch(ctx context.Context, meta *ArteryMetadat
 			}
 			return nil
 		}
+
+		// 3. Deserialize inner message for non-cluster payloads
+		innerMsg, err := assoc.nodeMgr.SerializerRegistry.DeserializePayload(env.GetSerializerId(), string(env.GetMessageManifest()), env.GetEnclosedMessage())
+		if err != nil {
+			slog.Debug("artery: selection failed to deserialize inner message", "error", err)
+			return err
+		}
+
+		// 4. Update meta and route
+		meta.DeserializedMessage = innerMsg
+		meta.Recipient = &gproto_remote.ActorRefData{Path: proto.String(path)}
 
 		return assoc.handleUserMessage(meta)
 
@@ -795,8 +867,11 @@ func (assoc *GekkaAssociation) SendWithSender(recipient, senderPath string, payl
 		return nil
 	}
 
+	// User messages go on Aeron stream 2 (Ordinary) when a separate outbox is
+	// available (UDP transport).  Control/cluster messages stay on stream 1.
+	outbox := assoc.udpOrdinaryOutboxFor(serializerId)
 	select {
-	case assoc.outbox <- frame:
+	case outbox <- frame:
 		return nil
 	default:
 		return fmt.Errorf("association outbox full")
@@ -869,12 +944,26 @@ func (assoc *GekkaAssociation) Send(recipient string, payload []byte, serializer
 		return nil
 	}
 
+	outbox := assoc.udpOrdinaryOutboxFor(serializerId)
 	select {
-	case assoc.outbox <- frame:
+	case outbox <- frame:
 		return nil
 	default:
 		return fmt.Errorf("association outbox full")
 	}
+}
+
+// udpOrdinaryOutboxFor returns the appropriate outbox channel for serializerId.
+// User messages (non-cluster, non-artery-internal) use the Aeron ordinary stream
+// (stream 2) when available.  Everything else uses the primary outbox (stream 1).
+// For TCP associations udpOrdinaryOutbox is nil, so the primary outbox is always used.
+func (assoc *GekkaAssociation) udpOrdinaryOutboxFor(serializerId int32) chan []byte {
+	if assoc.udpOrdinaryOutbox != nil &&
+		serializerId != ClusterSerializerID &&
+		serializerId != ArteryInternalSerializerID {
+		return assoc.udpOrdinaryOutbox
+	}
+	return assoc.outbox
 }
 
 func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *ArteryMetadata) error {
@@ -1220,4 +1309,99 @@ func (assoc *GekkaAssociation) handleHandshakeRsp(mwa *gproto_remote.MessageWith
 	}
 
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// UDP transport extensions
+// ---------------------------------------------------------------------------
+
+// Dispatch is an exported wrapper around the unexported dispatch method.
+// It is called by the UdpArteryHandler to route inbound Aeron DATA frames
+// through the same Artery message pipeline used by the TCP transport.
+func (assoc *GekkaAssociation) Dispatch(ctx context.Context, meta *ArteryMetadata) error {
+	return assoc.dispatch(ctx, meta)
+}
+
+// GetOrCreateUDPAssociation returns an existing association for src, or creates
+// a new INBOUND UDP association wired to udpH for outbound responses.
+//
+// The new association has no TCP conn; its outbox drainer forwards frames via
+// udpH.SendFrame(src, AeronStreamControl, frame).
+// getAnyAssociationByHost returns the first association (INBOUND or OUTBOUND)
+// for the given host:port pair.  Used by the UDP inbound path to find previously
+// created inbound associations without filtering to OUTBOUND-only.
+func (nm *NodeManager) getAnyAssociationByHost(host string, port uint32) (*GekkaAssociation, bool) {
+	nm.mu.RLock()
+	defer nm.mu.RUnlock()
+	for _, assoc := range nm.associations {
+		assoc.mu.RLock()
+		remote := assoc.remote
+		assoc.mu.RUnlock()
+		if remote != nil && remote.Address.GetHostname() == host && remote.Address.GetPort() == port {
+			return assoc, true
+		}
+	}
+	return nil, false
+}
+
+func (nm *NodeManager) GetOrCreateUDPAssociation(src *net.UDPAddr, udpH *UdpArteryHandler) *GekkaAssociation {
+	// Fast path: look up by physical UDP source address.  This map is keyed by
+	// the ephemeral media-driver port (e.g. "127.0.0.1:62159") and is never
+	// overwritten when handleHandshakeReq updates assoc.remote to the canonical
+	// Akka address, so it remains valid for the lifetime of the session.
+	srcKey := src.String()
+	nm.mu.RLock()
+	if assoc, ok := nm.udpSrcAssoc[srcKey]; ok {
+		nm.mu.RUnlock()
+		return assoc
+	}
+	nm.mu.RUnlock()
+
+	// Also check whether the src is the canonical Akka address (e.g. a direct
+	// OUTBOUND association to 127.0.0.1:2561).
+	if assoc, ok := nm.getAnyAssociationByHost(src.IP.String(), uint32(src.Port)); ok {
+		return assoc
+	}
+
+	assoc := &GekkaAssociation{
+		state:      INITIATED,
+		role:       INBOUND,
+		nodeMgr:    nm,
+		lastSeen:   time.Now(),
+		Handshake:  make(chan struct{}),
+		localUid:   nm.localUid,
+		outbox:     make(chan []byte, 512),
+		streamId:   AeronStreamControl,
+		udpHandler: udpH,
+		udpDst:     src,
+		remote: &gproto_remote.UniqueAddress{
+			Address: &gproto_remote.Address{
+				Protocol: nm.LocalAddr.Protocol,
+				System:   nm.LocalAddr.System,
+				Hostname: proto.String(src.IP.String()),
+				Port:     proto.Uint32(uint32(src.Port)),
+			},
+			Uid: proto.Uint64(0),
+		},
+	}
+	nm.RegisterAssociation(assoc.remote, assoc)
+
+	// Pin the ephemeral UDP source address to this association permanently.
+	// handleHandshakeReq will later overwrite assoc.remote with the canonical
+	// Akka address, but udpSrcAssoc keeps the original src → assoc binding.
+	nm.mu.Lock()
+	nm.udpSrcAssoc[srcKey] = assoc
+	nm.mu.Unlock()
+
+	// Start outbox drainer: sends frames via Aeron UDP back to src.
+	go func() {
+		for frame := range assoc.outbox {
+			if err := udpH.SendFrame(src, AeronStreamControl, frame); err != nil {
+				slog.Warn("aeron-udp: inbound assoc outbox error", "src", src, "error", err)
+			}
+		}
+	}()
+
+	slog.Info("aeron-udp: new inbound UDP association created", "src", src)
+	return assoc
 }

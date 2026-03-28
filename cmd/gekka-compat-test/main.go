@@ -70,6 +70,7 @@ func (a *EchoActor) Receive(msg any) {
 }
 
 func main() {
+        transport  := flag.String("transport", "tcp", "Artery transport: tcp | tls-tcp | aeron-udp")
         systemName := flag.String("system", "GekkaSystem", "Akka actor system name shared by all cluster members")
         seedHost := flag.String("seed-host", "127.0.0.1", "Akka seed node hostname")
         seedPort := flag.Int("seed-port", 2551, "Akka seed node port")
@@ -78,6 +79,11 @@ func main() {
         echoTarget := flag.String("echo-target", "", "Full Akka actor path of the target EchoActor (e.g. akka://GekkaSystem@127.0.0.1:2551/user/echo)")
         timeout := flag.Duration("timeout", 60*time.Second, "Maximum time to wait for cluster membership")
         flag.Parse()
+
+        if *transport == "aeron-udp" {
+                runAeronMode(*systemName, *seedHost, *seedPort, *localPort, *mgmtPort, *echoTarget, *timeout)
+                return
+        }
 
         cfg := gekka.ClusterConfig{
                 SystemName: *systemName,

@@ -84,6 +84,12 @@ type ClusterManager struct {
 	// Router is a function for sending messages, avoiding a cycle with the root package.
 	Router func(ctx context.Context, path string, msg any) error
 
+	// CrossDataCenterGossipProbability is the probability [0.0,1.0] with which a
+	// gossip round targets a node in a foreign data center.  Intra-DC gossip
+	// always proceeds; cross-DC rounds are skipped when rand >= probability.
+	// Defaults to 0.1 when zero.
+	CrossDataCenterGossipProbability float64
+
 	// SBRStrategy is an optional static-quorum strategy from the internal SBR
 	// primitives.  When set, CheckReachability invokes it after the partition
 	// has been unreachable for SBRStableAfter and calls LeaveCluster on Down.
@@ -1873,6 +1879,7 @@ func (cm *ClusterManager) gossipTick() {
 	cm.Mu.RLock()
 	members := cm.State.Members
 	addresses := cm.State.AllAddresses
+	allRoles := cm.State.AllRoles
 	localIdx := int32(-1)
 	localHost := cm.LocalAddress.Address.GetHostname()
 	localPort := cm.LocalAddress.Address.GetPort()
@@ -1906,6 +1913,26 @@ func (cm *ClusterManager) gossipTick() {
 	if targetAddr.GetAddress().GetHostname() == localHost &&
 		targetAddr.GetAddress().GetPort() == localPort {
 		return
+	}
+
+	// Cross-DC gossip throttling: skip foreign-DC targets according to
+	// CrossDataCenterGossipProbability (default 0.1).
+	{
+		localDC := cm.LocalDataCenter
+		if localDC == "" {
+			localDC = "default"
+		}
+		tmpGossip := &gproto_cluster.Gossip{AllRoles: allRoles}
+		targetDC := DataCenterForMember(tmpGossip, members[targetIdx])
+		if targetDC != localDC {
+			prob := cm.CrossDataCenterGossipProbability
+			if prob <= 0 {
+				prob = 0.1
+			}
+			if rand.Float64() >= prob {
+				return
+			}
+		}
 	}
 
 	path := cm.ClusterCorePath(

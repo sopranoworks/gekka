@@ -252,6 +252,11 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 	if nodeCfg.DataCenter == "" {
 		nodeCfg.DataCenter = "default"
 	}
+	if v, err := cfg.GetString(prefix + ".cluster.multi-data-center.cross-data-center-gossip-probability"); err == nil {
+		if f, parseErr := strconv.ParseFloat(strings.TrimSpace(v), 64); parseErr == nil {
+			nodeCfg.CrossDataCenterGossipProbability = f
+		}
+	}
 
 	// ── Cluster Sharding ────────────────────────────────────────────────────
 	shardingPrefix := prefix + ".cluster.sharding"

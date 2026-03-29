@@ -118,6 +118,8 @@ func NewStrategy(cfg SBRConfig) (Strategy, error) {
 			return nil, fmt.Errorf("sbr: static-quorum requires quorum-size > 0")
 		}
 		return &StaticQuorum{QuorumSize: cfg.QuorumSize, Role: cfg.Role}, nil
+	case "down-all-nodes-in-data-center":
+		return &DownAllNodesInDataCenter{DataCenter: cfg.Role}, nil
 	default:
 		return nil, fmt.Errorf("sbr: unknown strategy %q", cfg.ActiveStrategy)
 	}
@@ -221,6 +223,48 @@ func (s *StaticQuorum) Decide(self MemberAddress, reachable, unreachable []Membe
 		return Decision{DownMembers: unreachable}
 	}
 	return Decision{DownSelf: true}
+}
+
+// ── DownAllNodesInDataCenter ──────────────────────────────────────────────────
+
+// DownAllNodesInDataCenter downs every member that belongs to the named data
+// center when at least one member from that DC is unreachable.  This strategy
+// is suited for drastic DC-level failure scenarios where the entire DC should
+// be ejected from the cluster rather than allowing it to block convergence.
+//
+// The DataCenter field must match the name encoded in the member's "dc-<name>"
+// role (e.g. DataCenter="us-east" matches role "dc-us-east").
+// When DataCenter is empty the strategy is a no-op.
+type DownAllNodesInDataCenter struct {
+	// DataCenter is the name of the data center to target.
+	DataCenter string
+}
+
+func (s *DownAllNodesInDataCenter) Decide(self MemberAddress, reachable, unreachable []Member) Decision {
+	if s.DataCenter == "" {
+		return Decision{}
+	}
+
+	// Check whether any unreachable member belongs to the target DC.
+	anyUnreachableInDC := false
+	for _, m := range unreachable {
+		if m.Address.DataCenter == s.DataCenter {
+			anyUnreachableInDC = true
+			break
+		}
+	}
+	if !anyUnreachableInDC {
+		return Decision{} // no partition in target DC — nothing to do
+	}
+
+	// Down ALL members in the target DC (both reachable and unreachable sides).
+	var toDown []Member
+	for _, m := range append(reachable, unreachable...) {
+		if m.Address.DataCenter == s.DataCenter {
+			toDown = append(toDown, m)
+		}
+	}
+	return Decision{DownMembers: toDown}
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────

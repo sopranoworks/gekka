@@ -212,6 +212,14 @@ type ClusterConfig struct {
 	//	pekko.cluster.multi-data-center.self-data-center = "us-east"
 	DataCenter string
 
+	// CrossDataCenterGossipProbability is the probability [0.0, 1.0] that a
+	// gossip round will target a node in a different data center.  Intra-DC
+	// gossip always proceeds; cross-DC gossip is throttled by this value to
+	// reduce inter-DC bandwidth.
+	// Corresponds to pekko.cluster.multi-data-center.cross-data-center-gossip-probability.
+	// Default: 0.1.
+	CrossDataCenterGossipProbability float64
+
 	// Roles is the list of cluster roles this node advertises to the rest of the
 	// cluster.  These are merged with the automatic "dc-<DataCenter>" role before
 	// the Join message is sent.  Parsed from HOCON:
@@ -602,6 +610,9 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 		return router.Send(ctx, path, msg)
 	}
 	cm.SetLocalDataCenter(cfg.DataCenter)
+	if cfg.CrossDataCenterGossipProbability > 0 {
+		cm.CrossDataCenterGossipProbability = cfg.CrossDataCenterGossipProbability
+	}
 	if len(cfg.Roles) > 0 {
 		cm.SetLocalRoles(cfg.Roles)
 	}

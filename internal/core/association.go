@@ -94,6 +94,15 @@ type NodeManager struct {
 	pendingRepliesMu sync.RWMutex
 	pendingReplies   map[string]chan *ArteryMetadata // keyed by temp actor path
 
+	// quarantinedMu guards quarantinedUIDs.
+	quarantinedMu sync.RWMutex
+	// quarantinedUIDs is a permanent registry of remote node UIDs that have been
+	// quarantined.  Unlike the associations map (which removes the entry upon
+	// quarantine), this registry persists so that a restarting remote node with
+	// the same UID cannot re-associate until the local process restarts.
+	// Value is the UniqueAddress of the remote node at the time of quarantine.
+	quarantinedUIDs map[uint64]*gproto_remote.UniqueAddress
+
 	// mutedMu guards mutedNodes.
 	mutedMu sync.RWMutex
 	// mutedNodes is a set of "host:port" strings for which all outbound
@@ -132,7 +141,48 @@ func NewNodeManager(local *gproto_remote.Address, uid uint64) *NodeManager {
 		pendingReplies:     make(map[string]chan *ArteryMetadata),
 		mutedNodes:         make(map[string]struct{}),
 		udpSrcAssoc:        make(map[string]*GekkaAssociation),
+		quarantinedUIDs:    make(map[uint64]*gproto_remote.UniqueAddress),
 	}
+}
+
+// IsQuarantined returns true when uid has been permanently quarantined.
+// Thread-safe.
+func (nm *NodeManager) IsQuarantined(uid uint64) bool {
+	if uid == 0 {
+		return false
+	}
+	nm.quarantinedMu.RLock()
+	_, ok := nm.quarantinedUIDs[uid]
+	nm.quarantinedMu.RUnlock()
+	return ok
+}
+
+// RegisterQuarantinedUID permanently records remote as quarantined.
+// Subsequent connection attempts from that UID will be rejected.
+func (nm *NodeManager) RegisterQuarantinedUID(remote *gproto_remote.UniqueAddress) {
+	if remote == nil {
+		return
+	}
+	uid := remote.GetUid()
+	if uid == 0 {
+		return
+	}
+	nm.quarantinedMu.Lock()
+	nm.quarantinedUIDs[uid] = remote
+	nm.quarantinedMu.Unlock()
+	slog.Warn("node manager: registered permanently quarantined UID", "uid", uid, "address", remote.GetAddress())
+}
+
+// QuarantinedUIDs returns a snapshot of all permanently quarantined UIDs.
+// Used by diagnostics and tests.
+func (nm *NodeManager) QuarantinedUIDs() []uint64 {
+	nm.quarantinedMu.RLock()
+	defer nm.quarantinedMu.RUnlock()
+	out := make([]uint64, 0, len(nm.quarantinedUIDs))
+	for uid := range nm.quarantinedUIDs {
+		out = append(out, uid)
+	}
+	return out
 }
 
 // MuteNode silently drops all outbound frames to and all inbound frames from
@@ -418,12 +468,24 @@ func (nm *NodeManager) RegisterAssociation(remote *gproto_remote.UniqueAddress, 
 
 				slog.Warn("node manager: detected node restart, quarantining old association", "hostPort", hostPortKey, "oldKey", k)
 				existing.mu.Lock()
+				existingRemote := existing.remote
 				existing.state = QUARANTINED
 				if existing.conn != nil {
 					existing.conn.Close()
 				}
 				existing.mu.Unlock()
 				delete(nm.associations, k)
+				// Register the old UID permanently so the remote cannot re-associate
+				// with that UID after we drop the connection.
+				if existingRemote != nil {
+					nm.quarantinedMu.Lock()
+					nm.quarantinedUIDs[existingRemote.GetUid()] = existingRemote
+					nm.quarantinedMu.Unlock()
+				}
+				// Notify the remote that we have quarantined it, using the new
+				// association's outbox so the frame reaches the remote over the
+				// live transport.
+				go existing.SendQuarantined(existingRemote)
 			}
 		}
 	}
@@ -884,6 +946,41 @@ func (assoc *GekkaAssociation) GetState() AssociationState {
 	return assoc.state
 }
 
+// SendQuarantined enqueues a "Quarantined" control frame to notify the remote
+// node that we have permanently quarantined it.  The frame is sent on the
+// outbox so it piggybacks on the existing TCP/UDP transport without blocking
+// the caller.
+func (assoc *GekkaAssociation) SendQuarantined(to *gproto_remote.UniqueAddress) {
+	nm := assoc.nodeMgr
+	if nm == nil || nm.LocalAddr == nil {
+		return
+	}
+	localUA := &gproto_remote.UniqueAddress{
+		Address: nm.LocalAddr,
+		Uid:     proto.Uint64(assoc.localUid),
+	}
+	msg := &gproto_remote.Quarantined{
+		From: localUA,
+		To:   to,
+	}
+	payload, err := proto.Marshal(msg)
+	if err != nil {
+		slog.Warn("artery: failed to marshal Quarantined", "error", err)
+		return
+	}
+	frame, err := BuildArteryFrame(int64(assoc.localUid), actor.ArteryInternalSerializerID, "", "", "Quarantined", payload, true)
+	if err != nil {
+		slog.Warn("artery: failed to build Quarantined frame", "error", err)
+		return
+	}
+	select {
+	case assoc.outbox <- frame:
+		slog.Info("artery: sent Quarantined frame", "to", to)
+	default:
+		slog.Warn("artery: outbox full, Quarantined frame dropped", "to", to)
+	}
+}
+
 func (assoc *GekkaAssociation) GetRTT() time.Duration {
 	assoc.mu.RLock()
 	defer assoc.mu.RUnlock()
@@ -1042,9 +1139,16 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 		if err := proto.Unmarshal(meta.Payload, quar); err != nil {
 			return err
 		}
-		slog.Warn("artery: received Quarantined", "from", quar.From)
+		slog.Warn("artery: received Quarantined", "from", quar.From, "to", quar.To)
+		// Register the sender UID permanently so we also refuse future re-association from them.
+		if assoc.nodeMgr != nil {
+			assoc.nodeMgr.RegisterQuarantinedUID(quar.From)
+		}
 		assoc.mu.Lock()
 		assoc.state = QUARANTINED
+		if assoc.conn != nil {
+			assoc.conn.Close()
+		}
 		assoc.mu.Unlock()
 		return nil
 
@@ -1093,6 +1197,20 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 		if localSys := assoc.nodeMgr.LocalAddr.GetSystem(); toSys != localSys {
 			return fmt.Errorf("Handshake rejected: To system %q != local system %q", toSys, localSys)
 		}
+	}
+
+	// Quarantine guard: reject reconnection from a permanently quarantined UID.
+	if uid := req.GetFrom().GetUid(); uid != 0 && assoc.nodeMgr.IsQuarantined(uid) {
+		slog.Warn("artery: rejecting HandshakeReq from quarantined UID", "uid", uid)
+		// Inform the remote that it is quarantined and close.
+		assoc.SendQuarantined(req.From)
+		assoc.mu.Lock()
+		assoc.state = QUARANTINED
+		if assoc.conn != nil {
+			assoc.conn.Close()
+		}
+		assoc.mu.Unlock()
+		return fmt.Errorf("artery: HandshakeReq rejected — UID %d is quarantined", uid)
 	}
 
 	assoc.mu.Lock()

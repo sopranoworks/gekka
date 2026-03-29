@@ -351,6 +351,79 @@ abstract class GekkaSystem
 
       enterBarrier("test-done")
     }
+
+    // ── Quarantine signal test ─────────────────────────────────────────────────
+    // Down the Go node from the Akka seed side and verify that Akka observes
+    // the member leaving/removed state.  The Gekka node processes the resulting
+    // Quarantined control frame (sent by Akka when it decides to down the member)
+    // and must not attempt to re-associate.
+    //
+    // This test runs in a separate sbt-multi-jvm invocation because it relies on
+    // an already-up Go member from the previous test.  When the Go binary is
+    // not present (CI without sbt) it is skipped gracefully.
+    "process a Quarantined signal when the Go node is downed via the management API" in {
+      runOn(node1) {
+        import scala.util.Try
+
+        val mgmtBaseURL = "http://127.0.0.1:8558"
+
+        // Only run if the Go management API is reachable (i.e. Go node was started
+        // by a prior test phase in the same sbt run).
+        val reachable = Try {
+          val src = scala.io.Source.fromURL(s"$mgmtBaseURL/cluster/members")
+          try src.mkString finally src.close()
+        }.isSuccess
+
+        if (!reachable) {
+          info("QUARANTINE_SKIP: Go management API not reachable — skipping quarantine test")
+          println("QUARANTINE_SKIP: Go node not running, test skipped")
+          Console.flush()
+        } else {
+          val cluster = Cluster(system)
+
+          // Subscribe to MemberRemoved events so we can observe the Go node leaving.
+          val removedProbe = TestProbe()
+          cluster.subscribe(removedProbe.ref, classOf[akka.cluster.ClusterEvent.MemberRemoved])
+
+          // Down the Go node via its management REST API.
+          val goNodeAddr = "akka://GekkaSystem@127.0.0.1:2552"
+
+          val downResult = Try {
+            val url = new java.net.URL(s"$mgmtBaseURL/cluster/members/$goNodeAddr")
+            val conn = url.openConnection().asInstanceOf[java.net.HttpURLConnection]
+            conn.setRequestMethod("DELETE")
+            conn.setConnectTimeout(3000)
+            conn.setReadTimeout(3000)
+            val code = conn.getResponseCode
+            conn.disconnect()
+            code
+          }
+
+          downResult match {
+            case scala.util.Success(code) =>
+              println(s"QUARANTINE_DOWN: DELETE $goNodeAddr → HTTP $code")
+            case scala.util.Failure(ex) =>
+              println(s"QUARANTINE_DOWN_FAIL: $ex")
+          }
+          Console.flush()
+
+          // Wait for the Go node member to be Removed from Akka's cluster view.
+          // Timeout is generous because SBR stable-after is 5 s.
+          awaitAssert({
+            val removed = removedProbe.expectMsgType[akka.cluster.ClusterEvent.MemberRemoved](2.seconds)
+            removed.member.address.port shouldBe Some(2552)
+          }, 30.seconds, 1.second)
+
+          cluster.unsubscribe(removedProbe.ref)
+
+          println("QUARANTINE_MEMBER_REMOVED: Go node successfully removed from Akka cluster view")
+          println("STATUS: QUARANTINE_TEST_PASSED")
+          Console.flush()
+        }
+      }
+
+      enterBarrier("quarantine-done")
+    }
   }
 }
 

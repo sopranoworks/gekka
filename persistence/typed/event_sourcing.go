@@ -30,6 +30,12 @@ type EventSourcedBehavior[Command any, Event any, State any] struct {
 	CommandHandler func(typed.TypedContext[Command], State, Command) Effect[Event, State]
 	EventHandler   func(State, Event) State
 
+	// Tagger, if non-nil, is called for each event being persisted and returns the
+	// set of tags that should be associated with that event.  The tags are stored
+	// in the journal alongside the event and enable cross-actor queries via
+	// EventsByTag.
+	Tagger func(Event) []string
+
 	// SnapshotSelectionCriteria for recovery
 	SnapshotCriteria persistence.SnapshotSelectionCriteria
 	// SnapshotInterval: if > 0, save a snapshot every N events
@@ -312,10 +318,15 @@ func (p *persistentActor[Command, Event, State]) persist(events []Event, then fu
 
 	for _, event := range events {
 		p.seqNr++
+		var tags []string
+		if p.behavior.Tagger != nil {
+			tags = p.behavior.Tagger(event)
+		}
 		reprs = append(reprs, persistence.PersistentRepr{
 			PersistenceID: p.behavior.PersistenceID,
 			SequenceNr:    p.seqNr,
 			Payload:       event,
+			Tags:          tags,
 		})
 	}
 

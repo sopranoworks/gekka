@@ -76,8 +76,9 @@ func (s *InMemoryDurableStateStore) Delete(ctx context.Context, persistenceID st
 
 // InMemoryJournal is an in-memory implementation of the Journal interface.
 type InMemoryJournal struct {
-	mu       sync.RWMutex
-	messages map[string][]PersistentRepr
+	mu        sync.RWMutex
+	messages  map[string][]PersistentRepr
+	globalLog []PersistentRepr // all events in insertion order, used for tag queries
 }
 
 func NewInMemoryJournal() *InMemoryJournal {
@@ -130,6 +131,7 @@ func (j *InMemoryJournal) AsyncWriteMessages(ctx context.Context, messages []Per
 
 	for _, msg := range messages {
 		j.messages[msg.PersistenceID] = append(j.messages[msg.PersistenceID], msg)
+		j.globalLog = append(j.globalLog, msg)
 	}
 	return nil
 }

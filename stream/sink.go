@@ -138,6 +138,23 @@ func Collect[T any]() Sink[T, []T] {
 	}
 }
 
+// SinkFromFunc creates a Sink backed by a custom drain function.  fn receives
+// a pull function that follows the iterator contract: returning (elem, true,
+// nil) for each element, (zero, false, nil) at completion, and (zero, false,
+// err) on error.  fn should drain the upstream fully and return a non-nil
+// error only on failure.  The materialized value is NotUsed.
+//
+// This constructor is intended for advanced use-cases such as test probes and
+// custom back-pressure controllers.  Most applications should use [Foreach],
+// [Collect], or [Head] instead.
+func SinkFromFunc[T any](fn func(pull func() (T, bool, error)) error) Sink[T, NotUsed] {
+	return Sink[T, NotUsed]{
+		runWith: func(upstream iterator[T]) (NotUsed, error) {
+			return NotUsed{}, fn(upstream.next)
+		},
+	}
+}
+
 // Head creates a Sink that captures the first element and completes.
 // Returns the zero value if the source is empty.
 func Head[T any]() Sink[T, *T] {

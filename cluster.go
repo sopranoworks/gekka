@@ -548,6 +548,9 @@ type Cluster struct {
 	// Managed by cluster_persistence.go.
 	ps persistenceState
 
+	// eventStream is the system-wide publish/subscribe bus.
+	eventStream *actor.EventStream
+
 	// shardingRegionsMu guards shardingRegions.
 	shardingRegionsMu sync.Mutex
 	// shardingRegions holds refs to every ShardRegion actor spawned on this
@@ -722,6 +725,7 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 		logHandler:     cfg.LogHandler,
 		deployments:    cfg.Deployments,
 		sched:          newSystemScheduler(),
+		eventStream:    actor.NewEventStream(),
 	}
 	nm.SystemMessageCallback = cluster.HandleSystemMessage
 
@@ -1965,6 +1969,11 @@ func (c *Cluster) Stop(target ActorRef) {
 	if target.local != nil {
 		close(target.local.Mailbox())
 	}
+}
+
+// EventStream implements ActorSystem.
+func (c *Cluster) EventStream() *actor.EventStream {
+	return c.eventStream
 }
 
 // Scheduler implements ActorSystem.

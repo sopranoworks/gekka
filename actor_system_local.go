@@ -42,6 +42,7 @@ type localActorSystem struct {
 	journal           persistence.Journal
 	snapshotStore     persistence.SnapshotStore
 	durableStateStore persistence.DurableStateStore
+	eventStream       *actor.EventStream
 }
 
 // NewActorSystem creates and returns a local-only ActorSystem.
@@ -171,6 +172,7 @@ func NewActorSystem(name string, config ...*hocon.Config) (ActorSystem, error) {
 		journal:           j,
 		snapshotStore:     ss,
 		durableStateStore: ds,
+		eventStream:       actor.NewEventStream(),
 	}
 	// Terminate the scheduler when the system context is cancelled.
 	go func() {
@@ -179,6 +181,9 @@ func NewActorSystem(name string, config ...*hocon.Config) (ActorSystem, error) {
 	}()
 	return s, nil
 }
+
+// EventStream implements ActorSystem.
+func (s *localActorSystem) EventStream() *actor.EventStream { return s.eventStream }
 
 // Journal implements ActorSystem.
 func (s *localActorSystem) Journal() persistence.Journal { return s.journal }

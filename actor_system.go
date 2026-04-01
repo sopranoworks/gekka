@@ -137,6 +137,11 @@ type ActorSystem interface {
 	// at path.
 	Resolve(path string) (ActorRef, error)
 
+	// EventStream returns the system-wide publish/subscribe bus.
+	// Actors subscribe to event types and receive matching events as messages.
+	// Mirroring Pekko's org.apache.pekko.event.EventStream.
+	EventStream() *actor.EventStream
+
 	// Scheduler returns the system-level task scheduler.
 	// Scheduled tasks run in their own goroutines and are automatically
 	// cancelled when the ActorSystem is terminated.

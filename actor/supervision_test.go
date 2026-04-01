@@ -9,6 +9,7 @@
 package actor
 
 import (
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -214,4 +215,169 @@ type supervisionMockContext struct {
 
 func (m *supervisionMockContext) Stop(ref Ref) {
 	m.stopper.Stop(ref)
+}
+
+// multiStopContext implements ActorContext with a per-ref Stop dispatch table.
+// Used by AllForOneStrategy Stop tests where each child needs its own handler.
+type multiStopContext struct {
+	ActorContext
+	stopFuncs map[Ref]func()
+}
+
+func (m *multiStopContext) Stop(ref Ref) {
+	if f, ok := m.stopFuncs[ref]; ok {
+		f()
+	}
+}
+
+// ── AllForOneStrategy tests ───────────────────────────────────────────────────
+
+func TestAllForOneStrategy(t *testing.T) {
+	t.Run("Restart_AllChildren", func(t *testing.T) {
+		// Create three sibling actors managed by a common parent.
+		children := make([]*SupervisionTestActor, 3)
+		refs := make([]*supervisionMockRef, 3)
+		parent := &BaseActor{}
+		parent.setSupervisorStrategy(&AllForOneStrategy{
+			Decider: func(err error) Directive { return Restart },
+		})
+
+		// parentRef is the mock ref that delegates HandleFailure to the parent.
+		var parentRef *supervisionMockRef
+
+		for i := range children {
+			children[i] = &SupervisionTestActor{BaseActor: NewBaseActor()}
+		}
+
+		// parentRef must be created before registering children so that its
+		// HandleFailure can call parent.HandleFailure with the children already
+		// registered.
+		stopFunc := func() {} // no-op: Restart, not Stop
+		parentRef = &supervisionMockRef{
+			parent:   parent,
+			actor:    children[0], // placeholder; only HandleFailure matters
+			stopFunc: stopFunc,
+		}
+
+		for i, child := range children {
+			name := fmt.Sprintf("child%d", i)
+			refs[i] = &supervisionMockRef{actor: child, parent: parent}
+			InjectParent(child, parentRef)
+			child.SetSelf(refs[i])
+			// Register this child in the parent so AllForOne can iterate them.
+			parent.AddChild(name, refs[i], Props{New: func() Actor {
+				return &SupervisionTestActor{BaseActor: NewBaseActor()}
+			}})
+			Start(child)
+		}
+
+		// child[0] panics — all three should receive a restartSignal.
+		refs[0].Tell("panic")
+		time.Sleep(200 * time.Millisecond)
+
+		for i, child := range children {
+			rc := atomic.LoadInt32(&child.restartCount)
+			if rc != 1 {
+				t.Errorf("child[%d]: expected 1 restart (AllForOne), got %d", i, rc)
+			}
+		}
+
+		// All actors must still process messages after the mass restart.
+		for i, ref := range refs {
+			ref.Tell("alive")
+			time.Sleep(50 * time.Millisecond)
+			if children[i].lastMsg.Load() != "alive" {
+				t.Errorf("child[%d]: expected to be alive after AllForOne restart", i)
+			}
+		}
+	})
+
+	t.Run("Stop_AllChildren", func(t *testing.T) {
+		children := make([]*SupervisionTestActor, 3)
+		refs := make([]*supervisionMockRef, 3)
+		parent := &BaseActor{}
+		stopCalled := make([]int32, 3)
+
+		for i := range children {
+			children[i] = &SupervisionTestActor{BaseActor: NewBaseActor()}
+			refs[i] = &supervisionMockRef{actor: children[i]}
+		}
+
+		// multiStopCtx routes sys.Stop(ref) → the correct child's close func.
+		stopCtx := &multiStopContext{stopFuncs: make(map[Ref]func())}
+		for i := range refs {
+			idx := i
+			stopCtx.stopFuncs[refs[i]] = func() {
+				atomic.AddInt32(&stopCalled[idx], 1)
+				close(children[idx].Mailbox())
+			}
+		}
+		parent.SetSystem(stopCtx)
+
+		parent.setSupervisorStrategy(&AllForOneStrategy{
+			Decider: func(err error) Directive { return Stop },
+		})
+
+		parentRef := &supervisionMockRef{parent: parent, actor: children[0]}
+
+		for i, child := range children {
+			name := fmt.Sprintf("child%d", i)
+			refs[i].parent = parent
+			InjectParent(child, parentRef)
+			child.SetSelf(refs[i])
+			parent.AddChild(name, refs[i], Props{New: func() Actor {
+				return &SupervisionTestActor{BaseActor: NewBaseActor()}
+			}})
+			Start(child)
+		}
+
+		refs[1].Tell("panic")
+		time.Sleep(200 * time.Millisecond)
+
+		for i := range children {
+			if atomic.LoadInt32(&stopCalled[i]) == 0 {
+				t.Errorf("child[%d]: expected Stop to be called (AllForOne)", i)
+			}
+		}
+	})
+
+	t.Run("OneForOne_DoesNotAffectSiblings", func(t *testing.T) {
+		// Baseline: OneForOneStrategy must NOT restart siblings.
+		children := make([]*SupervisionTestActor, 3)
+		refs := make([]*supervisionMockRef, 3)
+		parent := &BaseActor{}
+		parent.setSupervisorStrategy(&OneForOneStrategy{
+			Decider: func(err error) Directive { return Restart },
+		})
+
+		var parentRef *supervisionMockRef
+		for i := range children {
+			children[i] = &SupervisionTestActor{BaseActor: NewBaseActor()}
+		}
+		parentRef = &supervisionMockRef{parent: parent, actor: children[0]}
+
+		for i, child := range children {
+			name := fmt.Sprintf("child%d", i)
+			refs[i] = &supervisionMockRef{actor: child, parent: parent}
+			InjectParent(child, parentRef)
+			child.SetSelf(refs[i])
+			parent.AddChild(name, refs[i], Props{New: func() Actor {
+				return &SupervisionTestActor{BaseActor: NewBaseActor()}
+			}})
+			Start(child)
+		}
+
+		refs[0].Tell("panic")
+		time.Sleep(200 * time.Millisecond)
+
+		// Only child[0] should restart.
+		if atomic.LoadInt32(&children[0].restartCount) != 1 {
+			t.Errorf("child[0]: expected 1 restart, got %d", children[0].restartCount)
+		}
+		for i := 1; i < 3; i++ {
+			if rc := atomic.LoadInt32(&children[i].restartCount); rc != 0 {
+				t.Errorf("child[%d]: OneForOne must not restart siblings, got %d restarts", i, rc)
+			}
+		}
+	})
 }

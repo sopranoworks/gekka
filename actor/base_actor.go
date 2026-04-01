@@ -303,21 +303,46 @@ func (b *BaseActor) HandleFailure(child Ref, childActor Actor, err error) {
 	}
 
 	directive := strategy.Decide(err)
-	switch directive {
-	case Resume:
-		child.Tell(resumeSignal{})
-	case Restart:
-		child.Tell(restartSignal{reason: err})
-	case Stop:
-		// We need to stop the child. Cluster.Stop takes ActorRef.
-		// Since we are in the actor package, we might need a bridge.
-		// For now, let's just close the mailbox if we can.
-		type stopper interface{ Stop(Ref) }
-		if s, ok := b.System().(stopper); ok {
-			s.Stop(child)
+
+	// AllForOneStrategy applies the directive to every child, not just the
+	// one that failed. Collect all siblings first, then act on them all.
+	targets := []Ref{child}
+	if _, ok := strategy.(allForOneSupervisor); ok {
+		all := b.Children()
+		targets = make([]Ref, 0, len(all))
+		for _, ref := range all {
+			targets = append(targets, ref)
 		}
-	case Escalate:
-		panic(err)
+		// Guarantee the failing child is included even if it was already
+		// removed from the children map during the failure path.
+		found := false
+		for _, ref := range targets {
+			if ref == child {
+				found = true
+				break
+			}
+		}
+		if !found {
+			targets = append(targets, child)
+		}
+	}
+
+	type stopper interface{ Stop(Ref) }
+	sys, hasStopper := b.System().(stopper)
+
+	for _, target := range targets {
+		switch directive {
+		case Resume:
+			target.Tell(resumeSignal{})
+		case Restart:
+			target.Tell(restartSignal{reason: err})
+		case Stop:
+			if hasStopper {
+				sys.Stop(target)
+			}
+		case Escalate:
+			panic(err)
+		}
 	}
 }
 

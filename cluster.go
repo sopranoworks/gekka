@@ -1055,10 +1055,27 @@ func (c *Cluster) handleArteryMessage(ctx context.Context, meta *core.ArteryMeta
 			payload = incoming.DeserializedMessage
 		}
 		env := actor.Envelope{Payload: payload, Sender: senderRef}
-		select {
-		case a.Mailbox() <- env:
-		default:
-			// Mailbox full — drop, just like a dead-letter in Pekko.
+		var sendCause string
+		func() {
+			defer func() {
+				if rec := recover(); rec != nil {
+					sendCause = "mailbox-closed"
+				}
+			}()
+			select {
+			case a.Mailbox() <- env:
+			default:
+				sendCause = "mailbox-full"
+			}
+		}()
+		if sendCause != "" {
+			recipientRef := ActorRef{fullPath: c.SelfPathURI(recipientPath), sys: c, local: a}
+			c.eventStream.Publish(actor.DeadLetter{
+				Message:   payload,
+				Sender:    senderRef,
+				Recipient: recipientRef,
+				Cause:     sendCause,
+			})
 		}
 		return nil
 	}

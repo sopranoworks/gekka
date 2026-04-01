@@ -13,6 +13,24 @@ import (
 	"sync"
 )
 
+// DeadLetter is published to the EventStream whenever a message cannot be
+// delivered to its intended recipient. This mirrors Pekko's
+// org.apache.pekko.actor.DeadLetter.
+//
+// Actors that want to monitor undeliverable messages subscribe to
+// reflect.TypeOf(actor.DeadLetter{}) on the system EventStream:
+//
+//	sys.EventStream().Subscribe(self, reflect.TypeOf(actor.DeadLetter{}))
+//
+// Cause records the reason for the dead-letter delivery ("mailbox-closed",
+// "mailbox-full", or "not-found").
+type DeadLetter struct {
+	Message   any    // the original message that could not be delivered
+	Sender    Ref    // sender reference; nil when no sender was specified
+	Recipient Ref    // the target actor reference
+	Cause     string // "mailbox-closed" | "mailbox-full" | "not-found"
+}
+
 // EventStream is a system-wide, type-based publish/subscribe bus that mirrors
 // Pekko's org.apache.pekko.event.EventStream.
 //

@@ -97,16 +97,32 @@ func (r ActorRef) Tell(msg any, sender ...actor.Ref) {
 	}
 
 	if r.local != nil {
-		defer func() {
-			if r := recover(); r != nil {
-				_ = r // Mailbox closed or other panic — drop silently
+		env := actor.Envelope{Payload: msg, Sender: s}
+		// sendCause is empty on success, "mailbox-closed" on panic (closed
+		// channel), or "mailbox-full" when the buffered channel is saturated.
+		var sendCause string
+		func() {
+			defer func() {
+				if rec := recover(); rec != nil {
+					sendCause = "mailbox-closed"
+				}
+			}()
+			select {
+			case r.local.Mailbox() <- env:
+				// delivered
+			default:
+				sendCause = "mailbox-full"
 			}
 		}()
-		env := actor.Envelope{Payload: msg, Sender: s}
-		select {
-		case r.local.Mailbox() <- env:
-		default:
-			// Mailbox full — drop silently (analogous to Pekko dead letters).
+		if sendCause != "" && r.sys != nil {
+			if es := r.sys.EventStream(); es != nil {
+				es.Publish(actor.DeadLetter{
+					Message:   msg,
+					Sender:    s,
+					Recipient: r,
+					Cause:     sendCause,
+				})
+			}
 		}
 		return
 	}

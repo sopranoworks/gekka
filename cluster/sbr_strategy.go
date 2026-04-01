@@ -118,6 +118,8 @@ func NewStrategy(cfg SBRConfig) (Strategy, error) {
 			return nil, fmt.Errorf("sbr: static-quorum requires quorum-size > 0")
 		}
 		return &StaticQuorum{QuorumSize: cfg.QuorumSize, Role: cfg.Role}, nil
+	case "down-all":
+		return &DownAll{}, nil
 	case "down-all-nodes-in-data-center":
 		return &DownAllNodesInDataCenter{DataCenter: cfg.Role}, nil
 	default:
@@ -223,6 +225,31 @@ func (s *StaticQuorum) Decide(self MemberAddress, reachable, unreachable []Membe
 		return Decision{DownMembers: unreachable}
 	}
 	return Decision{DownSelf: true}
+}
+
+// ── DownAll ───────────────────────────────────────────────────────────────────
+
+// DownAll is a Split Brain Resolver strategy that downs every member of the
+// cluster — both sides of a partition — when any unreachable member is
+// detected. Every surviving partition executes this decision, causing all
+// nodes to leave the cluster and forcing a clean restart.
+//
+// Use this strategy only in environments where a complete restart is
+// acceptable: CI clusters, short-lived test environments, or deployments
+// with fast automated re-provisioning.
+type DownAll struct{}
+
+// Decide returns a decision to down every unreachable member AND down self,
+// so that both partitions terminate. When there are no unreachable members
+// no action is taken.
+func (s *DownAll) Decide(_ MemberAddress, _ []Member, unreachable []Member) Decision {
+	if len(unreachable) == 0 {
+		return Decision{}
+	}
+	// DownSelf=true causes the local node to leave.
+	// DownMembers=unreachable lets the leader explicitly down the other side
+	// before leaving, accelerating gossip convergence.
+	return Decision{DownSelf: true, DownMembers: unreachable}
 }
 
 // ── DownAllNodesInDataCenter ──────────────────────────────────────────────────

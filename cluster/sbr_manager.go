@@ -334,17 +334,18 @@ func (m *SBRManager) decide(ctx context.Context) {
 
 	log.Printf("SBR: decision — downSelf=%v downMembers=%d", decision.DownSelf, len(decision.DownMembers))
 
+	// Always down remote members first so the rest of the cluster converges
+	// before this node leaves (important for DownAll where both sides act).
+	for _, dm := range decision.DownMembers {
+		log.Printf("SBR: downing member %s", dm.Address)
+		m.downFn(dm.Address)
+	}
+
 	if decision.DownSelf {
 		log.Printf("SBR: downing self (%s)", self)
 		if err := m.leaveFn(); err != nil {
 			log.Printf("SBR: LeaveCluster error: %v", err)
 		}
-		return
-	}
-
-	for _, dm := range decision.DownMembers {
-		log.Printf("SBR: downing member %s", dm.Address)
-		m.downFn(dm.Address)
 	}
 }
 

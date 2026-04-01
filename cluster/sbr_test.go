@@ -286,6 +286,7 @@ func TestNewStrategy_AllStrategiesConstruct(t *testing.T) {
 		{ActiveStrategy: "keep-oldest"},
 		{ActiveStrategy: "keep-referee", RefereeAddress: "host:2551"},
 		{ActiveStrategy: "static-quorum", QuorumSize: 3},
+		{ActiveStrategy: "down-all"},
 	}
 	for _, cfg := range cases {
 		strat, err := NewStrategy(cfg)
@@ -295,5 +296,108 @@ func TestNewStrategy_AllStrategiesConstruct(t *testing.T) {
 		if strat == nil {
 			t.Errorf("strategy %q: expected non-nil strategy", cfg.ActiveStrategy)
 		}
+	}
+}
+
+// ── DownAll tests ─────────────────────────────────────────────────────────────
+
+func TestDownAll_SomeMembersUnreachable(t *testing.T) {
+	strat := &DownAll{}
+	self := addr("10.0.0.1", 2551)
+	reachable := []Member{
+		mbr("10.0.0.1", 2551, 1, true),
+		mbr("10.0.0.2", 2551, 2, true),
+	}
+	unreachable := []Member{
+		mbr("10.0.0.3", 2551, 3, false),
+	}
+	d := strat.Decide(self, reachable, unreachable)
+	if !d.DownSelf {
+		t.Fatal("DownAll: expected DownSelf=true")
+	}
+	if len(d.DownMembers) != len(unreachable) {
+		t.Fatalf("DownAll: expected %d DownMembers, got %d", len(unreachable), len(d.DownMembers))
+	}
+}
+
+func TestDownAll_NoUnreachable(t *testing.T) {
+	strat := &DownAll{}
+	self := addr("10.0.0.1", 2551)
+	reachable := []Member{mbr("10.0.0.1", 2551, 1, true)}
+	d := strat.Decide(self, reachable, nil)
+	if d.DownSelf {
+		t.Fatal("DownAll: expected DownSelf=false when no unreachable members")
+	}
+	if len(d.DownMembers) != 0 {
+		t.Fatal("DownAll: expected no DownMembers when no unreachable members")
+	}
+}
+
+func TestDownAll_ViaNewStrategy(t *testing.T) {
+	strat, err := NewStrategy(SBRConfig{ActiveStrategy: "down-all"})
+	if err != nil || strat == nil {
+		t.Fatalf("NewStrategy(down-all): err=%v strat=%v", err, strat)
+	}
+	if _, ok := strat.(*DownAll); !ok {
+		t.Fatalf("expected *DownAll, got %T", strat)
+	}
+}
+
+// ── DownAllNodesInDataCenter tests ────────────────────────────────────────────
+
+func mbrDC(host string, port uint32, upNumber int32, reachable bool, dc string) Member {
+	m := mbr(host, port, upNumber, reachable)
+	m.Address.DataCenter = dc
+	return m
+}
+
+func TestDownAllNodesInDataCenter_TargetDCUnreachable(t *testing.T) {
+	strat := &DownAllNodesInDataCenter{DataCenter: "us-east"}
+	self := addr("10.0.0.1", 2551)
+	reachable := []Member{
+		mbrDC("10.0.0.1", 2551, 1, true, "eu-west"),
+		mbrDC("10.0.0.2", 2551, 2, true, "us-east"), // reachable node in target DC
+	}
+	unreachable := []Member{
+		mbrDC("10.0.0.3", 2551, 3, false, "us-east"), // unreachable node in target DC
+	}
+	d := strat.Decide(self, reachable, unreachable)
+	if d.DownSelf {
+		t.Fatal("expected DownSelf=false; self is in eu-west")
+	}
+	// Both us-east members (reachable and unreachable) should be downed.
+	if len(d.DownMembers) != 2 {
+		t.Fatalf("expected 2 DownMembers (all us-east nodes), got %d", len(d.DownMembers))
+	}
+	for _, dm := range d.DownMembers {
+		if dm.Address.DataCenter != "us-east" {
+			t.Errorf("expected only us-east nodes in DownMembers, got dc=%q", dm.Address.DataCenter)
+		}
+	}
+}
+
+func TestDownAllNodesInDataCenter_NoneUnreachableInDC(t *testing.T) {
+	strat := &DownAllNodesInDataCenter{DataCenter: "us-east"}
+	self := addr("10.0.0.1", 2551)
+	reachable := []Member{
+		mbrDC("10.0.0.1", 2551, 1, true, "eu-west"),
+		mbrDC("10.0.0.2", 2551, 2, true, "us-east"),
+	}
+	unreachable := []Member{
+		mbrDC("10.0.0.3", 2551, 3, false, "eu-west"), // unreachable node is NOT in target DC
+	}
+	d := strat.Decide(self, reachable, unreachable)
+	if d.DownSelf || len(d.DownMembers) != 0 {
+		t.Fatal("expected no action when no unreachable node belongs to target DC")
+	}
+}
+
+func TestDownAllNodesInDataCenter_EmptyDataCenter(t *testing.T) {
+	strat := &DownAllNodesInDataCenter{DataCenter: ""}
+	self := addr("10.0.0.1", 2551)
+	unreachable := []Member{mbrDC("10.0.0.2", 2551, 2, false, "us-east")}
+	d := strat.Decide(self, nil, unreachable)
+	if d.DownSelf || len(d.DownMembers) != 0 {
+		t.Fatal("expected no-op when DataCenter is empty")
 	}
 }

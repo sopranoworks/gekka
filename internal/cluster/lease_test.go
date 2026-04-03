@@ -46,6 +46,36 @@ func (p *mockLeaseProvider) GetLease(settings LeaseSettings) Lease {
 	return &mockLease{settings: settings}
 }
 
+func TestTestLease_AcquireRelease(t *testing.T) {
+	l := NewTestLease(LeaseSettings{LeaseName: "test"}, false)
+	ctx := context.Background()
+
+	assert.False(t, l.CheckLease(), "initially not held")
+
+	ok, err := l.Acquire(ctx, nil)
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.True(t, l.CheckLease(), "held after Acquire")
+
+	ok, err = l.Release(ctx)
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.False(t, l.CheckLease(), "not held after Release")
+}
+
+func TestTestLease_ForceHeld(t *testing.T) {
+	l := NewTestLease(LeaseSettings{LeaseName: "test"}, false)
+	l.ForceHeld(true)
+	assert.True(t, l.CheckLease())
+	l.ForceHeld(false)
+	assert.False(t, l.CheckLease())
+}
+
+func TestTestLease_InitialHeld(t *testing.T) {
+	l := NewTestLease(LeaseSettings{LeaseName: "test"}, true)
+	assert.True(t, l.CheckLease(), "initially held when constructed with held=true")
+}
+
 func TestLeaseManager(t *testing.T) {
 	mgr := NewLeaseManager()
 	mgr.RegisterProvider("mock", &mockLeaseProvider{})

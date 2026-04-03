@@ -73,3 +73,57 @@ func (m *LeaseManager) GetLease(providerName string, settings LeaseSettings) (Le
 	}
 	return provider.GetLease(settings), nil
 }
+
+// ── TestLease ─────────────────────────────────────────────────────────────────
+
+// TestLease is an in-memory Lease implementation for unit and integration
+// tests. Acquire always succeeds immediately; the held state can be forced at
+// any time via ForceHeld.
+//
+// TestLease is safe for concurrent use.
+type TestLease struct {
+	mu       sync.Mutex
+	held     bool
+	settings LeaseSettings
+}
+
+// NewTestLease returns a TestLease with the given settings. held controls the
+// initial lease state.
+func NewTestLease(settings LeaseSettings, held bool) *TestLease {
+	return &TestLease{settings: settings, held: held}
+}
+
+// ForceHeld sets the held state directly, simulating a lease acquisition or
+// loss without going through Acquire/Release.
+func (l *TestLease) ForceHeld(held bool) {
+	l.mu.Lock()
+	l.held = held
+	l.mu.Unlock()
+}
+
+// Acquire marks the lease as held and returns true. onLeaseLost is ignored.
+func (l *TestLease) Acquire(_ context.Context, _ func(error)) (bool, error) {
+	l.mu.Lock()
+	l.held = true
+	l.mu.Unlock()
+	return true, nil
+}
+
+// Release marks the lease as not held.
+func (l *TestLease) Release(_ context.Context) (bool, error) {
+	l.mu.Lock()
+	wasHeld := l.held
+	l.held = false
+	l.mu.Unlock()
+	return wasHeld, nil
+}
+
+// CheckLease reports whether the lease is currently held.
+func (l *TestLease) CheckLease() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.held
+}
+
+// Settings returns the lease configuration.
+func (l *TestLease) Settings() LeaseSettings { return l.settings }

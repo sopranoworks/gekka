@@ -16,18 +16,29 @@ import (
 	"time"
 )
 
+// LeaseChecker is the minimal interface that LeaseMajority needs from a
+// distributed lease implementation. It is satisfied by internal/cluster.Lease
+// as well as by TestLease.
+type LeaseChecker interface {
+	// CheckLease returns true if this node currently holds the lease.
+	CheckLease() bool
+}
+
 // SBRConfig configures the Split Brain Resolver strategy.
 //
 // ActiveStrategy selects which algorithm is used to decide which partition
 // survives after a network partition:
 //
-//   - "keep-majority"   (default) — the side with more nodes survives.
-//   - "keep-oldest"     — the side containing the oldest node survives.
-//   - "keep-referee"    — the side that can reach a specific "referee" node survives.
-//   - "static-quorum"   — a side needs at least QuorumSize reachable nodes to survive.
+//   - "keep-majority"    — the side with more nodes survives.
+//   - "keep-oldest"      — the side containing the oldest node survives.
+//   - "keep-referee"     — the side that can reach a specific "referee" node survives.
+//   - "static-quorum"    — a side needs at least QuorumSize reachable nodes to survive.
+//   - "lease-majority"   — the side holding a distributed lease survives.
+//   - "down-all"         — all members on both sides are downed (forces cluster restart).
 type SBRConfig struct {
 	// ActiveStrategy is one of: "keep-majority", "keep-oldest",
-	// "keep-referee", "static-quorum". Defaults to "" (disabled).
+	// "keep-referee", "static-quorum", "lease-majority", "down-all".
+	// Defaults to "" (disabled).
 	ActiveStrategy string
 
 	// StableAfter is the duration the reachability must remain stable before
@@ -63,6 +74,10 @@ type SBRConfig struct {
 	// QuorumSize is the minimum number of reachable members required by
 	// static-quorum. Required when ActiveStrategy == "static-quorum".
 	QuorumSize int
+
+	// Lease is the distributed lease used by lease-majority.
+	// Required when ActiveStrategy == "lease-majority".
+	Lease LeaseChecker
 }
 
 // Member represents a cluster member as seen by the SBR strategy.
@@ -118,6 +133,11 @@ func NewStrategy(cfg SBRConfig) (Strategy, error) {
 			return nil, fmt.Errorf("sbr: static-quorum requires quorum-size > 0")
 		}
 		return &StaticQuorum{QuorumSize: cfg.QuorumSize, Role: cfg.Role}, nil
+	case "lease-majority":
+		if cfg.Lease == nil {
+			return nil, fmt.Errorf("sbr: lease-majority requires a Lease implementation")
+		}
+		return &LeaseMajority{Role: cfg.Role, Lease: cfg.Lease}, nil
 	case "down-all":
 		return &DownAll{}, nil
 	case "down-all-nodes-in-data-center":
@@ -222,6 +242,30 @@ type StaticQuorum struct {
 func (s *StaticQuorum) Decide(self MemberAddress, reachable, unreachable []Member) Decision {
 	r := filterByRole(reachable, s.Role)
 	if len(r) >= s.QuorumSize {
+		return Decision{DownMembers: unreachable}
+	}
+	return Decision{DownSelf: true}
+}
+
+// ── LeaseMajority ─────────────────────────────────────────────────────────────
+
+// LeaseMajority keeps the partition that holds a distributed lease. The side
+// that holds the lease survives; the side that does not hold the lease downs
+// itself. When Role is set only members with that role are counted for the
+// majority check that determines whether this node should try to hold the lease,
+// but the lease itself is the final arbiter.
+//
+// This mirrors Pekko's lease-majority strategy
+// (pekko.cluster.split-brain-resolver.active-strategy = lease-majority).
+type LeaseMajority struct {
+	Role  string
+	Lease LeaseChecker
+}
+
+// Decide returns DownSelf when this node does not hold the lease, and
+// DownMembers (all unreachable) when it does.
+func (s *LeaseMajority) Decide(_ MemberAddress, _ []Member, unreachable []Member) Decision {
+	if s.Lease.CheckLease() {
 		return Decision{DownMembers: unreachable}
 	}
 	return Decision{DownSelf: true}

@@ -12,6 +12,11 @@ import (
 	"testing"
 )
 
+// stubLease implements LeaseChecker for unit tests.
+type stubLease struct{ held bool }
+
+func (l *stubLease) CheckLease() bool { return l.held }
+
 // helpers
 
 func addr(host string, port uint32) MemberAddress {
@@ -399,5 +404,52 @@ func TestDownAllNodesInDataCenter_EmptyDataCenter(t *testing.T) {
 	d := strat.Decide(self, nil, unreachable)
 	if d.DownSelf || len(d.DownMembers) != 0 {
 		t.Fatal("expected no-op when DataCenter is empty")
+	}
+}
+
+// ── LeaseMajority tests ───────────────────────────────────────────────────────
+
+func TestLeaseMajority_HoldsLease(t *testing.T) {
+	strat := &LeaseMajority{Lease: &stubLease{held: true}}
+	self := addr("10.0.0.1", 2551)
+	reachable := []Member{mbr("10.0.0.1", 2551, 1, true)}
+	unreachable := []Member{mbr("10.0.0.2", 2551, 2, false)}
+	d := strat.Decide(self, reachable, unreachable)
+	if d.DownSelf {
+		t.Fatal("expected DownSelf=false when lease is held")
+	}
+	if len(d.DownMembers) != 1 || d.DownMembers[0].Address != unreachable[0].Address {
+		t.Fatalf("expected unreachable member to be downed, got %v", d.DownMembers)
+	}
+}
+
+func TestLeaseMajority_DoesNotHoldLease(t *testing.T) {
+	strat := &LeaseMajority{Lease: &stubLease{held: false}}
+	self := addr("10.0.0.2", 2551)
+	reachable := []Member{mbr("10.0.0.2", 2551, 2, true)}
+	unreachable := []Member{mbr("10.0.0.1", 2551, 1, false)}
+	d := strat.Decide(self, reachable, unreachable)
+	if !d.DownSelf {
+		t.Fatal("expected DownSelf=true when lease is not held")
+	}
+}
+
+func TestLeaseMajority_ViaNewStrategy_RequiresLease(t *testing.T) {
+	_, err := NewStrategy(SBRConfig{ActiveStrategy: "lease-majority"})
+	if err == nil {
+		t.Fatal("expected error when Lease is nil")
+	}
+}
+
+func TestLeaseMajority_ViaNewStrategy(t *testing.T) {
+	strat, err := NewStrategy(SBRConfig{
+		ActiveStrategy: "lease-majority",
+		Lease:          &stubLease{held: true},
+	})
+	if err != nil || strat == nil {
+		t.Fatalf("NewStrategy(lease-majority): err=%v strat=%v", err, strat)
+	}
+	if _, ok := strat.(*LeaseMajority); !ok {
+		t.Fatalf("expected *LeaseMajority, got %T", strat)
 	}
 }

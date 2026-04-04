@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"sync"
 
 	"github.com/sopranoworks/gekka/actor"
 )
@@ -97,6 +98,10 @@ type PersistentFSM[S comparable, D any, E any] struct {
 	transitions []func(from S, to S)
 
 	startCalled bool
+
+	// async write support (PersistAsync / PersistAllAsync)
+	asyncWriteCh chan asyncWriteTask
+	asyncOnce    sync.Once
 }
 
 // NewPersistentFSM creates a PersistentFSM that stores events under persistenceID
@@ -196,13 +201,92 @@ func (f *PersistentFSM[S, D, E]) PersistentFSMPreStart() {
 }
 
 // Receive dispatches messages: during recovery they are stashed; afterwards
-// they are routed to the registered state handlers.
+// they are routed to the registered state handlers. Internal persistAsyncAck
+// messages are intercepted here and never forwarded to state handlers.
 func (f *PersistentFSM[S, D, E]) Receive(msg any) {
+	// Intercept internal async-persist acknowledgements.
+	if ack, ok := msg.(persistAsyncAck); ok {
+		if ack.err != nil {
+			f.Log().Error("PersistentFSM: async persist failed", "error", ack.err)
+			return
+		}
+		for _, h := range ack.handlers {
+			h()
+		}
+		return
+	}
 	if f.recovering {
 		f.stash = append(f.stash, msg)
 		return
 	}
 	f.dispatch(msg)
+}
+
+// PersistAsync enqueues event for asynchronous journal write and returns
+// immediately so the actor can keep processing incoming commands. handler is
+// invoked (on the actor's goroutine, via the mailbox) after the journal write
+// succeeds. Multiple PersistAsync calls are written and acknowledged in the
+// order they were issued.
+//
+// Unlike the synchronous persist path in FSMStateResult.Events, PersistAsync
+// does not stash incoming commands: the actor remains responsive while the
+// write is in flight.
+func (f *PersistentFSM[S, D, E]) PersistAsync(event E, handler func(E)) {
+	f.seqNr++
+	repr := PersistentRepr{
+		PersistenceID: f.persistenceID,
+		SequenceNr:    f.seqNr,
+		Payload:       event,
+	}
+	ev := event  // capture for closure
+	fn := handler // capture for closure
+	bound := func() { fn(ev) }
+	f.startAsyncWriter()
+	f.asyncWriteCh <- asyncWriteTask{
+		reprs:    []PersistentRepr{repr},
+		handlers: []func(){bound},
+	}
+}
+
+// PersistAllAsync persists a batch of events asynchronously. handler is called
+// once per event, in order, after the entire batch has been written to the
+// journal. The actor continues processing commands during the write.
+func (f *PersistentFSM[S, D, E]) PersistAllAsync(events []E, handler func(E)) {
+	if len(events) == 0 {
+		return
+	}
+	reprs := make([]PersistentRepr, len(events))
+	handlers := make([]func(), len(events))
+	for i, event := range events {
+		f.seqNr++
+		ev := event  // capture
+		fn := handler // capture
+		reprs[i] = PersistentRepr{
+			PersistenceID: f.persistenceID,
+			SequenceNr:    f.seqNr,
+			Payload:       ev,
+		}
+		handlers[i] = func() { fn(ev) }
+	}
+	f.startAsyncWriter()
+	f.asyncWriteCh <- asyncWriteTask{reprs: reprs, handlers: handlers}
+}
+
+// PostStop shuts down the background async-write goroutine, if started.
+// Embedders that override PostStop must call f.PersistentFSM.PostStop().
+func (f *PersistentFSM[S, D, E]) PostStop() {
+	if f.asyncWriteCh != nil {
+		close(f.asyncWriteCh)
+	}
+}
+
+// startAsyncWriter initialises asyncWriteCh and starts the background write
+// goroutine exactly once (on the first PersistAsync / PersistAllAsync call).
+func (f *PersistentFSM[S, D, E]) startAsyncWriter() {
+	f.asyncOnce.Do(func() {
+		f.asyncWriteCh = make(chan asyncWriteTask, 1024)
+		go asyncWriteLoop(f.journal, f.asyncWriteCh, f.Mailbox())
+	})
 }
 
 // ── Internal ─────────────────────────────────────────────────────────────────

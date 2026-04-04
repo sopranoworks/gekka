@@ -10,6 +10,7 @@ package projection
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
 
@@ -104,6 +105,114 @@ func (r *projectionRunner) Run(ctx context.Context) error {
 	// 3. Process stream.
 	return r.runManual(ctx, src)
 }
+
+// ── Exactly-once projection ───────────────────────────────────────────────────
+
+// TransactionalHandler processes a single event envelope within an existing
+// *sql.Tx.  Both the handler's side-effects and the subsequent offset save
+// are committed in the same transaction, achieving exactly-once delivery when
+// the handler writes to the same database as the offset store.
+type TransactionalHandler func(ctx context.Context, tx *sql.Tx, envelope query.EventEnvelope) error
+
+// exactlyOnceProjectionRunner wraps each event in a single sql.Tx that
+// atomically commits the handler's side-effect and the offset advance.
+type exactlyOnceProjectionRunner struct {
+	name           string
+	sourceProvider SourceProvider
+	offsetStore    TransactionalOffsetStore
+	handler        TransactionalHandler
+	db             *sql.DB
+}
+
+// NewExactlyOnceProjection creates a Projection that delivers each event
+// exactly once by wrapping the handler invocation and offset save in a single
+// database transaction.
+//
+//   - db          — the database used for both the handler and the offset store
+//   - sp          — provides the event source starting from a given offset
+//   - os          — a TransactionalOffsetStore backed by the same db
+//   - h           — handler that performs its side-effect within the provided tx
+func NewExactlyOnceProjection(
+	name string,
+	sp SourceProvider,
+	os TransactionalOffsetStore,
+	db *sql.DB,
+	h TransactionalHandler,
+) Projection {
+	return &exactlyOnceProjectionRunner{
+		name:           name,
+		sourceProvider: sp,
+		offsetStore:    os,
+		handler:        h,
+		db:             db,
+	}
+}
+
+// Run executes the exactly-once projection loop.
+func (r *exactlyOnceProjectionRunner) Run(ctx context.Context) error {
+	offset, err := r.offsetStore.ReadOffset(ctx, r.name)
+	if err != nil {
+		return fmt.Errorf("projection %q: failed to read offset: %w", r.name, err)
+	}
+	if offset == nil {
+		offset = query.NoOffset{}
+	}
+
+	src, err := r.sourceProvider.Source(ctx, offset)
+	if err != nil {
+		return fmt.Errorf("projection %q: failed to create source: %w", r.name, err)
+	}
+
+	log.Printf("ExactlyOnceProjection %q: starting from offset %v", r.name, offset)
+
+	return r.runExactlyOnce(ctx, src)
+}
+
+// runExactlyOnce processes each event in its own sql.Tx.
+// The transaction atomically commits:
+//  1. The handler's write(s) to the database.
+//  2. The updated projection offset.
+//
+// If either step fails the transaction is rolled back and the error is
+// returned, leaving the offset unchanged so the event is retried.
+func (r *exactlyOnceProjectionRunner) runExactlyOnce(ctx context.Context, src stream.Source[query.EventEnvelope, stream.NotUsed]) error {
+	m := stream.SyncMaterializer{}
+
+	tracer := telemetry.GetTracer(projectionTracingScope)
+
+	_, err := stream.RunWith(src, stream.ForeachErr(func(env query.EventEnvelope) error {
+		eventCtx := ctx
+		if len(env.TraceContext) > 0 {
+			eventCtx = tracer.Extract(ctx, env.TraceContext)
+		}
+		_, span := tracer.Start(eventCtx, "ExactlyOnceProjection.Handle")
+		defer span.End()
+
+		tx, err := r.db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("projection %q: begin tx: %w", r.name, err)
+		}
+
+		if err := r.handler(ctx, tx, env); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+
+		if err := r.offsetStore.SaveOffsetTx(ctx, tx, r.name, env.Offset); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("projection %q: save offset in tx: %w", r.name, err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("projection %q: commit tx: %w", r.name, err)
+		}
+		return nil
+	}), m)
+
+	return err
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 func (r *projectionRunner) runManual(ctx context.Context, src stream.Source[query.EventEnvelope, stream.NotUsed]) error {
 	// Use SyncMaterializer for synchronous execution.

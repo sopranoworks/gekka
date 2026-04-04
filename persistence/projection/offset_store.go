@@ -26,14 +26,25 @@ type OffsetStore interface {
 	SaveOffset(ctx context.Context, projectionName string, offset query.Offset) error
 }
 
+// TransactionalOffsetStore extends OffsetStore with transactional offset saving.
+// Implementations must persist the offset as part of an existing *sql.Tx so that
+// the handler's side-effects and the offset advance are committed atomically.
+type TransactionalOffsetStore interface {
+	OffsetStore
+	// SaveOffsetTx persists the offset within the given transaction.
+	// The caller is responsible for committing or rolling back the transaction.
+	SaveOffsetTx(ctx context.Context, tx *sql.Tx, projectionName string, offset query.Offset) error
+}
+
 // sqlOffsetStore implements OffsetStore using a SQL database.
 type sqlOffsetStore struct {
 	db    *sql.DB
 	table string
 }
 
-// NewSQLOffsetStore creates a new OffsetStore implementation for SQL.
-func NewSQLOffsetStore(db *sql.DB, table string) OffsetStore {
+// NewSQLOffsetStore creates a new OffsetStore backed by a SQL database.
+// The returned value also implements TransactionalOffsetStore.
+func NewSQLOffsetStore(db *sql.DB, table string) TransactionalOffsetStore {
 	return &sqlOffsetStore{
 		db:    db,
 		table: table,
@@ -77,31 +88,52 @@ func (s *sqlOffsetStore) ReadOffset(ctx context.Context, projectionName string) 
 }
 
 func (s *sqlOffsetStore) SaveOffset(ctx context.Context, projectionName string, offset query.Offset) error {
-	var offsetType string
-	var offsetValue int64
-
-	switch o := offset.(type) {
-	case query.SequenceOffset:
-		offsetType = "SequenceOffset"
-		offsetValue = int64(o)
-	case query.TimeOffset:
-		offsetType = "TimeOffset"
-		offsetValue = int64(o)
-	case query.NoOffset:
-		return nil // nothing to save
-	default:
-		return fmt.Errorf("unsupported offset type: %T", offset)
+	offsetType, offsetValue, err := offsetToSQL(offset)
+	if err != nil {
+		return err
 	}
-
+	if offsetType == "" {
+		return nil // NoOffset — nothing to save
+	}
 	now := time.Now().UnixNano()
 	queryStr := fmt.Sprintf(`INSERT INTO %s (projection_name, offset_type, offset_value, updated_at)
 		VALUES (?, ?, ?, ?)
 		ON DUPLICATE KEY UPDATE offset_type = VALUES(offset_type), offset_value = VALUES(offset_value), updated_at = VALUES(updated_at)`,
 		s.table)
-
-	// Implementation note: This UPSERT syntax is MySQL specific.
-	// In a real implementation we would use the Dialect to get the correct SQL.
-
-	_, err := s.db.ExecContext(ctx, queryStr, projectionName, offsetType, offsetValue, now)
+	_, err = s.db.ExecContext(ctx, queryStr, projectionName, offsetType, offsetValue, now)
 	return err
+}
+
+// SaveOffsetTx persists the offset within the provided transaction, enabling
+// exactly-once delivery when the handler's side-effects use the same transaction.
+func (s *sqlOffsetStore) SaveOffsetTx(ctx context.Context, tx *sql.Tx, projectionName string, offset query.Offset) error {
+	offsetType, offsetValue, err := offsetToSQL(offset)
+	if err != nil {
+		return err
+	}
+	if offsetType == "" {
+		return nil // NoOffset — nothing to save
+	}
+	now := time.Now().UnixNano()
+	queryStr := fmt.Sprintf(`INSERT INTO %s (projection_name, offset_type, offset_value, updated_at)
+		VALUES (?, ?, ?, ?)
+		ON DUPLICATE KEY UPDATE offset_type = VALUES(offset_type), offset_value = VALUES(offset_value), updated_at = VALUES(updated_at)`,
+		s.table)
+	_, err = tx.ExecContext(ctx, queryStr, projectionName, offsetType, offsetValue, now)
+	return err
+}
+
+// offsetToSQL converts a query.Offset to a (type, value) pair for SQL storage.
+// Returns ("", 0, nil) for NoOffset (nothing to persist).
+func offsetToSQL(offset query.Offset) (string, int64, error) {
+	switch o := offset.(type) {
+	case query.SequenceOffset:
+		return "SequenceOffset", int64(o), nil
+	case query.TimeOffset:
+		return "TimeOffset", int64(o), nil
+	case query.NoOffset:
+		return "", 0, nil
+	default:
+		return "", 0, fmt.Errorf("unsupported offset type: %T", offset)
+	}
 }

@@ -14,10 +14,23 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
 )
+
+// SubscriptionID uniquely identifies a key-change subscription.
+type SubscriptionID uint64
+
+// KeyChangeCallback is invoked when a CRDT value is updated via HandleIncoming.
+// key is the CRDT key; value is the current CRDT object (e.g. *GCounter, *ORSet).
+type KeyChangeCallback func(key string, value any)
+
+type subEntry struct {
+	id SubscriptionID
+	fn KeyChangeCallback
+}
 
 // ReplicatorMsg is the JSON envelope sent over Artery for gossip.
 //
@@ -95,6 +108,11 @@ type Replicator struct {
 
 	// Callback invoked when a gossip message arrives for a key we don't know about.
 	OnUnknownKey func(key string, msg ReplicatorMsg)
+
+	// Subscription support.
+	subsMu  sync.RWMutex
+	subs    map[string][]subEntry
+	subSeq  atomic.Uint64
 }
 
 type peerInfo struct {
@@ -276,6 +294,42 @@ func (r *Replicator) Stop() {
 	r.wg.Wait()
 }
 
+// subscribeKey registers fn to be called whenever the CRDT for key is updated
+// via HandleIncoming. Returns the SubscriptionID needed to unsubscribe.
+func (r *Replicator) subscribeKey(key string, fn KeyChangeCallback) SubscriptionID {
+	id := SubscriptionID(r.subSeq.Add(1))
+	r.subsMu.Lock()
+	if r.subs == nil {
+		r.subs = make(map[string][]subEntry)
+	}
+	r.subs[key] = append(r.subs[key], subEntry{id: id, fn: fn})
+	r.subsMu.Unlock()
+	return id
+}
+
+// unsubscribeKey removes the callback identified by id for the given key.
+func (r *Replicator) unsubscribeKey(key string, id SubscriptionID) {
+	r.subsMu.Lock()
+	entries := r.subs[key]
+	for i, e := range entries {
+		if e.id == id {
+			r.subs[key] = append(entries[:i], entries[i+1:]...)
+			break
+		}
+	}
+	r.subsMu.Unlock()
+}
+
+// notifySubscribers fans out to all registered callbacks for key.
+func (r *Replicator) notifySubscribers(key string, value any) {
+	r.subsMu.RLock()
+	entries := append([]subEntry(nil), r.subs[key]...)
+	r.subsMu.RUnlock()
+	for _, e := range entries {
+		e.fn(key, value)
+	}
+}
+
 // HandleIncoming processes a raw JSON message from a peer.
 // Call this from your NodeManager's UserMessageCallback.
 func (r *Replicator) HandleIncoming(data []byte) error {
@@ -292,6 +346,7 @@ func (r *Replicator) HandleIncoming(data []byte) error {
 		c := r.GCounter(msg.Key)
 		c.MergeState(p.State)
 		log.Printf("Replicator: merged GCounter[%s], value=%d", msg.Key, c.Value())
+		r.notifySubscribers(msg.Key, c)
 
 	case "orset-gossip":
 		var snap ORSetSnapshot
@@ -301,6 +356,7 @@ func (r *Replicator) HandleIncoming(data []byte) error {
 		s := r.ORSet(msg.Key)
 		s.MergeSnapshot(snap)
 		log.Printf("Replicator: merged ORSet[%s], elements=%v", msg.Key, s.Elements())
+		r.notifySubscribers(msg.Key, s)
 
 	case "lwwmap-gossip":
 		var p LWWMapPayload
@@ -310,6 +366,7 @@ func (r *Replicator) HandleIncoming(data []byte) error {
 		m := r.LWWMap(msg.Key)
 		m.Merge(p.State)
 		log.Printf("Replicator: merged LWWMap[%s], keys=%d", msg.Key, len(m.Entries()))
+		r.notifySubscribers(msg.Key, m)
 
 	case "pncounter-gossip":
 		var p PNCounterPayload
@@ -319,6 +376,7 @@ func (r *Replicator) HandleIncoming(data []byte) error {
 		c := r.PNCounter(msg.Key)
 		c.MergeSnapshot(p.PNCounterSnapshot)
 		log.Printf("Replicator: merged PNCounter[%s], value=%d", msg.Key, c.Value())
+		r.notifySubscribers(msg.Key, c)
 
 	case "orflag-gossip":
 		var snap ORSetSnapshot
@@ -328,6 +386,7 @@ func (r *Replicator) HandleIncoming(data []byte) error {
 		f := r.ORFlag(msg.Key)
 		f.MergeSnapshot(snap)
 		log.Printf("Replicator: merged ORFlag[%s], value=%v", msg.Key, f.Value())
+		r.notifySubscribers(msg.Key, f)
 
 	case "lwwregister-gossip":
 		var p LWWRegisterPayload
@@ -337,6 +396,7 @@ func (r *Replicator) HandleIncoming(data []byte) error {
 		reg := r.LWWRegister(msg.Key)
 		reg.MergeSnapshot(p.LWWRegisterSnapshot)
 		log.Printf("Replicator: merged LWWRegister[%s], value=%v", msg.Key, func() any { v, _ := reg.Get(); return v }())
+		r.notifySubscribers(msg.Key, reg)
 
 	// ── Delta message types ────────────────────────────────────────────────
 
@@ -348,6 +408,7 @@ func (r *Replicator) HandleIncoming(data []byte) error {
 		c := r.GCounter(msg.Key)
 		c.MergeCounterDelta(d)
 		log.Printf("Replicator: merged GCounter delta[%s], value=%d", msg.Key, c.Value())
+		r.notifySubscribers(msg.Key, c)
 
 	case "orset-delta":
 		var d ORSetDelta
@@ -357,6 +418,7 @@ func (r *Replicator) HandleIncoming(data []byte) error {
 		s := r.ORSet(msg.Key)
 		s.MergeORSetDelta(d)
 		log.Printf("Replicator: merged ORSet delta[%s], elements=%v", msg.Key, s.Elements())
+		r.notifySubscribers(msg.Key, s)
 
 	case "lwwmap-delta":
 		var d LWWMapDelta
@@ -366,6 +428,7 @@ func (r *Replicator) HandleIncoming(data []byte) error {
 		m := r.LWWMap(msg.Key)
 		m.MergeLWWMapDelta(d)
 		log.Printf("Replicator: merged LWWMap delta[%s], keys=%d", msg.Key, len(m.Entries()))
+		r.notifySubscribers(msg.Key, m)
 
 	default:
 		if r.OnUnknownKey != nil {

@@ -75,6 +75,19 @@ func (m *ORMap) Entries() map[string]ReplicatedData {
 	return res
 }
 
+// Keys returns a snapshot of all keys currently in the map.
+func (m *ORMap) Keys() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]string, 0, len(m.data))
+	for k := range m.data {
+		if m.keys.Contains(k) {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
 // Merge combines another ORMap into this one.
 func (m *ORMap) Merge(other ReplicatedData) ReplicatedData {
 	o, ok := other.(*ORMap)
@@ -165,6 +178,18 @@ func (m *PNCounterMap) Decrement(nodeID, key string, delta uint64) {
 	counter.Decrement(nodeID, delta)
 }
 
+// GetValue returns the net counter value for key, or (0, false) if absent.
+func (m *PNCounterMap) GetValue(key string) (int64, bool) {
+	v, ok := m.ORMap.Get(key)
+	if !ok {
+		return 0, false
+	}
+	return v.(*PNCounter).Value(), true
+}
+
+// Keys returns all keys currently in the map.
+func (m *PNCounterMap) Keys() []string { return m.ORMap.Keys() }
+
 func (m *PNCounterMap) Merge(other ReplicatedData) ReplicatedData {
 	o := other.(*PNCounterMap)
 	m.ORMap.Merge(&o.ORMap)
@@ -187,6 +212,24 @@ type ORMultiMap struct {
 func NewORMultiMap() *ORMultiMap {
 	return &ORMultiMap{ORMap: *NewORMap()}
 }
+
+// Put adds element to the set at key. Alias for AddBinding.
+func (m *ORMultiMap) Put(nodeID, key, element string) { m.AddBinding(nodeID, key, element) }
+
+// Remove removes element from the set at key. Alias for RemoveBinding.
+func (m *ORMultiMap) Remove(nodeID, key, element string) { m.RemoveBinding(nodeID, key, element) }
+
+// GetElements returns all elements for key, or nil if absent.
+func (m *ORMultiMap) GetElements(key string) []string {
+	v, ok := m.ORMap.Get(key)
+	if !ok {
+		return nil
+	}
+	return v.(*ORSet).Elements()
+}
+
+// Keys returns all keys currently in the map.
+func (m *ORMultiMap) Keys() []string { return m.ORMap.Keys() }
 
 func (m *ORMultiMap) AddBinding(nodeID, key, element string) {
 	m.mu.Lock()

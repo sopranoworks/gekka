@@ -44,6 +44,9 @@ type EventSourcedBehavior[Command any, Event any, State any] struct {
 	// delete older ones after each save.  Requires SnapshotInterval > 0.
 	// Example: SnapshotInterval=1, MaxSnapshots=2 keeps the two most recent snapshots.
 	MaxSnapshots int
+	// SnapshotWhen, if non-nil, is evaluated after each event application.
+	// A snapshot is saved whenever it returns true (OR'd with SnapshotInterval).
+	SnapshotWhen func(state State, event Event, seqNr uint64) bool
 }
 
 // WithPersistenceID returns a copy of the behavior with a new persistence ID.
@@ -339,32 +342,40 @@ func (p *persistentActor[Command, Event, State]) persist(events []Event, then fu
 		return
 	}
 
-	// Apply events to state
-	for _, event := range events {
-		p.Log().Debug("Applying event to state", "seqNr", p.seqNr)
+	// Apply events to state; evaluate snapshot predicates per event.
+	for i, event := range events {
+		eventSeqNr := reprs[i].SequenceNr
+		p.Log().Debug("Applying event to state", "seqNr", eventSeqNr)
 		p.state = p.behavior.EventHandler(p.state, event)
-	}
 
-	// Check if snapshot is needed
-	if p.behavior.SnapshotStore != nil && p.behavior.SnapshotInterval > 0 &&
-		p.seqNr%p.behavior.SnapshotInterval == 0 {
-		snapErr := p.behavior.SnapshotStore.SaveSnapshot(ctx, persistence.SnapshotMetadata{
-			PersistenceID: p.behavior.PersistenceID,
-			SequenceNr:    p.seqNr,
-			Timestamp:     time.Now().Unix(),
-		}, p.state)
-		if snapErr == nil {
-			p.lastSnapSeqNr = p.seqNr
-			// Automated cleanup: remove old snapshots beyond the MaxSnapshots limit.
-			if p.behavior.MaxSnapshots > 0 {
-				keepCount := uint64(p.behavior.MaxSnapshots) * p.behavior.SnapshotInterval
-				if p.seqNr > keepCount {
-					deleteUpTo := p.seqNr - keepCount
-					if delErr := p.behavior.SnapshotStore.DeleteSnapshots(ctx, p.behavior.PersistenceID, persistence.SnapshotSelectionCriteria{
-						MaxSequenceNr: deleteUpTo,
-						MaxTimestamp:  math.MaxInt64,
-					}); delErr != nil {
-						p.Log().Error("snapshot cleanup failed", "error", delErr, "deleteUpTo", deleteUpTo)
+		// Determine whether a snapshot should be saved after this event (OR logic).
+		shouldSnap := false
+		if p.behavior.SnapshotInterval > 0 && eventSeqNr%p.behavior.SnapshotInterval == 0 {
+			shouldSnap = true
+		}
+		if p.behavior.SnapshotWhen != nil && p.behavior.SnapshotWhen(p.state, event, eventSeqNr) {
+			shouldSnap = true
+		}
+
+		if shouldSnap && p.behavior.SnapshotStore != nil {
+			snapErr := p.behavior.SnapshotStore.SaveSnapshot(ctx, persistence.SnapshotMetadata{
+				PersistenceID: p.behavior.PersistenceID,
+				SequenceNr:    eventSeqNr,
+				Timestamp:     time.Now().Unix(),
+			}, p.state)
+			if snapErr == nil {
+				p.lastSnapSeqNr = eventSeqNr
+				// Automated cleanup when using SnapshotInterval-based retention.
+				if p.behavior.MaxSnapshots > 0 && p.behavior.SnapshotInterval > 0 {
+					keepCount := uint64(p.behavior.MaxSnapshots) * p.behavior.SnapshotInterval
+					if eventSeqNr > keepCount {
+						deleteUpTo := eventSeqNr - keepCount
+						if delErr := p.behavior.SnapshotStore.DeleteSnapshots(ctx, p.behavior.PersistenceID, persistence.SnapshotSelectionCriteria{
+							MaxSequenceNr: deleteUpTo,
+							MaxTimestamp:  math.MaxInt64,
+						}); delErr != nil {
+							p.Log().Error("snapshot cleanup failed", "error", delErr, "deleteUpTo", deleteUpTo)
+						}
 					}
 				}
 			}

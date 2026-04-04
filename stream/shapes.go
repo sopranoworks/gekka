@@ -158,3 +158,19 @@ func (s BidiShape[I1, O1, I2, O2]) Outlets() []Port {
 	return []Port{s.Out1, s.Out2}
 }
 
+// FanOut2Shape[In, A, B] has one Inlet and two Outlets of different element
+// types.  Used by [UnzipWith2Stage] to split a single stream into two typed
+// output streams.
+type FanOut2Shape[In, A, B any] struct {
+	In   *Inlet[In]
+	Out0 *Outlet[A]
+	Out1 *Outlet[B]
+}
+
+func (s FanOut2Shape[In, A, B]) Inlets() []Port {
+	return []Port{s.In}
+}
+
+func (s FanOut2Shape[In, A, B]) Outlets() []Port {
+	return []Port{s.Out0, s.Out1}
+}

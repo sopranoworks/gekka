@@ -523,3 +523,138 @@ func (f Flow[In, Out, Mat]) Log(name string) Flow[In, Out, Mat] {
 		},
 	}
 }
+
+// ─── WireTap ──────────────────────────────────────────────────────────────
+
+// wireTapIterator observes each element via a tap callback without blocking
+// the main stream.
+type wireTapIterator[T any] struct {
+	upstream iterator[T]
+	tap      func(T)
+}
+
+func (w *wireTapIterator[T]) next() (T, bool, error) {
+	elem, ok, err := w.upstream.next()
+	if ok && err == nil {
+		go w.tap(elem)
+	}
+	return elem, ok, err
+}
+
+// WireTap creates a [Flow] that calls tap for each element asynchronously
+// in a separate goroutine, then forwards the element unchanged.
+//
+// The tap callback never applies back-pressure to the main stream: even if
+// the tap is slow, the upstream continues producing elements at full speed.
+// Use a buffered channel in the tap closure when you need to ensure every
+// element is captured without loss.
+func WireTap[T any](tap func(T)) Flow[T, T, NotUsed] {
+	return Flow[T, T, NotUsed]{
+		attach: func(up iterator[T]) (iterator[T], NotUsed) {
+			return &wireTapIterator[T]{upstream: up, tap: tap}, NotUsed{}
+		},
+	}
+}
+
+// ─── Interleave ───────────────────────────────────────────────────────────
+
+// interleaveIterator alternates between two upstream iterators in segments
+// of segmentSize elements each.
+type interleaveIterator[T any] struct {
+	a, b         iterator[T]
+	segmentSize  int
+	fromA        bool
+	segLeft      int
+	aDone, bDone bool
+}
+
+func newInterleaveIterator[T any](a, b iterator[T], segmentSize int) *interleaveIterator[T] {
+	return &interleaveIterator[T]{
+		a:           a,
+		b:           b,
+		segmentSize: segmentSize,
+		fromA:       true,
+		segLeft:     segmentSize,
+	}
+}
+
+// switchSource switches the active source at segment boundaries.
+// If the desired next source is exhausted, the current source is kept.
+func (it *interleaveIterator[T]) switchSource() {
+	wantA := !it.fromA
+	if wantA && !it.aDone {
+		it.fromA = true
+	} else if !wantA && !it.bDone {
+		it.fromA = false
+	}
+	it.segLeft = it.segmentSize
+}
+
+func (it *interleaveIterator[T]) next() (T, bool, error) {
+	var zero T
+	for {
+		if it.aDone && it.bDone {
+			return zero, false, nil
+		}
+
+		// If the current source is exhausted, force a switch to the other.
+		if it.fromA && it.aDone {
+			it.fromA = false
+			it.segLeft = it.segmentSize
+		} else if !it.fromA && it.bDone {
+			it.fromA = true
+			it.segLeft = it.segmentSize
+		}
+
+		// If the segment has ended, switch to the other source.
+		if it.segLeft == 0 {
+			it.switchSource()
+		}
+
+		if it.aDone && it.bDone {
+			return zero, false, nil
+		}
+
+		var src iterator[T]
+		if it.fromA {
+			src = it.a
+		} else {
+			src = it.b
+		}
+
+		elem, ok, err := src.next()
+		if err != nil {
+			return zero, false, err
+		}
+		if !ok {
+			if it.fromA {
+				it.aDone = true
+			} else {
+				it.bDone = true
+			}
+			it.segLeft = 0
+			continue
+		}
+
+		it.segLeft--
+		if it.segLeft == 0 {
+			it.switchSource()
+		}
+
+		return elem, true, nil
+	}
+}
+
+// Interleave creates a [Flow] that alternates between the main stream and
+// other, emitting segmentSize consecutive elements from each in turn.
+//
+// When one source is exhausted the remaining elements of the other source
+// are forwarded until it is also done.
+func Interleave[T, Mat any](segmentSize int, other Source[T, Mat]) Flow[T, T, NotUsed] {
+	return Flow[T, T, NotUsed]{
+		attach: func(up iterator[T]) (iterator[T], NotUsed) {
+			otherIter, _ := other.factory()
+			return newInterleaveIterator(up, otherIter, segmentSize), NotUsed{}
+		},
+	}
+}

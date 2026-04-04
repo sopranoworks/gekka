@@ -225,3 +225,189 @@ func (z *ZipStage[A, B]) materialize(_ Materializer, shape Shape) materializedSt
 		runners:  nil, // pure pullback mechanics
 	}
 }
+
+// ─── MergePrioritizedStage ────────────────────────────────────────────────
+
+// MergePrioritizedStage merges n input streams using a weighted round-robin
+// policy: an upstream with priority p[i] is preferred p[i] times for every
+// p[j] times upstream j is preferred.
+type MergePrioritizedStage[T any] struct {
+	priorities []int
+}
+
+// NewMergePrioritized creates a merge junction that emits elements from
+// multiple upstreams using weighted round-robin based on priorities.
+//
+// priorities[i] is the relative weight of Inlets_[i].  An upstream with
+// priority 3 receives 3× as many pulls as an upstream with priority 1.
+// When a preferred upstream is exhausted, elements from the remaining
+// active upstreams are still forwarded.
+func NewMergePrioritized[T any](priorities []int) *MergePrioritizedStage[T] {
+	return &MergePrioritizedStage[T]{priorities: priorities}
+}
+
+func (m *MergePrioritizedStage[T]) Shape() FanInShape[T] {
+	inlets := make([]*Inlet[T], len(m.priorities))
+	for i := range inlets {
+		inlets[i] = &Inlet[T]{}
+	}
+	return FanInShape[T]{Inlets_: inlets, Out: &Outlet[T]{}}
+}
+
+// buildPrioritySeq expands a priority slice into a flat weighted index
+// sequence.  For example, [3, 1] → [0, 0, 0, 1].
+func buildPrioritySeq(priorities []int) []int {
+	var seq []int
+	for i, p := range priorities {
+		for j := 0; j < p; j++ {
+			seq = append(seq, i)
+		}
+	}
+	return seq
+}
+
+func (m *MergePrioritizedStage[T]) materialize(_ Materializer, shape Shape) materializedStage {
+	s := shape.(FanInShape[T])
+	n := len(m.priorities)
+
+	lazyIns := make([]*lazyIterator[T], n)
+	inConns := make(map[int]func(any))
+	for i, in := range s.Inlets_ {
+		lazyIns[i] = &lazyIterator[T]{}
+		idx := i
+		inConns[in.id] = func(up any) {
+			lazyIns[idx].inner = up.(iterator[T])
+		}
+	}
+
+	lazyOut := &lazyIterator[T]{}
+	outIters := map[int]any{s.Out.id: lazyOut}
+
+	outCh := make(chan T, n*DefaultAsyncBufSize)
+	sharedErr := newSharedError()
+	lazyOut.inner = &channelIterator[T]{ch: outCh, err: sharedErr}
+
+	seq := buildPrioritySeq(m.priorities)
+	seqLen := len(seq)
+
+	runner := func() error {
+		defer close(outCh)
+		done := make([]bool, n)
+		activeCnt := n
+		seqIdx := 0
+
+		for activeCnt > 0 {
+			upIdx := seq[seqIdx]
+			seqIdx = (seqIdx + 1) % seqLen
+
+			if done[upIdx] {
+				continue
+			}
+
+			elem, ok, err := lazyIns[upIdx].next()
+			if err != nil {
+				sharedErr.fail(err)
+				return err
+			}
+			if !ok {
+				done[upIdx] = true
+				activeCnt--
+				continue
+			}
+
+			select {
+			case <-sharedErr.sig:
+				return nil
+			case outCh <- elem:
+			}
+		}
+		return nil
+	}
+
+	return materializedStage{
+		outIters: outIters,
+		inConns:  inConns,
+		runners:  []func() error{runner},
+	}
+}
+
+// ─── UnzipWith2Stage ──────────────────────────────────────────────────────
+
+// UnzipWith2Stage splits a single input stream into two typed output streams
+// by applying an extractor function to each element.
+type UnzipWith2Stage[In, A, B any] struct {
+	f func(In) (A, B)
+}
+
+// NewUnzipWith2 creates an UnzipWith2Stage that applies f to each incoming
+// element and routes the two results to Out0 (type A) and Out1 (type B).
+func NewUnzipWith2[In, A, B any](f func(In) (A, B)) *UnzipWith2Stage[In, A, B] {
+	return &UnzipWith2Stage[In, A, B]{f: f}
+}
+
+func (u *UnzipWith2Stage[In, A, B]) Shape() FanOut2Shape[In, A, B] {
+	return FanOut2Shape[In, A, B]{
+		In:   &Inlet[In]{},
+		Out0: &Outlet[A]{},
+		Out1: &Outlet[B]{},
+	}
+}
+
+func (u *UnzipWith2Stage[In, A, B]) materialize(_ Materializer, shape Shape) materializedStage {
+	s := shape.(FanOut2Shape[In, A, B])
+
+	lazyIn := &lazyIterator[In]{}
+	ch0 := make(chan A, DefaultAsyncBufSize)
+	ch1 := make(chan B, DefaultAsyncBufSize)
+	sharedErr := newSharedError()
+
+	lazyOut0 := &lazyIterator[A]{}
+	lazyOut1 := &lazyIterator[B]{}
+	lazyOut0.inner = &channelIterator[A]{ch: ch0, err: sharedErr}
+	lazyOut1.inner = &channelIterator[B]{ch: ch1, err: sharedErr}
+
+	inConns := map[int]func(any){
+		s.In.id: func(up any) {
+			lazyIn.inner = up.(iterator[In])
+		},
+	}
+
+	outIters := map[int]any{
+		s.Out0.id: lazyOut0,
+		s.Out1.id: lazyOut1,
+	}
+
+	runner := func() error {
+		defer func() {
+			close(ch0)
+			close(ch1)
+		}()
+		for {
+			elem, ok, err := lazyIn.next()
+			if err != nil {
+				sharedErr.fail(err)
+				return err
+			}
+			if !ok {
+				return nil
+			}
+			a, b := u.f(elem)
+			select {
+			case <-sharedErr.sig:
+				return nil
+			case ch0 <- a:
+			}
+			select {
+			case <-sharedErr.sig:
+				return nil
+			case ch1 <- b:
+			}
+		}
+	}
+
+	return materializedStage{
+		outIters: outIters,
+		inConns:  inConns,
+		runners:  []func() error{runner},
+	}
+}

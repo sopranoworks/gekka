@@ -3,6 +3,8 @@ go 1.26.1
 use (
 	.
 	./cmd
+	./extensions/cluster/aws
+	./extensions/cluster/consul
 	./extensions/cluster/k8s
 	./extensions/persistence/redis
 	./extensions/persistence/spanner

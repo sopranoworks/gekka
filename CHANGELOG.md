@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-04-05
+
+### Added
+
+- 🚀 **AllForOneStrategy Supervisor**: New supervision strategy that applies the failure directive to all child actors when any single child fails, complementing `OneForOneStrategy`.
+- 🚀 **EventStream**: System-wide publish/subscribe bus for broadcasting events across the local actor system. Supports `Publish`, `Subscribe`, and `Unsubscribe` with type-safe filtering.
+- 🚀 **DeadLetter Integration**: Undeliverable messages are published to the `EventStream` as `DeadLetter` events for monitoring and debugging.
+- 🚀 **Behaviors.intercept API** (`actor/typed/interceptor.go`): `BehaviorInterceptor[T]` interface with `AroundReceive` hook, `Intercept[T]` factory, and built-in `LogMessages[T]` interceptor for transparent message tracing.
+- 🚀 **Custom Mailbox Types** (`actor/mailbox.go`): `MailboxFactory` interface with `NewBoundedMailbox(capacity, dropStrategy)` supporting `DropNewest`, `DropOldest`, and `BackPressure` strategies, plus `NewPriorityMailbox(less)` backed by `container/heap` for priority-ordered delivery. Wired via `Props.Mailbox`.
+- 🚀 **Extensible Serialization**: HOCON-based registration for user-defined serializers via `gekka.serialization.bindings`, enabling pluggable wire formats without modifying core transport code.
+- 🚀 **Persistent FSM** (`persistence/fsm.go`): State-machine-based persistence combining FSM behavior with the event sourcing journal. Includes `persistAsync` and `persistAllAsync` for high-throughput writes that process commands before journal acks.
+- 🚀 **Event Adapters**: `EventAdapter` transformation hooks for migrating events between journal representation and actor domain model, enabling schema evolution without data migration.
+- 🚀 **Snapshot Lifecycle Management**: Automated snapshot cleanup via `RetentionCriteria`, and `snapshotWhen func(state, event, seqNr) bool` predicate on `EventSourcedBehavior` for fine-grained snapshot control.
+- 🚀 **DurableProducerQueue**: Persistence-backed reliable delivery queue ensuring at-least-once semantics survive producer crashes.
+- 🚀 **WorkPulling Delivery Pattern** (`actor/typed/delivery/`): Push-pull message distribution where workers pull work at their own pace, preventing mailbox overflow under bursty load.
+- 🚀 **Exactly-once Projection Delivery**: Offset-tracked projection delivery with durable checkpointing prevents duplicate event processing during restarts.
+- 🚀 **EventsByTag Persistence Query**: `EventsByTag` DSL backed by SQL and Spanner stores for tag-based CQRS event stream filtering.
+- 🚀 **GroupBy Sub-Streams & BidiFlow**: `GroupBy` for dynamic fan-out by key; `BidiFlow` for composable bidirectional protocol stacking (framing, codec, encryption layers).
+- 🚀 **Stream Hubs**: `MergeHub[T]`, `BroadcastHub[T]`, and `PartitionHub[T]` for dynamic many-to-one and one-to-many topologies with runtime subscriber management.
+- 🚀 **Stream Compression**: `Gzip`, `Gunzip`, `Deflate`, and `Inflate` flow operators for transparent in-stream compression and decompression.
+- 🚀 **Stream Framing**: Length-field-based and delimiter-based framing flows for TCP protocol stacking.
+- 🚀 **Additional Stream Operators**: `TakeWhile`, `DropWhile`, `FlatMapConcat`, `MapAsyncUnordered`, `Scan`, `WireTap` (non-blocking side-tap), `Interleave` (round-robin merge), `MergePrioritized` (weighted fan-in), `UnzipWith2` (typed fan-out), `RetryFlowWithBackoff` (per-element retry), `FlowWithContext`, and `SourceWithContext` (metadata-preserving streams).
+- 🚀 **Actor TestKit & TestProbe** (`actor/testkit/`): `TestProbe` for synchronous message interception, with assertion helpers (`ExpectMsg`, `ExpectNoMsg`, `FishForMessage`) and `WithCallingThreadDispatcher` for deterministic unit tests.
+- 🚀 **Stream TestKit**: `TestSource` (reactive source probe) and `TestSink` (reactive sink probe) for precise backpressure and element-by-element stream testing.
+- 🚀 **Cluster Client Extension**: External client for communicating with a cluster without joining as a full member; supports `Send` and `Publish` to any cluster actor path.
+- 🚀 **Artery Quarantine Protocol Parity**: Full quarantine state machine — quarantined associations are tracked via UID registry and refuse all further communication until UID reset.
+- 🚀 **LeaseMajority SBR Strategy**: Split-brain resolution strategy using a distributed lease to determine which partition retains the majority and stays up.
+- 🚀 **DownAll / DownAllNodesInDataCenter SBR Strategies**: Strategies that down all nodes (or all nodes in a given DC) on partition — suitable for stateless services where fast recovery is preferred over split tolerance.
+- 🚀 **TestLease & KubernetesLease**: Lease implementations for testing and Kubernetes-based leader election, usable with `LeaseMajority` SBR.
+- 🚀 **Consul & AWS EC2 Discovery Extensions**: New seed provider implementations for Consul service discovery and AWS EC2 tag-based cluster formation.
+- 🚀 **Typed Replicator Adapter** (`cluster/ddata/`): `TypedReplicatorAdapter[Cmd, D]` enabling typed actors to interact with Distributed Data via `AskGet`, `AskUpdate`, `Subscribe`, and `Unsubscribe`.
+- 🚀 **Typed Cluster Pub/Sub** (`cluster/pubsub/`): `Topic[T]` typed behavior with `Publish[T]`, `Subscribe[T]`, and `Unsubscribe[T]`; backed by `LocalMediator` for in-process testing.
+- 🚀 **PNCounterMap & ORMultiMap Typed API** (`cluster/ddata/`): Typed accessor methods — `GetValue`, `Keys` on `PNCounterMap`; `Put`, `Remove`, `GetElements`, `Keys` on `ORMultiMap`.
+- 🚀 **Multi-DC Gossip Enhancements**: Configurable `CrossDataCenterGossipProbability` for bandwidth-efficient cross-DC state propagation; DC-aware failure detection tuning.
+
 ## [0.14.0] - 2026-03-28
 
 ### Added
@@ -288,7 +323,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Message Dispatch**: Fixed a critical bug where messages were not correctly routed to registered actors by default when incoming envelopes contained full URIs.
 
 
-[Unreleased]: https://github.com/sopranoworks/gekka/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/sopranoworks/gekka/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/sopranoworks/gekka/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/sopranoworks/gekka/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/sopranoworks/gekka/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/sopranoworks/gekka/compare/v0.11.0...v0.12.0

@@ -136,7 +136,7 @@ func TestLogMessages_DoesNotPanic(t *testing.T) {
 
 	behavior := LogMessages[string](slog.LevelDebug, inner)
 	ctx := newMockCtx()
-	behavior = callBehavior(behavior, ctx, "hello")
+	callBehavior(behavior, ctx, "hello")
 
 	if len(received) != 1 || received[0] != "hello" {
 		t.Errorf("expected [hello], got %v", received)
@@ -167,7 +167,7 @@ func TestIntercept_BehaviorTransition(t *testing.T) {
 
 	behavior = callBehavior(behavior, ctx, "one")    // first:one
 	behavior = callBehavior(behavior, ctx, "switch") // transitions → second
-	behavior = callBehavior(behavior, ctx, "two")    // second:two
+	callBehavior(behavior, ctx, "two")               // second:two
 
 	if got := interceptor.count.Load(); got != 3 {
 		t.Errorf("interceptor count after transition = %d, want 3", got)

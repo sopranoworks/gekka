@@ -74,18 +74,20 @@
 - **Adaptive Cluster Rebalancing**: Automatic shard migration driven by node-level pressure scores (CPU, Memory, Mailbox).
 - **Ultra Thin Core (CBOR removal)**: Removed `fxamacker/cbor` from core to comply with the zero-non-stdlib-dependency policy for transport and serialization primitives.
 
+### v0.15.0 (2026-04-05) ✅ Released
+- **Actor System Enhancements**: `AllForOneStrategy` supervisor; `EventStream` system-wide pub/sub bus; `DeadLetter` events; custom mailbox types (`BoundedMailbox`, `UnboundedPriorityMailbox`) with pluggable `MailboxFactory`.
+- **Typed Actor Enhancements**: `Behaviors.intercept` API with `BehaviorInterceptor[T]` and `LogMessages[T]`; typed `Topic[T]` pub/sub with `LocalMediator`; `TypedReplicatorAdapter` for typed-actor DData integration.
+- **Persistence Enhancements**: `PersistentFSM` for state-machine event sourcing; `EventAdapter` schema evolution hooks; `snapshotWhen` predicate; `persistAsync`/`persistAllAsync`; `DurableProducerQueue`; `EventsByTag` query DSL; snapshot lifecycle management with `RetentionCriteria`.
+- **Streams — Operators**: `WireTap`, `Interleave`, `TakeWhile`, `DropWhile`, `FlatMapConcat`, `MapAsyncUnordered`, `Scan`, `MergePrioritized`, `UnzipWith2`, `RetryFlowWithBackoff`, `FlowWithContext`, `SourceWithContext`.
+- **Streams — Hubs, Compression & Framing**: `MergeHub`, `BroadcastHub`, `PartitionHub`; `Gzip`/`Gunzip`/`Deflate`/`Inflate`; length-field and delimiter framing flows; `GroupBy` sub-streams; `BidiFlow` protocol stacking.
+- **Cluster Extensions**: Cluster Client; Artery quarantine protocol parity; `LeaseMajority`, `DownAll`, `DownAllNodesInDataCenter` SBR strategies; `TestLease`/`KubernetesLease`; Consul and AWS EC2 discovery.
+- **Testing Framework**: `Actor TestKit` with `TestProbe` and assertion helpers; `Stream TestKit` with reactive source/sink probes.
+- **Distributed Data**: `PNCounterMap` and `ORMultiMap` typed accessor API; configurable cross-DC gossip probability; exactly-once projection delivery.
+- **Extensible Serialization**: HOCON-based user-defined serializer registration via `gekka.serialization.bindings`.
+
 ---
 
 ## Upcoming
-
-### v0.15.0 — Extensibility and Advanced Patterns
-
-- **User-Defined Serializer API**: Support for registering custom serializers via HOCON configuration, enabling pluggable wire formats without modifying core transport code.
-- **Persistent FSM**: Support for state-machine-based persistence with event-driven transitions, combining FSM behavior with the event sourcing journal.
-- **Event Adapters**: Transformation hooks for migrating events between the journal representation and the actor domain model, enabling schema evolution without data migration.
-- **Stream Operators**: `GroupBy` for dynamic sub-stream dispatching by key, and `BidiFlow` for composable bidirectional protocol stacking (framing, codec, encryption layers).
-
----
 
 ### v1.0.0 — Production Readiness & Stability
 

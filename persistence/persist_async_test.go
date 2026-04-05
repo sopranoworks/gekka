@@ -72,7 +72,7 @@ func (a *asyncIncrActor) Receive(msg any) {
 
 	// For user commands, issue the async persist.
 	if cmd, ok := msg.(asyncIncrCmd); ok {
-		event := asyncIncrEvent{seq: cmd.seq}
+		event := asyncIncrEvent(cmd)
 		a.PersistAsync(event, a.onHandled)
 	}
 }

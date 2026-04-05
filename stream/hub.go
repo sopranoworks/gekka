@@ -16,9 +16,8 @@ import (
 
 // mergeHub is the shared state of a MergeHub.
 type mergeHub[T any] struct {
-	ch     chan T
-	done   chan struct{}
-	closeOnce sync.Once
+	ch   chan T
+	done chan struct{}
 }
 
 // NewMergeHub creates a dynamic merge hub.  Multiple producers can connect

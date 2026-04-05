@@ -46,27 +46,6 @@ func (r *fakeRouter) SendWithSender(_ context.Context, path, senderPath string, 
 	return nil
 }
 
-func (r *fakeRouter) lastMsg() *sentMsg {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if len(r.msgs) == 0 {
-		return nil
-	}
-	m := r.msgs[len(r.msgs)-1]
-	return &m
-}
-
-func (r *fakeRouter) count() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return len(r.msgs)
-}
-
-func (r *fakeRouter) reset() {
-	r.mu.Lock()
-	r.msgs = nil
-	r.mu.Unlock()
-}
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 

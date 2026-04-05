@@ -70,19 +70,16 @@ func TestMergeHub_MultipleProducers(t *testing.T) {
 	consumerDone := make(chan struct{})
 	go func() {
 		defer close(consumerDone)
-		for {
-			// Pull from the hub source in a blocking loop.
-			var local []int
-			graph := stream.Via(src, stream.Take[int](10)).
-				To(stream.Foreach(func(n int) { local = append(local, n) }))
-			if _, err := graph.Run(stream.SyncMaterializer{}); err != nil {
-				return
-			}
-			mu.Lock()
-			got = append(got, local...)
-			mu.Unlock()
+		// Pull from the hub source.
+		var local []int
+		graph := stream.Via(src, stream.Take[int](10)).
+			To(stream.Foreach(func(n int) { local = append(local, n) }))
+		if _, err := graph.Run(stream.SyncMaterializer{}); err != nil {
 			return
 		}
+		mu.Lock()
+		got = append(got, local...)
+		mu.Unlock()
 	}()
 
 	time.Sleep(10 * time.Millisecond)

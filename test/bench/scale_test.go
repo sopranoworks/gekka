@@ -111,6 +111,10 @@ func (c *benchActorContext) SystemActorOf(behavior any, name string) (actor.Ref,
 
 func (c *benchActorContext) Context() context.Context { return context.Background() }
 
+func (c *benchActorContext) ActorSelection(_ string) actor.ActorSelection {
+	return actor.ActorSelection{}
+}
+
 // benchRef is a synchronous actor reference.
 type benchRef struct {
 	path  string

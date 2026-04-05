@@ -56,8 +56,6 @@ type durableQueueState struct {
 	requestUpTo   int64
 	buffer        []*SequencedMessage
 
-	// Recovery flag: true until the journal replay is complete.
-	recovering bool
 	// recovered tracks whether we have loaded state from the journal on first start.
 	recovered bool
 }

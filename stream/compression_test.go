@@ -58,17 +58,6 @@ func TestCompression_Gzip_MultiChunk(t *testing.T) {
 	}
 	expected := []byte("chunk one chunk two chunk three")
 
-	// Compress each chunk individually — each produces valid gzip output.
-	// We collect all compressed bytes, then gunzip the full stream.
-	var compressedAll []byte
-	for _, c := range chunks {
-		comp := collectBytes(t,
-			stream.Via(stream.FromSlice([][]byte{c}),
-				stream.Compression.Gzip(stream.DefaultCompressionLevel)))
-		compressedAll = append(compressedAll, comp...)
-	}
-
-	// For multi-stream gunzip we test the single-stream variant here.
 	// Re-compress everything as a single stream.
 	compressed := collectBytes(t,
 		stream.Via(stream.FromSlice(chunks),

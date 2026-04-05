@@ -89,7 +89,7 @@ func newOrderFSMActor(journal Journal, orderID string) *orderFSMActor {
 		case PayOrder:
 			newData := e.Data
 			newData.Total = cmd.Amount
-			return fsm.Goto(OrderPaid).Using(newData).Persisting(OrderPaidEvent{Amount: cmd.Amount}).Build()
+			return fsm.Goto(OrderPaid).Using(newData).Persisting(OrderPaidEvent(cmd)).Build()
 		}
 		return fsm.Unhandled()
 	})
@@ -98,7 +98,7 @@ func newOrderFSMActor(journal Journal, orderID string) *orderFSMActor {
 	fsm.When(OrderPaid, func(e FSMEvent[OrderData]) FSMStateResult[OrderState, OrderData, OrderEvent] {
 		switch cmd := e.Msg.(type) {
 		case ShipOrder:
-			return fsm.Goto(OrderShipped).Persisting(OrderShippedEvent{TrackingID: cmd.TrackingID}).Build()
+			return fsm.Goto(OrderShipped).Persisting(OrderShippedEvent(cmd)).Build()
 		}
 		return fsm.Unhandled()
 	})

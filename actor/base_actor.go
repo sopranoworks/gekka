@@ -69,6 +69,8 @@ type Actor interface {
 // NewBaseActorWithSize to override it.
 type BaseActor struct {
 	mailbox            chan any
+	mbSend             func(any) bool // non-nil when a custom mailbox is installed
+	mbClose            func()         // non-nil when a custom mailbox needs special teardown
 	currentSender      Ref             // set for the duration of each Receive call; nil otherwise
 	currentCtx         context.Context // trace context for the current message; nil outside Receive
 	selfRef            Ref             // this actor's own reference, injected by SpawnActor/ActorOf
@@ -252,6 +254,39 @@ func (b *BaseActor) initMailbox() {
 		b.children = make(map[string]Ref)
 	}
 }
+
+// Send delivers a message using the installed mailbox's enqueue semantics.
+// When a MailboxFactory was provided via Props.Mailbox, this method applies
+// the configured drop strategy or back-pressure. Without a custom mailbox it
+// falls back to non-blocking channel send (DropNewest semantics).
+//
+// Returns true if the message was accepted, false if it was dropped.
+func (b *BaseActor) Send(msg any) bool {
+	if b.mbSend != nil {
+		return b.mbSend(msg)
+	}
+	select {
+	case b.mailbox <- msg:
+		return true
+	default:
+		return false
+	}
+}
+
+// CloseMailbox terminates the mailbox. For the default channel mailbox it
+// closes the underlying channel. For priority mailboxes it signals the drain
+// goroutine to stop (which then closes the channel, ending Start's range loop).
+func (b *BaseActor) CloseMailbox() {
+	if b.mbClose != nil {
+		b.mbClose()
+	} else {
+		close(b.mailbox)
+	}
+}
+
+// baseActor returns the receiver's *BaseActor pointer. Used by InjectMailbox
+// to reach the embedded BaseActor of any actor struct through a type assertion.
+func (b *BaseActor) baseActor() *BaseActor { return b }
 
 // Lifecycle hooks default implementations
 

@@ -343,7 +343,11 @@ func (s *localActorSystem) Unwatch(watcher ActorRef, target ActorRef) {
 // Stop implements ActorSystem.
 func (s *localActorSystem) Stop(target ActorRef) {
 	if target.local != nil {
-		close(target.local.Mailbox())
+		if cl, ok := target.local.(actor.MailboxCloser); ok {
+			cl.CloseMailbox()
+		} else {
+			close(target.local.Mailbox())
+		}
 	}
 }
 
@@ -567,6 +571,11 @@ func (s *localActorSystem) LookupDeployment(path string) (core.DeploymentConfig,
 // SpawnActor implements internalSystem.
 func (s *localActorSystem) SpawnActor(path string, a actor.Actor, props actor.Props) actor.Ref {
 	ref := ActorRef{fullPath: s.SelfPathURI(path), sys: s, local: a}
+
+	// Apply custom mailbox before the actor goroutine starts.
+	if props.Mailbox != nil {
+		actor.InjectMailbox(a, props.Mailbox)
+	}
 
 	// Inject the actor's own reference so it can use Self() inside Receive.
 	type selfSetter interface{ SetSelf(actor.Ref) }

@@ -1984,7 +1984,11 @@ func (c *Cluster) Unwatch(watcher ActorRef, target ActorRef) {
 // Stop implements ActorSystem.
 func (c *Cluster) Stop(target ActorRef) {
 	if target.local != nil {
-		close(target.local.Mailbox())
+		if cl, ok := target.local.(actor.MailboxCloser); ok {
+			cl.CloseMailbox()
+		} else {
+			close(target.local.Mailbox())
+		}
 	}
 }
 

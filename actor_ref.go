@@ -101,19 +101,36 @@ func (r ActorRef) Tell(msg any, sender ...actor.Ref) {
 		// sendCause is empty on success, "mailbox-closed" on panic (closed
 		// channel), or "mailbox-full" when the buffered channel is saturated.
 		var sendCause string
-		func() {
-			defer func() {
-				if rec := recover(); rec != nil {
-					sendCause = "mailbox-closed"
+
+		// If the actor implements MessageSender (e.g. BoundedMailbox or
+		// PriorityMailbox), delegate to its custom enqueue logic.
+		if ms, ok := r.local.(actor.MessageSender); ok {
+			func() {
+				defer func() {
+					if rec := recover(); rec != nil {
+						sendCause = "mailbox-closed"
+					}
+				}()
+				if !ms.Send(env) {
+					sendCause = "mailbox-full"
 				}
 			}()
-			select {
-			case r.local.Mailbox() <- env:
-				// delivered
-			default:
-				sendCause = "mailbox-full"
-			}
-		}()
+		} else {
+			func() {
+				defer func() {
+					if rec := recover(); rec != nil {
+						sendCause = "mailbox-closed"
+					}
+				}()
+				select {
+				case r.local.Mailbox() <- env:
+					// delivered
+				default:
+					sendCause = "mailbox-full"
+				}
+			}()
+		}
+
 		if sendCause != "" && r.sys != nil {
 			if es := r.sys.EventStream(); es != nil {
 				es.Publish(actor.DeadLetter{

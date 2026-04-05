@@ -110,6 +110,11 @@ type Props struct {
 	// actor should be handled. If nil, a default strategy (usually Restart)
 	// is used.
 	SupervisorStrategy SupervisorStrategy
+
+	// Mailbox overrides the default unbounded channel mailbox. Use
+	// NewBoundedMailbox or NewPriorityMailbox to set a custom mailbox.
+	// Nil means the default 256-element buffered channel.
+	Mailbox MailboxFactory
 }
 
 // TerminatedMessage is implemented by actor-stopped notifications.

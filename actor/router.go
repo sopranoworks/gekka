@@ -485,7 +485,7 @@ func (l *ConsistentHashRoutingLogic) calculateRouteesHash(routees []Ref) uint64 
 func (l *ConsistentHashRoutingLogic) rebuildRing(routees []Ref) {
 	vnodes := l.VirtualNodesFactor
 	if vnodes <= 0 {
-		vnodes = 10
+		vnodes = 100
 	}
 
 	l.ring = make([]nodeHash, 0, len(routees)*vnodes)

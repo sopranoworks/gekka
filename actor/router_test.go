@@ -311,22 +311,103 @@ func TestConsistentHash_Selection(t *testing.T) {
 }
 
 func TestConsistentHash_RebuildRing(t *testing.T) {
-	logic := &ConsistentHashRoutingLogic{VirtualNodesFactor: 10}
+	logic := &ConsistentHashRoutingLogic{VirtualNodesFactor: 50}
 	r0 := &routeeMock{path: "r0"}
 	routees := []Ref{r0}
 
 	logic.Select("msg", routees)
 	initialRingSize := len(logic.ring)
-	if initialRingSize != 10 {
-		t.Errorf("expected 10 virtual nodes, got %d", initialRingSize)
+	if initialRingSize != 50 {
+		t.Errorf("expected 50 virtual nodes, got %d", initialRingSize)
 	}
 
 	// Add a routee
 	r1 := &routeeMock{path: "r1"}
 	routees = append(routees, r1)
 	logic.Select("msg", routees)
-	if len(logic.ring) != 20 {
-		t.Errorf("expected 20 virtual nodes after adding routee, got %d", len(logic.ring))
+	if len(logic.ring) != 100 {
+		t.Errorf("expected 100 virtual nodes after adding routee, got %d", len(logic.ring))
+	}
+}
+
+func TestConsistentHash_DefaultVirtualNodes(t *testing.T) {
+	logic := &ConsistentHashRoutingLogic{} // default VirtualNodesFactor
+	routees := []Ref{&routeeMock{path: "r0"}}
+	logic.Select("msg", routees)
+	if len(logic.ring) != 100 {
+		t.Errorf("expected 100 default virtual nodes, got %d", len(logic.ring))
+	}
+}
+
+func TestConsistentHash_BoundedDisruption(t *testing.T) {
+	// With 3 routees, removing one should reroute ≤40% of keys (bounded disruption).
+	logic := &ConsistentHashRoutingLogic{}
+	r0 := &routeeMock{path: "/user/worker-0"}
+	r1 := &routeeMock{path: "/user/worker-1"}
+	r2 := &routeeMock{path: "/user/worker-2"}
+	routeesAll := []Ref{r0, r1, r2}
+
+	const N = 1000
+	// Record routing with all 3 routees
+	routingBefore := make(map[string]string, N)
+	for i := 0; i < N; i++ {
+		key := fmt.Sprintf("key-%d", i)
+		routingBefore[key] = logic.Select(hashMsg{key: key}, routeesAll).Path()
+	}
+
+	// Remove r2
+	routeesAfter := []Ref{r0, r1}
+	changed := 0
+	for i := 0; i < N; i++ {
+		key := fmt.Sprintf("key-%d", i)
+		newTarget := logic.Select(hashMsg{key: key}, routeesAfter).Path()
+		if newTarget != routingBefore[key] {
+			changed++
+		}
+	}
+
+	disruptionPct := float64(changed) / float64(N) * 100
+	t.Logf("disruption after removing 1 of 3 routees: %.1f%% (%d/%d keys changed)", disruptionPct, changed, N)
+
+	// With consistent hashing, removing 1 of 3 routees should reroute ~1/3 of
+	// keys.  We allow up to 40% to account for hash distribution variance.
+	if disruptionPct > 40 {
+		t.Errorf("disruption too high: %.1f%% > 40%%", disruptionPct)
+	}
+}
+
+func TestConsistentHash_StabilityOnAdd(t *testing.T) {
+	// Adding one routee to a set of 3 should preserve ≥80% of existing routing.
+	logic := &ConsistentHashRoutingLogic{}
+	r0 := &routeeMock{path: "/user/worker-0"}
+	r1 := &routeeMock{path: "/user/worker-1"}
+	r2 := &routeeMock{path: "/user/worker-2"}
+	routeesBefore := []Ref{r0, r1, r2}
+
+	const N = 1000
+	routingBefore := make(map[string]string, N)
+	for i := 0; i < N; i++ {
+		key := fmt.Sprintf("key-%d", i)
+		routingBefore[key] = logic.Select(hashMsg{key: key}, routeesBefore).Path()
+	}
+
+	// Add r3
+	r3 := &routeeMock{path: "/user/worker-3"}
+	routeesAfter := []Ref{r0, r1, r2, r3}
+	preserved := 0
+	for i := 0; i < N; i++ {
+		key := fmt.Sprintf("key-%d", i)
+		newTarget := logic.Select(hashMsg{key: key}, routeesAfter).Path()
+		if newTarget == routingBefore[key] {
+			preserved++
+		}
+	}
+
+	preservedPct := float64(preserved) / float64(N) * 100
+	t.Logf("preserved after adding 1 routee to 3: %.1f%% (%d/%d keys)", preservedPct, preserved, N)
+
+	if preservedPct < 80 {
+		t.Errorf("too many keys rerouted: only %.1f%% preserved (want ≥80%%)", preservedPct)
 	}
 }
 

@@ -83,6 +83,8 @@ type BaseActor struct {
 	children           map[string]Ref   // children spawned by this actor
 	childProps         map[string]Props // props used to spawn children, for Restart
 	onStop             func()
+	receiveStack       []func(msg any)  // behavior stack for become/unbecome
+	receiveTimeout     *receiveTimeoutConfig // classic receive timeout state
 }
 
 // Sender returns the actor reference that sent the currently-processed message.
@@ -394,6 +396,112 @@ func (b *BaseActor) Children() map[string]Ref {
 	return res
 }
 
+// ── Become / Unbecome ──────────────────────────────────────────────────────
+
+// Become pushes a new message handler onto the behavior stack. Subsequent
+// messages will be dispatched to this handler until Unbecome is called.
+func (b *BaseActor) Become(receive func(msg any)) {
+	b.receiveStack = append(b.receiveStack, receive)
+}
+
+// BecomeStacked is an alias for Become (Pekko compatibility).
+func (b *BaseActor) BecomeStacked(receive func(msg any)) {
+	b.Become(receive)
+}
+
+// Unbecome pops the top handler from the behavior stack. If the stack is
+// empty after the pop, the actor reverts to its original Receive method.
+func (b *BaseActor) Unbecome() {
+	if len(b.receiveStack) > 0 {
+		b.receiveStack = b.receiveStack[:len(b.receiveStack)-1]
+	}
+}
+
+// currentReceive returns the active message handler: either the top of the
+// behavior stack or nil (meaning use the original Receive method).
+func (b *BaseActor) currentReceive() func(msg any) {
+	if len(b.receiveStack) > 0 {
+		return b.receiveStack[len(b.receiveStack)-1]
+	}
+	return nil
+}
+
+// ── Classic ReceiveTimeout ─────────────────────────────────────────────────
+
+type receiveTimeoutConfig struct {
+	mu       sync.Mutex
+	duration time.Duration
+	timer    *time.Timer
+	active   bool
+}
+
+// SetReceiveTimeout configures the classic actor to receive a ReceiveTimeout{}
+// message if no messages arrive within d. Resets on every message delivery.
+func (b *BaseActor) SetReceiveTimeout(d time.Duration) {
+	if b.receiveTimeout == nil {
+		b.receiveTimeout = &receiveTimeoutConfig{}
+	}
+	rt := b.receiveTimeout
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+
+	if rt.timer != nil {
+		rt.timer.Stop()
+	}
+	rt.duration = d
+	rt.active = true
+
+	self := b.selfRef
+	rt.timer = time.AfterFunc(d, func() {
+		rt.mu.Lock()
+		active := rt.active
+		rt.mu.Unlock()
+		if active && self != nil {
+			self.Tell(ReceiveTimeout{})
+		}
+	})
+}
+
+// CancelReceiveTimeout cancels a previously set receive timeout.
+func (b *BaseActor) CancelReceiveTimeout() {
+	if b.receiveTimeout == nil {
+		return
+	}
+	rt := b.receiveTimeout
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	rt.active = false
+	if rt.timer != nil {
+		rt.timer.Stop()
+		rt.timer = nil
+	}
+}
+
+// resetReceiveTimeout resets the timer. Called after each message delivery.
+func (b *BaseActor) resetReceiveTimeout() {
+	if b.receiveTimeout == nil {
+		return
+	}
+	rt := b.receiveTimeout
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if !rt.active {
+		return
+	}
+	if rt.timer != nil {
+		rt.timer.Stop()
+	}
+	self := b.selfRef
+	rt.timer = time.AfterFunc(rt.duration, func() {
+		rt.mu.Lock()
+		active := rt.active
+		rt.mu.Unlock()
+		if active && self != nil {
+			self.Tell(ReceiveTimeout{})
+		}
+	})
+}
+
 // InjectSystem sets the ActorContext on any actor that embeds BaseActor.
 // It is called by SpawnActor/ActorOf after the actor has been registered.
 //
@@ -469,11 +577,23 @@ func Start(a Actor) {
 	type parentGetter interface{ Parent() Ref }
 	pg, hasParent := any(a).(parentGetter)
 
+	// Detect become/unbecome support (BaseActor provides it).
+	type becomeSupport interface {
+		currentReceive() func(msg any)
+		resetReceiveTimeout()
+		CancelReceiveTimeout()
+	}
+	bs, hasBecomeSupport := any(a).(becomeSupport)
+
 	// Acquire metric instruments once for this actor's lifetime.
 	mailboxGauge, processDuration := initActorMetrics()
 
 	go func() {
 		defer func() {
+			// Cancel receive timeout on stop
+			if hasBecomeSupport {
+				bs.CancelReceiveTimeout()
+			}
 			if trig, ok := any(a).(interface{ triggerStop() }); ok {
 				trig.triggerStop()
 			}
@@ -489,6 +609,44 @@ func Start(a Actor) {
 			actorPath = self.Path()
 		}
 		pathAttr := telemetry.StringAttr("actor.path", actorPath)
+
+		// dispatchMsg handles system messages (PoisonPill, Kill, Identify)
+		// and delegates to the become stack or Receive. Returns false if the
+		// actor should stop (PoisonPill).
+		dispatchMsg := func(msg any) bool {
+			switch msg.(type) {
+			case PoisonPill:
+				return false // signal stop
+			case Kill:
+				panic(&ActorKilledException{Actor: a.Self()})
+			}
+			if id, ok := msg.(Identify); ok {
+				if sender := a.Self(); sender != nil {
+					if hasSS {
+						if s := any(a).(interface{ Sender() Ref }); s != nil {
+							if senderRef := s.Sender(); senderRef != nil {
+								senderRef.Tell(ActorIdentity{MessageID: id.MessageID, Ref: a.Self()})
+								return true
+							}
+						}
+					}
+				}
+				return true
+			}
+			// Reset receive timeout on each message
+			if hasBecomeSupport {
+				bs.resetReceiveTimeout()
+			}
+			// Dispatch via become stack or Receive
+			if hasBecomeSupport {
+				if handler := bs.currentReceive(); handler != nil {
+					handler(msg)
+					return true
+				}
+			}
+			a.Receive(msg)
+			return true
+		}
 
 		for {
 			var shouldContinue bool
@@ -541,7 +699,14 @@ func Start(a Actor) {
 							cs.setCurrentCtx(msgCtx)
 						}
 						start := time.Now()
-						a.Receive(m.Payload)
+						if !dispatchMsg(m.Payload) {
+							// PoisonPill: close mailbox to trigger graceful stop
+							span.End()
+							if closer, ok := any(a).(interface{ CloseMailbox() }); ok {
+								closer.CloseMailbox()
+							}
+							return
+						}
 						processDuration.Record(msgCtx, time.Since(start).Seconds(), pathAttr)
 						span.End()
 						if hasCS {
@@ -561,7 +726,13 @@ func Start(a Actor) {
 							cs.setCurrentCtx(msgCtx)
 						}
 						start := time.Now()
-						a.Receive(m)
+						if !dispatchMsg(m) {
+							span.End()
+							if closer, ok := any(a).(interface{ CloseMailbox() }); ok {
+								closer.CloseMailbox()
+							}
+							return
+						}
 						processDuration.Record(msgCtx, time.Since(start).Seconds(), pathAttr)
 						span.End()
 						if hasCS {

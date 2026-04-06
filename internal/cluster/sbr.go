@@ -30,10 +30,11 @@ const (
 // Member is the SBR-visible representation of a cluster member.
 // It carries only the fields required to evaluate a partitioning strategy.
 type Member struct {
-	Host     string
-	Port     uint32
-	Roles    []string
-	UpNumber int32 // monotonic join order; lower value = older member
+	Host       string
+	Port       uint32
+	Roles      []string
+	UpNumber   int32  // monotonic join order; lower value = older member
+	AppVersion string // application version string (e.g. "1.2.3"); empty when unset
 }
 
 // Strategy is the interface implemented by each SBR algorithm.

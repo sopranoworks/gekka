@@ -41,11 +41,12 @@ type ClusterDomainEvent interface {
 
 // MemberAddress identifies the cluster member that an event concerns.
 type MemberAddress struct {
-	Protocol   string // "pekko" or "akka"
-	System     string // actor system name, e.g. "ClusterSystem"
-	Host       string // hostname or IP
-	Port       uint32 // TCP port
-	DataCenter string // data-center name, e.g. "us-east" (from "dc-us-east" role); "default" when unset
+	Protocol   string     // "pekko" or "akka"
+	System     string     // actor system name, e.g. "ClusterSystem"
+	Host       string     // hostname or IP
+	Port       uint32     // TCP port
+	DataCenter string     // data-center name, e.g. "us-east" (from "dc-us-east" role); "default" when unset
+	AppVersion AppVersion // application version for rolling updates; zero when unset
 }
 
 // String returns the member's address in Artery URI form ("pekko://System@host:port").
@@ -98,6 +99,14 @@ type UnreachableMember struct{ Member MemberAddress }
 // as reachable again (e.g. after a transient network partition heals).
 type ReachableMember struct{ Member MemberAddress }
 
+// AppVersionChanged is published when a member's advertised application version
+// changes (typically during a rolling update).
+type AppVersionChanged struct {
+	Member     MemberAddress
+	OldVersion AppVersion
+	NewVersion AppVersion
+}
+
 // Marker method implementations — satisfy ClusterDomainEvent.
 func (MemberUp) clusterDomainEvent()          {}
 func (MemberLeft) clusterDomainEvent()        {}
@@ -106,6 +115,7 @@ func (MemberDowned) clusterDomainEvent()      {}
 func (MemberRemoved) clusterDomainEvent()     {}
 func (UnreachableMember) clusterDomainEvent() {}
 func (ReachableMember) clusterDomainEvent()   {}
+func (AppVersionChanged) clusterDomainEvent() {}
 
 // Convenience reflect.Type values for use with Cluster.Subscribe.
 // Pass one or more of these to filter specific event types.
@@ -119,6 +129,7 @@ var (
 	EventMemberRemoved     = reflect.TypeOf(MemberRemoved{})
 	EventUnreachableMember = reflect.TypeOf(UnreachableMember{})
 	EventReachableMember   = reflect.TypeOf(ReachableMember{})
+	EventAppVersionChanged = reflect.TypeOf(AppVersionChanged{})
 )
 
 // ── Subscriber management (methods on ClusterManager) ────────────────────────
@@ -199,12 +210,24 @@ func diffGossipMembers(oldState, newState *gproto_cluster.Gossip) []ClusterDomai
 		port uint32
 	}
 
-	// Build a snapshot of the old member statuses.
-	old := make(map[key]gproto_cluster.MemberStatus)
+	type memberSnapshot struct {
+		status     gproto_cluster.MemberStatus
+		appVersion string
+	}
+
+	// Build a snapshot of the old member statuses and versions.
+	old := make(map[key]memberSnapshot)
 	if oldState != nil {
 		for _, m := range oldState.Members {
 			a := oldState.AllAddresses[m.GetAddressIndex()].GetAddress()
-			old[key{a.GetHostname(), a.GetPort()}] = m.GetStatus()
+			ver := ""
+			if idx := m.GetAppVersionIndex(); idx >= 0 && int(idx) < len(oldState.AllAppVersions) {
+				ver = oldState.AllAppVersions[idx]
+			}
+			old[key{a.GetHostname(), a.GetPort()}] = memberSnapshot{
+				status:     m.GetStatus(),
+				appVersion: ver,
+			}
 		}
 	}
 
@@ -214,28 +237,42 @@ func diffGossipMembers(oldState, newState *gproto_cluster.Gossip) []ClusterDomai
 		a := ua.GetAddress()
 		k := key{a.GetHostname(), a.GetPort()}
 		newSt := m.GetStatus()
-		oldSt, existed := old[k]
-		if existed && oldSt == newSt {
-			continue // no transition
+		newVer := ""
+		if idx := m.GetAppVersionIndex(); idx >= 0 && int(idx) < len(newState.AllAppVersions) {
+			newVer = newState.AllAppVersions[idx]
 		}
-		ma := memberAddressFromUA(ua)
-		switch newSt {
-		case gproto_cluster.MemberStatus_Up:
-			events = append(events, MemberUp{Member: ma})
-		case gproto_cluster.MemberStatus_Leaving:
-			events = append(events, MemberLeft{Member: ma})
-		case gproto_cluster.MemberStatus_Exiting:
-			events = append(events, MemberExited{Member: ma})
-		case gproto_cluster.MemberStatus_Down:
-			events = append(events, MemberDowned{Member: ma})
-		case gproto_cluster.MemberStatus_Removed:
-			events = append(events, MemberRemoved{Member: ma})
+		oldSnap, existed := old[k]
+
+		ma := memberAddressFromGossip(ua, newVer)
+
+		if !existed || oldSnap.status != newSt {
+			switch newSt {
+			case gproto_cluster.MemberStatus_Up:
+				events = append(events, MemberUp{Member: ma})
+			case gproto_cluster.MemberStatus_Leaving:
+				events = append(events, MemberLeft{Member: ma})
+			case gproto_cluster.MemberStatus_Exiting:
+				events = append(events, MemberExited{Member: ma})
+			case gproto_cluster.MemberStatus_Down:
+				events = append(events, MemberDowned{Member: ma})
+			case gproto_cluster.MemberStatus_Removed:
+				events = append(events, MemberRemoved{Member: ma})
+			}
+		}
+
+		// Emit AppVersionChanged if the version changed (and member existed before).
+		if existed && oldSnap.appVersion != newVer && newVer != "" {
+			events = append(events, AppVersionChanged{
+				Member:     ma,
+				OldVersion: ParseAppVersion(oldSnap.appVersion),
+				NewVersion: ParseAppVersion(newVer),
+			})
 		}
 	}
 	return events
 }
 
-// memberAddressFromUA converts a UniqueAddress to a MemberAddress.
+// memberAddressFromUA converts a UniqueAddress to a MemberAddress (without version).
 func memberAddressFromUA(ua *gproto_cluster.UniqueAddress) MemberAddress {
 	a := ua.GetAddress()
 	return MemberAddress{
@@ -243,5 +280,17 @@ func memberAddressFromUA(ua *gproto_cluster.UniqueAddress) MemberAddress {
 		System:   a.GetSystem(),
 		Host:     a.GetHostname(),
 		Port:     a.GetPort(),
+	}
+}
+
+// memberAddressFromGossip converts a UniqueAddress + version string to a MemberAddress.
+func memberAddressFromGossip(ua *gproto_cluster.UniqueAddress, appVersion string) MemberAddress {
+	a := ua.GetAddress()
+	return MemberAddress{
+		Protocol:   a.GetProtocol(),
+		System:     a.GetSystem(),
+		Host:       a.GetHostname(),
+		Port:       a.GetPort(),
+		AppVersion: ParseAppVersion(appVersion),
 	}
 }

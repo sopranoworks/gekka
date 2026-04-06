@@ -81,6 +81,9 @@ type ClusterManager struct {
 	// Set via SetLocalRoles before JoinCluster.  The dc-<dc> role is always appended.
 	localRoles []string
 
+	// LocalAppVersion is this node's application version, advertised during join.
+	LocalAppVersion AppVersion
+
 	// Router is a function for sending messages, avoiding a cycle with the root package.
 	Router func(ctx context.Context, path string, msg any) error
 
@@ -378,12 +381,57 @@ func (cm *ClusterManager) upsertRolesLocked(roles []string) []int32 {
 	return idxs
 }
 
+// SetLocalAppVersion configures the application version for this node.
+// Must be called before JoinCluster.  The version is advertised in the Join
+// message and stored in the gossip state for other members to inspect.
+func (cm *ClusterManager) SetLocalAppVersion(v AppVersion) {
+	cm.LocalAppVersion = v
+
+	// Update the initial member entry (index 0 = local) with the version.
+	if !v.IsZero() {
+		cm.Mu.Lock()
+		verIdx := cm.upsertAppVersionsLocked([]string{v.String()})
+		if len(cm.State.Members) > 0 {
+			cm.State.Members[0].AppVersionIndex = proto.Int32(verIdx)
+		}
+		cm.Mu.Unlock()
+	}
+}
+
+// upsertAppVersionsLocked ensures the given version string is present in
+// AllAppVersions and returns its index.  Must be called with cm.Mu held (write).
+func (cm *ClusterManager) upsertAppVersionsLocked(versions []string) int32 {
+	ver := versions[0]
+	for i, v := range cm.State.AllAppVersions {
+		if v == ver {
+			return int32(i)
+		}
+	}
+	idx := int32(len(cm.State.AllAppVersions))
+	cm.State.AllAppVersions = append(cm.State.AllAppVersions, ver)
+	return idx
+}
+
+// AppVersionForMember returns the AppVersion for a member at the given address
+// index, or zero AppVersion if not set.
+func (cm *ClusterManager) AppVersionForMember(m *gproto_cluster.Member) AppVersion {
+	idx := m.GetAppVersionIndex()
+	if idx >= 0 && int(idx) < len(cm.State.AllAppVersions) {
+		return ParseAppVersion(cm.State.AllAppVersions[idx])
+	}
+	return AppVersion{}
+}
+
 // ProceedJoin sends the actual Join message after receiving InitJoinAck
 func (cm *ClusterManager) ProceedJoin(ctx context.Context, actorPath string) error {
 	roles := append([]string{cm.localDCRole()}, cm.localRoles...)
 	join := &gproto_cluster.Join{
 		Node:  cm.LocalAddress,
 		Roles: roles,
+	}
+	if !cm.LocalAppVersion.IsZero() {
+		v := cm.LocalAppVersion.String()
+		join.AppVersion = &v
 	}
 	log.Printf("Cluster: sending Join to %s", actorPath)
 	return cm.Router(ctx, actorPath, join)
@@ -605,7 +653,7 @@ func (cm *ClusterManager) handleJoin(payload []byte, manifest string) error {
 	// the updated state.  The gossip loop's performLeaderActions will transition
 	// Joining → Up on the next tick.
 	cm.Mu.Lock()
-	cm.addMemberToGossipLocked(joiningNode, join.GetRoles())
+	cm.addMemberToGossipLocked(joiningNode, join.GetRoles(), join.GetAppVersion())
 	welcomeGossip := proto.Clone(cm.State).(*gproto_cluster.Gossip)
 	cm.connectToNewMembers(cm.State)
 	cm.Mu.Unlock()
@@ -625,9 +673,16 @@ func (cm *ClusterManager) handleJoin(payload []byte, manifest string) error {
 
 // addMemberToGossipLocked adds a joining node to the gossip Members list (as Joining).
 // roles are stored into AllRoles / RolesIndexes so that OldestNodeInDC works.
+// appVersion is the joining node's version string (e.g. "1.2.3"); empty means unset.
 // Must be called with cm.Mu held.
-func (cm *ClusterManager) addMemberToGossipLocked(joiningAddr *gproto_cluster.UniqueAddress, roles []string) {
+func (cm *ClusterManager) addMemberToGossipLocked(joiningAddr *gproto_cluster.UniqueAddress, roles []string, appVersion string) {
 	roleIdxs := cm.upsertRolesLocked(roles)
+
+	var appVerIdx *int32
+	if appVersion != "" {
+		idx := cm.upsertAppVersionsLocked([]string{appVersion})
+		appVerIdx = proto.Int32(idx)
+	}
 
 	// Look for an existing AllAddresses entry by host:port.
 	for i, addr := range cm.State.AllAddresses {
@@ -646,12 +701,16 @@ func (cm *ClusterManager) addMemberToGossipLocked(joiningAddr *gproto_cluster.Un
 					return
 				}
 			}
-			cm.State.Members = append(cm.State.Members, &gproto_cluster.Member{
+			newMem := &gproto_cluster.Member{
 				AddressIndex: proto.Int32(int32(i)),
 				Status:       gproto_cluster.MemberStatus_Joining.Enum(),
 				UpNumber:     proto.Int32(int32(len(cm.State.Members) + 1)),
 				RolesIndexes: roleIdxs,
-			})
+			}
+			if appVerIdx != nil {
+				newMem.AppVersionIndex = appVerIdx
+			}
+			cm.State.Members = append(cm.State.Members, newMem)
 			cm.ensureLocalHashInAllHashesLocked()
 			cm.incrementVersionWithLockHeld()
 			return
@@ -662,12 +721,16 @@ func (cm *ClusterManager) addMemberToGossipLocked(joiningAddr *gproto_cluster.Un
 	addrIdx := int32(len(cm.State.AllAddresses))
 	cm.State.AllAddresses = append(cm.State.AllAddresses, joiningAddr)
 	cm.State.AllHashes = append(cm.State.AllHashes, fmt.Sprintf("%d", joiningAddr.GetUid()))
-	cm.State.Members = append(cm.State.Members, &gproto_cluster.Member{
+	newMem := &gproto_cluster.Member{
 		AddressIndex: proto.Int32(addrIdx),
 		Status:       gproto_cluster.MemberStatus_Joining.Enum(),
 		UpNumber:     proto.Int32(int32(len(cm.State.Members) + 1)),
 		RolesIndexes: roleIdxs,
-	})
+	}
+	if appVerIdx != nil {
+		newMem.AppVersionIndex = appVerIdx
+	}
+	cm.State.Members = append(cm.State.Members, newMem)
 	cm.ensureLocalHashInAllHashesLocked()
 	cm.incrementVersionWithLockHeld()
 }
@@ -1174,6 +1237,24 @@ func (cm *ClusterManager) mergeGossipStates(s1, s2 *gproto_cluster.Gossip) *gpro
 		}
 	}
 
+	// Merge AllAppVersions from s2 into merged, building a remap table.
+	appVerRemap := make(map[int32]int32) // s2 appVersion idx → merged appVersion idx
+	for s2Idx, ver := range s2.AllAppVersions {
+		found := false
+		for mergedIdx, v := range merged.AllAppVersions {
+			if v == ver {
+				appVerRemap[int32(s2Idx)] = int32(mergedIdx)
+				found = true
+				break
+			}
+		}
+		if !found {
+			newIdx := int32(len(merged.AllAppVersions))
+			merged.AllAppVersions = append(merged.AllAppVersions, ver)
+			appVerRemap[int32(s2Idx)] = newIdx
+		}
+	}
+
 	// Union of members with highest status/upNumber
 	memberMap := make(map[int32]*gproto_cluster.Member)
 	for _, m := range merged.Members {
@@ -1204,6 +1285,12 @@ func (cm *ClusterManager) mergeGossipStates(s1, s2 *gproto_cluster.Gossip) *gpro
 				}
 				m1.RolesIndexes = remapped
 			}
+			// Adopt AppVersionIndex from incoming state if local entry has none.
+			if m1.AppVersionIndex == nil && m2.AppVersionIndex != nil {
+				if idx, ok2 := appVerRemap[m2.GetAppVersionIndex()]; ok2 {
+					m1.AppVersionIndex = proto.Int32(idx)
+				}
+			}
 		} else {
 			newM := proto.Clone(m2).(*gproto_cluster.Member)
 			newM.AddressIndex = proto.Int32(idxMerged)
@@ -1215,6 +1302,12 @@ func (cm *ClusterManager) mergeGossipStates(s1, s2 *gproto_cluster.Gossip) *gpro
 				}
 			}
 			newM.RolesIndexes = remapped
+			// Remap AppVersionIndex from s2's space to merged space.
+			if newM.AppVersionIndex != nil {
+				if idx, ok := appVerRemap[newM.GetAppVersionIndex()]; ok {
+					newM.AppVersionIndex = proto.Int32(idx)
+				}
+			}
 			merged.Members = append(merged.Members, newM)
 			memberMap[idxMerged] = newM
 		}
@@ -1776,11 +1869,16 @@ func (cm *ClusterManager) collectSBRMembersLocked() (all []icluster.Member, unre
 				roles = append(roles, state.AllRoles[idx])
 			}
 		}
+		appVer := ""
+		if idx := mem.GetAppVersionIndex(); idx >= 0 && int(idx) < len(state.AllAppVersions) {
+			appVer = state.AllAppVersions[idx]
+		}
 		m := icluster.Member{
-			Host:     a.GetHostname(),
-			Port:     a.GetPort(),
-			Roles:    roles,
-			UpNumber: mem.GetUpNumber(),
+			Host:       a.GetHostname(),
+			Port:       a.GetPort(),
+			Roles:      roles,
+			UpNumber:   mem.GetUpNumber(),
+			AppVersion: appVer,
 		}
 		all = append(all, m)
 		if _, isUnreachable := unreachableIdx[addrIdx]; isUnreachable {

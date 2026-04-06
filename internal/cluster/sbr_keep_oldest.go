@@ -106,21 +106,68 @@ func sbrFilterByRole(members []Member, role string) []Member {
 }
 
 // sbrOldestMember returns the member with the lowest UpNumber.
-// On a tie the member with the lexicographically lower Host (then lower Port)
-// is chosen as oldest, providing a deterministic total order.
+// When UpNumber ties, the member with the higher AppVersion wins (rolling
+// update preference — newer code survives).  When AppVersion also ties,
+// the member with the lexicographically lower Host (then lower Port) is
+// chosen, providing a deterministic total order.
 func sbrOldestMember(members []Member) Member {
 	best := members[0]
 	for _, m := range members[1:] {
-		switch {
-		case m.UpNumber < best.UpNumber:
-			best = m
-		case m.UpNumber == best.UpNumber && m.Host < best.Host:
-			best = m
-		case m.UpNumber == best.UpNumber && m.Host == best.Host && m.Port < best.Port:
+		if sbrPreferMember(m, best) {
 			best = m
 		}
 	}
 	return best
+}
+
+// sbrPreferMember returns true when a should be preferred over b for "oldest"
+// selection.  Lower UpNumber wins; on tie, higher AppVersion wins; on tie,
+// lower address wins.
+func sbrPreferMember(a, b Member) bool {
+	if a.UpNumber != b.UpNumber {
+		return a.UpNumber < b.UpNumber
+	}
+	// UpNumber tied — prefer higher AppVersion (rolling update: newer survives).
+	cmp := compareVersionStrings(a.AppVersion, b.AppVersion)
+	if cmp != 0 {
+		return cmp > 0
+	}
+	// AppVersion also tied — deterministic address tiebreaker.
+	if a.Host != b.Host {
+		return a.Host < b.Host
+	}
+	return a.Port < b.Port
+}
+
+// compareVersionStrings compares two "major.minor.patch" version strings.
+// Returns -1, 0, or +1.  Empty strings compare as "0.0.0".
+func compareVersionStrings(a, b string) int {
+	parse := func(s string) (uint16, uint16, uint16) {
+		var maj, min, pat uint16
+		fmt.Sscanf(s, "%d.%d.%d", &maj, &min, &pat)
+		return maj, min, pat
+	}
+	a1, a2, a3 := parse(a)
+	b1, b2, b3 := parse(b)
+	switch {
+	case a1 != b1:
+		if a1 < b1 {
+			return -1
+		}
+		return 1
+	case a2 != b2:
+		if a2 < b2 {
+			return -1
+		}
+		return 1
+	case a3 != b3:
+		if a3 < b3 {
+			return -1
+		}
+		return 1
+	default:
+		return 0
+	}
 }
 
 // sbrExclude returns the members from all that are not present in the

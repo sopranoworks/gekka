@@ -9,11 +9,63 @@
 package cluster
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
 	icluster "github.com/sopranoworks/gekka/internal/cluster"
 )
+
+// AppVersion represents a semantic version (major.minor.patch) used for
+// rolling update coordination.  Nodes advertise their version during the
+// cluster join handshake so that older/newer nodes can detect and handle
+// version differences.
+type AppVersion struct {
+	Major uint16
+	Minor uint16
+	Patch uint16
+}
+
+// String returns the version in "major.minor.patch" form.
+func (v AppVersion) String() string {
+	return fmt.Sprintf("%d.%d.%d", v.Major, v.Minor, v.Patch)
+}
+
+// IsZero returns true when the version has not been set.
+func (v AppVersion) IsZero() bool {
+	return v.Major == 0 && v.Minor == 0 && v.Patch == 0
+}
+
+// Compare returns -1 if v < other, 0 if equal, +1 if v > other.
+func (v AppVersion) Compare(other AppVersion) int {
+	switch {
+	case v.Major != other.Major:
+		if v.Major < other.Major {
+			return -1
+		}
+		return 1
+	case v.Minor != other.Minor:
+		if v.Minor < other.Minor {
+			return -1
+		}
+		return 1
+	case v.Patch != other.Patch:
+		if v.Patch < other.Patch {
+			return -1
+		}
+		return 1
+	default:
+		return 0
+	}
+}
+
+// ParseAppVersion parses "major.minor.patch" into an AppVersion.
+// Returns zero AppVersion on parse failure.
+func ParseAppVersion(s string) AppVersion {
+	var v AppVersion
+	fmt.Sscanf(s, "%d.%d.%d", &v.Major, &v.Minor, &v.Patch)
+	return v
+}
 
 // InternalSBRConfig holds configuration for the lightweight internal SBR
 // primitives (icluster.Strategy).  It mirrors the relevant fields of SBRConfig

@@ -199,11 +199,12 @@ func (r *contextAskResponder[T]) Path() string {
 // TypedActor is the internal bridge between the untyped actor system and typed behaviors.
 type TypedActor[T any] struct {
 	actor.BaseActor
-	behavior Behavior[T]
-	ctx      *typedContext[T]
-	timers   *timerScheduler[T]
-	stash    *stashBuffer[T]
-	stopped  bool
+	behavior         Behavior[T]
+	ctx              *typedContext[T]
+	timers           *timerScheduler[T]
+	stash            *stashBuffer[T]
+	stopped          bool
+	terminatedHooks  map[string]func() // path → callback for Monitor
 }
 
 // NewTypedActorInternal creates a new TypedActor instance with the given initial behavior.
@@ -331,11 +332,30 @@ func createProxyContext(a *genericTypedActor) any {
 	return nil
 }
 
+// addTerminatedHook registers a callback to be invoked when an actor at the
+// given path sends a TerminatedMessage. Used by Monitor to convert termination
+// signals into typed messages.
+func (a *TypedActor[T]) addTerminatedHook(path string, fn func()) {
+	if a.terminatedHooks == nil {
+		a.terminatedHooks = make(map[string]func())
+	}
+	a.terminatedHooks[path] = fn
+}
+
 // Receive implements the Actor interface for TypedActor[T].
 func (a *TypedActor[T]) Receive(msg any) {
 	if a.stopped {
 		return
 	}
+
+	// Intercept TerminatedMessage for Monitor hooks.
+	if tm, ok := msg.(actor.TerminatedMessage); ok && a.terminatedHooks != nil {
+		if fn, found := a.terminatedHooks[tm.TerminatedActor().Path()]; found {
+			fn()
+			return
+		}
+	}
+
 	if m, ok := msg.(T); ok {
 		next := a.behavior(a.ctx, m)
 		if next != nil {

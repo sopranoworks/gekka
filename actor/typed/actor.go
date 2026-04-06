@@ -205,6 +205,7 @@ type TypedActor[T any] struct {
 	stash            *stashBuffer[T]
 	stopped          bool
 	terminatedHooks  map[string]func() // path → callback for Monitor
+	receiveTimeout   *receiveTimeoutState[T]
 }
 
 // NewTypedActorInternal creates a new TypedActor instance with the given initial behavior.
@@ -227,6 +228,7 @@ func (a *TypedActor[T]) PreStart() {
 // PostStop cancels all active timers so their goroutines exit cleanly.
 func (a *TypedActor[T]) PostStop() {
 	a.timers.CancelAll()
+	a.cancelReceiveTimeout()
 }
 
 // NewTypedActor creates a new Actor that handles messages of type T using the given behavior.
@@ -357,6 +359,7 @@ func (a *TypedActor[T]) Receive(msg any) {
 	}
 
 	if m, ok := msg.(T); ok {
+		a.resetReceiveTimeout()
 		next := a.behavior(a.ctx, m)
 		if next != nil {
 			if isStopped(next) {

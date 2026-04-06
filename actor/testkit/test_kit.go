@@ -68,12 +68,32 @@ type GekkaTestKit struct {
 	// System is the ActorContext used to spawn actors under test.
 	// May be nil when the kit is used solely for TestProbe assertions.
 	System actor.ActorContext
+
+	// useCallingThread, when true, overrides Props.Dispatcher to
+	// DispatcherCallingThread for every ActorOf call made through this kit.
+	useCallingThread bool
 }
 
 // NewTestKit creates a GekkaTestKit backed by system.
 // Pass nil when only probes are needed.
 func NewTestKit(system actor.ActorContext) *GekkaTestKit {
 	return &GekkaTestKit{System: system}
+}
+
+// WithCallingThreadDispatcher returns a new GekkaTestKit that forces all actors
+// spawned via [GekkaTestKit.ActorOf] to use the CallingThreadDispatcher, making
+// message delivery synchronous and deterministic in tests.
+func (tk *GekkaTestKit) WithCallingThreadDispatcher() *GekkaTestKit {
+	return &GekkaTestKit{System: tk.System, useCallingThread: true}
+}
+
+// ActorOf creates an actor through the kit's System, applying any kit-level
+// options (e.g. WithCallingThreadDispatcher) to the props before delegating.
+func (tk *GekkaTestKit) ActorOf(props actor.Props, name string) (actor.Ref, error) {
+	if tk.useCallingThread {
+		props.Dispatcher = actor.DispatcherCallingThread
+	}
+	return tk.System.ActorOf(props, name)
 }
 
 // NewProbe creates and returns a new [TestProbe].

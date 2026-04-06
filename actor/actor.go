@@ -115,6 +115,11 @@ type Props struct {
 	// NewBoundedMailbox or NewPriorityMailbox to set a custom mailbox.
 	// Nil means the default 256-element buffered channel.
 	Mailbox MailboxFactory
+
+	// Dispatcher selects how the actor's receive loop is scheduled.
+	// DispatcherDefault (zero value) uses a goroutine-per-actor; see the
+	// DispatcherType constants for alternatives.
+	Dispatcher DispatcherType
 }
 
 // TerminatedMessage is implemented by actor-stopped notifications.

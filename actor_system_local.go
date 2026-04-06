@@ -648,7 +648,7 @@ func (s *localActorSystem) SpawnActor(path string, a actor.Actor, props actor.Pr
 			}
 		}
 	})
-	actor.Start(a)
+	actor.StartWithDispatcher(a, props.Dispatcher)
 
 	s.actorsMu.Lock()
 	s.actors[path] = a

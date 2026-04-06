@@ -2131,7 +2131,7 @@ func (n *Cluster) SpawnActor(path string, a actor.Actor, props actor.Props) acto
 			}
 		}
 	})
-	actor.Start(a)
+	actor.StartWithDispatcher(a, props.Dispatcher)
 	n.RegisterActor(path, a)
 	return ref
 }

@@ -231,24 +231,30 @@ func (b *bufferIterator[T]) next() (T, bool, error) {
 // throttleIterator limits throughput to at most `elements` per `per` duration
 // using a synchronous token-bucket algorithm.  Up to `burst` tokens may
 // accumulate, allowing short bursts above the steady-state rate.
+//
+// When costCalculation is non-nil each element may consume more than one
+// token.  Elements whose cost exceeds the current token count are held
+// until enough tokens have accumulated.
 type throttleIterator[T any] struct {
-	upstream  iterator[T]
-	interval  time.Duration // per / elements
-	last      time.Time     // wall-clock time of the last token bucket update
-	burst     int           // maximum token accumulation
-	available int           // tokens currently available
+	upstream        iterator[T]
+	interval        time.Duration // per / elements — time to generate one token
+	last            time.Time     // wall-clock time of the last token bucket update
+	burst           int           // maximum token accumulation
+	available       int           // tokens currently available
+	costCalculation func(T) int   // nil → cost 1 per element
 }
 
-func newThrottleIterator[T any](upstream iterator[T], elements int, per time.Duration, burst int) *throttleIterator[T] {
+func newThrottleIterator[T any](upstream iterator[T], elements int, per time.Duration, burst int, costFn func(T) int) *throttleIterator[T] {
 	if burst <= 0 {
 		burst = elements
 	}
 	return &throttleIterator[T]{
-		upstream:  upstream,
-		interval:  per / time.Duration(elements),
-		last:      time.Now(),
-		burst:     burst,
-		available: burst, // start with a full bucket
+		upstream:        upstream,
+		interval:        per / time.Duration(elements),
+		last:            time.Now(),
+		burst:           burst,
+		available:       burst, // start with a full bucket
+		costCalculation: costFn,
 	}
 }
 
@@ -260,22 +266,34 @@ func (t *throttleIterator[T]) next() (T, bool, error) {
 		return elem, ok, err
 	}
 
-	// We have a real element — replenish tokens and wait if the bucket is empty.
+	// Determine the cost of this element.
+	cost := 1
+	if t.costCalculation != nil {
+		cost = t.costCalculation(elem)
+		if cost < 1 {
+			cost = 1
+		}
+	}
+
+	// Replenish tokens based on elapsed time.
 	elapsed := time.Since(t.last)
 	if newTokens := int(elapsed / t.interval); newTokens > 0 {
 		t.available = min(t.available+newTokens, t.burst)
 		t.last = t.last.Add(time.Duration(newTokens) * t.interval)
 	}
 
-	if t.available > 0 {
-		t.available--
-	} else {
-		sleepUntil := t.last.Add(t.interval)
+	// Wait until enough tokens are available for this element's cost.
+	for t.available < cost {
+		deficit := cost - t.available
+		sleepUntil := t.last.Add(time.Duration(deficit) * t.interval)
 		if d := time.Until(sleepUntil); d > 0 {
 			time.Sleep(d)
 		}
 		t.last = sleepUntil
+		t.available += deficit
 	}
+	t.available -= cost
+
 	return elem, true, nil
 }
 

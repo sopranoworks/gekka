@@ -161,11 +161,11 @@ func (s Source[T, Mat]) Buffer(size int, strategy OverflowStrategy) Source[T, Ma
 
 // Throttle appends a [Throttle] stage after this Source.
 // See the package-level [Throttle] function for parameter semantics.
-func (s Source[T, Mat]) Throttle(elements int, per time.Duration, burst int) Source[T, Mat] {
+func (s Source[T, Mat]) Throttle(elements int, per time.Duration, burst int, costCalculation func(T) int) Source[T, Mat] {
 	return Source[T, Mat]{
 		factory: func() (iterator[T], Mat) {
 			inner, mat := s.factory()
-			return newThrottleIterator(inner, elements, per, burst), mat
+			return newThrottleIterator(inner, elements, per, burst, costCalculation), mat
 		},
 	}
 }

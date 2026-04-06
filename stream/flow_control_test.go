@@ -245,7 +245,7 @@ func TestThrottle_LimitsRate(t *testing.T) {
 	result, err := stream.RunWith(
 		stream.Via(
 			stream.FromSlice(makeRange(count)),
-			stream.Throttle[int](elements, per, burst),
+			stream.Throttle[int](elements, per, burst, nil),
 		),
 		stream.Collect[int](),
 		stream.ActorMaterializer{},
@@ -278,7 +278,7 @@ func TestThrottle_BurstAllowsInitialBurst(t *testing.T) {
 	result, err := stream.RunWith(
 		stream.Via(
 			stream.FromSlice(makeRange(total)),
-			stream.Throttle[int](elements, per, burstSize),
+			stream.Throttle[int](elements, per, burstSize, nil),
 		),
 		stream.Collect[int](),
 		stream.ActorMaterializer{},
@@ -312,7 +312,7 @@ func TestThrottle_Method_OnFlow(t *testing.T) {
 	result, err := stream.RunWith(
 		stream.Via(
 			stream.FromSlice(makeRange(count)),
-			stream.Map(func(n int) int { return n }).Throttle(elements, per, burst),
+			stream.Map(func(n int) int { return n }).Throttle(elements, per, burst, nil),
 		),
 		stream.Collect[int](),
 		stream.ActorMaterializer{},
@@ -328,6 +328,86 @@ func TestThrottle_Method_OnFlow(t *testing.T) {
 	if elapsed < minTime {
 		t.Fatalf("too fast: elapsed %v < %v", elapsed, minTime)
 	}
+}
+
+// TestThrottle_CostCalculation verifies that a costCalculation function
+// causes high-cost elements to consume multiple tokens.
+func TestThrottle_CostCalculation(t *testing.T) {
+	// Rate: 10 tokens/100ms, burst=10 (starts full).
+	// Elements: [1, 1, 1, 5, 1] with cost = value.
+	// Total cost = 1+1+1+5+1 = 9 tokens.  Burst covers them all instantly.
+	// But with burst=3 and 5 elements of cost [1,1,1,5,1]:
+	//   - first 3 cost 1 each → 3 tokens from burst (available=0)
+	//   - element 4 costs 5 → must wait 5 intervals = 50ms
+	//   - element 5 costs 1 → must wait 1 interval = 10ms
+	const (
+		elements = 10
+		per      = 100 * time.Millisecond
+		burst    = 3
+		// interval = 10ms; deficit after burst: 5+1 = 6 tokens → 60ms minimum
+		minExpected = 60 * time.Millisecond
+	)
+
+	input := []int{1, 1, 1, 5, 1}
+	costFn := func(n int) int { return n }
+
+	start := time.Now()
+	result, err := stream.RunWith(
+		stream.Via(
+			stream.FromSlice(input),
+			stream.Throttle[int](elements, per, burst, costFn),
+		),
+		stream.Collect[int](),
+		stream.ActorMaterializer{},
+	)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != len(input) {
+		t.Fatalf("got %d elements, want %d", len(result), len(input))
+	}
+	if elapsed < minExpected {
+		t.Fatalf("cost calculation not honoured: elapsed %v < minimum expected %v", elapsed, minExpected)
+	}
+	t.Logf("cost-based throttle elapsed %v (min expected %v)", elapsed, minExpected)
+}
+
+// TestThrottle_HighCostElement verifies that a single element with cost > burst
+// is still emitted after enough tokens accumulate.
+func TestThrottle_HighCostElement(t *testing.T) {
+	const (
+		elements = 10
+		per      = 100 * time.Millisecond
+		burst    = 5
+		// interval = 10ms. Element costs 8 tokens. Burst gives 5, need 3 more → 30ms.
+		minExpected = 30 * time.Millisecond
+	)
+
+	costFn := func(n int) int { return 8 }
+
+	start := time.Now()
+	result, err := stream.RunWith(
+		stream.Via(
+			stream.FromSlice([]int{42}),
+			stream.Throttle[int](elements, per, burst, costFn),
+		),
+		stream.Collect[int](),
+		stream.ActorMaterializer{},
+	)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 1 || result[0] != 42 {
+		t.Fatalf("got %v, want [42]", result)
+	}
+	if elapsed < minExpected {
+		t.Fatalf("high-cost element not honoured: elapsed %v < minimum expected %v", elapsed, minExpected)
+	}
+	t.Logf("high-cost element elapsed %v (min expected %v)", elapsed, minExpected)
 }
 
 // ─── Delay ────────────────────────────────────────────────────────────────

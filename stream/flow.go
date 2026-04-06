@@ -194,25 +194,28 @@ func (f Flow[In, Out, Mat]) Buffer(size int, strategy OverflowStrategy) Flow[In,
 //   - burst    — maximum number of tokens that can accumulate, allowing short
 //     bursts above the steady-state rate.  Pass 0 to use elements as the
 //     burst size (i.e. allow one full interval's worth of burst).
+//   - costCalculation — optional function returning the token cost of each
+//     element.  When nil every element costs 1 token.  Elements whose cost
+//     exceeds the current bucket are held until enough tokens accumulate.
 //
 // Example — limit to 100 elements/second with a burst of 10:
 //
-//	stream.Via(src, stream.Throttle[int](100, time.Second, 10))
-func Throttle[T any](elements int, per time.Duration, burst int) Flow[T, T, NotUsed] {
+//	stream.Via(src, stream.Throttle[int](100, time.Second, 10, nil))
+func Throttle[T any](elements int, per time.Duration, burst int, costCalculation func(T) int) Flow[T, T, NotUsed] {
 	return Flow[T, T, NotUsed]{
 		attach: func(up iterator[T]) (iterator[T], NotUsed) {
-			return newThrottleIterator(up, elements, per, burst), NotUsed{}
+			return newThrottleIterator(up, elements, per, burst, costCalculation), NotUsed{}
 		},
 	}
 }
 
 // Throttle wraps this Flow with a [Throttle] stage appended after its output
 // port.  See the package-level [Throttle] function for parameter semantics.
-func (f Flow[In, Out, Mat]) Throttle(elements int, per time.Duration, burst int) Flow[In, Out, Mat] {
+func (f Flow[In, Out, Mat]) Throttle(elements int, per time.Duration, burst int, costCalculation func(Out) int) Flow[In, Out, Mat] {
 	return Flow[In, Out, Mat]{
 		attach: func(up iterator[In]) (iterator[Out], Mat) {
 			inner, mat := f.attach(up)
-			return newThrottleIterator(inner, elements, per, burst), mat
+			return newThrottleIterator(inner, elements, per, burst, costCalculation), mat
 		},
 	}
 }

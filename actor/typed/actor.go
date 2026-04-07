@@ -81,9 +81,18 @@ type TypedContext[T any] interface {
 }
 
 // typedContext is the internal implementation of TypedContext[T].
-type typedContext[T any] struct {
-	actor *TypedActor[T]
+// mdcSwapper is an optional interface that TypedContext implementations can
+// support to allow WithMdc to inject a logger with diagnostic context.
+type mdcSwapper interface {
+	setMdcLogger(l *slog.Logger)
 }
+
+type typedContext[T any] struct {
+	actor     *TypedActor[T]
+	mdcLogger *slog.Logger // set temporarily by WithMdc
+}
+
+func (c *typedContext[T]) setMdcLogger(l *slog.Logger) { c.mdcLogger = l }
 
 var askCounter atomic.Uint64
 
@@ -96,6 +105,9 @@ func (c *typedContext[T]) System() actor.ActorContext {
 }
 
 func (c *typedContext[T]) Log() *slog.Logger {
+	if c.mdcLogger != nil {
+		return c.mdcLogger
+	}
 	return c.actor.Log().Logger()
 }
 
@@ -402,6 +414,71 @@ func Stopped[T any]() Behavior[T] {
 // In this implementation, Same is represented by a nil Behavior.
 func Same[T any]() Behavior[T] {
 	return nil
+}
+
+// Empty returns a behavior that accepts no messages. Each received message
+// is logged as a warning and otherwise ignored. The actor continues running.
+// This is useful as a placeholder or initial behavior before setup completes.
+func Empty[T any]() Behavior[T] {
+	return func(ctx TypedContext[T], msg T) Behavior[T] {
+		ctx.Log().Warn("empty behavior received message", "type", fmt.Sprintf("%T", msg))
+		return Same[T]()
+	}
+}
+
+// Ignore returns a behavior that silently ignores all messages.
+// No warnings are logged. The actor continues running.
+func Ignore[T any]() Behavior[T] {
+	return func(ctx TypedContext[T], msg T) Behavior[T] {
+		return Same[T]()
+	}
+}
+
+// Unhandled returns a behavior that marks every message as unhandled.
+// This logs at debug level and returns Same, allowing supervision or
+// the event stream to process the unhandled message.
+func Unhandled[T any]() Behavior[T] {
+	return func(ctx TypedContext[T], msg T) Behavior[T] {
+		ctx.Log().Debug("unhandled message", "type", fmt.Sprintf("%T", msg))
+		return Same[T]()
+	}
+}
+
+// WithMdc wraps a behavior with Mapped Diagnostic Context (MDC) support.
+// staticMdc keys are always included in log output. mdcForMessage is called
+// for each message and its returned keys are merged (message-specific keys
+// override static keys). The MDC is applied to the actor's logger before
+// message processing and cleared afterward.
+func WithMdc[T any](staticMdc map[string]string, mdcForMessage func(T) map[string]string, behavior Behavior[T]) Behavior[T] {
+	return func(ctx TypedContext[T], msg T) Behavior[T] {
+		// Build MDC attrs
+		var attrs []any
+		for k, v := range staticMdc {
+			attrs = append(attrs, slog.String(k, v))
+		}
+		if mdcForMessage != nil {
+			for k, v := range mdcForMessage(msg) {
+				attrs = append(attrs, slog.String(k, v))
+			}
+		}
+
+		// Create a child logger with MDC context
+		original := ctx.Log()
+		mdcLogger := original.With(attrs...)
+
+		// Swap the logger temporarily via the mdcSwapper interface
+		if sw, ok := ctx.(mdcSwapper); ok {
+			sw.setMdcLogger(mdcLogger)
+			defer sw.setMdcLogger(nil)
+		}
+
+		next := behavior(ctx, msg)
+		if next == nil || isStopped(next) {
+			return next
+		}
+		// Re-wrap the returned behavior with the same MDC
+		return WithMdc(staticMdc, mdcForMessage, next)
+	}
 }
 
 // Setup is a behavior decorator that allows for initialization of the actor.

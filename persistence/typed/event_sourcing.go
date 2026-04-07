@@ -69,6 +69,16 @@ type persistEffect[Event any, State any] struct {
 
 func (*persistEffect[Event, State]) isEffect() {}
 
+// PersistEffectEvents returns the events from a persist effect, or nil if the
+// effect is not a persist effect. This allows sub-packages (e.g. replicated)
+// to extract events without accessing unexported types.
+func PersistEffectEvents[Event any, State any](e Effect[Event, State]) (events []Event, then func(State), ok bool) {
+	if pe, ok := e.(*persistEffect[Event, State]); ok {
+		return pe.events, pe.then, true
+	}
+	return nil, nil, false
+}
+
 // Persist creates an effect that persists one or more events.
 func Persist[Event any, State any](events ...Event) Effect[Event, State] {
 	return &persistEffect[Event, State]{events: events}

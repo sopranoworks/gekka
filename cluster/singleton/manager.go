@@ -9,10 +9,13 @@
 package singleton
 
 import (
+	"context"
 	"log"
+	"time"
 
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/cluster"
+	icluster "github.com/sopranoworks/gekka/internal/cluster"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 )
 
@@ -40,6 +43,12 @@ type ClusterSingletonManager struct {
 	dataCenter     string      // optional DC filter; empty = any DC
 	singletonProps actor.Props // factory for the singleton actor
 	singletonRef   actor.Ref   // non-nil when the singleton is running on this node
+
+	// Lease-based coordination (optional). When set, the manager must acquire
+	// the lease before starting the singleton and releases it on handoff/stop.
+	lease            icluster.Lease
+	leaseRetryDelay  time.Duration // backoff between retries; default 5s
+	leaseHeld        bool
 }
 
 // NewClusterSingletonManager creates a manager actor that will spawn/stop the
@@ -64,6 +73,20 @@ func (m *ClusterSingletonManager) WithDataCenter(dc string) cluster.ClusterSingl
 	return m
 }
 
+// WithLease configures the manager to acquire a distributed lease before
+// starting the singleton actor. This prevents split-brain dual-singletons.
+func (m *ClusterSingletonManager) WithLease(lease icluster.Lease) *ClusterSingletonManager {
+	m.lease = lease
+	return m
+}
+
+// WithLeaseRetryDelay sets the backoff delay between lease acquisition retries.
+// Default is 5 seconds.
+func (m *ClusterSingletonManager) WithLeaseRetryDelay(d time.Duration) *ClusterSingletonManager {
+	m.leaseRetryDelay = d
+	return m
+}
+
 // PreStart subscribes to cluster events and starts the singleton if this node
 // is already the oldest at startup time.
 func (m *ClusterSingletonManager) PreStart() {
@@ -77,7 +100,7 @@ func (m *ClusterSingletonManager) PreStart() {
 }
 
 // PostStop unsubscribes from cluster events and stops the singleton actor if
-// it is still running locally.
+// it is still running locally, releasing any held lease.
 func (m *ClusterSingletonManager) PostStop() {
 	m.cm.Unsubscribe(m.Self())
 	if m.singletonRef != nil {
@@ -85,6 +108,7 @@ func (m *ClusterSingletonManager) PostStop() {
 		m.System().Stop(m.singletonRef)
 		m.singletonRef = nil
 	}
+	m.releaseLease()
 }
 
 // Receive dispatches cluster domain events and monitors singleton lifecycle.
@@ -123,9 +147,13 @@ func (m *ClusterSingletonManager) isLocalOldest() bool {
 func (m *ClusterSingletonManager) maybeSpawnOrStop() {
 	if m.isLocalOldest() {
 		if m.singletonRef == nil {
+			if !m.acquireLease() {
+				return
+			}
 			ref, err := m.System().ActorOf(m.singletonProps, "singleton")
 			if err != nil {
 				log.Printf("ClusterSingletonManager: failed to spawn singleton: %v", err)
+				m.releaseLease()
 				return
 			}
 			m.singletonRef = ref
@@ -137,6 +165,56 @@ func (m *ClusterSingletonManager) maybeSpawnOrStop() {
 			log.Printf("ClusterSingletonManager: stopping singleton — no longer oldest node")
 			m.System().Stop(m.singletonRef)
 			m.singletonRef = nil
+			m.releaseLease()
 		}
 	}
+}
+
+// acquireLease attempts to acquire the configured lease. Returns true if no
+// lease is configured or if the lease was acquired successfully. On failure
+// it retries once after leaseRetryDelay.
+func (m *ClusterSingletonManager) acquireLease() bool {
+	if m.lease == nil {
+		return true
+	}
+	if m.leaseHeld {
+		return true
+	}
+
+	ctx := context.Background()
+	ok, err := m.lease.Acquire(ctx, func(err error) {
+		log.Printf("ClusterSingletonManager: lease lost: %v", err)
+		// On lease loss, stop the singleton.
+		if m.singletonRef != nil {
+			m.System().Stop(m.singletonRef)
+			m.singletonRef = nil
+		}
+		m.leaseHeld = false
+	})
+	if err != nil || !ok {
+		retryDelay := m.leaseRetryDelay
+		if retryDelay == 0 {
+			retryDelay = 5 * time.Second
+		}
+		log.Printf("ClusterSingletonManager: lease acquisition failed, retrying in %s", retryDelay)
+		time.Sleep(retryDelay)
+		ok, err = m.lease.Acquire(ctx, nil)
+		if err != nil || !ok {
+			log.Printf("ClusterSingletonManager: lease acquisition retry failed: %v", err)
+			return false
+		}
+	}
+	m.leaseHeld = true
+	return true
+}
+
+// releaseLease releases the held lease if any.
+func (m *ClusterSingletonManager) releaseLease() {
+	if m.lease == nil || !m.leaseHeld {
+		return
+	}
+	if _, err := m.lease.Release(context.Background()); err != nil {
+		log.Printf("ClusterSingletonManager: lease release failed: %v", err)
+	}
+	m.leaseHeld = false
 }

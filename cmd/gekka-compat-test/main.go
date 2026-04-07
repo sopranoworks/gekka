@@ -178,11 +178,15 @@ func main() {
                                         goto memberUp
                                 }
                         case cluster.UnreachableMember:
-                                fmt.Printf("FAIL: CLUSTER_UNREACHABLE %s\n", e.Member.String())
-                                os.Exit(1)
+                                // Log but don't exit — in multi-node clusters, members may be
+                                // temporarily unreachable before connections are established.
+                                fmt.Printf("WARN: CLUSTER_UNREACHABLE %s\n", e.Member.String())
                         case cluster.MemberDowned:
-                                fmt.Printf("FAIL: CLUSTER_MEMBER_DOWN %s\n", e.Member.String())
-                                os.Exit(1)
+                                if e.Member.Host == cfg.Host && e.Member.Port == cfg.Port {
+                                        fmt.Printf("FAIL: LOCAL_MEMBER_DOWN %s\n", e.Member.String())
+                                        os.Exit(1)
+                                }
+                                fmt.Printf("WARN: CLUSTER_MEMBER_DOWN %s\n", e.Member.String())
                         case cluster.MemberRemoved:
                                 if e.Member.Host == cfg.Host && e.Member.Port == cfg.Port {
                                         fmt.Printf("FAIL: LOCAL_MEMBER_REMOVED %s\n", e.Member.String())

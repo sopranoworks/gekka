@@ -270,6 +270,34 @@ State is propagated as JSON (serializer ID 4) over Artery.
 
 ---
 
+## Multi-Node Cluster Join Behavior
+
+When a Gekka node joins a cluster that already has multiple members, the seed
+node's **Welcome** (`"W"`) message contains the full gossip state — including
+addresses of members the joiner has never communicated with. The joiner's
+phi-accrual failure detector has no heartbeat history for these members and may
+immediately mark them as **Unreachable**.
+
+This is expected and transient. The resolution sequence is:
+
+1. Joiner receives `Welcome` containing `N` members.
+2. Joiner's failure detector evaluates members with no heartbeat history →
+   phi exceeds threshold → `UnreachableMember` event fires for unknown peers.
+3. Akka/Pekko seed node propagates the joiner's address via gossip to all
+   existing members.
+4. Existing members initiate outbound Artery connections to the joiner.
+5. Heartbeat exchange begins → phi drops below threshold → members become
+   reachable.
+
+**Implementation note:** Gekka treats `UnreachableMember` events for remote
+members as warnings, not fatal errors. Only `MemberDowned` or `MemberRemoved`
+for the local node triggers a hard failure. This differs from the original
+2-node compat test binary which treated any `UnreachableMember` as fatal — that
+assumption breaks in clusters with 3+ members where connection establishment is
+not instantaneous.
+
+---
+
 ## Wire Compatibility Notes
 
 - Pekko sends heartbeats to `/system/cluster/heartbeatReceiver` using

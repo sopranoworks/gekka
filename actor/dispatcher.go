@@ -11,6 +11,8 @@ package actor
 import (
 	"log/slog"
 	"runtime"
+	"strings"
+	"sync"
 )
 
 // DispatcherType selects how an actor's receive loop is scheduled.
@@ -140,6 +142,60 @@ func installCallingThreadImpl(a Actor) {
 			a.Receive(msg)
 		}
 		return true
+	}
+}
+
+// ── Dispatcher Configuration ──────────────────────────────────────────────────
+
+// DispatcherConfig holds the HOCON-parsed configuration for a named dispatcher.
+type DispatcherConfig struct {
+	Type       string // "default-dispatcher", "pinned-dispatcher", "calling-thread-dispatcher"
+	Throughput int    // messages per actor before yielding (informational; Go uses goroutines)
+}
+
+var (
+	dispatcherConfigsMu sync.RWMutex
+	dispatcherConfigs   = map[string]DispatcherConfig{
+		"default-dispatcher": {Type: "default-dispatcher", Throughput: 5},
+		"pinned-dispatcher":  {Type: "pinned-dispatcher", Throughput: 1},
+	}
+)
+
+// RegisterDispatcherConfig stores a named dispatcher config that can be
+// referenced by Props.DispatcherKey.
+func RegisterDispatcherConfig(key string, cfg DispatcherConfig) {
+	dispatcherConfigsMu.Lock()
+	defer dispatcherConfigsMu.Unlock()
+	dispatcherConfigs[key] = cfg
+}
+
+// ResolveDispatcherKey looks up the DispatcherType for a config key.
+// Returns DispatcherDefault if the key is empty or not found.
+func ResolveDispatcherKey(key string) DispatcherType {
+	if key == "" {
+		return DispatcherDefault
+	}
+
+	dispatcherConfigsMu.RLock()
+	cfg, ok := dispatcherConfigs[key]
+	dispatcherConfigsMu.RUnlock()
+
+	if !ok {
+		return DispatcherDefault
+	}
+	return dispatcherTypeFromString(cfg.Type)
+}
+
+// dispatcherTypeFromString maps a HOCON type string to a DispatcherType.
+func dispatcherTypeFromString(s string) DispatcherType {
+	s = strings.TrimSpace(strings.ToLower(s))
+	switch {
+	case strings.Contains(s, "pinned"):
+		return DispatcherPinned
+	case strings.Contains(s, "calling-thread"):
+		return DispatcherCallingThread
+	default:
+		return DispatcherDefault
 	}
 }
 

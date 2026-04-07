@@ -474,11 +474,51 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		nodeCfg.Discovery.Config.Config["port"] = v
 	}
 
+	// ── Dispatcher Configuration ────────────────────────────────────────────
+	extractDispatchers(cfg, prefix)
+
 	// Preserve the raw config so NewCluster can call LoadFromConfig for
 	// user-defined serializers declared under pekko.actor.serializers.
 	nodeCfg.HOCON = cfg
 
 	return nodeCfg, nil
+}
+
+// extractDispatchers reads dispatcher definitions from the HOCON config
+// and registers them with the actor package's dispatcher registry.
+//
+// HOCON format:
+//
+//	pekko.dispatchers {
+//	  my-dispatcher {
+//	    type = "pinned-dispatcher"
+//	    throughput = 1
+//	  }
+//	}
+func extractDispatchers(cfg *hocon.Config, prefix string) {
+	dispPrefix := prefix + ".dispatchers"
+
+	// Try to enumerate known dispatcher keys. The HOCON library doesn't
+	// expose key iteration, so we check the sub-config for each entry.
+	sub, err := cfg.GetConfig(dispPrefix)
+	if err != nil {
+		return
+	}
+
+	// Iterate over sub-config keys.
+	for _, key := range sub.Keys() {
+		dcfg := actor.DispatcherConfig{}
+		path := dispPrefix + "." + key
+		if v, e := cfg.GetString(path + ".type"); e == nil {
+			dcfg.Type = strings.TrimSpace(v)
+		} else {
+			dcfg.Type = key // default: use the key name as the type
+		}
+		if v, e := cfg.GetInt(path + ".throughput"); e == nil {
+			dcfg.Throughput = v
+		}
+		actor.RegisterDispatcherConfig(key, dcfg)
+	}
 }
 
 // parseHOCONDuration parses a Pekko/HOCON duration string such as "20s", "5 seconds",

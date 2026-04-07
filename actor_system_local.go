@@ -648,7 +648,11 @@ func (s *localActorSystem) SpawnActor(path string, a actor.Actor, props actor.Pr
 			}
 		}
 	})
-	actor.StartWithDispatcher(a, props.Dispatcher)
+	dispType := props.Dispatcher
+	if props.DispatcherKey != "" {
+		dispType = actor.ResolveDispatcherKey(props.DispatcherKey)
+	}
+	actor.StartWithDispatcher(a, dispType)
 
 	s.actorsMu.Lock()
 	s.actors[path] = a

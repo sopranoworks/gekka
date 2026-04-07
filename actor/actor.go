@@ -120,6 +120,11 @@ type Props struct {
 	// DispatcherDefault (zero value) uses a goroutine-per-actor; see the
 	// DispatcherType constants for alternatives.
 	Dispatcher DispatcherType
+
+	// DispatcherKey is a HOCON config key (e.g. "my-dispatcher") that is
+	// resolved to a DispatcherType at actor spawn time via the system config.
+	// When non-empty it takes precedence over the Dispatcher field.
+	DispatcherKey string
 }
 
 // TerminatedMessage is implemented by actor-stopped notifications.

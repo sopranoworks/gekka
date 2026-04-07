@@ -2131,7 +2131,11 @@ func (n *Cluster) SpawnActor(path string, a actor.Actor, props actor.Props) acto
 			}
 		}
 	})
-	actor.StartWithDispatcher(a, props.Dispatcher)
+	dispType := props.Dispatcher
+	if props.DispatcherKey != "" {
+		dispType = actor.ResolveDispatcherKey(props.DispatcherKey)
+	}
+	actor.StartWithDispatcher(a, dispType)
 	n.RegisterActor(path, a)
 	return ref
 }

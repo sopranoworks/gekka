@@ -47,6 +47,19 @@ type EventSourcedBehavior[Command any, Event any, State any] struct {
 	// SnapshotWhen, if non-nil, is evaluated after each event application.
 	// A snapshot is saved whenever it returns true (OR'd with SnapshotInterval).
 	SnapshotWhen func(state State, event Event, seqNr uint64) bool
+
+	// RetentionCriteria, if set, governs automated snapshot retention and
+	// event deletion.  It takes precedence over the SnapshotInterval and
+	// MaxSnapshots fields above when its SnapshotEveryNEvents > 0.
+	RetentionCriteria *RetentionCriteria
+
+	// RecoveryStrategy controls how recovery proceeds.  Nil means normal
+	// recovery (load snapshot + replay all events).
+	RecoveryStrategy *RecoveryStrategy
+
+	// SignalHandler, if non-nil, receives lifecycle signals such as
+	// [RecoveryCompleted] after recovery finishes.
+	SignalHandler func(signal PersistenceSignal)
 }
 
 // WithPersistenceID returns a copy of the behavior with a new persistence ID.
@@ -281,9 +294,32 @@ func (p *persistentActor[Command, Event, State]) Receive(msg any) {
 func (p *persistentActor[Command, Event, State]) recover() {
 	ctx := context.Background()
 
+	// Check for disabled recovery
+	if p.behavior.RecoveryStrategy != nil && p.behavior.RecoveryStrategy.Disabled {
+		// Skip recovery — start fresh but read highest seqNr to avoid conflicts
+		if p.behavior.Journal != nil {
+			highSeq, err := p.behavior.Journal.ReadHighestSequenceNr(ctx, p.behavior.PersistenceID, 0)
+			if err == nil {
+				p.seqNr = highSeq
+			}
+		}
+		p.recovering = false
+		p.Log().Info("Recovery disabled, starting fresh", "seqNr", p.seqNr)
+		p.deliverRecoveryCompleted()
+		p.processStash()
+		return
+	}
+
 	// 1. Load snapshot
 	if p.behavior.SnapshotStore != nil {
-		snap, err := p.behavior.SnapshotStore.LoadSnapshot(ctx, p.behavior.PersistenceID, p.behavior.SnapshotCriteria)
+		criteria := p.behavior.SnapshotCriteria
+		if criteria == (persistence.SnapshotSelectionCriteria{}) {
+			criteria = persistence.LatestSnapshotCriteria()
+		}
+		if p.behavior.RecoveryStrategy != nil && p.behavior.RecoveryStrategy.SnapshotSelectionCriteria != nil {
+			criteria = *p.behavior.RecoveryStrategy.SnapshotSelectionCriteria
+		}
+		snap, err := p.behavior.SnapshotStore.LoadSnapshot(ctx, p.behavior.PersistenceID, criteria)
 		if err == nil && snap != nil {
 			if s, ok := snap.Snapshot.(State); ok {
 				p.state = s
@@ -295,8 +331,14 @@ func (p *persistentActor[Command, Event, State]) recover() {
 
 	// 2. Replay events
 	if p.behavior.Journal != nil {
+		replayFilter := p.getReplayFilter()
 		err := p.behavior.Journal.ReplayMessages(ctx, p.behavior.PersistenceID, p.seqNr+1, ^uint64(0), 0, func(repr persistence.PersistentRepr) {
 			if event, ok := repr.Payload.(Event); ok {
+				if replayFilter != nil && !replayFilter(repr) {
+					// Skip this event but advance seqNr
+					p.seqNr = repr.SequenceNr
+					return
+				}
 				p.state = p.behavior.EventHandler(p.state, event)
 				p.seqNr = repr.SequenceNr
 			}
@@ -315,8 +357,24 @@ func (p *persistentActor[Command, Event, State]) recover() {
 
 	p.recovering = false
 	p.Log().Info("Recovery completed", "seqNr", p.seqNr)
+	p.deliverRecoveryCompleted()
+	p.processStash()
+}
 
-	// 3. Process stashed commands
+func (p *persistentActor[Command, Event, State]) getReplayFilter() func(persistence.PersistentRepr) bool {
+	if p.behavior.RecoveryStrategy != nil && p.behavior.RecoveryStrategy.ReplayFilter != nil {
+		return p.behavior.RecoveryStrategy.ReplayFilter
+	}
+	return nil
+}
+
+func (p *persistentActor[Command, Event, State]) deliverRecoveryCompleted() {
+	if p.behavior.SignalHandler != nil {
+		p.behavior.SignalHandler(RecoveryCompleted{HighestSequenceNr: p.seqNr})
+	}
+}
+
+func (p *persistentActor[Command, Event, State]) processStash() {
 	for _, cmd := range p.stash {
 		p.Receive(cmd)
 	}
@@ -363,6 +421,10 @@ func (p *persistentActor[Command, Event, State]) persist(events []Event, then fu
 		if p.behavior.SnapshotInterval > 0 && eventSeqNr%p.behavior.SnapshotInterval == 0 {
 			shouldSnap = true
 		}
+		if p.behavior.RetentionCriteria != nil && p.behavior.RetentionCriteria.SnapshotEveryNEvents > 0 &&
+			eventSeqNr%p.behavior.RetentionCriteria.SnapshotEveryNEvents == 0 {
+			shouldSnap = true
+		}
 		if p.behavior.SnapshotWhen != nil && p.behavior.SnapshotWhen(p.state, event, eventSeqNr) {
 			shouldSnap = true
 		}
@@ -375,25 +437,54 @@ func (p *persistentActor[Command, Event, State]) persist(events []Event, then fu
 			}, p.state)
 			if snapErr == nil {
 				p.lastSnapSeqNr = eventSeqNr
-				// Automated cleanup when using SnapshotInterval-based retention.
-				if p.behavior.MaxSnapshots > 0 && p.behavior.SnapshotInterval > 0 {
-					keepCount := uint64(p.behavior.MaxSnapshots) * p.behavior.SnapshotInterval
-					if eventSeqNr > keepCount {
-						deleteUpTo := eventSeqNr - keepCount
-						if delErr := p.behavior.SnapshotStore.DeleteSnapshots(ctx, p.behavior.PersistenceID, persistence.SnapshotSelectionCriteria{
-							MaxSequenceNr: deleteUpTo,
-							MaxTimestamp:  math.MaxInt64,
-						}); delErr != nil {
-							p.Log().Error("snapshot cleanup failed", "error", delErr, "deleteUpTo", deleteUpTo)
-						}
-					}
-				}
+				p.applyRetentionCleanup(ctx, eventSeqNr)
 			}
 		}
 	}
 
 	if then != nil {
 		then(p.state)
+	}
+}
+
+func (p *persistentActor[Command, Event, State]) applyRetentionCleanup(ctx context.Context, eventSeqNr uint64) {
+	// RetentionCriteria-based cleanup
+	if rc := p.behavior.RetentionCriteria; rc != nil && rc.KeepNSnapshots > 0 {
+		interval := rc.SnapshotEveryNEvents
+		if interval == 0 {
+			interval = 1
+		}
+		keepCount := uint64(rc.KeepNSnapshots) * interval
+		if eventSeqNr > keepCount {
+			deleteUpTo := eventSeqNr - keepCount
+			if delErr := p.behavior.SnapshotStore.DeleteSnapshots(ctx, p.behavior.PersistenceID, persistence.SnapshotSelectionCriteria{
+				MaxSequenceNr: deleteUpTo,
+				MaxTimestamp:  math.MaxInt64,
+			}); delErr != nil {
+				p.Log().Error("snapshot cleanup failed", "error", delErr, "deleteUpTo", deleteUpTo)
+			}
+			// Delete old events if configured
+			if rc.DeleteEventsOnSnapshot {
+				if delErr := p.behavior.Journal.AsyncDeleteMessagesTo(ctx, p.behavior.PersistenceID, deleteUpTo); delErr != nil {
+					p.Log().Error("event cleanup failed", "error", delErr, "deleteUpTo", deleteUpTo)
+				}
+			}
+		}
+		return
+	}
+
+	// Legacy MaxSnapshots-based cleanup
+	if p.behavior.MaxSnapshots > 0 && p.behavior.SnapshotInterval > 0 {
+		keepCount := uint64(p.behavior.MaxSnapshots) * p.behavior.SnapshotInterval
+		if eventSeqNr > keepCount {
+			deleteUpTo := eventSeqNr - keepCount
+			if delErr := p.behavior.SnapshotStore.DeleteSnapshots(ctx, p.behavior.PersistenceID, persistence.SnapshotSelectionCriteria{
+				MaxSequenceNr: deleteUpTo,
+				MaxTimestamp:  math.MaxInt64,
+			}); delErr != nil {
+				p.Log().Error("snapshot cleanup failed", "error", delErr, "deleteUpTo", deleteUpTo)
+			}
+		}
 	}
 }
 

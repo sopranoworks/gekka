@@ -218,6 +218,7 @@ type TypedActor[T any] struct {
 	stopped          bool
 	terminatedHooks  map[string]func() // path → callback for Monitor
 	receiveTimeout   *receiveTimeoutState[T]
+	postStopCallback func()            // optional callback for StoppedWithPostStop
 }
 
 // NewTypedActorInternal creates a new TypedActor instance with the given initial behavior.
@@ -238,7 +239,11 @@ func (a *TypedActor[T]) PreStart() {
 }
 
 // PostStop cancels all active timers so their goroutines exit cleanly.
+// If a [StoppedWithPostStop] callback was registered, it is invoked here.
 func (a *TypedActor[T]) PostStop() {
+	if a.postStopCallback != nil {
+		a.postStopCallback()
+	}
 	a.timers.CancelAll()
 	a.cancelReceiveTimeout()
 }

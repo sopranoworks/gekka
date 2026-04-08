@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"reflect"
 	"strings"
 	"sync"
@@ -70,6 +71,10 @@ const (
 
 	DDataReplicatedSerializerID    = 11
 	DDataReplicatorMsgSerializerID = 12
+
+	// MiscMessageSerializerID is Pekko's MiscMessageSerializer (ID=16).
+	// Handles Identify, ActorIdentity, PoisonPill, Status$Success/Failure, etc.
+	MiscMessageSerializerID = 16
 )
 
 // Serializer is an interface for serializing messages.
@@ -442,10 +447,14 @@ func (j *JSONSerializer) ToBinary(msg interface{}) ([]byte, error) {
 }
 
 // FromBinary deserializes JSON bytes into the type registered for manifest.
+// When unmarshal fails (e.g. binary data sent with a manifest that collides
+// with a different serializer's manifest namespace), the payload is returned
+// as an opaque OpaqueJSONMessage rather than crashing the TCP handler.
 func (j *JSONSerializer) FromBinary(data []byte, manifest string) (interface{}, error) {
 	typ, ok := j.registry.GetTypeByManifest(manifest)
 	if !ok {
-		return nil, fmt.Errorf("JSONSerializer: no type registered for manifest %q", manifest)
+		// Unknown manifest — return opaque wrapper instead of error.
+		return &OpaqueJSONMessage{Manifest: manifest, Data: data}, nil
 	}
 	var ptr reflect.Value
 	if typ.Kind() == reflect.Ptr {
@@ -454,12 +463,23 @@ func (j *JSONSerializer) FromBinary(data []byte, manifest string) (interface{}, 
 		ptr = reflect.New(typ)
 	}
 	if err := json.Unmarshal(data, ptr.Interface()); err != nil {
-		return nil, fmt.Errorf("JSONSerializer: unmarshal into %v: %w", typ, err)
+		// Unmarshal failure — manifest collision between serializers.
+		// Return opaque wrapper so the connection isn't killed.
+		slog.Debug("JSONSerializer: manifest collision, returning opaque message",
+			"manifest", manifest, "type", typ, "error", err)
+		return &OpaqueJSONMessage{Manifest: manifest, Data: data}, nil
 	}
 	if typ.Kind() == reflect.Ptr {
 		return ptr.Interface(), nil
 	}
 	return ptr.Elem().Interface(), nil
+}
+
+// OpaqueJSONMessage wraps payloads that the JSONSerializer couldn't decode,
+// typically due to manifest collisions with other serializers.
+type OpaqueJSONMessage struct {
+	Manifest string
+	Data     []byte
 }
 
 // RawSerializer handles raw byte slice messages.

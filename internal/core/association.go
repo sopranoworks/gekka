@@ -789,11 +789,22 @@ func (assoc *GekkaAssociation) dispatch(ctx context.Context, meta *ArteryMetadat
 			return nil
 		}
 
+		// 2b. Handle Identify (MiscMessageSerializer, sid=16, manifest "A") —
+		// reply with ActorIdentity so Pekko's actorSelection(...).resolveOne() works.
+		// Only respond to manifest "A" (Identify); other MiscMessage types are dropped.
+		if env.GetSerializerId() == MiscMessageSerializerID && string(env.GetMessageManifest()) == "A" {
+			meta.Recipient = &gproto_remote.ActorRefData{Path: proto.String(path)}
+			assoc.handleIdentify(meta, env)
+			return nil
+		}
+
 		// 3. Deserialize inner message for non-cluster payloads
 		innerMsg, err := assoc.nodeMgr.SerializerRegistry.DeserializePayload(env.GetSerializerId(), string(env.GetMessageManifest()), env.GetEnclosedMessage())
 		if err != nil {
-			slog.Debug("artery: selection failed to deserialize inner message", "error", err)
-			return err
+			// Non-fatal: unknown serializer or manifest collision should not
+			// kill the TCP connection.  Log and drop the message.
+			slog.Debug("artery: selection failed to deserialize inner message (dropping)", "error", err)
+			return nil
 		}
 
 		// 4. Update meta and route
@@ -1168,18 +1179,26 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 			// Akka sends cluster heartbeats via actorSelection using serializer 6.
 			// Decode the SelectionEnvelope and forward inner cluster messages so
 			// our failure-detector keeps receiving HBR responses from Go.
-			if assoc.nodeMgr.clusterMgr != nil {
-				env := &gproto_remote.SelectionEnvelope{}
-				if err := proto.Unmarshal(meta.Payload, env); err == nil {
-					innerManifest := string(env.GetMessageManifest())
-					if env.GetSerializerId() == 5 && innerManifest != "" {
-						assoc.mu.RLock()
-						remote := assoc.remote
-						assoc.mu.RUnlock()
-						slog.Debug("artery: forwarding actorSelection cluster message", "manifest", innerManifest)
-						return assoc.nodeMgr.clusterMgr.HandleIncomingClusterMessage(
-							ctx, env.GetEnclosedMessage(), innerManifest, ToClusterUniqueAddress(remote))
-					}
+			env := &gproto_remote.SelectionEnvelope{}
+			if err := proto.Unmarshal(meta.Payload, env); err == nil {
+				innerSID := env.GetSerializerId()
+				innerManifest := string(env.GetMessageManifest())
+
+				// Forward cluster messages (sid=5) to the cluster manager.
+				if innerSID == 5 && innerManifest != "" && assoc.nodeMgr.clusterMgr != nil {
+					assoc.mu.RLock()
+					remote := assoc.remote
+					assoc.mu.RUnlock()
+					slog.Debug("artery: forwarding actorSelection cluster message", "manifest", innerManifest)
+					return assoc.nodeMgr.clusterMgr.HandleIncomingClusterMessage(
+						ctx, env.GetEnclosedMessage(), innerManifest, ToClusterUniqueAddress(remote))
+				}
+
+				// Handle Identify (sid=16) — respond with ActorIdentity so Pekko's
+				// actorSelection(...).resolveOne() can discover Go actors.
+				if innerSID == MiscMessageSerializerID {
+					assoc.handleIdentify(meta, env)
+					return nil
 				}
 			}
 			return nil
@@ -1187,6 +1206,65 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 		slog.Debug("artery: unidentified control message", "manifest", manifest, "serializerId", meta.SerializerId)
 		return nil
 	}
+}
+
+// handleIdentify responds to Pekko's Identify messages inside ActorSelectionMessages.
+// This enables actorSelection(...).resolveOne() from Pekko to discover Go actors.
+func (assoc *GekkaAssociation) handleIdentify(meta *ArteryMetadata, env *gproto_remote.SelectionEnvelope) {
+	// Decode the Identify proto from the enclosed message.
+	identify := &gproto_remote.Identify{}
+	if err := proto.Unmarshal(env.GetEnclosedMessage(), identify); err != nil {
+		slog.Debug("artery: failed to decode Identify", "error", err)
+		return
+	}
+
+	// Resolve the recipient path from the ActorSelection elements.
+	recipientPath := meta.Recipient.GetPath()
+
+	// Build the actor ref path for the reply.
+	la := assoc.nodeMgr.LocalAddr
+	actorRefPath := fmt.Sprintf("%s://%s@%s:%d%s",
+		la.GetProtocol(), la.GetSystem(), la.GetHostname(), la.GetPort(), recipientPath)
+
+	// Build ActorIdentity reply.  Ref is always set (the actor exists from
+	// Pekko's perspective — Go's registered actors serve as remote endpoints).
+	identity := &gproto_remote.ActorIdentity{
+		CorrelationId: identify.GetMessageId(),
+		Ref:           &gproto_remote.ProtoActorRef{Path: proto.String(actorRefPath)},
+	}
+
+	identityBytes, err := proto.Marshal(identity)
+	if err != nil {
+		slog.Warn("artery: failed to marshal ActorIdentity", "error", err)
+		return
+	}
+
+	// Send ActorIdentity back to the sender.  The sender path is in the Artery
+	// envelope's sender field — that's where Pekko's resolveOne() waits.
+	senderPath := ""
+	if meta.Sender != nil {
+		senderPath = meta.Sender.GetPath()
+	}
+	if senderPath == "" {
+		slog.Debug("artery: Identify has no sender, cannot reply")
+		return
+	}
+
+	// Send ActorIdentity via the outbound association to Pekko.
+	// In Artery TCP, connections are unidirectional.
+	remoteAddr := assoc.remote.GetAddress()
+	outAssoc, ok := assoc.nodeMgr.GetGekkaAssociationByHost(remoteAddr.GetHostname(), remoteAddr.GetPort())
+	if !ok {
+		slog.Warn("artery: no outbound association for ActorIdentity reply")
+		return
+	}
+
+	// Use SendWithSender to properly frame the reply with the actor ref as sender.
+	if err := outAssoc.SendWithSender(senderPath, actorRefPath, identityBytes, MiscMessageSerializerID, "B"); err != nil {
+		slog.Warn("artery: failed to send ActorIdentity", "error", err)
+		return
+	}
+	slog.Debug("artery: sent ActorIdentity", "recipient", senderPath, "actorRef", actorRefPath)
 }
 
 func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeReq) error {

@@ -337,8 +337,9 @@ func TestClusterJoinLeave(t *testing.T) {
 	}
 
 	// 5. [FAILING]
-	log.Printf("[FAILING] Halting heartbeat to simulate unreachability...")
+	log.Printf("[FAILING] Muting node to simulate unreachability...")
 	node.StopHeartbeat()
+	node.MuteNode("127.0.0.1", 2552)
 
 	log.Printf("[WAITING UNREACHABLE] Waiting for Scala to report Go node as UNREACHABLE...")
 	select {
@@ -348,17 +349,10 @@ func TestClusterJoinLeave(t *testing.T) {
 		t.Fatalf("[TIMEOUT] Scala seed node did not detect Go node failure within 40s")
 	}
 
-	// 6. [LEAVING]
-	log.Printf("[RESTORING] Resuming heartbeat...")
-	node.StartHeartbeat()
-	time.Sleep(2 * time.Second)
-
-	log.Printf("[LEAVING] Sending Leave command...")
-	if err := node.Leave(); err != nil {
-		t.Fatalf("Leave: %v", err)
-	}
-
-	log.Printf("[WAITING REMOVED] Waiting for Scala to report Go node as REMOVED...")
+	// 6. [REMOVED] SBR (keep-oldest, stable-after=5s) automatically downs and
+	// removes unreachable nodes.  By the time we detect UNREACHABLE (~15-18s),
+	// the SBR has already acted.  Wait for REMOVED.
+	log.Printf("[WAITING REMOVED] Waiting for SBR to remove Go node...")
 	select {
 	case <-goNodeRemovedChan:
 		log.Printf("[CONFIRMED REMOVED] Scala seed node successfully removed Go node.")

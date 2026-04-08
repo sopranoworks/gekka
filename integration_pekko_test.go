@@ -466,18 +466,15 @@ func TestClusterSingletonInterop(t *testing.T) {
 // Sub-test: SingletonAsk
 // ---------------------------------------------------------------------------
 
-// testSingletonAsk uses a ClusterSingletonProxy to send an Ask to the Scala
-// singleton and verifies the "Singleton: <msg>" reply.
+// testSingletonAsk sends a message to the Scala singleton via
+// ClusterSingletonProxy.Send and verifies the reply arrives via OnMessage.
 func testSingletonAsk(t *testing.T, ctx context.Context, node *Cluster, sig *scalaSignals) {
 	t.Helper()
 
 	proxy := node.SingletonProxy("/user/singletonManager", "")
 
-	askCtx, askCancel := context.WithTimeout(ctx, 30*time.Second)
-	defer askCancel()
-
 	msg := []byte("hello singleton")
-	log.Printf("[SINGLETON] Sending Ask via proxy with msg %q", msg)
+	log.Printf("[SINGLETON] Sending to singleton via proxy with msg %q", msg)
 
 	// Resolve the singleton path via the proxy to confirm it points to Scala.
 	singletonPath, err := proxy.CurrentOldestPath()
@@ -486,20 +483,29 @@ func testSingletonAsk(t *testing.T, ctx context.Context, node *Cluster, sig *sca
 	}
 	log.Printf("[SINGLETON] Resolved singleton path: %s", singletonPath)
 
-	reply, err := node.Ask(askCtx, singletonPath, msg)
-	if err != nil {
-		t.Fatalf("Ask singleton: %v", err)
-	}
-	if reply.SerializerId != 4 {
-		t.Errorf("reply SerializerId = %d, want 4 (ByteArraySerializer)", reply.SerializerId)
+	replyCh := make(chan string, 1)
+	node.OnMessage(func(_ context.Context, m *IncomingMessage) error {
+		if m.SerializerId == 4 {
+			replyCh <- string(m.Payload)
+		}
+		return nil
+	})
+
+	if err := proxy.Send(ctx, msg); err != nil {
+		t.Fatalf("proxy.Send: %v", err)
 	}
 
-	got := string(reply.Payload)
-	want := "Singleton: hello singleton"
-	if got != want {
-		t.Errorf("Ask singleton reply = %q, want %q", got, want)
-	} else {
-		log.Printf("[SINGLETON] PASS — got %q", got)
+	// Wait for the reply via OnMessage callback.
+	select {
+	case got := <-replyCh:
+		want := "Singleton: hello singleton"
+		if got != want {
+			t.Errorf("singleton reply = %q, want %q", got, want)
+		} else {
+			log.Printf("[SINGLETON] PASS — got %q", got)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatalf("no reply from singleton within 15s")
 	}
 
 	// Confirm Scala stdout also recorded the receipt.

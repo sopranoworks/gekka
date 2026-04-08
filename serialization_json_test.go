@@ -121,21 +121,27 @@ func TestJSONSerializer_RoundTrip_PointerType(t *testing.T) {
 	}
 }
 
-func TestJSONSerializer_UnknownManifest_ReturnsError(t *testing.T) {
+func TestJSONSerializer_UnknownManifest_ReturnsOpaque(t *testing.T) {
 	reg := core.NewSerializationRegistry()
-	_, err := reg.DeserializePayload(actor.JSONSerializerID, "com.example.Unknown", []byte(`{}`))
-	if err == nil {
-		t.Error("expected error for unknown manifest, got nil")
+	result, err := reg.DeserializePayload(actor.JSONSerializerID, "com.example.Unknown", []byte(`{}`))
+	if err != nil {
+		t.Errorf("expected nil error, got %v", err)
+	}
+	if _, ok := result.(*core.OpaqueJSONMessage); !ok {
+		t.Errorf("expected *OpaqueJSONMessage, got %T", result)
 	}
 }
 
-func TestJSONSerializer_InvalidJSON_ReturnsError(t *testing.T) {
+func TestJSONSerializer_InvalidJSON_ReturnsOpaque(t *testing.T) {
 	reg := core.NewSerializationRegistry()
 	reg.RegisterManifest(manifestShipping, reflect.TypeOf(shippingEvent{}))
 
-	_, err := reg.DeserializePayload(actor.JSONSerializerID, manifestShipping, []byte(`not-json{`))
-	if err == nil {
-		t.Error("expected error for malformed JSON, got nil")
+	result, err := reg.DeserializePayload(actor.JSONSerializerID, manifestShipping, []byte(`not-json{`))
+	if err != nil {
+		t.Errorf("expected nil error, got %v", err)
+	}
+	if _, ok := result.(*core.OpaqueJSONMessage); !ok {
+		t.Errorf("expected *OpaqueJSONMessage, got %T", result)
 	}
 }
 

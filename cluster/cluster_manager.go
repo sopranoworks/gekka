@@ -107,6 +107,11 @@ type ClusterManager struct {
 	// Protected by Mu.
 	sbrUnreachableSince time.Time
 
+	// heartbeatMuted suppresses heartbeat responses when true, allowing
+	// the remote failure detector to trigger.  Set by StopHeartbeat, cleared
+	// by StartHeartbeat.
+	heartbeatMuted atomic.Bool
+
 	// Cluster event subscribers — managed by cluster_events.go methods.
 	SubMu sync.RWMutex
 	Subs  []eventSubscriber
@@ -320,7 +325,30 @@ func (cm *ClusterManager) JoinCluster(ctx context.Context, seedHost string, seed
 	proto := cm.Proto()
 	minConfig := fmt.Sprintf(`%s.cluster.downing-provider-class = "%s.cluster.sbr.SplitBrainResolverProvider"`, proto, proto)
 	initJoin := &gproto_cluster.InitJoin{CurrentConfig: &minConfig}
-	return cm.Router(ctx, path, initJoin)
+
+	// Send InitJoin immediately; also start a retry loop that re-sends until
+	// the Welcome message is received.  The first attempt may be lost if the
+	// Artery handshake is still in progress.
+	_ = cm.Router(ctx, path, initJoin)
+
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if cm.WelcomeReceived.Load() {
+					return
+				}
+				log.Printf("Cluster: retrying InitJoin to %s", path)
+				_ = cm.Router(ctx, path, initJoin)
+			}
+		}
+	}()
+
+	return nil
 }
 
 // SetLocalDataCenter configures the data-center label for this node.
@@ -612,6 +640,12 @@ func (cm *ClusterManager) handleHeartbeat(payload []byte, manifest string, remot
 		uid64 := uint64(remoteAddr.GetUid()) | (uint64(remoteAddr.GetUid2()) << 32)
 		key := fmt.Sprintf("%s:%d-%d", addr.GetHostname(), addr.GetPort(), uid64)
 		cm.Fd.Heartbeat(key)
+	}
+
+	// When heartbeats are muted (StopHeartbeat), suppress the response so the
+	// remote failure detector can detect this node as unreachable.
+	if cm.heartbeatMuted.Load() {
+		return nil
 	}
 
 	// Reply with HeartBeatResponse
@@ -2112,6 +2146,7 @@ var (
 )
 
 func (cm *ClusterManager) StartHeartbeat(target *gproto_cluster.Address) {
+	cm.heartbeatMuted.Store(false)
 	key := fmt.Sprintf("%s:%d", target.GetHostname(), target.GetPort())
 
 	heartbeatTasksMu.Lock()
@@ -2153,6 +2188,7 @@ func (cm *ClusterManager) StartHeartbeat(target *gproto_cluster.Address) {
 
 // StopHeartbeat stops sending heartbeats to simulate failure.
 func (cm *ClusterManager) StopHeartbeat(target *gproto_cluster.Address) {
+	cm.heartbeatMuted.Store(true)
 	key := fmt.Sprintf("%s:%d", target.GetHostname(), target.GetPort())
 	heartbeatTasksMu.Lock()
 	if t, ok := heartbeatTasks[key]; ok {

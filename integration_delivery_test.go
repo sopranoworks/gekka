@@ -71,7 +71,8 @@ func TestDeliveryInterop(t *testing.T) {
 
 	// Register the Reliable Delivery serializer so the router can encode/decode
 	// SequencedMessage, Request, Ack, Resend, and RegisterConsumer.
-	node.RegisterSerializer(delivery.NewSerializer())
+	ds := delivery.NewSerializer()
+	node.RegisterSerializer(ds.Identifier(), ds)
 
 	// ── 3. Join and wait for handshake ────────────────────────────────────
 	log.Println("[GO] Joining GekkaSystem at 127.0.0.1:2552...")

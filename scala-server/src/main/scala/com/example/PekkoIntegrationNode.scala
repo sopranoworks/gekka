@@ -326,14 +326,25 @@ object PekkoIntegrationNode extends App {
 
   scalaConsumerBehavior ! ReliableConsumerBehavior.Start(scalaConsumerController)
 
-  // Resolve Go's ProducerController and connect when available.
+  // Connect Scala's ConsumerController to Go's ProducerController.
+  // We defer registration until the Go node (port 2553) joins the cluster,
+  // ensuring the Artery TCP association is established before sending.
   val goProducerPath = "pekko://GekkaSystem@127.0.0.1:2553/user/goProducer"
-  system.actorSelection(goProducerPath).resolveOne(20.seconds).foreach { classicRef =>
-    val typedGoProducer = classicRef.toTyped[ProducerController.Command[Array[Byte]]]
-    scalaConsumerController ! ConsumerController.RegisterToProducerController(
-      typedGoProducer
-    )
-  }
+  system.actorOf(Props(new Actor {
+    import org.apache.pekko.cluster.ClusterEvent.{InitialStateAsEvents, MemberUp}
+    override def preStart(): Unit =
+      org.apache.pekko.cluster.Cluster(context.system)
+        .subscribe(self, InitialStateAsEvents, classOf[MemberUp])
+    def receive: Receive = {
+      case MemberUp(member) if member.address.port.contains(2553) =>
+        val extSystem = context.system.asInstanceOf[org.apache.pekko.actor.ExtendedActorSystem]
+        val ref: ActorRef = extSystem.provider.resolveActorRef(goProducerPath)
+        val typedRef = ref.toTyped[ProducerController.Command[Array[Byte]]]
+        scalaConsumerController ! ConsumerController.RegisterToProducerController(typedRef)
+        context.stop(self)
+      case _ =>
+    }
+  }), "goProducerWatcher")
 
   // ── Reliable Delivery: Scala producer / Go consumer (Scala→Go direction) ─
   // Scala spawns a ProducerController at /user/scalaProducer.

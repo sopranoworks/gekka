@@ -63,6 +63,13 @@ const (
 	DeltaPropagationManifest = "Q"
 )
 
+// OpaqueReplicatorMsg wraps DData replicator messages with manifests that
+// Gekka does not need to fully decode (e.g. ReadResult "M", WriteAck "N").
+type OpaqueReplicatorMsg struct {
+	Manifest string
+	Data     []byte
+}
+
 // ---------------------------------------------------------------------------
 // Decoded types
 // ---------------------------------------------------------------------------
@@ -228,7 +235,10 @@ func (s *DDataSerializer) FromBinary(data []byte, manifest string) (any, error) 
 		return set, nil
 
 	default:
-		return nil, fmt.Errorf("DDataSerializer: FromBinary: unknown manifest %q", manifest)
+		// Gracefully handle DData replicator manifests that we don't need to
+		// fully decode (e.g. "M"=ReadResult, "N"=WriteAck, etc.).  Return an
+		// opaque wrapper so the frame handler doesn't crash the connection.
+		return &OpaqueReplicatorMsg{Manifest: manifest, Data: data}, nil
 	}
 }
 

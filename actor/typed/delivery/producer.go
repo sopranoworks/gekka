@@ -54,6 +54,8 @@ func (p *producerState) handleCommand(ctx typed.TypedContext[any], msg any) type
 	switch m := msg.(type) {
 	case RegisterConsumer:
 		p.onRegisterConsumer(ctx, m)
+	case *RegisterConsumer:
+		p.onRegisterConsumer(ctx, *m)
 	case *Request:
 		p.onRequest(ctx, m)
 	case *AckMsg:
@@ -75,6 +77,9 @@ func (p *producerState) onRegisterConsumer(ctx typed.TypedContext[any], m Regist
 	}
 	p.consumerRef = ref
 	p.consumerPath = m.ConsumerControllerRef
+	// After consumer registration, attempt to send buffered messages.
+	// The first message (First=true) is sent immediately to initiate the protocol.
+	p.sendBuffered(ctx)
 }
 
 func (p *producerState) onRequest(ctx typed.TypedContext[any], m *Request) {
@@ -116,9 +121,15 @@ func (p *producerState) sendBuffered(_ typed.TypedContext[any]) {
 		return
 	}
 	for _, msg := range p.buffer {
-		if msg.SeqNr <= p.requestUpTo && msg.SeqNr > p.sentUpTo {
-			p.consumerRef.Tell(msg, p.selfRef)
-			p.sentUpTo = msg.SeqNr
+		if msg.SeqNr > p.sentUpTo {
+			// The first message (First=true) is always sent to initiate the
+			// protocol — the consumer won't send a Request until it receives
+			// this initial message.  Subsequent messages respect the flow
+			// control window (requestUpTo).
+			if msg.First || msg.SeqNr <= p.requestUpTo {
+				p.consumerRef.Tell(msg, p.selfRef)
+				p.sentUpTo = msg.SeqNr
+			}
 		}
 	}
 }

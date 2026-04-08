@@ -60,16 +60,12 @@ func TcpArteryHandlerWithCallback(ctx context.Context, conn net.Conn, handler Fr
 }
 
 func TcpArteryOutboundHandler(ctx context.Context, conn net.Conn, handler FrameHandler, ctm *CompressionTableManager, remoteUid uint64, streamId int32, protocol string) error {
-	var magicHeader []byte
-	if protocol == "pekko" || protocol == "artery" {
-		// Artery 2.0 (Pekko) preamble: ART (3) + version (1) + streamId (1) = 5 bytes total
-		magicHeader = []byte{'A', 'R', 'T', 1, byte(streamId)}
-		slog.Info("artery: writing Pekko preamble", "streamId", streamId)
-	} else {
-		// Artery 1.0 (Akka) preamble: AKKA (4) + streamId (1) = 5 bytes total
-		magicHeader = []byte{'A', 'K', 'K', 'A', byte(streamId)}
-		slog.Info("artery: writing Akka preamble", "streamId", streamId)
-	}
+	// Both Pekko 1.x and Akka 2.6.x use the AKKA preamble on the wire.
+	// Pekko kept the same Artery TCP framing for backwards compatibility;
+	// the "pekko://" vs "akka://" distinction is only in actor-path URIs,
+	// not in the TCP stream header.
+	magicHeader := []byte{'A', 'K', 'K', 'A', byte(streamId)}
+	slog.Info("artery: writing Pekko preamble", "streamId", streamId)
 
 	if _, err := conn.Write(magicHeader); err != nil {
 		return fmt.Errorf("failed to write stream magic header: %w", err)

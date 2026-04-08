@@ -917,6 +917,8 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	}()
 
 	// Register built-in serializers
+	nm.SerializerRegistry.RegisterSerializer(core.MiscMessageSerializerID, &core.MiscMessageSerializer{})
+	nm.SerializerRegistry.RegisterSerializer(ddata.DDataReplicatorMsgSerializerID, &ddata.DDataSerializer{})
 	nm.SerializerRegistry.RegisterSerializer(stream.StreamRefSerializerID, &stream.StreamRefSerializer{})
 	nm.SerializerRegistry.RegisterManifest("A", reflect.TypeOf((*stream.SequencedOnNext)(nil)), stream.StreamRefSerializerID)
 	nm.SerializerRegistry.RegisterManifest("B", reflect.TypeOf((*stream.CumulativeDemand)(nil)), stream.StreamRefSerializerID)

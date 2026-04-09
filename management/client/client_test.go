@@ -75,11 +75,12 @@ func TestConfigEntries_OK(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ConfigEntries: %v", err)
 	}
-	if len(got) != 2 {
-		t.Errorf("expected 2 entries, got %d: %v", len(got), got)
+	want := map[string]any{
+		"pekko.cluster.roles":                []any{"frontend"},
+		"pekko.remote.artery.canonical.port": float64(2551),
 	}
-	if _, ok := got["pekko.cluster.roles"]; !ok {
-		t.Errorf("missing pekko.cluster.roles key")
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
 	}
 }
 
@@ -90,5 +91,15 @@ func TestConfigEntries_HTTPError(t *testing.T) {
 	defer srv.Close()
 	if _, err := New(srv.URL).ConfigEntries(); err == nil {
 		t.Fatal("expected error on 500")
+	}
+}
+
+func TestConfigEntries_BadJSON(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`not json`))
+	}))
+	defer srv.Close()
+	if _, err := New(srv.URL).ConfigEntries(); err == nil {
+		t.Fatal("expected parse error")
 	}
 }

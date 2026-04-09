@@ -22,6 +22,7 @@ type rootState struct {
 	configPath string
 	profile    string
 	jsonOutput bool
+	quiet      bool
 	cfg        cli.Config
 }
 
@@ -78,6 +79,8 @@ a Gekka (or Apache Pekko) cluster via its HTTP Management API.`,
 		"Named profile to use from the config file")
 	rootCmd.PersistentFlags().BoolVar(&root.jsonOutput, "json", false,
 		"Output raw JSON instead of a formatted table")
+	rootCmd.PersistentFlags().BoolVarP(&root.quiet, "quiet", "q", false,
+		"Suppress non-essential output (errors still go to stderr)")
 
 	rootCmd.AddCommand(newMembersCmd(root))
 	rootCmd.AddCommand(newDiscoveryCheckCmd(root))

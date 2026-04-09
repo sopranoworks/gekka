@@ -410,6 +410,10 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		v = strings.ToLower(strings.TrimSpace(v))
 		nodeCfg.Management.HealthChecksEnabled = v == "true" || v == "on"
 	}
+	if v, err := cfg.GetString("gekka.management.debug.enabled"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		nodeCfg.Management.DebugEnabled = v == "true" || v == "on"
+	}
 
 	// ── Telemetry ────────────────────────────────────────────────────────────
 	if v, err := cfg.GetString("gekka.telemetry.tracing.enabled"); err == nil {

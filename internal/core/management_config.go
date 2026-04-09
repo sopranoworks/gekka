@@ -115,6 +115,12 @@ type ManagementConfig struct {
 	//
 	// HOCON: gekka.management.http.health-checks.enabled
 	HealthChecksEnabled bool `hocon:"health-checks.enabled"`
+
+	// DebugEnabled controls whether /cluster/debug/* introspection endpoints
+	// are registered on the management server.  Defaults to false.
+	//
+	// HOCON: gekka.management.debug.enabled
+	DebugEnabled bool `hocon:"-"`
 }
 
 // DefaultManagementConfig returns a ManagementConfig populated with the
@@ -124,11 +130,13 @@ type ManagementConfig struct {
 //	port                  = 8558
 //	enabled               = false
 //	health-checks.enabled = true
+//	debug.enabled         = false
 func DefaultManagementConfig() ManagementConfig {
 	return ManagementConfig{
 		Hostname:            "127.0.0.1",
 		Port:                8558,
 		Enabled:             false,
 		HealthChecksEnabled: true,
+		DebugEnabled:        false,
 	}
 }

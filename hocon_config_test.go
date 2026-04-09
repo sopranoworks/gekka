@@ -9,6 +9,8 @@
 package gekka
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -577,5 +579,46 @@ gekka.management.http {
 	}
 	if cfg3.Management.Enabled {
 		t.Error("expected Enabled=false when explicitly set to false, even if port is defined")
+	}
+}
+
+func TestLoadConfig_DebugEnabled(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "app.conf")
+	if err := os.WriteFile(path, []byte(`
+gekka.management.http {
+  enabled = true
+  hostname = "127.0.0.1"
+  port = 8558
+}
+gekka.management.debug {
+  enabled = true
+}
+`), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if !cfg.Management.DebugEnabled {
+		t.Error("expected Management.DebugEnabled=true")
+	}
+}
+
+func TestLoadConfig_DebugDisabledByDefault(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "app.conf")
+	if err := os.WriteFile(path, []byte(`
+gekka.management.http { enabled = true }
+`), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.Management.DebugEnabled {
+		t.Error("expected Management.DebugEnabled=false by default")
 	}
 }

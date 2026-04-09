@@ -781,6 +781,9 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 			_ = server.Shutdown()
 			return nil, fmt.Errorf("gekka: management server: %w", err)
 		}
+		if cfg.Management.DebugEnabled {
+			mgmtSrv.EnableDebug(cluster)
+		}
 		mgmtSrv.Start(ctx)
 		cluster.mgmt = mgmtSrv
 	}

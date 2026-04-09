@@ -103,3 +103,60 @@ func TestConfigEntries_BadJSON(t *testing.T) {
 		t.Fatal("expected parse error")
 	}
 }
+
+func TestAlive_OK(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/health/alive" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"status":"alive"}`))
+	}))
+	defer srv.Close()
+
+	ok, msg, err := New(srv.URL).Alive()
+	if err != nil {
+		t.Fatalf("Alive: %v", err)
+	}
+	if !ok {
+		t.Errorf("expected ok=true")
+	}
+	if msg != "alive" {
+		t.Errorf("expected status=alive, got %q", msg)
+	}
+}
+
+func TestReady_NotReady(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte(`{"status":"not_ready","reason":"not_up"}`))
+	}))
+	defer srv.Close()
+
+	ok, msg, err := New(srv.URL).Ready()
+	if err != nil {
+		t.Fatalf("Ready: %v", err)
+	}
+	if ok {
+		t.Errorf("expected ok=false")
+	}
+	if msg != "not_up" {
+		t.Errorf("expected reason=not_up, got %q", msg)
+	}
+}
+
+func TestReady_OK(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{"status":"ready"}`))
+	}))
+	defer srv.Close()
+
+	ok, msg, err := New(srv.URL).Ready()
+	if err != nil {
+		t.Fatalf("Ready: %v", err)
+	}
+	if !ok || msg != "ready" {
+		t.Errorf("expected ok=true, msg=ready; got ok=%v, msg=%q", ok, msg)
+	}
+}

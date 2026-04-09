@@ -231,3 +231,49 @@ func (c *Client) ConfigEntries() (map[string]any, error) {
 	}
 	return out, nil
 }
+
+// healthResponse matches the JSON shape returned by /health/alive and
+// /health/ready: {"status":"...","reason":"..."}.
+type healthResponse struct {
+	Status string `json:"status"`
+	Reason string `json:"reason"`
+}
+
+// Alive calls GET /health/alive and returns (ok, status, err).
+// ok=true iff HTTP 200; message is the "status" field.
+func (c *Client) Alive() (bool, string, error) {
+	return c.healthProbe("/health/alive")
+}
+
+// Ready calls GET /health/ready and returns (ok, message, err).
+// ok=true iff HTTP 200; message is the "status" field on success or
+// the "reason" field on 503.
+func (c *Client) Ready() (bool, string, error) {
+	return c.healthProbe("/health/ready")
+}
+
+func (c *Client) healthProbe(path string) (bool, string, error) {
+	endpoint := c.baseURL + path
+	resp, err := c.httpClient.Get(endpoint)
+	if err != nil {
+		return false, "", fmt.Errorf("client: GET %s: %w", endpoint, err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return false, "", fmt.Errorf("client: read response: %w", err)
+	}
+	var hr healthResponse
+	_ = json.Unmarshal(body, &hr) // tolerate non-JSON bodies
+	if resp.StatusCode == http.StatusOK {
+		return true, hr.Status, nil
+	}
+	msg := hr.Reason
+	if msg == "" {
+		msg = hr.Status
+	}
+	if msg == "" {
+		msg = resp.Status
+	}
+	return false, msg, nil
+}

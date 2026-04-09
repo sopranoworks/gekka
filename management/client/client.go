@@ -49,6 +49,12 @@ func New(baseURL string) *Client {
 	}
 }
 
+// SetTimeout updates the HTTP client timeout.  Used by commands that want
+// per-invocation control (e.g. `gekka-cli health --timeout 10s`).
+func (c *Client) SetTimeout(d time.Duration) {
+	c.httpClient.Timeout = d
+}
+
 // Members calls GET /cluster/members and returns the parsed member list.
 func (c *Client) Members() ([]MemberInfo, error) {
 	endpoint := c.baseURL + "/cluster/members"

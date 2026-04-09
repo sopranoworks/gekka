@@ -184,3 +184,26 @@ func (c *Client) RebalanceShard(typeName, shardID, targetRegion string) error {
 	}
 	return nil
 }
+
+// Services calls GET /cluster/services and returns the service→addresses map.
+func (c *Client) Services() (map[string][]string, error) {
+	endpoint := c.baseURL + "/cluster/services"
+	resp, err := c.httpClient.Get(endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("client: GET %s: %w", endpoint, err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("client: read response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("client: server returned %s: %s", resp.Status, body)
+	}
+	var out map[string][]string
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, fmt.Errorf("client: parse response: %w", err)
+	}
+	return out, nil
+}

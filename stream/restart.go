@@ -188,3 +188,35 @@ func RestartFlow[In, Out any](settings RestartSettings, factory func() Flow[In, 
 		},
 	}
 }
+
+// ─── RestartSink ─────────────────────────────────────────────────────────
+
+// RestartSink wraps factory so that if the produced Sink fails, it is
+// transparently restarted after an exponential-backoff delay. Elements
+// that were in-flight when the failure occurred are lost.
+//
+// The restart semantics mirror those of [RestartSource] and [RestartFlow].
+func RestartSink[T any](settings RestartSettings, factory func() Sink[T, NotUsed]) Sink[T, NotUsed] {
+	return Sink[T, NotUsed]{
+		runWith: func(upstream iterator[T]) (NotUsed, error) {
+			backoff := settings.MinBackoff
+			restarts := 0
+
+			for {
+				sink := factory()
+				_, err := sink.runWith(upstream)
+				if err == nil {
+					return NotUsed{}, nil
+				}
+
+				if settings.MaxRestarts >= 0 && restarts >= settings.MaxRestarts {
+					return NotUsed{}, err
+				}
+
+				time.Sleep(backoff)
+				backoff = calcBackoff(backoff, settings)
+				restarts++
+			}
+		},
+	}
+}

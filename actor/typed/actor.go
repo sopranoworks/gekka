@@ -449,6 +449,19 @@ func Unhandled[T any]() Behavior[T] {
 	}
 }
 
+// ReceivePartial creates a behavior where the handler returns (nextBehavior, true)
+// if the message was handled, or (nil, false) if unhandled. Unhandled messages
+// are logged and the actor continues with its current behavior.
+func ReceivePartial[T any](handler func(TypedContext[T], T) (Behavior[T], bool)) Behavior[T] {
+	return func(ctx TypedContext[T], msg T) Behavior[T] {
+		if next, handled := handler(ctx, msg); handled {
+			return next
+		}
+		ctx.Log().Debug("unhandled message in receivePartial", "type", fmt.Sprintf("%T", msg))
+		return Same[T]()
+	}
+}
+
 // WithMdc wraps a behavior with Mapped Diagnostic Context (MDC) support.
 // staticMdc keys are always included in log output. mdcForMessage is called
 // for each message and its returned keys are merged (message-specific keys

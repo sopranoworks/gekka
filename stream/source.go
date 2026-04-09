@@ -84,6 +84,54 @@ func Repeat[T any](elem T) Source[T, NotUsed] {
 	}
 }
 
+// Single creates a Source that emits exactly one element, then completes.
+func Single[T any](elem T) Source[T, NotUsed] {
+	return Source[T, NotUsed]{
+		factory: func() (iterator[T], NotUsed) {
+			return &singleIterator[T]{elem: elem}, NotUsed{}
+		},
+	}
+}
+
+// Empty creates a Source that immediately completes with no elements.
+func Empty[T any]() Source[T, NotUsed] {
+	return Source[T, NotUsed]{
+		factory: func() (iterator[T], NotUsed) {
+			return &emptyIterator[T]{}, NotUsed{}
+		},
+	}
+}
+
+// Range creates a Source that emits integers from start to end inclusive,
+// then completes.
+func Range(start, end int) Source[int, NotUsed] {
+	return Source[int, NotUsed]{
+		factory: func() (iterator[int], NotUsed) {
+			return &rangeIterator{cur: start, end: end}, NotUsed{}
+		},
+	}
+}
+
+// Tick creates an infinite Source that emits elem at fixed intervals.
+// The first element is emitted immediately. Combine with Take to bound.
+func Tick[T any](interval time.Duration, elem T) Source[T, NotUsed] {
+	return Source[T, NotUsed]{
+		factory: func() (iterator[T], NotUsed) {
+			return &tickIterator[T]{interval: interval, elem: elem, first: true}, NotUsed{}
+		},
+	}
+}
+
+// FromFuture creates a Source that runs fn asynchronously and emits its
+// result. If fn returns an error the stream fails.
+func FromFuture[T any](fn func() (T, error)) Source[T, NotUsed] {
+	return Source[T, NotUsed]{
+		factory: func() (iterator[T], NotUsed) {
+			return &futureIterator[T]{fn: fn}, NotUsed{}
+		},
+	}
+}
+
 // ─── Stage methods (element type preserved) ───────────────────────────────
 
 // Filter returns a Source that only emits elements for which pred returns true.

@@ -109,6 +109,32 @@ func FromTypedActorRef[T any](ref typed.TypedActorRef[T]) Sink[T, NotUsed] {
 	})
 }
 
+// ActorRefWithBackpressure returns a [Sink] that sends each element to ref
+// and waits for an ack message before pulling the next element from upstream.
+// This provides back-pressure through the actor: if the actor is slow to
+// acknowledge, the upstream is throttled.
+//
+// The ack channel must be provided by the caller and fed by the actor after
+// processing each message.
+func ActorRefWithBackpressure[T any](ref typed.TypedActorRef[T], ackCh <-chan struct{}) Sink[T, NotUsed] {
+	return Sink[T, NotUsed]{
+		runWith: func(upstream iterator[T]) (NotUsed, error) {
+			for {
+				elem, ok, err := upstream.next()
+				if err != nil {
+					return NotUsed{}, err
+				}
+				if !ok {
+					return NotUsed{}, nil
+				}
+				ref.Tell(elem)
+				// Wait for ack before pulling next
+				<-ackCh
+			}
+		},
+	}
+}
+
 // ─── ActorSource ──────────────────────────────────────────────────────────
 
 // OverflowStrategy controls the behaviour of [ActorSource] when the internal

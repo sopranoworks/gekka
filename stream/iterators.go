@@ -933,3 +933,90 @@ func (c *conflateIterator[In, S]) next() (S, bool, error) {
 		return v, true, nil
 	}
 }
+
+// ─── singleIterator ──────────────────────────────────────────────────────
+
+// singleIterator emits exactly one element, then completes.
+type singleIterator[T any] struct {
+	elem    T
+	emitted bool
+}
+
+func (s *singleIterator[T]) next() (T, bool, error) {
+	if s.emitted {
+		var zero T
+		return zero, false, nil
+	}
+	s.emitted = true
+	return s.elem, true, nil
+}
+
+// ─── emptyIterator ───────────────────────────────────────────────────────
+
+// emptyIterator completes immediately with no elements.
+type emptyIterator[T any] struct{}
+
+func (e *emptyIterator[T]) next() (T, bool, error) {
+	var zero T
+	return zero, false, nil
+}
+
+// ─── rangeIterator ───────────────────────────────────────────────────────
+
+// rangeIterator emits integers from start to end inclusive.
+type rangeIterator struct {
+	cur, end int
+}
+
+func (r *rangeIterator) next() (int, bool, error) {
+	if r.cur > r.end {
+		return 0, false, nil
+	}
+	v := r.cur
+	r.cur++
+	return v, true, nil
+}
+
+// ─── tickIterator ────────────────────────────────────────────────────────
+
+// tickIterator emits elem at fixed intervals forever.
+type tickIterator[T any] struct {
+	interval time.Duration
+	elem     T
+	first    bool
+}
+
+func (t *tickIterator[T]) next() (T, bool, error) {
+	if !t.first {
+		time.Sleep(t.interval)
+	}
+	t.first = false
+	return t.elem, true, nil
+}
+
+// ─── futureIterator ──────────────────────────────────────────────────────
+
+// futureIterator runs a function once and emits its result.
+type futureIterator[T any] struct {
+	fn      func() (T, error)
+	once    sync.Once
+	val     T
+	err     error
+	emitted bool
+}
+
+func (f *futureIterator[T]) next() (T, bool, error) {
+	if f.emitted {
+		var zero T
+		return zero, false, nil
+	}
+	f.once.Do(func() {
+		f.val, f.err = f.fn()
+	})
+	f.emitted = true
+	if f.err != nil {
+		var zero T
+		return zero, false, f.err
+	}
+	return f.val, true, nil
+}

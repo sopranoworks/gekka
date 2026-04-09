@@ -180,3 +180,91 @@ func TestReady_OK(t *testing.T) {
 		t.Errorf("expected ok=true, msg=ready; got ok=%v, msg=%q", ok, msg)
 	}
 }
+
+func TestDebugCRDTList_OK(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/cluster/debug/crdt" {
+			t.Errorf("path: %s", r.URL.Path)
+		}
+		w.Write([]byte(`{"kind":"crdt-list","data":[{"key":"a","type":"gcounter"},{"key":"b","type":"orset"}]}`))
+	}))
+	defer srv.Close()
+
+	got, err := New(srv.URL).DebugCRDTList()
+	if err != nil {
+		t.Fatalf("DebugCRDTList: %v", err)
+	}
+	if len(got) != 2 || got[0].Key != "a" || got[1].Type != "orset" {
+		t.Errorf("got %+v", got)
+	}
+}
+
+func TestDebugCRDT_OK(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/cluster/debug/crdt/my-counter" {
+			t.Errorf("path: %s", r.URL.Path)
+		}
+		w.Write([]byte(`{"kind":"crdt","data":{"key":"my-counter","type":"gcounter","value":{"total":42}}}`))
+	}))
+	defer srv.Close()
+
+	got, err := New(srv.URL).DebugCRDT("my-counter")
+	if err != nil {
+		t.Fatalf("DebugCRDT: %v", err)
+	}
+	if got == nil || got.Key != "my-counter" || got.Type != "gcounter" {
+		t.Errorf("got %+v", got)
+	}
+}
+
+func TestDebugCRDT_NotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"error":"key missing not found"}`))
+	}))
+	defer srv.Close()
+
+	got, err := New(srv.URL).DebugCRDT("missing")
+	if err != nil {
+		t.Errorf("expected nil error on 404, got %v", err)
+	}
+	if got != nil {
+		t.Errorf("expected nil value on 404, got %+v", got)
+	}
+}
+
+func TestDebugActors_UserOnly(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("system") != "" {
+			t.Errorf("unexpected system query: %s", r.URL.RawQuery)
+		}
+		w.Write([]byte(`{"kind":"actors","data":[{"path":"/user/alpha","kind":"user"}]}`))
+	}))
+	defer srv.Close()
+
+	got, err := New(srv.URL).DebugActors(false)
+	if err != nil {
+		t.Fatalf("DebugActors: %v", err)
+	}
+	if len(got) != 1 || got[0].Path != "/user/alpha" {
+		t.Errorf("got %+v", got)
+	}
+}
+
+func TestDebugActors_IncludeSystem(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("system") != "true" {
+			t.Errorf("missing system=true: %s", r.URL.RawQuery)
+		}
+		w.Write([]byte(`{"kind":"actors","data":[{"path":"/user/alpha","kind":"user"},{"path":"/system/x","kind":"system"}]}`))
+	}))
+	defer srv.Close()
+
+	got, err := New(srv.URL).DebugActors(true)
+	if err != nil {
+		t.Fatalf("DebugActors: %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("len = %d", len(got))
+	}
+}

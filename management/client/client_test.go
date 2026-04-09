@@ -126,6 +126,26 @@ func TestAlive_OK(t *testing.T) {
 	}
 }
 
+func TestAlive_NotAlive(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte(`{"status":"not_alive","reason":"starting"}`))
+	}))
+	defer srv.Close()
+
+	ok, msg, err := New(srv.URL).Alive()
+	if err != nil {
+		t.Fatalf("Alive: %v", err)
+	}
+	if ok {
+		t.Errorf("expected ok=false")
+	}
+	if msg != "starting" {
+		t.Errorf("expected reason=starting, got %q", msg)
+	}
+}
+
 func TestReady_NotReady(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

@@ -18,6 +18,7 @@ import (
 	"log/slog"
 	"net"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1333,6 +1334,85 @@ func (c *Cluster) CRDTList() []management.CRDTEntry {
 		out[i] = management.CRDTEntry{Key: e.Key, Type: e.Type}
 	}
 	return out
+}
+
+// CRDT implements management.DebugProvider.  Looks up key across all CRDT
+// types in the Replicator and returns the current snapshot shaped for JSON.
+// Returns (nil, nil) when the key is not registered on this node.
+func (c *Cluster) CRDT(key string) (*management.CRDTValue, error) {
+	if c.repl == nil {
+		return nil, nil
+	}
+
+	if g, ok := c.repl.LookupGCounter(key); ok {
+		snap := g.Snapshot()
+		var total uint64
+		for _, v := range snap {
+			total += v
+		}
+		return &management.CRDTValue{
+			Key:  key,
+			Type: "gcounter",
+			Value: map[string]any{
+				"total":    total,
+				"per_node": snap,
+			},
+		}, nil
+	}
+
+	if s, ok := c.repl.LookupORSet(key); ok {
+		elems := s.Elements()
+		sort.Strings(elems)
+		return &management.CRDTValue{
+			Key:   key,
+			Type:  "orset",
+			Value: elems,
+		}, nil
+	}
+
+	if m, ok := c.repl.LookupLWWMap(key); ok {
+		return &management.CRDTValue{
+			Key:   key,
+			Type:  "lwwmap",
+			Value: m.Entries(),
+		}, nil
+	}
+
+	if p, ok := c.repl.LookupPNCounter(key); ok {
+		snap := p.Snapshot()
+		return &management.CRDTValue{
+			Key:  key,
+			Type: "pncounter",
+			Value: map[string]any{
+				"total":      p.Value(),
+				"increments": snap.Pos,
+				"decrements": snap.Neg,
+			},
+		}, nil
+	}
+
+	if f, ok := c.repl.LookupORFlag(key); ok {
+		return &management.CRDTValue{
+			Key:   key,
+			Type:  "orflag",
+			Value: f.Value(),
+		}, nil
+	}
+
+	if reg, ok := c.repl.LookupLWWRegister(key); ok {
+		snap := reg.Snapshot()
+		return &management.CRDTValue{
+			Key:  key,
+			Type: "lwwregister",
+			Value: map[string]any{
+				"value":     snap.Value,
+				"timestamp": snap.Timestamp,
+				"node_id":   snap.NodeID,
+			},
+		}, nil
+	}
+
+	return nil, nil
 }
 
 func (c *Cluster) Join(seedHost string, seedPort uint32) error {

@@ -276,7 +276,7 @@ func (ms *ManagementServer) handleDebugCRDT(w http.ResponseWriter, r *http.Reque
 	ms.handleDebugCRDTImpl(w, r)
 }
 func (ms *ManagementServer) handleDebugActors(w http.ResponseWriter, r *http.Request) {
-	writeDebugError(w, http.StatusNotImplemented, "handleDebugActors not implemented")
+	ms.handleDebugActorsImpl(w, r)
 }
 
 // ── Handlers ──────────────────────────────────────────────────────────────────

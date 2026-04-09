@@ -1415,6 +1415,26 @@ func (c *Cluster) CRDT(key string) (*management.CRDTValue, error) {
 	return nil, nil
 }
 
+// Actors implements management.DebugProvider.  Returns every actor registered
+// on this node, sorted alphabetically.  When includeSystem is false, /system/*
+// paths are filtered out.
+func (c *Cluster) Actors(includeSystem bool) []management.ActorEntry {
+	paths := c.ActorPaths()
+	sort.Strings(paths)
+	out := make([]management.ActorEntry, 0, len(paths))
+	for _, p := range paths {
+		kind := "user"
+		if strings.HasPrefix(p, "/system/") {
+			kind = "system"
+		}
+		if !includeSystem && kind == "system" {
+			continue
+		}
+		out = append(out, management.ActorEntry{Path: p, Kind: kind})
+	}
+	return out
+}
+
 func (c *Cluster) Join(seedHost string, seedPort uint32) error {
 	scheme := c.localAddr.GetProtocol() // "pekko" or "akka"
 	c.seedAddr = &gproto_remote.Address{

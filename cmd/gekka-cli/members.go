@@ -219,3 +219,27 @@ func isTerminal(f *os.File) bool {
 	}
 	return (fi.Mode() & os.ModeCharDevice) != 0
 }
+
+func newMemberLeaveCmd(root *rootState) *cobra.Command {
+	var (
+		flagURL string
+		autoYes bool
+	)
+	cmd := &cobra.Command{
+		Use:   "leave <address>",
+		Short: "Initiate a graceful Leave for a cluster member",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			baseURL := root.resolveURL(flagURL)
+			if !autoYes && !isTerminal(os.Stdin) {
+				return fmt.Errorf("refusing to prompt: stdin is not a tty (use --yes)")
+			}
+			return runMemberAction(memberActionLeave, baseURL, args[0],
+				autoYes, root.jsonOutput, root.quiet,
+				os.Stdin, os.Stdout)
+		},
+	}
+	cmd.Flags().StringVar(&flagURL, "url", "", "Base URL of the management API")
+	cmd.Flags().BoolVarP(&autoYes, "yes", "y", false, "Skip confirmation prompt")
+	return cmd
+}

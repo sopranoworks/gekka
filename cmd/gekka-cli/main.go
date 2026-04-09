@@ -84,6 +84,7 @@ a Gekka (or Apache Pekko) cluster via its HTTP Management API.`,
 
 	membersCmd := newMembersCmd(root)
 	membersCmd.AddCommand(newMemberDownCmd(root))
+	membersCmd.AddCommand(newMemberLeaveCmd(root))
 	rootCmd.AddCommand(membersCmd)
 	rootCmd.AddCommand(newDiscoveryCheckCmd(root))
 	rootCmd.AddCommand(newDashboardCmd(root))

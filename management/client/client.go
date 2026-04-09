@@ -207,3 +207,27 @@ func (c *Client) Services() (map[string][]string, error) {
 	}
 	return out, nil
 }
+
+// ConfigEntries calls GET /cluster/config and returns the flat key→value map.
+// Keys are dotted (e.g. "pekko.cluster.roles"); values are arbitrary JSON.
+func (c *Client) ConfigEntries() (map[string]any, error) {
+	endpoint := c.baseURL + "/cluster/config"
+	resp, err := c.httpClient.Get(endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("client: GET %s: %w", endpoint, err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("client: read response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("client: server returned %s: %s", resp.Status, body)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, fmt.Errorf("client: parse response: %w", err)
+	}
+	return out, nil
+}

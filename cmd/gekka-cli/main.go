@@ -82,7 +82,9 @@ a Gekka (or Apache Pekko) cluster via its HTTP Management API.`,
 	rootCmd.PersistentFlags().BoolVarP(&root.quiet, "quiet", "q", false,
 		"Suppress non-essential output (errors still go to stderr)")
 
-	rootCmd.AddCommand(newMembersCmd(root))
+	membersCmd := newMembersCmd(root)
+	membersCmd.AddCommand(newMemberDownCmd(root))
+	rootCmd.AddCommand(membersCmd)
 	rootCmd.AddCommand(newDiscoveryCheckCmd(root))
 	rootCmd.AddCommand(newDashboardCmd(root))
 	rootCmd.AddCommand(newShardsCmd(root))

@@ -214,6 +214,92 @@ func (r *Replicator) LWWRegister(key string) *LWWRegister {
 	return reg
 }
 
+// Entry describes a CRDT known to the Replicator.  Used by debug/introspection
+// callers to enumerate all live CRDTs without creating new ones.
+type Entry struct {
+	Key  string
+	Type string // "gcounter" | "orset" | "lwwmap" | "pncounter" | "orflag" | "lwwregister"
+}
+
+// Entries returns a snapshot of every CRDT currently known to the Replicator.
+// The slice is built under a short read-lock window and is safe to use after
+// return.  Order is not defined — callers should sort if they need it.
+func (r *Replicator) Entries() []Entry {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]Entry, 0,
+		len(r.counters)+len(r.sets)+len(r.maps)+
+			len(r.pnCounters)+len(r.orFlags)+len(r.registers))
+	for k := range r.counters {
+		out = append(out, Entry{Key: k, Type: "gcounter"})
+	}
+	for k := range r.sets {
+		out = append(out, Entry{Key: k, Type: "orset"})
+	}
+	for k := range r.maps {
+		out = append(out, Entry{Key: k, Type: "lwwmap"})
+	}
+	for k := range r.pnCounters {
+		out = append(out, Entry{Key: k, Type: "pncounter"})
+	}
+	for k := range r.orFlags {
+		out = append(out, Entry{Key: k, Type: "orflag"})
+	}
+	for k := range r.registers {
+		out = append(out, Entry{Key: k, Type: "lwwregister"})
+	}
+	return out
+}
+
+// LookupGCounter returns the named GCounter without creating one if it is
+// missing.  Second return is false on miss.
+func (r *Replicator) LookupGCounter(key string) (*GCounter, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	c, ok := r.counters[key]
+	return c, ok
+}
+
+// LookupORSet is the read-only counterpart of ORSet(key).
+func (r *Replicator) LookupORSet(key string) (*ORSet, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	s, ok := r.sets[key]
+	return s, ok
+}
+
+// LookupLWWMap is the read-only counterpart of LWWMap(key).
+func (r *Replicator) LookupLWWMap(key string) (*LWWMap, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	m, ok := r.maps[key]
+	return m, ok
+}
+
+// LookupPNCounter is the read-only counterpart of PNCounter(key).
+func (r *Replicator) LookupPNCounter(key string) (*PNCounter, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	p, ok := r.pnCounters[key]
+	return p, ok
+}
+
+// LookupORFlag is the read-only counterpart of ORFlag(key).
+func (r *Replicator) LookupORFlag(key string) (*ORFlag, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	f, ok := r.orFlags[key]
+	return f, ok
+}
+
+// LookupLWWRegister is the read-only counterpart of LWWRegister(key).
+func (r *Replicator) LookupLWWRegister(key string) (*LWWRegister, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	reg, ok := r.registers[key]
+	return reg, ok
+}
+
 // IncrementCounter increments the named counter for this node.
 func (r *Replicator) IncrementCounter(key string, delta uint64, consistency WriteConsistency) {
 	c := r.GCounter(key)

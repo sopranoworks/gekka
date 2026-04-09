@@ -263,11 +263,34 @@ func (w *teaWriter) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
+// ── Management API Auto-Enable ──────────────────────────────────────────────
+
+// applyManagementDefaults flips the HTTP management API on by default unless
+// disable is true.  Explicit HOCON values for Hostname and Port are preserved;
+// blanks are filled in with gekka-metrics defaults (127.0.0.1:8559).
+//
+// The "disable=true" path is the --disable-management escape hatch for
+// operators who do not want gekka-metrics to bind a management port.
+func applyManagementDefaults(cfg *gekka.ClusterConfig, disable bool) {
+	if disable {
+		return
+	}
+	cfg.Management.Enabled = true
+	if cfg.Management.Hostname == "" {
+		cfg.Management.Hostname = "127.0.0.1"
+	}
+	if cfg.Management.Port == 0 {
+		cfg.Management.Port = 8559
+	}
+}
+
 // ── Main ────────────────────────────────────────────────────────────────────
 
 func main() {
 	flagConfig := flag.String("config", "", "Path to HOCON application.conf (required)")
 	flagOtlp := flag.String("otlp", "", "OTLP/HTTP collector endpoint (overrides config)")
+	flagDisableManagement := flag.Bool("disable-management", false,
+		"Do not auto-enable the HTTP management API (opt out of the default port 8559 binding)")
 	flag.Parse()
 
 	if *flagConfig == "" {
@@ -282,6 +305,8 @@ func main() {
 	}
 
 	cfg.Roles = appendIfMissing(cfg.Roles, "metrics-exporter")
+
+	applyManagementDefaults(&cfg, *flagDisableManagement)
 
 	otlpEndpoint := cfg.Telemetry.OtlpEndpoint
 	if *flagOtlp != "" {

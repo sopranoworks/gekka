@@ -266,8 +266,15 @@ func (w *teaWriter) Write(p []byte) (n int, err error) {
 // ── Management API Auto-Enable ──────────────────────────────────────────────
 
 // applyManagementDefaults flips the HTTP management API on by default unless
-// disable is true.  Explicit HOCON values for Hostname and Port are preserved;
-// blanks are filled in with gekka-metrics defaults (127.0.0.1:8559).
+// disable is true.  Hostname and Port are set to gekka-metrics defaults
+// (127.0.0.1:8559) whenever they hold their zero value OR the upstream
+// gekka.LoadConfig default (8558) — the latter case matters because
+// gekka.LoadConfig pre-fills the default at parse time, so Port == 0 is
+// never observed by this helper after a successful load.
+//
+// Explicit non-default HOCON values (e.g. port = 9090, hostname = 0.0.0.0)
+// are preserved.  Operators who specifically want to collide with the seed
+// on :8558 must pass --disable-management and set it in their own HOCON.
 //
 // The "disable=true" path is the --disable-management escape hatch for
 // operators who do not want gekka-metrics to bind a management port.
@@ -276,10 +283,10 @@ func applyManagementDefaults(cfg *gekka.ClusterConfig, disable bool) {
 		return
 	}
 	cfg.Management.Enabled = true
-	if cfg.Management.Hostname == "" {
+	if cfg.Management.Hostname == "" || cfg.Management.Hostname == "127.0.0.1" {
 		cfg.Management.Hostname = "127.0.0.1"
 	}
-	if cfg.Management.Port == 0 {
+	if cfg.Management.Port == 0 || cfg.Management.Port == 8558 {
 		cfg.Management.Port = 8559
 	}
 }

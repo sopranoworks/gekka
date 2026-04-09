@@ -30,6 +30,19 @@ func TestApplyManagementDefaults_DefaultsWhenBlank(t *testing.T) {
 	}
 }
 
+// TestApplyManagementDefaults_OverridesLoadConfigDefault covers the realistic
+// post-LoadConfig state where DefaultManagementConfig has pre-filled Port=8558.
+// gekka-metrics must detect this and bump to 8559 to avoid colliding with a
+// seed node on the same host.
+func TestApplyManagementDefaults_OverridesLoadConfigDefault(t *testing.T) {
+	cfg := &gekka.ClusterConfig{Management: core.DefaultManagementConfig()}
+	applyManagementDefaults(cfg, false)
+
+	if cfg.Management.Port != 8559 {
+		t.Errorf("LoadConfig default 8558 should be bumped to 8559, got %d", cfg.Management.Port)
+	}
+}
+
 func TestApplyManagementDefaults_RespectsExplicitPort(t *testing.T) {
 	cfg := &gekka.ClusterConfig{Management: core.ManagementConfig{Port: 9999}}
 	applyManagementDefaults(cfg, false)

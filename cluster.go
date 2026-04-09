@@ -1321,6 +1321,20 @@ func (c *Cluster) ActorPaths() []string {
 	return out
 }
 
+// CRDTList implements management.DebugProvider.  Returns every CRDT known to
+// this node's Replicator as a slice of management.CRDTEntry.
+func (c *Cluster) CRDTList() []management.CRDTEntry {
+	if c.repl == nil {
+		return nil
+	}
+	entries := c.repl.Entries()
+	out := make([]management.CRDTEntry, len(entries))
+	for i, e := range entries {
+		out[i] = management.CRDTEntry{Key: e.Key, Type: e.Type}
+	}
+	return out
+}
+
 func (c *Cluster) Join(seedHost string, seedPort uint32) error {
 	scheme := c.localAddr.GetProtocol() // "pekko" or "akka"
 	c.seedAddr = &gproto_remote.Address{

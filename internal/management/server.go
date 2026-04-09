@@ -270,10 +270,10 @@ func (ms *ManagementServer) EnableDebug(provider DebugProvider) {
 // Stub handlers — filled in by Tasks 6, 7, 8.  They exist here so EnableDebug
 // compiles; each task replaces the body with the real implementation.
 func (ms *ManagementServer) handleDebugCRDTList(w http.ResponseWriter, r *http.Request) {
-	writeDebugError(w, http.StatusNotImplemented, "handleDebugCRDTList not implemented")
+	ms.handleDebugCRDTListImpl(w, r)
 }
 func (ms *ManagementServer) handleDebugCRDT(w http.ResponseWriter, r *http.Request) {
-	writeDebugError(w, http.StatusNotImplemented, "handleDebugCRDT not implemented")
+	ms.handleDebugCRDTImpl(w, r)
 }
 func (ms *ManagementServer) handleDebugActors(w http.ResponseWriter, r *http.Request) {
 	writeDebugError(w, http.StatusNotImplemented, "handleDebugActors not implemented")

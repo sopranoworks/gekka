@@ -126,9 +126,9 @@ func TestDebugEnabled_RoutesExist(t *testing.T) {
 	rec := httptest.NewRecorder()
 	ms.ServeHTTP(rec, req)
 
-	// 501 — stub body — proves the route is registered but the real handler
-	// hasn't been implemented yet (Tasks 6-8 replace the stub).
-	if rec.Code != http.StatusNotImplemented {
-		t.Errorf("enabled: got %d, want 501; body=%s", rec.Code, rec.Body.String())
+	// 200 — route is registered and the real CRDT-list handler is now live
+	// (Task 6 replaced the stub).
+	if rec.Code != http.StatusOK {
+		t.Errorf("enabled: got %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 }

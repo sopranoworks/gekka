@@ -114,3 +114,26 @@ func sortedKeys(m map[string]*TreeNode) []string {
 	sort.Strings(out)
 	return out
 }
+
+// BuildPathTree turns a list of /-separated paths into a TreeNode hierarchy.
+// Unlike BuildTree (which takes a flat dotted-key map) this walks /-separated
+// path strings and produces leaves with no values.  Empty segments (from
+// leading slashes) are skipped.
+func BuildPathTree(paths []string) *TreeNode {
+	root := &TreeNode{Children: map[string]*TreeNode{}}
+	for _, p := range paths {
+		cur := root
+		for _, seg := range strings.Split(p, "/") {
+			if seg == "" {
+				continue
+			}
+			child, ok := cur.Children[seg]
+			if !ok {
+				child = &TreeNode{Name: seg, Children: map[string]*TreeNode{}}
+				cur.Children[seg] = child
+			}
+			cur = child
+		}
+	}
+	return root
+}

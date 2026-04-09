@@ -68,3 +68,50 @@ func TestRenderTree_LeafValues(t *testing.T) {
 		t.Errorf("expected value 'hello' in output:\n%s", joined)
 	}
 }
+
+func TestBuildPathTree_Basic(t *testing.T) {
+	paths := []string{
+		"/user/worker-1",
+		"/user/worker-2",
+		"/user/supervisor/child-a",
+		"/user/supervisor/child-b",
+	}
+	root := BuildPathTree(paths)
+	if root == nil {
+		t.Fatal("nil root")
+	}
+	user := root.Find("user")
+	if user == nil {
+		t.Fatal("missing user node")
+	}
+	if user.Find("worker-1") == nil || user.Find("worker-2") == nil {
+		t.Errorf("missing worker leaves")
+	}
+	sup := user.Find("supervisor")
+	if sup == nil {
+		t.Fatal("missing supervisor")
+	}
+	if sup.Find("child-a") == nil || sup.Find("child-b") == nil {
+		t.Errorf("missing supervisor children")
+	}
+}
+
+func TestBuildPathTree_Empty(t *testing.T) {
+	root := BuildPathTree(nil)
+	if root == nil {
+		t.Error("nil root for empty input")
+	}
+	if len(root.Children) != 0 {
+		t.Errorf("expected empty children, got %v", root.Children)
+	}
+}
+
+func TestBuildPathTree_RendersWithExistingRenderer(t *testing.T) {
+	paths := []string{"/user/a", "/user/b/c"}
+	root := BuildPathTree(paths)
+	lines := RenderTree(root)
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "user") || !strings.Contains(joined, "a") || !strings.Contains(joined, "b") {
+		t.Errorf("rendered output missing expected nodes:\n%s", joined)
+	}
+}

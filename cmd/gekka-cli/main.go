@@ -91,6 +91,7 @@ a Gekka (or Apache Pekko) cluster via its HTTP Management API.`,
 	rootCmd.AddCommand(newShardsCmd(root))
 	rootCmd.AddCommand(newHealthCmd(root))
 	rootCmd.AddCommand(newDurableStateCmd(root))
+	rootCmd.AddCommand(newServicesCmd(root))
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

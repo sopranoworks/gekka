@@ -99,7 +99,7 @@ func TestBuildPathTree_Basic(t *testing.T) {
 func TestBuildPathTree_Empty(t *testing.T) {
 	root := BuildPathTree(nil)
 	if root == nil {
-		t.Error("nil root for empty input")
+		t.Fatal("nil root for empty input")
 	}
 	if len(root.Children) != 0 {
 		t.Errorf("expected empty children, got %v", root.Children)

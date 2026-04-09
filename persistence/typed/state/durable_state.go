@@ -86,9 +86,11 @@ type durableStateActor[Command any, State any] struct {
 	revision   uint64
 	recovering bool
 	tctx       typed.TypedContext[Command]
-	timers     *actor.TimerSchedulerImpl[Command]
-	userStash  *actor.StashBufferImpl[Command]
-	stash      []Command // internal recovery stash
+	timers            *actor.TimerSchedulerImpl[Command]
+	userStash         *actor.StashBufferImpl[Command]
+	userStashPending  []Command
+	drainingUserStash bool
+	stash             []Command // internal recovery stash
 }
 
 func NewDurableStateActor[Command any, State any](b *DurableStateBehavior[Command, State]) actor.Actor {
@@ -211,7 +213,9 @@ func (r *contextAskResponder[T]) Path() string {
 
 func (p *durableStateActor[Command, State]) PreStart() {
 	p.timers = actor.NewTimerScheduler[Command](p.Self())
-	p.userStash = actor.NewStashBuffer[Command](p.Self(), actor.DefaultStashCapacity)
+	p.userStash = actor.NewStashBuffer[Command](actor.DefaultStashCapacity, func(cmd Command) {
+		p.userStashPending = append(p.userStashPending, cmd)
+	})
 	p.recover()
 }
 
@@ -237,7 +241,22 @@ func (p *durableStateActor[Command, State]) Receive(msg any) {
 		case *unhandledEffect[State]:
 			p.Log().Warn("Unhandled command", "type", fmt.Sprintf("%T", cmd))
 		}
+		p.drainUserStash()
 		return
+	}
+}
+
+func (p *durableStateActor[Command, State]) drainUserStash() {
+	if p.drainingUserStash {
+		return
+	}
+	p.drainingUserStash = true
+	defer func() { p.drainingUserStash = false }()
+
+	for len(p.userStashPending) > 0 {
+		next := p.userStashPending[0]
+		p.userStashPending = p.userStashPending[1:]
+		p.Receive(next)
 	}
 }
 

@@ -214,7 +214,9 @@ type TypedActor[T any] struct {
 	behavior         Behavior[T]
 	ctx              *typedContext[T]
 	timers           *timerScheduler[T]
-	stash            *stashBuffer[T]
+	stash            *actor.StashBufferImpl[T]
+	stashPending     []T
+	drainingStash    bool
 	stopped          bool
 	terminatedHooks  map[string]func() // path → callback for Monitor
 	receiveTimeout   *receiveTimeoutState[T]
@@ -235,7 +237,28 @@ func NewTypedActorInternal[T any](behavior Behavior[T]) *TypedActor[T] {
 // self reference has been injected by the actor system.
 func (a *TypedActor[T]) PreStart() {
 	a.timers = newTimerScheduler[T](a.Self())
-	a.stash = newStashBuffer[T](a.Self(), actor.DefaultStashCapacity)
+	a.stash = actor.NewStashBuffer[T](actor.DefaultStashCapacity, func(msg T) {
+		a.stashPending = append(a.stashPending, msg)
+	})
+}
+
+// drainStash processes messages moved to stashPending by the user's
+// StashBuffer redeliver hook (triggered by UnstashAll). Each drained
+// message re-enters Receive so normal behavior dispatch applies. The
+// drainingStash flag prevents recursive drains when a drained message
+// itself calls UnstashAll again.
+func (a *TypedActor[T]) drainStash() {
+	if a.drainingStash {
+		return
+	}
+	a.drainingStash = true
+	defer func() { a.drainingStash = false }()
+
+	for len(a.stashPending) > 0 {
+		next := a.stashPending[0]
+		a.stashPending = a.stashPending[1:]
+		a.Receive(next)
+	}
 }
 
 // PostStop cancels all active timers so their goroutines exit cleanly.
@@ -291,12 +314,14 @@ func createTypedActorReflection(behavior any, tType reflect.Type) actor.Actor {
 
 type genericTypedActor struct {
 	actor.BaseActor
-	behavior reflect.Value // Behavior[T]
-	tType    reflect.Type
-	ctx      any                 // TypedContext[T]
-	timers   TimerScheduler[any] // Use local interface
-	stash    StashBuffer[any]    // Use local interface
-	stopped  bool
+	behavior      reflect.Value // Behavior[T]
+	tType         reflect.Type
+	ctx           any                 // TypedContext[T]
+	timers        TimerScheduler[any] // Use local interface
+	stash         StashBuffer[any]    // Use local interface
+	stashPending  []any
+	drainingStash bool
+	stopped       bool
 }
 
 func (a *genericTypedActor) PreStart() {
@@ -306,7 +331,23 @@ func (a *genericTypedActor) PreStart() {
 
 	// Initialize timers/stash
 	a.timers = actor.NewTimerScheduler[any](a.Self())
-	a.stash = actor.NewStashBuffer[any](a.Self(), actor.DefaultStashCapacity)
+	a.stash = actor.NewStashBuffer[any](actor.DefaultStashCapacity, func(msg any) {
+		a.stashPending = append(a.stashPending, msg)
+	})
+}
+
+func (a *genericTypedActor) drainStash() {
+	if a.drainingStash {
+		return
+	}
+	a.drainingStash = true
+	defer func() { a.drainingStash = false }()
+
+	for len(a.stashPending) > 0 {
+		next := a.stashPending[0]
+		a.stashPending = a.stashPending[1:]
+		a.Receive(next)
+	}
 }
 
 func (a *genericTypedActor) PostStop() {
@@ -346,6 +387,7 @@ func (a *genericTypedActor) Receive(msg any) {
 			a.behavior = next
 		}
 	}
+	a.drainStash()
 }
 
 func isStoppedGeneric(behavior any, tType reflect.Type) bool {
@@ -396,6 +438,7 @@ func (a *TypedActor[T]) Receive(msg any) {
 				a.behavior = next
 			}
 		}
+		a.drainStash()
 	}
 }
 

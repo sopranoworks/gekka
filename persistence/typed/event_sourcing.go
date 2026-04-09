@@ -120,9 +120,11 @@ type persistentActor[Command any, Event any, State any] struct {
 	lastSnapSeqNr uint64
 	recovering    bool
 	tctx          typed.TypedContext[Command]
-	stash         []Command // internal recovery stash; separate from user StashBuffer
-	timers        *actor.TimerSchedulerImpl[Command]
-	userStash     *actor.StashBufferImpl[Command]
+	stash             []Command // internal recovery stash; separate from user StashBuffer
+	timers            *actor.TimerSchedulerImpl[Command]
+	userStash         *actor.StashBufferImpl[Command]
+	userStashPending  []Command
+	drainingUserStash bool
 }
 
 func NewPersistentActor[Command any, Event any, State any](b *EventSourcedBehavior[Command, Event, State]) actor.Actor {
@@ -253,7 +255,9 @@ func (r *contextAskResponder[T]) Path() string {
 
 func (p *persistentActor[Command, Event, State]) PreStart() {
 	p.timers = actor.NewTimerScheduler[Command](p.Self())
-	p.userStash = actor.NewStashBuffer[Command](p.Self(), actor.DefaultStashCapacity)
+	p.userStash = actor.NewStashBuffer[Command](actor.DefaultStashCapacity, func(cmd Command) {
+		p.userStashPending = append(p.userStashPending, cmd)
+	})
 	p.recover()
 }
 
@@ -282,12 +286,27 @@ func (p *persistentActor[Command, Event, State]) Receive(msg any) {
 			p.persist(pe.events, pe.then)
 		}
 		// *noneEffect and nil are no-ops.
+		p.drainUserStash()
 		return
 	}
 
 	switch msg.(type) {
 	case actor.TerminatedMessage:
 		// Handle termination
+	}
+}
+
+func (p *persistentActor[Command, Event, State]) drainUserStash() {
+	if p.drainingUserStash {
+		return
+	}
+	p.drainingUserStash = true
+	defer func() { p.drainingUserStash = false }()
+
+	for len(p.userStashPending) > 0 {
+		next := p.userStashPending[0]
+		p.userStashPending = p.userStashPending[1:]
+		p.Receive(next)
 	}
 }
 

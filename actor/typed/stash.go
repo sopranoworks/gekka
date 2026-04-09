@@ -8,29 +8,27 @@
 
 package typed
 
-import (
-	"github.com/sopranoworks/gekka/actor"
-)
-
-// StashBuffer provides a temporary storage for messages that should not be
-// processed by an actor's current behavior.
+// StashBuffer provides temporary storage for messages that should not be
+// processed by an actor's current behavior. It is created by the owning
+// typed actor (TypedActor, persistent, or durable-state) and exposed via
+// the typed context.
+//
+// Stash appends a message for later redelivery.
+// UnstashAll redelivers every buffered message through the actor's normal
+// dispatch path, in FIFO order, and empties the buffer.
 type StashBuffer[T any] interface {
-	// Stash adds the current message to the stash.
-	Stash() error
+	// Stash adds msg to the buffer. Returns an error if the buffer is full.
+	Stash(msg T) error
 
-	// UnstashAll prepends all stashed messages to the actor's mailbox.
+	// UnstashAll redelivers every buffered message in FIFO order.
 	UnstashAll() error
 
-	// Clear removes all messages from the stash.
+	// Size returns the current number of buffered messages.
+	Size() int
+
+	// IsFull reports whether the buffer has reached its capacity.
+	IsFull() bool
+
+	// Clear drops all buffered messages without delivering them.
 	Clear()
-}
-
-type stashBuffer[T any] struct {
-	*actor.StashBufferImpl[T]
-}
-
-func newStashBuffer[T any](self actor.Ref, capacity int) *stashBuffer[T] {
-	return &stashBuffer[T]{
-		StashBufferImpl: actor.NewStashBuffer[T](self, capacity),
-	}
 }

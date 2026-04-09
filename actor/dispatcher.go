@@ -9,6 +9,7 @@
 package actor
 
 import (
+	"context"
 	"log/slog"
 	"runtime"
 	"strings"
@@ -237,14 +238,14 @@ func (f *loggingFactory) installInto(b *BaseActor) {
 		// Wrap whatever mbSend the inner factory installed.
 		innerSend := b.mbSend
 		b.mbSend = func(msg any) bool {
-			logger.Log(nil, level, "mailbox enqueue", "message", msg)
+			logger.Log(context.TODO(), level, "mailbox enqueue", "message", msg)
 			return innerSend(msg)
 		}
 	} else {
 		// No inner factory (or inner did not set mbSend) — wrap default channel send.
 		ch := b.mailbox
 		b.mbSend = func(msg any) bool {
-			logger.Log(nil, level, "mailbox enqueue", "message", msg)
+			logger.Log(context.TODO(), level, "mailbox enqueue", "message", msg)
 			select {
 			case ch <- msg:
 				return true

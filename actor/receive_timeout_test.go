@@ -24,11 +24,11 @@ type receiveTimeoutTestActor struct {
 func (a *receiveTimeoutTestActor) Receive(msg any) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	switch msg.(type) {
+	switch m := msg.(type) {
 	case ReceiveTimeout:
 		a.msgs = append(a.msgs, "timeout")
 	case string:
-		a.msgs = append(a.msgs, msg.(string))
+		a.msgs = append(a.msgs, m)
 	}
 }
 

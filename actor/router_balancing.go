@@ -70,10 +70,9 @@ func (r *BalancingPoolRouter) PreStart() {
 
 // Receive forwards all messages to the shared channel.
 func (r *BalancingPoolRouter) Receive(msg any) {
-	switch msg.(type) {
+	switch tm := msg.(type) {
 	case TerminatedMessage:
 		// A routee died — remove from list
-		tm := msg.(TerminatedMessage)
 		for i, rt := range r.routees {
 			if rt.Path() == tm.TerminatedActor().Path() {
 				r.routees = append(r.routees[:i], r.routees[i+1:]...)

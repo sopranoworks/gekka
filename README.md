@@ -1,4 +1,4 @@
-# gekka &nbsp;[![Version](https://img.shields.io/badge/version-0.15.0-blue)](https://github.com/sopranoworks/gekka)
+# gekka &nbsp;[![Version](https://img.shields.io/badge/version-0.16.0-blue)](https://github.com/sopranoworks/gekka)
 
  [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Go CI](https://github.com/sopranoworks/gekka/actions/workflows/go.yml/badge.svg)](https://github.com/sopranoworks/gekka/actions/workflows/go.yml)
 
@@ -12,20 +12,23 @@ Configuration is loaded via [`gekka-config`](https://github.com/sopranoworks/gek
 
 ---
 
-## What's New in v0.15.0
+## What's New in v0.16.0
 
-- **Actor System Enhancements** — `EventStream` system-wide pub/sub bus; `DeadLetter` events published on undeliverable messages; `AllForOneStrategy` supervisor; custom mailbox types (`BoundedMailbox`, `UnboundedPriorityMailbox`) configurable via `Props`.
-- **Typed Actor Enhancements** — `Behaviors.intercept` API with `BehaviorInterceptor[T]` and built-in `LogMessages[T]`; typed `Topic[T]` pub/sub backed by `LocalMediator`; `TypedReplicatorAdapter` for typed-actor DData integration.
-- **Persistence Enhancements** — `PersistentFSM` for state-machine-based event sourcing; `EventAdapter` hooks for schema evolution; `snapshotWhen` predicate for fine-grained snapshot control; `persistAsync`/`persistAllAsync` for high-throughput writes; `DurableProducerQueue` for persistence-backed reliable delivery; `EventsByTag` query DSL.
-- **Streams — New Operators** — `WireTap`, `Interleave`, `TakeWhile`, `DropWhile`, `FlatMapConcat`, `MapAsyncUnordered`, `Scan`, `MergePrioritized`, `UnzipWith2`, `RetryFlowWithBackoff`, `FlowWithContext`, `SourceWithContext`.
-- **Streams — Hubs & Compression** — Dynamic `MergeHub`, `BroadcastHub`, and `PartitionHub` for runtime topology reconfiguration; `Gzip`/`Gunzip`/`Deflate`/`Inflate` compression flows; length-field and delimiter-based framing flows.
-- **Streams — Sub-streams & BidiFlow** — `GroupBy` for dynamic fan-out by key; `BidiFlow` for composable bidirectional protocol stacking.
-- **Exactly-once Projections** — Projection delivery with durable offset tracking prevents duplicate processing across restarts.
-- **WorkPulling Delivery** — Push-pull distribution where workers pull work at their own pace, preventing mailbox overflow under bursty load.
-- **Cluster Extensions** — Cluster Client for external nodes; Artery quarantine protocol parity; `LeaseMajority`, `DownAll`, `DownAllNodesInDataCenter` SBR strategies; `TestLease` and `KubernetesLease`; Consul and AWS EC2 seed provider extensions.
-- **Testing Framework** — `Actor TestKit` with `TestProbe` and assertion helpers; `Stream TestKit` with reactive source/sink probes.
-- **Distributed Data** — `PNCounterMap` and `ORMultiMap` typed accessor API; multi-DC gossip enhancements with configurable cross-DC propagation probability.
-- **Extensible Serialization** — HOCON-based registration for user-defined serializers, enabling custom wire formats without modifying core transport code.
+- **Actor Dispatchers** — `PinnedDispatcher` (OS-thread pinning), `CallingThreadDispatcher` (synchronous for tests), `LoggingMailbox` decorator; HOCON dispatcher config via `Props.DispatcherKey`.
+- **Classic Actor Completeness** — `become`/`unbecome` behavior stack; `PoisonPill`/`Kill` lifecycle messages; `Identify`/`ActorIdentity` protocol; `GracefulStop` pattern; `SetReceiveTimeout`/`CancelReceiveTimeout`.
+- **Typed Actor Completeness** — `PipeToSelf`, `MessageAdapter`, `AskWithStatus`/`StatusReply`, `WatchWith`, `SetReceiveTimeout` (typed); `Behaviors.empty`/`ignore`/`unhandled`; `WithMdc`; `Behaviors.supervise` (Restart/Stop/Resume/Backoff); `SpawnProtocol`; `TransformMessages`; `StoppedWithPostStop`; `ReceiveSignal`; `ReceivePartial`.
+- **Cluster Bootstrap & Resilience** — `ClusterBootstrap` with discovery polling and quorum-based self-join; `ClusterMetricsRoutingLogic` (pressure-driven routing); Singleton lease coordination; `AppVersion` in handshake for rolling updates.
+- **Distributed Data** — `GSet[T]` grow-only set CRDT with delta propagation.
+- **Typed Persistence Completeness** — `RetentionCriteria` (snapshot scheduling + journal cleanup); `RecoveryStrategy` (Disabled/SnapshotSelection/ReplayFilter); `RecoveryCompleted` signal; `ReplicatedEventSourcing` for multi-DC event sourcing.
+- **Streams — Source** — `Single`, `Empty`, `Range`, `Tick`, `FromFuture`, `Queue` (overflow strategies), `Unfold`, `UnfoldAsync`, `Cycle`, `ZipWithIndex`, `Combine`.
+- **Streams — Flow** — Token-bucket `Throttle` with `costCalculation`; `MapConcat`, `FlatMapMerge`; `TakeWithin`, `DropWithin`; `DivertTo`, `AlsoTo`; `InitialTimeout`, `CompletionTimeout`, `IdleTimeout`, `KeepAlive`; `DelayWith`, `OrElse`, `Prepend`; `WatchTermination`, `Monitor`; `Intersperse`, `RecoverWithRetries`, `MapError`, `StatefulMap`, `BatchWeighted`.
+- **Streams — Sink & Buffering** — `Fold`, `Reduce`, `Last`, `LastOption`, `HeadOption`, `Cancelled`; `ActorRefWithBackpressure`; `RestartSink`; `Batch`, `Expand`, `Extrapolate`, `Sliding`, `SplitWhen`, `SplitAfter`, `ScanAsync`.
+- **Streams — Custom GraphStage** — `GraphStage[S]`/`GraphStageLogic` API for fully custom back-pressure stages; `LazySource`/`LazySink`/`LazyFlow`; Reactive Streams `Publisher`/`Subscriber`/`Processor` interop.
+- **Routers** — `BalancingPool` (work-stealing shared channel); `SmallestMailboxPool`; `ConsistentHashRouter` with 100-replica virtual-node ring; `Behaviors.monitor` typed DeathWatch.
+- **Serialization & Remote Deploy** — CBOR serializer (`serialization/cbor`); Remote actor deployment via `RemoteScope`/`RemoteDeploy`.
+- **Testing** — `BehaviorTestKit`, `SerializationTestKit`, `ManualTime`, `PersistenceTestKit`, `LoggingTestKit`, `MultiNodeTestKit` (in-process cluster with `Barrier`/`RunOn`).
+- **Extension Framework** — `ExtensionId`/`Extension` lazy singleton API; `AggregateProvider` for multi-source seed discovery.
+- **Bug Fixes & Compatibility** — 11 integration test failures resolved (Artery delivery, serialization dispatch); 4-node multi-JVM test (2 Akka + 2 Go).
 
 ## Configuration
 
@@ -48,32 +51,42 @@ If either `gekka.management.http.hostname` or `gekka.management.http.port` is ex
 ### 🏗️ Core Actor Engine
 - **Hierarchical Actor System** — Parent-child relationships with supervisor-managed lifecycle.
 - **Typed Behaviors** — Type-safe actor definitions leveraging Go generics for robust messaging.
-- **Fault Tolerance** — Advanced supervision with `OneForOneStrategy`, `AllForOneStrategy`, and specialized recovery policies.
+- **Fault Tolerance** — Advanced supervision with `OneForOneStrategy`, `AllForOneStrategy`, `Behaviors.supervise` (Restart/Stop/Resume/Backoff), and specialized recovery policies.
 - **Timers & Stash** — Built-in `TimerScheduler` for scheduled tasks and `StashBuffer` for message deferral.
 - **EventStream & DeadLetter** — System-wide pub/sub bus for broadcasting events; undeliverable messages published as `DeadLetter` events.
-- **Custom Mailboxes** — Pluggable `MailboxFactory` interface with `BoundedMailbox` (drop strategies) and `UnboundedPriorityMailbox` (heap-backed priority ordering).
+- **Custom Mailboxes** — Pluggable `MailboxFactory` interface with `BoundedMailbox` (drop strategies), `UnboundedPriorityMailbox` (heap-backed priority ordering), and `LoggingMailbox` decorator.
+- **Dispatchers** — `PinnedDispatcher` (OS-thread affinity), `CallingThreadDispatcher` (synchronous test execution), HOCON-configurable dispatcher assignment via `Props.DispatcherKey`.
+- **Classic Actor Lifecycle** — `become`/`unbecome` behavior stack; `PoisonPill`/`Kill`; `Identify`/`ActorIdentity`; `GracefulStop`; `SetReceiveTimeout`/`CancelReceiveTimeout`.
+- **Typed Actor Interaction** — `PipeToSelf`, `MessageAdapter`, `AskWithStatus`, `WatchWith`, `SetReceiveTimeout` (typed); `SpawnProtocol`; `TransformMessages`; `ReceiveSignal`; `ReceivePartial`; `WithMdc`.
+- **Extension Framework** — `ExtensionId`/`Extension` lazy singleton API for attaching system-level services.
 
 ### 🌐 Clustering & Distribution
 - **Artery TCP & Aeron UDP Transport** — High-performance, Pekko/Akka-compatible wire protocols. TCP transport with full preamble and manifest support; native Aeron UDP transport for low-latency, lock-free messaging across hybrid Go/JVM clusters.
+- **ClusterBootstrap** — Automatic seed-node discovery with configurable quorum logic and leader-election by address sort; eliminates static seed-node configuration.
 - **Cluster Sharding** — Automated, load-aware actor placement with manual rebalancing support via CLI.
 - **Cluster Client** — External client extension for communicating with a cluster without joining as a member.
-- **Multi-source Discovery** — Kubernetes API, DNS SRV, Consul, and AWS EC2 tag-based seed providers.
+- **Multi-source Discovery** — Kubernetes API, DNS SRV, Consul, AWS EC2 tag-based, and `AggregateProvider` (multi-source fan-out with deduplication).
 - **Split Brain Resolver (SBR)** — Resilient partition resolution with configurable strategies (static-quorum, keep-oldest, keep-majority, lease-majority, down-all).
 - **Multi-DC Awareness** — Strategic routing and management across multiple logical data centers with configurable cross-DC gossip probability.
+- **Rolling Updates** — `AppVersion` field in handshake; `AppVersionChanged` events enable blue/green and phased rollout orchestration.
 
 ### 💾 Persistence & Reliability
-- **Event Sourcing** — Durable state recovery via journaled events and periodic snapshots; `snapshotWhen` predicate for fine-grained snapshot control.
-- **Persistent FSM** — State-machine-based persistence combining FSM behavior with the event sourcing journal.
+- **Event Sourcing** — Durable state recovery via journaled events and periodic snapshots; `snapshotWhen` predicate; `RetentionCriteria` for automated snapshot scheduling and journal cleanup.
+- **Recovery Control** — `RecoveryStrategy` (Disabled/SnapshotSelection/ReplayFilter); `RecoveryCompleted` signal for post-recovery initialization.
+- **Replicated Event Sourcing** — Multi-DC persistence with `ReplicatedEventSourcing`; events carry `ReplicaId` metadata and stream across replicas for eventual consistency.
+- **Persistent FSM** — State-machine-based persistence combining FSM behavior with the event sourcing journal; `persistAsync`/`persistAllAsync` for high-throughput writes.
 - **Event Adapters** — Transformation hooks for schema evolution between journal and actor domain models.
 - **Extensible Backends** — Decoupled storage interfaces supporting Spanner, SQL, and Redis via extensions.
-- **Exactly-once Reliable Delivery** — Guaranteed message delivery even during shard handoffs or failovers; WorkPulling pattern and DurableProducerQueue for high-throughput scenarios.
-- **Distributed Data (CRDTs)** — Eventually consistent shared state with bandwidth-efficient Delta-propagation; typed `PNCounterMap` and `ORMultiMap` APIs.
+- **Exactly-once Reliable Delivery** — Guaranteed message delivery even during shard handoffs or failovers; WorkPulling pattern, `DurableProducerQueue`, and `AtLeastOnceDelivery` mixin.
+- **Distributed Data (CRDTs)** — Eventually consistent shared state with bandwidth-efficient delta-propagation; `GCounter`, `ORSet`, `PNCounterMap`, `ORMultiMap`, `GSet` typed APIs.
 
 ### 🔌 Ecosystem & Connectivity
-- **Pekko/Akka Interoperability** — Verified wire-level compatibility with JVM nodes via Artery TCP and native Aeron UDP. Hybrid clusters (Go + Scala) are tested with `sbt multi-jvm:test` including Ping/Pong message exchange and 60-second stability windows.
-- **HOCON Configuration** — Flexible, layered configuration powered by the `gekka-config` engine, including user-defined serializer registration.
-- **Gekka Streams** — Backpressure-aware reactive streams aligned with the Akka Streams model; rich operator set including hubs, compression, framing, and sub-streams.
-- **Testing Framework** — `Actor TestKit` with `TestProbe` for deterministic unit tests; `Stream TestKit` with reactive source/sink probes for backpressure testing.
+- **Pekko/Akka Interoperability** — Verified wire-level compatibility with JVM nodes via Artery TCP and native Aeron UDP. Hybrid clusters (Go + Scala) tested with `sbt multi-jvm:test` including 4-node (2 Akka + 2 Go) cluster formation.
+- **HOCON Configuration** — Flexible, layered configuration powered by the `gekka-config` engine, including user-defined serializer registration and dispatcher configuration.
+- **Gekka Streams** — Backpressure-aware reactive streams aligned with the Akka Streams model; rich operator set including hubs, compression, framing, sub-streams, custom `GraphStage` API, and Reactive Streams interop.
+- **Remote Actor Deployment** — `RemoteScope`/`RemoteDeploy` for spawning actors on remote nodes via `ActorOf`.
+- **Serialization** — Built-in Protobuf, ByteArray, JSON, CBOR; HOCON-configurable user-defined serializers.
+- **Testing Framework** — `BehaviorTestKit`, `SerializationTestKit`, `ManualTime`, `PersistenceTestKit`, `LoggingTestKit`, `MultiNodeTestKit`, `TestProbe`, stream probes.
 
 ### 📊 Observability & Management
 - **Interactive Dashboard** — Real-time TUI dashboard in `gekka-cli` for monitoring member health and roles.

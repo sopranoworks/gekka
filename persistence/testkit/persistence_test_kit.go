@@ -33,8 +33,6 @@ import (
 // PersistenceTestKit provides an in-memory journal and snapshot store with
 // programmable failure injection for testing persistent actors.
 type PersistenceTestKit struct {
-	mu sync.Mutex
-
 	// underlying stores
 	journal  *testJournal
 	snapshot *testSnapshotStore

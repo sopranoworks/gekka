@@ -72,7 +72,7 @@ func newBehavior(replicaId ReplicaId, journal persistence.Journal, allReplicas [
 		AllReplicas: allReplicas,
 		InitialState: counterState{Total: 0},
 		CommandHandler: func(ctx typed.TypedContext[addCmd], state counterState, cmd addCmd) ptypes.Effect[addedEvt, counterState] {
-			return ptypes.Persist[addedEvt, counterState](addedEvt{Value: cmd.Value})
+			return ptypes.Persist[addedEvt, counterState](addedEvt(cmd))
 		},
 		EventHandler: func(state counterState, re ReplicatedEvent[addedEvt]) counterState {
 			return counterState{Total: state.Total + re.Event.Value}
@@ -246,7 +246,7 @@ func TestReplicatedEventOriginTracking(t *testing.T) {
 		AllReplicas:   replicas,
 		InitialState:  counterState{},
 		CommandHandler: func(ctx typed.TypedContext[addCmd], state counterState, cmd addCmd) ptypes.Effect[addedEvt, counterState] {
-			return ptypes.Persist[addedEvt, counterState](addedEvt{Value: cmd.Value})
+			return ptypes.Persist[addedEvt, counterState](addedEvt(cmd))
 		},
 		EventHandler: func(state counterState, re ReplicatedEvent[addedEvt]) counterState {
 			origins = append(origins, re.Origin)

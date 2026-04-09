@@ -85,6 +85,24 @@
 - **Distributed Data**: `PNCounterMap` and `ORMultiMap` typed accessor API; configurable cross-DC gossip probability; exactly-once projection delivery.
 - **Extensible Serialization**: HOCON-based user-defined serializer registration via `gekka.serialization.bindings`.
 
+### v0.16.0 (2026-04-09) ✅ Released
+- **Actor System — Dispatchers**: `PinnedDispatcher` (OS-thread pinning), `CallingThreadDispatcher` (synchronous for tests), `LoggingMailbox` decorator; HOCON dispatcher configuration via `Props.DispatcherKey`.
+- **Classic Actor Completeness**: `become`/`unbecome` behavior stack; `PoisonPill`/`Kill` lifecycle messages; `Identify`/`ActorIdentity` protocol; `GracefulStop` pattern; `SetReceiveTimeout`/`CancelReceiveTimeout` for classic actors.
+- **Typed Actor Completeness**: `ctx.PipeToSelf`, `MessageAdapter`, `AskWithStatus`/`StatusReply`, `WatchWith`; `SetReceiveTimeout` and `CancelReceiveTimeout` for typed actors; `Behaviors.empty`, `Behaviors.ignore`, `Behaviors.unhandled`; `WithMdc` structured logging context; `Behaviors.supervise` wrapper (Restart/Stop/Resume/RestartWithBackoff); `SpawnProtocol`; `TransformMessages`; `StoppedWithPostStop`; `ReceiveSignal` (Terminated/PreRestart/PostStop); `ReceivePartial`.
+- **Cluster — Bootstrap & Resilience**: `ClusterBootstrap` coordinator with discovery polling, quorum logic, and leader-election by address sort; `ClusterMetricsRoutingLogic` for pressure-driven routing; Singleton lease coordination; `AppVersion` in handshake for rolling updates with `AppVersionChanged` events.
+- **Distributed Data**: `GSet[T]` grow-only set CRDT with delta propagation.
+- **Persistence — Typed Completeness**: `RetentionCriteria` (snapshot-every-N, keep-N, delete-events-on-snapshot); `RecoveryStrategy` (Disabled, SnapshotSelectionCriteria, ReplayFilter); `RecoveryCompleted` signal; `ReplicatedEventSourcing` for multi-DC event sourcing with cross-replica streaming.
+- **Streams — Source constructors**: `Single`, `Empty`, `Range`, `Tick`, `FromFuture`, `Queue` (with overflow strategies), `Unfold`, `UnfoldAsync`, `Cycle`, `ZipWithIndex`, `Combine` (Merge/Concat strategies).
+- **Streams — Flow operators**: Token-bucket `Throttle` with `costCalculation`; `MapConcat`, `FlatMapMerge`; `TakeWithin`, `DropWithin`; `DivertTo`, `AlsoTo`; `InitialTimeout`, `CompletionTimeout`, `IdleTimeout`, `KeepAlive`; `DelayWith`, `OrElse`, `Prepend`; `WatchTermination`, `Monitor`; `Intersperse`, `RecoverWithRetries`, `MapError`, `StatefulMap`, `BatchWeighted`.
+- **Streams — Sink & buffering**: `Fold`, `Reduce`, `Last`, `LastOption`, `HeadOption`, `Cancelled`; `ActorRefWithBackpressure`; `RestartSink`; `Batch`, `Expand`, `Extrapolate`, `Sliding`, `SplitWhen`, `SplitAfter`, `ScanAsync`.
+- **Streams — Custom GraphStage API**: `GraphStage[S]`/`GraphStageLogic` with `InHandler`/`OutHandler` for fully custom stages; `LazySource`, `LazySink`, `LazyFlow`; Reactive Streams `Publisher`/`Subscriber`/`Processor` interop.
+- **Streams — Sink Integration**: `ConsistentHashRouter` with 100-replica virtual-node ring; `BalancingPool` (shared-channel work-stealing); `SmallestMailboxPool`; `Behaviors.monitor` (typed DeathWatch with custom message synthesis).
+- **Serialization**: CBOR serializer (`serialization/cbor`) using `fxamacker/cbor/v2`; Remote actor deployment via `RemoteScope`/`RemoteDeploy`.
+- **Testing**: `BehaviorTestKit` (synchronous typed behavior unit tests); `SerializationTestKit` (round-trip verification); `ManualTime` (deterministic timer control); `PersistenceTestKit` with failure injection; `LoggingTestKit` (log assertion); `MultiNodeTestKit` (in-process cluster formation with `Barrier`/`RunOn`).
+- **Extension Framework**: `ExtensionId`/`Extension` API for lazy singleton extensions on `ActorSystem`; `AggregateProvider` for multi-source seed discovery.
+- **Bug Fixes**: Resolved 11 integration test failures in Artery delivery, `ProducerController` type switch, and serialization registry dispatch.
+- **Multi-JVM Testing**: 4-node compatibility test (2 Akka + 2 Go nodes) with full cluster formation verification.
+
 ---
 
 ## Upcoming

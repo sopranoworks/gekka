@@ -279,6 +279,10 @@ func (b *BaseActor) Send(msg any) bool {
 // closes the underlying channel. For priority mailboxes it signals the drain
 // goroutine to stop (which then closes the channel, ending Start's range loop).
 func (b *BaseActor) CloseMailbox() {
+	// Cancel any pending receive timeout timer first to prevent the timer
+	// callback from racing with the mailbox close (which would cause a
+	// "send on closed channel" panic when the timer Tells ReceiveTimeout).
+	b.CancelReceiveTimeout()
 	if b.mbClose != nil {
 		b.mbClose()
 	} else {
@@ -454,9 +458,8 @@ func (b *BaseActor) SetReceiveTimeout(d time.Duration) {
 	self := b.selfRef
 	rt.timer = time.AfterFunc(d, func() {
 		rt.mu.Lock()
-		active := rt.active
-		rt.mu.Unlock()
-		if active && self != nil {
+		defer rt.mu.Unlock()
+		if rt.active && self != nil {
 			self.Tell(ReceiveTimeout{})
 		}
 	})
@@ -494,9 +497,8 @@ func (b *BaseActor) resetReceiveTimeout() {
 	self := b.selfRef
 	rt.timer = time.AfterFunc(rt.duration, func() {
 		rt.mu.Lock()
-		active := rt.active
-		rt.mu.Unlock()
-		if active && self != nil {
+		defer rt.mu.Unlock()
+		if rt.active && self != nil {
 			self.Tell(ReceiveTimeout{})
 		}
 	})

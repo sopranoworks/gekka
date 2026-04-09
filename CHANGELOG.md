@@ -7,6 +7,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-04-09
+
+### Added
+
+- 🚀 **PinnedDispatcher**: `DispatcherPinned` locks the actor goroutine to a single OS thread via `runtime.LockOSThread`, enabling actors that depend on thread-local state (CGo, OpenGL, etc.).
+- 🚀 **CallingThreadDispatcher**: `DispatcherCallingThread` executes `Receive` synchronously on the `Tell` caller's goroutine, enabling deterministic single-threaded unit tests without goroutine scheduling.
+- 🚀 **LoggingMailbox**: `NewLoggingMailbox(inner, level, logger)` decorator that logs every enqueued message before delegating to the inner mailbox factory.
+- 🚀 **HOCON Dispatcher Configuration**: `Props{DispatcherKey: "my-dispatcher"}` resolved at spawn time from `pekko.dispatchers.*` HOCON config, enabling per-actor dispatcher tuning without code changes.
+- 🚀 **Behaviors.monitor** (Typed DeathWatch): `Monitor[T, U](ref, onTerminated, inner)` wraps a typed behavior to synthesize a custom message when a watched actor terminates, avoiding explicit signal handling.
+- 🚀 **Token-bucket Throttle**: Replaced the basic rate limiter with a proper token-bucket `Throttle[T](elements, per, maximumBurst, costCalculation)` stream operator, supporting per-element cost functions and burst absorption.
+- 🚀 **ConsistentHashRouter — Virtual-node ring**: `ConsistentHashRouter` now uses a 100-replica virtual-node ring with binary-search selection, guaranteeing ≥80% key stability when one routee is added and ≤40% disruption when one of three routees is removed.
+- 🚀 **Rolling Updates (AppVersion)**: `AppVersion{Major, Minor, Patch}` field in `NodeConfig`/`ClusterConfig`; included in `InitJoin` and `Welcome` handshake protos; `ClusterManager` emits `AppVersionChanged` events as new versions join, enabling blue/green and rolling upgrade orchestration.
+- 🚀 **ctx.PipeToSelf**: Typed actor `PipeToSelf[T, R](ctx, fn, adapt)` runs an async function in a goroutine and delivers the result to `ctx.Self()` via an adapter, safely bridging async I/O into the actor model.
+- 🚀 **MessageAdapter**: `MessageAdapter[T, U](ctx, adapt)` returns a typed `ActorRef[U]` that applies an adapter function before forwarding to `ctx.Self()`, enabling external-protocol bridging without exposing the actor's internal message type.
+- 🚀 **AskWithStatus / StatusReply**: `AskWithStatus[Req, Res](ctx, target, createRequest, timeout)` sends a request and unwraps a `StatusReply[Res]` response, surfacing errors directly.
+- 🚀 **WatchWith**: `WatchWith[T](ctx, target, msg)` registers a watch and delivers a custom message (rather than the generic `Terminated` signal) when the target actor stops.
+- 🚀 **SetReceiveTimeout (typed)**: `SetReceiveTimeout[T](ctx, d, msg)` and `CancelReceiveTimeout[T](ctx)` — typed actor API for idle-timeout message injection, mirroring the classic actor pattern.
+- 🚀 **become / unbecome** (classic): `BaseActor.Become(fn)` pushes a new `Receive` handler onto an internal stack; `Unbecome()` pops it, restoring the previous handler. Enables finite-state behavior switching without subclassing.
+- 🚀 **PoisonPill / Kill**: `PoisonPill` triggers a graceful post-stop shutdown; `Kill` panics with `ActorKilledException`, invoking supervision. Both are sent as ordinary messages.
+- 🚀 **Identify / ActorIdentity**: Classic actors auto-respond to `Identify{MessageID}` with `ActorIdentity{MessageID, Ref}`, enabling actor path resolution without cluster infrastructure.
+- 🚀 **GracefulStop**: `GracefulStop(ref, timeout, stopMsg)` sends a stop message and waits for `PostStop` to complete within the timeout, returning an error if the deadline is exceeded.
+- 🚀 **SetReceiveTimeout (classic)**: `BaseActor.SetReceiveTimeout(d)` and `CancelReceiveTimeout()` — idle timeout with automatic timer reset on every received message.
+- 🚀 **Custom GraphStage API**: `GraphStage[S Shape]` interface with `GraphStageLogic` (Push/Pull/Complete/Cancel/SetHandler) and `InHandler`/`OutHandler` callbacks, enabling fully custom back-pressure-aware stream stages without modifying the core library.
+- 🚀 **LazySource / LazySink / LazyFlow**: Factory is deferred until the first element demand, enabling resource-efficient pipelines where the source or sink should not be created until actually needed.
+- 🚀 **Reactive Streams Interop**: `Publisher[T]`, `Subscriber[T]`, `Subscription`, and `Processor[T, R]` interfaces; `FromPublisher[T]` and `AsPublisher[T]` adapters for interoperating with any Reactive Streams-compliant library.
+- 🚀 **ClusterBootstrap Coordinator**: `ClusterBootstrap` polls a `SeedProvider` at a configurable interval, waits for a stable quorum of contact points, and performs self-join when the local node has the lowest address — eliminating the need for manually specified seed nodes.
+- 🚀 **Replicated Event Sourcing**: `ReplicatedEventSourcing[Cmd, Evt, State]` in `persistence/typed/replicated/` enables multi-DC event sourcing. Events carry `ReplicaId` origin metadata and are streamed across replicas via `ReplicationStream`, guaranteeing eventual consistency without central coordination.
+- 🚀 **Singleton Lease Coordination**: Optional `Lease` field on `ClusterSingletonManagerSettings`; the singleton acquires the lease before starting and releases it on handoff/shutdown, preventing split-brain singleton duplication.
+- 🚀 **ClusterMetricsRoutingLogic**: Pressure-driven cluster router that selects the least-loaded node using configurable `WeightFunc` over CPU, Memory, and Mailbox pressure scores propagated via `MetricsGossip`.
+- 🚀 **MultiNodeTestKit**: `MultiNodeTestKit` in `actor/testkit/` creates N in-process actor systems, forms a real cluster among them, and provides `Barrier(name)` synchronization and `RunOn(node, fn)` for targeted test execution — all without an external cluster.
+- 🚀 **Behaviors.empty / ignore / unhandled**: Three new terminal-ish typed behaviors — `Empty[T]()` logs a warning per message; `Ignore[T]()` silently drops; `Unhandled[T]()` logs at debug level.
+- 🚀 **WithMdc**: `WithMdc[T](staticMdc, mdcForMessage, behavior)` wraps a typed behavior to inject structured MDC key-value pairs into the actor logger, both as static fields and per-message fields.
+- 🚀 **BalancingPool Router**: `BalancingPoolRouter` with a shared channel (work-stealing) ensures all routees pull from the same queue, preventing head-of-line blocking when some routees are slow.
+- 🚀 **SmallestMailboxPool Router**: `SmallestMailboxRoutingLogic` queries routee mailbox sizes at send time and routes to the least-loaded routee.
+- 🚀 **AtLeastOnceDelivery**: `AtLeastOnceDelivery` mixin with `Deliver`/`ConfirmDelivery`, configurable `RedeliverInterval` and `MaxUnconfirmedMessages`; state survives restart via snapshot.
+- 🚀 **PersistenceTestKit**: `persistence/testkit.PersistenceTestKit` with `FailNextPersist`, `FailNextRead`, `ExpectNextPersisted`, `PersistedInStorage`, `ClearAll` — in-memory journal with programmable failure injection.
+- 🚀 **LoggingTestKit**: `actor/testkit.LoggingTestKit` with `ExpectLog(level, pattern)`, `ExpectNoLog`, and `Intercept(fn)` for asserting actor log output in unit tests.
+- 🚀 **GSet CRDT**: `GSet[T comparable]` grow-only set with `Add`, `Contains`, `Elements`, `Size`, `Merge` (union semantics), and delta propagation.
+- 🚀 **CBOR Serializer**: `serialization/cbor` package using `fxamacker/cbor/v2`; implements the `Serializer` interface with manifest-based type resolution and configurable serializer ID.
+- 🚀 **Remote Actor Deployment**: `RemoteScope{Address}` and `Props.WithRemoteDeploy(address)` — `ActorOf` with a remote deploy sends a deployment message to the target node, which spawns the actor locally and returns a remote `ActorRef`.
+- 🚀 **Stream Source Constructors**: `Single[T](elem)`, `Empty[T]()`, `Range(from, to)`, `Tick[T](interval, elem)`, `FromFuture[T](fn)`, `Queue[T](bufferSize, strategy)` (with `DropHead`/`DropTail`/`DropNew`/`Fail` strategies), `Unfold[S, T]`, `UnfoldAsync[S, T]`, `Cycle[T]`, `ZipWithIndex[T]`, `Combine[T](strategy, sources...)`.
+- 🚀 **Stream Flow Operators**: `MapConcat[In, Out]`, `FlatMapMerge[In, Out]`; `TakeWithin`, `DropWithin`; `DivertTo`, `AlsoTo`; `InitialTimeout`, `CompletionTimeout`, `IdleTimeout`, `KeepAlive`; `DelayWith`, `OrElse`, `Prepend`; `WatchTermination`, `Monitor`; `Intersperse`, `RecoverWithRetries`, `MapError`, `StatefulMap`.
+- 🚀 **Stream Sink Operators**: `Fold[T, U]`, `Reduce[T]`, `Last[T]`, `LastOption[T]`, `HeadOption[T]`, `Cancelled[T]`; `ActorRefWithBackpressure` (ack-based back-pressure sink); `RestartSink` (automatic restart with backoff).
+- 🚀 **Stream Buffering Operators**: `Batch[In, Out]`, `BatchWeighted[In, Out]` (weighted-cost batching), `Expand`, `Extrapolate`, `Sliding`, `SplitWhen`, `SplitAfter`, `ScanAsync`.
+- 🚀 **RetentionCriteria (Typed Persistence)**: `SnapshotEvery(n, keepN)` and `DeleteEventsOnSnapshot` flags on `EventSourcedBehavior` automate snapshot scheduling and journal cleanup.
+- 🚀 **RecoveryStrategy (Typed Persistence)**: `RecoveryStrategy.Disabled` skips recovery for fresh starts; `SnapshotSelectionCriteria` filters which snapshot to load; `ReplayFilter` skips specific events during recovery.
+- 🚀 **RecoveryCompleted signal (Typed Persistence)**: After all events are replayed, a `RecoveryCompleted{HighestSequenceNr}` signal is delivered via `EventSourcedBehavior.SignalHandler`, enabling post-recovery initialization.
+- 🚀 **BehaviorTestKit**: `actor/testkit.BehaviorTestKit[T]` for synchronous typed-behavior unit tests — `Run(msg)`, `ReturnedBehavior()`, `SelfInbox()`, and `ExpectEffect(effect)` for spawn/watch/schedule side-effect assertions.
+- 🚀 **SerializationTestKit**: `actor/testkit.SerializationTestKit` with `VerifySerialization(t, msg)` and `VerifySerializationOf(t, msg, serializer)` for round-trip codec testing.
+- 🚀 **ManualTime**: `actor/testkit.ManualTime` with `Advance(d)`, `Now()`, and `Schedule(key, delay, callback)` for deterministic timer control in unit tests.
+- 🚀 **Behaviors.supervise** (Typed): `Supervise[T](behavior).OnFailure(strategy)` wraps a typed behavior with a supervisor that applies Restart/Stop/Resume/RestartWithBackoff on panic, mirroring Pekko's typed supervision DSL.
+- 🚀 **SpawnProtocol**: `SpawnProtocolBehavior[T]()` is a typed behavior that handles `SpawnProtocol[T]` messages, spawning child actors and replying with their refs — useful as a guardian for programmatic actor creation.
+- 🚀 **TransformMessages**: `TransformMessages(behavior, transform func(any) (any, bool))` wraps a behavior to adapt messages at the type level, returning `Unhandled` for unmatched inputs.
+- 🚀 **StoppedWithPostStop**: `StoppedWithPostStop[T](postStop func())` variant of `Stopped` that invokes a callback when the actor stops, enabling cleanup without a full `ReceiveSignal` handler.
+- 🚀 **ReceiveSignal**: `ReceiveSignal[T](msgHandler, signalHandler)` typed behavior that handles both messages and lifecycle signals (`Terminated`, `PreRestart`, `PostStop`).
+- 🚀 **ReceivePartial**: `ReceivePartial[T](handler func(TypedContext[T], T) (Behavior[T], bool))` — typed behavior that explicitly returns whether the message was handled; unmatched messages are treated as `Unhandled`.
+- 🚀 **Extension Framework**: `ExtensionId` / `Extension` API for registering lazy-initialized singleton extensions on `ActorSystem`, with thread-safe `sync.Once`-based initialization.
+- 🚀 **AggregateProvider**: `discovery.NewAggregateProvider(providers...)` merges and deduplicates seed nodes from multiple discovery sources, with partial-failure tolerance.
+
+### Bug Fixes
+
+- 🐛 **ProducerController RegisterConsumer type switch**: Added missing pointer-type case for `*RegisterConsumer` in the `ProducerController` message dispatch switch, resolving a consumer registration failure.
+- 🐛 **Delivery serializer pointer types**: `RegisterConsumer` messages in the delivery serializer are now correctly handled as pointer types, matching the `ProducerController` fix.
+- 🐛 **Serialization registry dispatch**: Fixed 9 additional integration test failures in Artery message routing caused by incorrect serializer ID dispatch ordering in the registry.
+
+### Tests
+
+- 🧪 **4-node multi-JVM cluster test**: New compatibility spec with 2 Akka + 2 Go nodes forming a single cluster, verifying cross-language membership convergence, heartbeat exchange, and gossip propagation across 4 members simultaneously.
+
 ## [0.15.0] - 2026-04-05
 
 ### Added

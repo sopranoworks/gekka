@@ -10,7 +10,6 @@ package cluster
 
 import (
 	"math/rand"
-	"sync"
 
 	"github.com/sopranoworks/gekka/actor"
 )
@@ -54,7 +53,6 @@ func HeapWeightFunc(p actor.NodePressure) float64 {
 // ClusterMetricsRoutingLogic routes messages to the least-loaded cluster node
 // based on MetricsGossip data.
 type ClusterMetricsRoutingLogic struct {
-	mu       sync.RWMutex
 	metrics  *MetricsGossip
 	weightFn WeightFunc
 

@@ -9,6 +9,7 @@
 package typed
 
 import (
+	"context"
 	"testing"
 
 	"github.com/sopranoworks/gekka/actor/typed"
@@ -47,7 +48,7 @@ func TestRetentionCriteria_SnapshotsAndCleanup(t *testing.T) {
 	// With SnapshotEvery(5, 2), snapshots at 5, 10, 15, 20.
 	// Keep 2 → delete up to seqNr 10 after snapshot at 20.
 	// Verify latest snapshot exists
-	snap, err := snapStore.LoadSnapshot(nil, "ret-1", persistence.LatestSnapshotCriteria())
+	snap, err := snapStore.LoadSnapshot(context.TODO(), "ret-1", persistence.LatestSnapshotCriteria())
 	assert.NoError(t, err)
 	assert.NotNil(t, snap)
 	assert.Equal(t, uint64(20), snap.Metadata.SequenceNr)

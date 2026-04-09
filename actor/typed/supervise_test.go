@@ -30,11 +30,9 @@ func TestSupervise_RestartOnPanic(t *testing.T) {
 
 	// Simulate calling the behavior directly
 	ctx := &typedContext[string]{}
-	// First call panics, gets restarted (behavior is reset to original)
+	// First call panics, gets restarted (behavior is reset to original).
+	// A nil return means "Same" — the supervised wrapper stays active.
 	next := supervised(ctx, "panic")
-	if next == nil {
-		// Same — supervised wrapper still active, good
-	}
 	// Second call should work (after restart, behavior is reset)
 	if next != nil && !isStopped(next) {
 		next(ctx, "hello")

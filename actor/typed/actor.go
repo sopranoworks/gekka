@@ -248,6 +248,15 @@ func (a *TypedActor[T]) PostStop() {
 	a.cancelReceiveTimeout()
 }
 
+// CloseMailbox cancels the typed receive timeout (which lives on TypedActor,
+// not BaseActor) before closing the mailbox channel. Without this, a pending
+// timer could fire after the mailbox is closed and panic with "send on closed
+// channel".
+func (a *TypedActor[T]) CloseMailbox() {
+	a.cancelReceiveTimeout()
+	a.BaseActor.CloseMailbox()
+}
+
 // NewTypedActor creates a new Actor that handles messages of type T using the given behavior.
 func NewTypedActor[T any](behavior Behavior[T]) actor.Actor {
 	return NewTypedActorInternal(behavior)

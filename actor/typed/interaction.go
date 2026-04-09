@@ -212,9 +212,8 @@ func (a *TypedActor[T]) setReceiveTimeout(d time.Duration, msg T) {
 	self := a.Self()
 	rt.timer = time.AfterFunc(d, func() {
 		rt.mu.Lock()
-		active := rt.active
-		rt.mu.Unlock()
-		if active {
+		defer rt.mu.Unlock()
+		if rt.active {
 			self.Tell(msg)
 		}
 	})
@@ -254,9 +253,8 @@ func (a *TypedActor[T]) resetReceiveTimeout() {
 	msg := rt.msg
 	rt.timer = time.AfterFunc(rt.duration, func() {
 		rt.mu.Lock()
-		active := rt.active
-		rt.mu.Unlock()
-		if active {
+		defer rt.mu.Unlock()
+		if rt.active {
 			self.Tell(msg)
 		}
 	})

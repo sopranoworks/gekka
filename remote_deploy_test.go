@@ -9,6 +9,7 @@
 package gekka
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -216,7 +217,7 @@ func TestDeployRemote_EmptyFactoryID(t *testing.T) {
 	}
 	defer sys.Terminate()
 
-	_, err = DeployRemote(nil, sys, "test", RemoteDeploy{
+	_, err = DeployRemote(context.TODO(), sys, "test", RemoteDeploy{
 		Scope: RemoteScope{
 			Address: actor.Address{Host: "127.0.0.1", Port: 2551},
 		},

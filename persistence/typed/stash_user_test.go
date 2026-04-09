@@ -89,7 +89,10 @@ func TestUserStash_StashWhileLockedThenUnstash(t *testing.T) {
 					}
 					return None[evtWorked, lockState]()
 				}
-				return Persist[evtWorked, lockState](evtWorked{ID: c.ID})
+				// cmdWork (command) and evtWorked (event) are semantically distinct
+				// types; the gosimple S1016 conversion suggestion would erase that
+				// distinction, so we keep the explicit field construction.
+				return Persist[evtWorked, lockState](evtWorked{ID: c.ID}) //nolint:gosimple
 			}
 			return None[evtWorked, lockState]()
 		},

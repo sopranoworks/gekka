@@ -146,6 +146,8 @@ type ManagementServer struct {
 	srv          *http.Server
 	listener     net.Listener
 	healthChecks bool // whether /health/* endpoints are registered
+	mux          *http.ServeMux // stored so EnableDebug can register routes post-construction
+	debug        DebugProvider  // non-nil when debug routes have been enabled
 
 	// shuttingDown is set to 1 atomically when the coordinated-shutdown
 	// sequence enters PhaseServiceUnbind.  Once set, /health/ready returns
@@ -183,7 +185,8 @@ func NewManagementServer(provider ClusterStateProvider, hostname string, port in
 		healthChecks: enableHealth,
 	}
 
-	mux := http.NewServeMux()
+	ms.mux = http.NewServeMux()
+	mux := ms.mux // local alias so the existing HandleFunc calls below still read naturally
 	// NOTE: Go's default mux matches the longest prefix, so registering both
 	// "/cluster/members/" (trailing slash) and "/cluster/members" covers both
 	// the list endpoint and any sub-path (address lookup / write operations).
@@ -246,6 +249,34 @@ func (ms *ManagementServer) Stop(ctx context.Context) error {
 // This allows ManagementServer to be used directly with httptest.NewServer in tests.
 func (ms *ManagementServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ms.srv.Handler.ServeHTTP(w, r)
+}
+
+// EnableDebug registers the /cluster/debug/* routes on this server and stores
+// the provider.  Must be called before Start() — registering routes after the
+// server is serving is a data race on http.ServeMux.
+//
+// When debug is not enabled, these routes are never registered and return 404
+// (Go's default ServeMux behavior for unknown paths).
+func (ms *ManagementServer) EnableDebug(provider DebugProvider) {
+	if ms.debug != nil {
+		return // idempotent — already enabled
+	}
+	ms.debug = provider
+	ms.mux.HandleFunc("/cluster/debug/crdt", ms.handleDebugCRDTList)
+	ms.mux.HandleFunc("/cluster/debug/crdt/", ms.handleDebugCRDT)
+	ms.mux.HandleFunc("/cluster/debug/actors", ms.handleDebugActors)
+}
+
+// Stub handlers — filled in by Tasks 6, 7, 8.  They exist here so EnableDebug
+// compiles; each task replaces the body with the real implementation.
+func (ms *ManagementServer) handleDebugCRDTList(w http.ResponseWriter, r *http.Request) {
+	writeDebugError(w, http.StatusNotImplemented, "handleDebugCRDTList not implemented")
+}
+func (ms *ManagementServer) handleDebugCRDT(w http.ResponseWriter, r *http.Request) {
+	writeDebugError(w, http.StatusNotImplemented, "handleDebugCRDT not implemented")
+}
+func (ms *ManagementServer) handleDebugActors(w http.ResponseWriter, r *http.Request) {
+	writeDebugError(w, http.StatusNotImplemented, "handleDebugActors not implemented")
 }
 
 // ── Handlers ──────────────────────────────────────────────────────────────────

@@ -38,6 +38,36 @@ pekko://ClusterSystem@127.0.0.1:2560  Up      default  metrics-exporter  yes
 | Seed node Artery TCP | 2552 |
 | Metrics node Artery TCP | 2560 |
 | Seed HTTP Management API | 8558 |
+| Metrics HTTP Management API | 8559 |
+
+## Deployment Topology
+
+The HTTP management API is part of `gekka.Cluster` — any node started with
+`gekka.management.http.enabled = true` exposes it on the configured port. It
+is not a separate process.
+
+In this suite:
+
+```
+gekka-cli ──HTTP──▶ seed-node:8558
+                        │
+                        └── gossip ── gekka-metrics:8559 (also hosts mgmt API)
+```
+
+`gekka-metrics` auto-enables the management API on port 8559 by default.
+To opt out, pass `--disable-management` when starting it, or set
+`gekka.management.http.enabled = false` explicitly in the metrics HOCON config.
+
+You can point `gekka-cli` at either node to get that node's local view of
+cluster state. This is useful when debugging whether gossip has propagated
+to a specific peer.
+
+## Debug Endpoints
+
+With `gekka.management.debug.enabled = true` in a node's HOCON config,
+`gekka-cli debug crdt` and `gekka-cli debug actors` expose introspection
+into that node's Distributed Data state and actor registry. These endpoints
+are strictly read-only and default to OFF.
 
 ## Automated Test
 

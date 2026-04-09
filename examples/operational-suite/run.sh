@@ -26,23 +26,68 @@ go build -o "$TMP/gekka-cli"    "$REPO_ROOT/cmd/gekka-cli"
 echo "==> Writing configs..."
 cat > "$TMP/seed.conf" <<'CONF'
 pekko {
-  actor.provider = cluster
-  remote.artery { transport = tcp; canonical { hostname = "127.0.0.1"; port = 2552 } }
-  cluster { seed-nodes = ["pekko://ClusterSystem@127.0.0.1:2552"] }
+  actor {
+    provider = cluster
+  }
+  remote {
+    artery {
+      transport = tcp
+      canonical {
+        hostname = "127.0.0.1"
+        port = 2552
+      }
+    }
+  }
+  cluster {
+    seed-nodes = ["pekko://ClusterSystem@127.0.0.1:2552"]
+  }
 }
-gekka.management.http {
-  enabled = true
-  hostname = "127.0.0.1"
-  port = 8558
-  health-checks.enabled = true
+gekka {
+  management {
+    http {
+      enabled = true
+      hostname = "127.0.0.1"
+      port = 8558
+      health-checks {
+        enabled = true
+      }
+    }
+    debug {
+      enabled = true
+    }
+  }
 }
 CONF
 
 cat > "$TMP/metrics.conf" <<'CONF'
 pekko {
-  actor.provider = cluster
-  remote.artery { transport = tcp; canonical { hostname = "127.0.0.1"; port = 2560 } }
-  cluster { seed-nodes = ["pekko://ClusterSystem@127.0.0.1:2552"] }
+  actor {
+    provider = cluster
+  }
+  remote {
+    artery {
+      transport = tcp
+      canonical {
+        hostname = "127.0.0.1"
+        port = 2560
+      }
+    }
+  }
+  cluster {
+    seed-nodes = ["pekko://ClusterSystem@127.0.0.1:2552"]
+  }
+}
+gekka {
+  management {
+    http {
+      enabled = true
+      hostname = "127.0.0.1"
+      port = 8559
+    }
+    debug {
+      enabled = true
+    }
+  }
 }
 CONF
 
@@ -80,6 +125,18 @@ for i in $(seq 1 30); do
   fi
 done
 
+echo "   Waiting for metrics management API at http://127.0.0.1:8559 ..."
+for i in $(seq 1 20); do
+  sleep 0.5
+  if curl -sf http://127.0.0.1:8559/health/alive >/dev/null 2>&1; then
+    echo "   Ready after $((i * 500)) ms."
+    break
+  fi
+  if [ "$i" -eq 20 ]; then
+    echo "ERROR: metrics management API did not start."; cat "$TMP/metrics.log"; exit 1
+  fi
+done
+
 echo ""
 echo "==> gekka-cli members --url http://127.0.0.1:8558"
 "$TMP/gekka-cli" members --url http://127.0.0.1:8558
@@ -88,6 +145,16 @@ echo ""
 echo "==> gekka-metrics cluster_state log (last 3 lines):"
 grep "cluster_state\|joined cluster" "$TMP/metrics.log" | tail -3 || \
   echo "   (no cluster_state log yet — first tick is at 30s)"
+
+echo ""
+echo "==> Demonstrating debug endpoints on seed (:8558)..."
+"$TMP/gekka-cli" --url http://127.0.0.1:8558 debug crdt
+"$TMP/gekka-cli" --url http://127.0.0.1:8558 debug actors --json
+
+echo ""
+echo "==> Demonstrating debug endpoints on metrics node (:8559)..."
+"$TMP/gekka-cli" --url http://127.0.0.1:8559 debug crdt
+"$TMP/gekka-cli" --url http://127.0.0.1:8559 debug actors --json
 
 echo ""
 echo "SUCCESS: operational-suite completed."

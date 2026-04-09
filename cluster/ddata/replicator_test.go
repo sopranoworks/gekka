@@ -80,4 +80,7 @@ func TestReplicator_LookupORSet_HitAndMiss(t *testing.T) {
 	if ok {
 		t.Error("miss: expected ok=false")
 	}
+	if _, exists := r.sets["missing"]; exists {
+		t.Error("Lookup on miss must not create the entry")
+	}
 }

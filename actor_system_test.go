@@ -281,6 +281,39 @@ func TestBaseActor_System_Context_IsNodeContext(t *testing.T) {
 	}
 }
 
+// ── Cluster.ActorPaths ───────────────────────────────────────────────────────
+
+func TestCluster_ActorPaths_ListsRegisteredActors(t *testing.T) {
+	node := newTestNode(t, "Sys", "127.0.0.1", 0)
+
+	if _, err := node.System.ActorOf(newSimpleProps(), "alpha"); err != nil {
+		t.Fatalf("ActorOf alpha: %v", err)
+	}
+	if _, err := node.System.ActorOf(newSimpleProps(), "beta"); err != nil {
+		t.Fatalf("ActorOf beta: %v", err)
+	}
+
+	paths := node.ActorPaths()
+	have := map[string]bool{}
+	for _, p := range paths {
+		have[p] = true
+	}
+	if !have["/user/alpha"] {
+		t.Errorf("missing /user/alpha in %v", paths)
+	}
+	if !have["/user/beta"] {
+		t.Errorf("missing /user/beta in %v", paths)
+	}
+}
+
+func TestCluster_ActorPaths_Empty(t *testing.T) {
+	node := newTestNode(t, "Sys", "127.0.0.1", 0)
+	paths := node.ActorPaths()
+	if len(paths) != 0 {
+		t.Errorf("expected empty, got %v", paths)
+	}
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 // systemCaptureActor is used to inspect the injected System() after ActorOf.

@@ -1308,6 +1308,19 @@ func (c *Cluster) Metrics() *core.NodeMetrics {
 	return c.metrics
 }
 
+// ActorPaths returns a snapshot of every actor path currently registered on
+// this node.  Used by the debug introspection endpoints.  Order is not
+// defined — callers should sort if they need it.
+func (c *Cluster) ActorPaths() []string {
+	c.actorsMu.RLock()
+	defer c.actorsMu.RUnlock()
+	out := make([]string, 0, len(c.actors))
+	for path := range c.actors {
+		out = append(out, path)
+	}
+	return out
+}
+
 func (c *Cluster) Join(seedHost string, seedPort uint32) error {
 	scheme := c.localAddr.GetProtocol() // "pekko" or "akka"
 	c.seedAddr = &gproto_remote.Address{

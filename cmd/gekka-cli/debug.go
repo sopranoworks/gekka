@@ -22,7 +22,3 @@ func newDebugCmd(root *rootState) *cobra.Command {
 	return cmd
 }
 
-// Temporary stub — replaced by Task 13.
-func newDebugActorsCmd(root *rootState) *cobra.Command {
-	return &cobra.Command{Use: "actors", Short: "placeholder (Task 13)"}
-}

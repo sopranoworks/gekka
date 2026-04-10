@@ -16,9 +16,10 @@ import (
 )
 
 const (
-	DefaultThreshold     = 10.0
-	DefaultMaxSampleSize = 1000
-	DefaultMinStdDev     = 200 * time.Millisecond
+	DefaultThreshold              = 10.0
+	DefaultMaxSampleSize          = 1000
+	DefaultMinStdDev              = 200 * time.Millisecond
+	DefaultFirstHeartbeatEstimate = 1 * time.Second
 )
 
 // PhiAccrualFailureDetector tracks the heartbeat history of a single remote
@@ -29,14 +30,21 @@ const (
 // normal distribution fitted to the sliding window of intervals.
 //
 // A node is considered unavailable when φ exceeds the configured threshold.
+//
+// To avoid a "wedged" state where exactly one heartbeat has been observed —
+// which used to leave history empty and Phi returning 0 forever — the first
+// Heartbeat call seeds the history window with firstHeartbeatEstimate (a
+// synthetic baseline interval). Subsequent heartbeats overwrite the seed
+// once two real intervals are available. This matches Pekko's approach.
 type PhiAccrualFailureDetector struct {
-	threshold       float64
-	maxSampleSize   int
-	minStdDeviation time.Duration
-	history         []time.Duration // sliding window of inter-arrival times
-	lastHeartbeatAt time.Time
-	hasFirstBeat    bool
-	mu              sync.Mutex
+	threshold              float64
+	maxSampleSize          int
+	minStdDeviation        time.Duration
+	firstHeartbeatEstimate time.Duration
+	history                []time.Duration // sliding window of inter-arrival times
+	lastHeartbeatAt        time.Time
+	hasFirstBeat           bool
+	mu                     sync.Mutex
 }
 
 // New creates a PhiAccrualFailureDetector for a single remote node.
@@ -44,17 +52,35 @@ type PhiAccrualFailureDetector struct {
 //   - maxSampleSize:   maximum number of intervals retained in the sliding window (e.g. 1000).
 //   - minStdDeviation: lower bound on σ to prevent φ from exploding on perfectly
 //     regular heartbeats or tiny windows (e.g. 200ms).
+//
+// The firstHeartbeatEstimate is set to DefaultFirstHeartbeatEstimate (1s).
+// Use NewWithFirstEstimate to override.
 func New(threshold float64, maxSampleSize int, minStdDeviation time.Duration) *PhiAccrualFailureDetector {
+	return NewWithFirstEstimate(threshold, maxSampleSize, minStdDeviation, DefaultFirstHeartbeatEstimate)
+}
+
+// NewWithFirstEstimate creates a PhiAccrualFailureDetector with an explicit
+// firstHeartbeatEstimate. This is the synthetic interval seeded into history
+// on the first Heartbeat call so that Phi can compute from the second tick
+// onward instead of staying wedged at 0.
+func NewWithFirstEstimate(threshold float64, maxSampleSize int, minStdDeviation, firstHeartbeatEstimate time.Duration) *PhiAccrualFailureDetector {
+	if firstHeartbeatEstimate <= 0 {
+		firstHeartbeatEstimate = DefaultFirstHeartbeatEstimate
+	}
 	return &PhiAccrualFailureDetector{
-		threshold:       threshold,
-		maxSampleSize:   maxSampleSize,
-		minStdDeviation: minStdDeviation,
-		history:         make([]time.Duration, 0, maxSampleSize),
+		threshold:              threshold,
+		maxSampleSize:          maxSampleSize,
+		minStdDeviation:        minStdDeviation,
+		firstHeartbeatEstimate: firstHeartbeatEstimate,
+		history:                make([]time.Duration, 0, maxSampleSize),
 	}
 }
 
 // Heartbeat records the arrival of a heartbeat from the remote node.
-// The first call seeds the last-arrival timestamp without recording an interval.
+// The first call seeds the last-arrival timestamp AND seeds history with
+// firstHeartbeatEstimate so that Phi can compute meaningfully from the
+// moment of the first heartbeat. Subsequent heartbeats append the real
+// inter-arrival interval to the sliding window.
 func (d *PhiAccrualFailureDetector) Heartbeat() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -68,13 +94,21 @@ func (d *PhiAccrualFailureDetector) Heartbeat() {
 			d.history = d.history[:len(d.history)-1]
 		}
 		d.history = append(d.history, interval)
+	} else {
+		// First heartbeat: seed history with the estimate so Phi has a
+		// baseline to compute from immediately. Without this seed, Phi
+		// would return 0 (and IsAvailable would return true) until a
+		// second real heartbeat arrives — leaving the detector wedged
+		// when a node is muted/killed shortly after joining.
+		d.history = append(d.history, d.firstHeartbeatEstimate)
 	}
 	d.lastHeartbeatAt = now
 	d.hasFirstBeat = true
 }
 
 // Phi returns the current suspicion level for the remote node.
-// Returns 0 if fewer than two heartbeats have been observed.
+// Returns 0 only when no heartbeat has ever been observed; after the first
+// heartbeat the detector computes Phi against the seeded history.
 func (d *PhiAccrualFailureDetector) Phi() float64 {
 	d.mu.Lock()
 	hasFirst := d.hasFirstBeat

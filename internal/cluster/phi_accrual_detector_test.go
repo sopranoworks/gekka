@@ -150,12 +150,40 @@ func TestInitialStateReturnsZeroPhi(t *testing.T) {
 	}
 }
 
-// TestSingleHeartbeatReturnsZeroPhi verifies that exactly one heartbeat (no
-// interval recorded yet) still returns 0.
-func TestSingleHeartbeatReturnsZeroPhi(t *testing.T) {
+// TestSingleHeartbeatSeedsBaseline verifies that exactly one heartbeat is
+// enough to start computing meaningful φ values. Before the firstHeartbeat-
+// Estimate fix, only one heartbeat left history empty and Phi returned 0
+// indefinitely, leaving the detector wedged when a node was muted/killed
+// shortly after joining (matching Pekko's actual failure-detector behavior).
+//
+// After the fix, the first Heartbeat() call seeds history with the
+// firstHeartbeatEstimate (default 1s) so Phi computes against a real
+// distribution from the first call onward.
+func TestSingleHeartbeatSeedsBaseline(t *testing.T) {
 	d := New(10.0, 1000, 200*time.Millisecond)
 	d.Heartbeat()
-	if phi := d.Phi(); phi != 0.0 {
-		t.Errorf("expected 0.0 φ with only one heartbeat (no interval), got %.4f", phi)
+
+	// Immediately after the first heartbeat, timeSinceLast ≈ 0 so the
+	// late-probability is high and φ should be close to 0 (well below
+	// the threshold). The detector must report the node as available.
+	phi := d.Phi()
+	if phi >= 10.0 {
+		t.Errorf("φ immediately after first heartbeat must be well below threshold, got %.4f", phi)
+	}
+	if !d.IsAvailable() {
+		t.Error("node with one heartbeat must be reported as available")
+	}
+
+	// After 5× the firstHeartbeatEstimate (5s by default) of silence,
+	// φ must exceed the threshold so the detector can mark the node
+	// unreachable. This is the regression test for the wedged-detector
+	// bug where φ stayed at 0 forever.
+	d.lastHeartbeatAt = time.Now().Add(-5 * time.Second)
+	phi = d.Phi()
+	if phi < 10.0 {
+		t.Errorf("φ after 5s of silence with 1 heartbeat must exceed threshold, got %.4f", phi)
+	}
+	if d.IsAvailable() {
+		t.Error("node silent for 5s after one heartbeat must NOT be available")
 	}
 }

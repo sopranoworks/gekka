@@ -417,6 +417,9 @@ func (nm *NodeManager) SetCompressionManager(ctm *CompressionTableManager) {
 	nm.mu.Lock()
 	defer nm.mu.Unlock()
 	nm.compressionMgr = ctm
+	if ctm != nil {
+		ctm.flightRec = nm.FlightRec
+	}
 }
 
 // MessageContext carries metadata about an incoming Artery message.
@@ -646,6 +649,22 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 					_ = assoc.conn.Close()
 					return
 				}
+				// Emit flight recorder events for sent frames.
+				if nm.FlightRec != nil {
+					assoc.mu.RLock()
+					sid := assoc.streamId
+					assoc.mu.RUnlock()
+					if sid == 3 {
+						nm.FlightRec.Emit(assoc.remoteKey(), FlightEvent{
+							Timestamp: time.Now(),
+							Severity:  SeverityInfo,
+							Category:  CatLargeFrame,
+							Message:   "send",
+							Fields:    map[string]any{"size": len(msg)},
+						})
+					}
+					nm.FlightRec.EmitFrame(assoc.remoteKey(), "send", len(msg), 0)
+				}
 			}
 		}
 	}()
@@ -772,6 +791,20 @@ func (assoc *GekkaAssociation) dispatch(ctx context.Context, meta *ArteryMetadat
 		if assoc.nodeMgr.isNodeMuted(a.GetHostname(), a.GetPort()) {
 			return nil
 		}
+	}
+
+	// Emit flight recorder events for received frames.
+	if assoc.nodeMgr != nil && assoc.nodeMgr.FlightRec != nil {
+		if assoc.streamId == 3 {
+			assoc.nodeMgr.FlightRec.Emit(assoc.remoteKey(), FlightEvent{
+				Timestamp: time.Now(),
+				Severity:  SeverityInfo,
+				Category:  CatLargeFrame,
+				Message:   "recv",
+				Fields:    map[string]any{"size": len(meta.Payload)},
+			})
+		}
+		assoc.nodeMgr.FlightRec.EmitFrame(assoc.remoteKey(), "recv", len(meta.Payload), meta.SerializerId)
 	}
 
 	assoc.mu.Lock()

@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/sopranoworks/gekka/actor"
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
@@ -25,6 +26,7 @@ type CompressionTableManager struct {
 	actorRefTable map[uint64]*CompressionTable
 	manifestTable map[uint64]*CompressionTable
 	router        *actor.Router // needed to send acks back
+	flightRec     *FlightRecorder
 }
 
 // CompressionTable represents a single versioned dictionary of string -> uint32 mapping.
@@ -130,6 +132,21 @@ func (ctm *CompressionTableManager) HandleAdvertisement(ctx context.Context, adv
 		ctm.UpdateManifestTable(originUid, version, keys, values)
 	}
 
+	if ctm.flightRec != nil {
+		tableType := "manifest"
+		if isActorRef {
+			tableType = "actorref"
+		}
+		remoteKey := fmt.Sprintf("%s:%d", adv.GetFrom().GetAddress().GetHostname(), adv.GetFrom().GetAddress().GetPort())
+		ctm.flightRec.Emit(remoteKey, FlightEvent{
+			Timestamp: time.Now(),
+			Severity:  SeverityInfo,
+			Category:  CatCompression,
+			Message:   "advert_received",
+			Fields:    map[string]any{"version": adv.GetTableVersion(), "type": tableType},
+		})
+	}
+
 	// Send Ack
 	ack := &gproto_remote.CompressionTableAdvertisementAck{
 		From:    localAddress,
@@ -141,5 +158,20 @@ func (ctm *CompressionTableManager) HandleAdvertisement(ctx context.Context, adv
 
 	// ArteryControl messages usually use SerializerId 17 (or 1 depending on version, check later)
 
-	return ctm.router.Send(ctx, path, ack)
+	if err := ctm.router.Send(ctx, path, ack); err != nil {
+		return err
+	}
+
+	if ctm.flightRec != nil {
+		remoteKey := fmt.Sprintf("%s:%d", adv.GetFrom().GetAddress().GetHostname(), adv.GetFrom().GetAddress().GetPort())
+		ctm.flightRec.Emit(remoteKey, FlightEvent{
+			Timestamp: time.Now(),
+			Severity:  SeverityInfo,
+			Category:  CatCompression,
+			Message:   "ack_sent",
+			Fields:    map[string]any{"version": adv.GetTableVersion()},
+		})
+	}
+
+	return nil
 }

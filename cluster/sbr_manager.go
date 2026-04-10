@@ -351,18 +351,32 @@ func (m *SBRManager) decide(ctx context.Context) {
 
 // classifyMembers reads the current gossip state and separates Up/WeaklyUp
 // members into reachable and unreachable sets from the local observer's
-// perspective (address index 0 in AllAddresses).
+// perspective. The local observer index is looked up dynamically — it is
+// only 0 when the local node was the first joiner; later joiners have a
+// non-zero index and a hardcoded 0 silently drops every observation,
+// leaving the SBR strategy with no unreachable members and no decision.
 func (m *SBRManager) classifyMembers() (reachable, unreachable []Member) {
 	m.cm.Mu.RLock()
 	defer m.cm.Mu.RUnlock()
 
 	state := m.cm.State
 
+	// Find the local observer's address index in AllAddresses.
+	localHost := m.cm.LocalAddress.Address.GetHostname()
+	localPort := m.cm.LocalAddress.Address.GetPort()
+	localIdx := int32(-1)
+	for i, ua := range state.AllAddresses {
+		if ua.GetAddress().GetHostname() == localHost && ua.GetAddress().GetPort() == localPort {
+			localIdx = int32(i)
+			break
+		}
+	}
+
 	// Build a set of unreachable address indices as seen by the local observer.
 	unreachableIdx := make(map[int32]struct{})
-	if state.Overview != nil {
+	if state.Overview != nil && localIdx >= 0 {
 		for _, obs := range state.Overview.ObserverReachability {
-			if obs.GetAddressIndex() != 0 {
+			if obs.GetAddressIndex() != localIdx {
 				continue // not the local node's observation record
 			}
 			for _, sub := range obs.SubjectReachability {

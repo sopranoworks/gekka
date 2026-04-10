@@ -51,6 +51,12 @@ type ActorIdentity struct {
 
 // ── ReceiveTimeout ─────────────────────────────────────────────────────────
 
+// ControlMessage is a marker interface for messages that should be processed
+// with priority over normal messages when using a ControlAwareMailbox.
+type ControlMessage interface {
+	IsControlMessage()
+}
+
 // ReceiveTimeout is a system message delivered to a classic actor when no
 // messages have been received within the configured timeout duration.
 type ReceiveTimeout struct{}

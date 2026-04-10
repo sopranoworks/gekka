@@ -2192,6 +2192,18 @@ func (c *Cluster) LookupDeployment(path string) (core.DeploymentConfig, bool) {
 func (n *Cluster) SpawnActor(path string, a actor.Actor, props actor.Props) actor.Ref {
 	ref := ActorRef{fullPath: n.SelfPathURI(path), sys: n, local: a}
 
+	// Apply custom mailbox before the actor goroutine starts.
+	// Priority: Props.Mailbox > dispatcher's mailbox-type from HOCON config.
+	if props.Mailbox != nil {
+		actor.InjectMailbox(a, props.Mailbox)
+	} else if props.DispatcherKey != "" {
+		if dcfg, ok := actor.GetDispatcherConfig(props.DispatcherKey); ok {
+			if mf := dcfg.ResolveMailbox(); mf != nil {
+				actor.InjectMailbox(a, mf)
+			}
+		}
+	}
+
 	// Inject the actor's own reference so it can use Self() inside Receive.
 	type selfSetter interface{ SetSelf(actor.Ref) }
 	if ss, ok := a.(selfSetter); ok {

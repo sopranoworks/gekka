@@ -10,6 +10,13 @@ package actor
 
 import "sync"
 
+func init() {
+	RegisterMailboxType(NewControlAwareMailbox(),
+		"org.apache.pekko.dispatch.UnboundedControlAwareMailbox",
+		"akka.dispatch.UnboundedControlAwareMailbox",
+	)
+}
+
 // NewControlAwareMailbox returns a MailboxFactory for an unbounded mailbox that
 // prioritises ControlMessage instances over normal messages. Within each
 // priority class FIFO order is preserved. Both queues are unbounded.

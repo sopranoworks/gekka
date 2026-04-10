@@ -87,3 +87,55 @@ func TestPropsDispatcherKey(t *testing.T) {
 	resolved := ResolveDispatcherKey(props.DispatcherKey)
 	assert.Equal(t, DispatcherPinned, resolved)
 }
+
+func TestGetDispatcherConfig(t *testing.T) {
+	cfg, ok := GetDispatcherConfig("default-dispatcher")
+	assert.True(t, ok)
+	assert.Equal(t, "default-dispatcher", cfg.Type)
+
+	_, ok = GetDispatcherConfig("nonexistent")
+	assert.False(t, ok)
+
+	_, ok = GetDispatcherConfig("")
+	assert.False(t, ok)
+}
+
+func TestDispatcherConfig_MailboxType(t *testing.T) {
+	RegisterDispatcherConfig("ctrl-dispatcher", DispatcherConfig{
+		Type:        "default-dispatcher",
+		MailboxType: "org.apache.pekko.dispatch.UnboundedControlAwareMailbox",
+	})
+
+	cfg, ok := GetDispatcherConfig("ctrl-dispatcher")
+	assert.True(t, ok)
+	assert.Equal(t, "org.apache.pekko.dispatch.UnboundedControlAwareMailbox", cfg.MailboxType)
+
+	// ResolveMailbox should return a non-nil factory (registered via init())
+	mf := cfg.ResolveMailbox()
+	assert.NotNil(t, mf, "registered FQCN should resolve to a MailboxFactory")
+}
+
+func TestDispatcherConfig_UnknownMailboxType(t *testing.T) {
+	RegisterDispatcherConfig("unknown-mb-dispatcher", DispatcherConfig{
+		Type:        "default-dispatcher",
+		MailboxType: "com.example.NonExistentMailbox",
+	})
+
+	cfg, _ := GetDispatcherConfig("unknown-mb-dispatcher")
+	mf := cfg.ResolveMailbox()
+	assert.Nil(t, mf, "unregistered FQCN should return nil")
+}
+
+func TestLookupMailboxType(t *testing.T) {
+	// Pekko FQCN should be registered
+	mf := LookupMailboxType("org.apache.pekko.dispatch.UnboundedControlAwareMailbox")
+	assert.NotNil(t, mf)
+
+	// Akka FQCN should also be registered
+	mf = LookupMailboxType("akka.dispatch.UnboundedControlAwareMailbox")
+	assert.NotNil(t, mf)
+
+	// Unknown should return nil
+	mf = LookupMailboxType("com.example.Nothing")
+	assert.Nil(t, mf)
+}

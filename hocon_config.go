@@ -521,6 +521,9 @@ func extractDispatchers(cfg *hocon.Config, prefix string) {
 		if v, e := cfg.GetInt(path + ".throughput"); e == nil {
 			dcfg.Throughput = v
 		}
+		if v, e := cfg.GetString(path + ".mailbox-type"); e == nil && v != "" {
+			dcfg.MailboxType = strings.TrimSpace(v)
+		}
 		actor.RegisterDispatcherConfig(key, dcfg)
 	}
 }

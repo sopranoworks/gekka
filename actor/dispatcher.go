@@ -150,8 +150,18 @@ func installCallingThreadImpl(a Actor) {
 
 // DispatcherConfig holds the HOCON-parsed configuration for a named dispatcher.
 type DispatcherConfig struct {
-	Type       string // "default-dispatcher", "pinned-dispatcher", "calling-thread-dispatcher"
-	Throughput int    // messages per actor before yielding (informational; Go uses goroutines)
+	Type        string // "default-dispatcher", "pinned-dispatcher", "calling-thread-dispatcher"
+	Throughput  int    // messages per actor before yielding (informational; Go uses goroutines)
+	MailboxType string // FQCN from HOCON mailbox-type (e.g. "org.apache.pekko.dispatch.UnboundedControlAwareMailbox")
+}
+
+// ResolveMailbox returns the MailboxFactory for this dispatcher's MailboxType,
+// or nil if no mailbox-type was configured or the FQCN is not registered.
+func (c DispatcherConfig) ResolveMailbox() MailboxFactory {
+	if c.MailboxType == "" {
+		return nil
+	}
+	return LookupMailboxType(c.MailboxType)
 }
 
 var (
@@ -168,6 +178,18 @@ func RegisterDispatcherConfig(key string, cfg DispatcherConfig) {
 	dispatcherConfigsMu.Lock()
 	defer dispatcherConfigsMu.Unlock()
 	dispatcherConfigs[key] = cfg
+}
+
+// GetDispatcherConfig returns the full DispatcherConfig for the given key.
+// Returns an empty config and false if the key is not registered.
+func GetDispatcherConfig(key string) (DispatcherConfig, bool) {
+	if key == "" {
+		return DispatcherConfig{}, false
+	}
+	dispatcherConfigsMu.RLock()
+	cfg, ok := dispatcherConfigs[key]
+	dispatcherConfigsMu.RUnlock()
+	return cfg, ok
 }
 
 // ResolveDispatcherKey looks up the DispatcherType for a config key.

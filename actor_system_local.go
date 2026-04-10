@@ -573,8 +573,15 @@ func (s *localActorSystem) SpawnActor(path string, a actor.Actor, props actor.Pr
 	ref := ActorRef{fullPath: s.SelfPathURI(path), sys: s, local: a}
 
 	// Apply custom mailbox before the actor goroutine starts.
+	// Priority: Props.Mailbox > dispatcher's mailbox-type from HOCON config.
 	if props.Mailbox != nil {
 		actor.InjectMailbox(a, props.Mailbox)
+	} else if props.DispatcherKey != "" {
+		if dcfg, ok := actor.GetDispatcherConfig(props.DispatcherKey); ok {
+			if mf := dcfg.ResolveMailbox(); mf != nil {
+				actor.InjectMailbox(a, mf)
+			}
+		}
 	}
 
 	// Inject the actor's own reference so it can use Self() inside Receive.

@@ -84,6 +84,40 @@ func InjectMailbox(a Actor, mf MailboxFactory) {
 	}
 }
 
+// ── Mailbox Registry ─────────────────────────────────────────────────────────
+//
+// The registry maps FQCN strings (as used in Pekko/Akka HOCON config) to
+// MailboxFactory constructors. This enables HOCON `mailbox-type` config keys
+// to resolve to the correct Go implementation at actor spawn time.
+
+var (
+	mailboxRegistryMu sync.RWMutex
+	mailboxRegistry   = map[string]MailboxFactory{}
+)
+
+// RegisterMailboxType registers a MailboxFactory under one or more FQCN keys.
+// Call this from init() in mailbox implementation files.
+//
+//	actor.RegisterMailboxType(NewControlAwareMailbox(),
+//	    "org.apache.pekko.dispatch.UnboundedControlAwareMailbox",
+//	    "akka.dispatch.UnboundedControlAwareMailbox",
+//	)
+func RegisterMailboxType(factory MailboxFactory, fqcns ...string) {
+	mailboxRegistryMu.Lock()
+	defer mailboxRegistryMu.Unlock()
+	for _, fqcn := range fqcns {
+		mailboxRegistry[fqcn] = factory
+	}
+}
+
+// LookupMailboxType returns the MailboxFactory registered under fqcn, or nil
+// if no such type has been registered.
+func LookupMailboxType(fqcn string) MailboxFactory {
+	mailboxRegistryMu.RLock()
+	defer mailboxRegistryMu.RUnlock()
+	return mailboxRegistry[fqcn]
+}
+
 // ── BoundedMailbox ────────────────────────────────────────────────────────────
 
 type boundedFactory struct {

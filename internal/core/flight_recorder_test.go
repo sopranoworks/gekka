@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -58,6 +59,17 @@ func TestRingBuffer_Clear(t *testing.T) {
 	if len(snap) != 0 {
 		t.Fatalf("expected 0 events after clear, got %d", len(snap))
 	}
+
+	// Events appended after Clear must appear in correct order
+	rb.Append(makeEvent("post1"))
+	rb.Append(makeEvent("post2"))
+	snap = rb.Snapshot()
+	if len(snap) != 2 {
+		t.Fatalf("expected 2 events after re-append, got %d", len(snap))
+	}
+	if snap[0].Message != "post1" || snap[1].Message != "post2" {
+		t.Fatalf("wrong order after clear+re-append: %v", []string{snap[0].Message, snap[1].Message})
+	}
 }
 
 func TestFlightRecorder_Disabled(t *testing.T) {
@@ -108,9 +120,9 @@ func TestFlightRecorder_EmitFrame_SampledLevel(t *testing.T) {
 		fr.EmitFrame("10.0.0.1:2551", "send", 256, 4)
 	}
 	snap := fr.Snapshot("10.0.0.1:2551")
-	// 10000 frames at 1:100 sampling -> expect ~100 events (tolerance: 50-200)
-	if len(snap) < 50 || len(snap) > 200 {
-		t.Fatalf("sampled level: expected ~100 events, got %d", len(snap))
+	// Deterministic modulo: exactly 100 events from 10000 frames at 1:100
+	if len(snap) != 100 {
+		t.Fatalf("sampled level: expected exactly 100 events, got %d", len(snap))
 	}
 }
 
@@ -193,5 +205,69 @@ func TestFlightRecorder_DumpAll(t *testing.T) {
 	}
 	if !strings.Contains(output, "QUARANTINED") {
 		t.Fatalf("missing QUARANTINED event: %s", output)
+	}
+}
+
+func TestRingBuffer_ConcurrentAppendAndSnapshot(t *testing.T) {
+	rb := &RingBuffer{}
+	const goroutines = 10
+	const eventsEach = 1000
+
+	var wg sync.WaitGroup
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < eventsEach; i++ {
+				rb.Append(makeEvent("concurrent"))
+			}
+		}()
+	}
+	// Concurrent readers
+	for g := 0; g < 3; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 100; i++ {
+				_ = rb.Snapshot()
+			}
+		}()
+	}
+	wg.Wait()
+
+	snap := rb.Snapshot()
+	// Should have at most flightRecorderBufSize events
+	if len(snap) > flightRecorderBufSize {
+		t.Fatalf("snapshot exceeded buffer size: %d", len(snap))
+	}
+}
+
+func TestFlightRecorder_ConcurrentEmit(t *testing.T) {
+	fr := NewFlightRecorder(true, LevelFull)
+	const goroutines = 10
+	const eventsEach = 100
+
+	var wg sync.WaitGroup
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			addr := fmt.Sprintf("10.0.0.%d:2551", id)
+			for i := 0; i < eventsEach; i++ {
+				fr.EmitFrame(addr, "send", 256, 4)
+			}
+		}(g)
+	}
+	wg.Wait()
+
+	// Each goroutine used a unique address; all should have exactly eventsEach events
+	all := fr.SnapshotAll()
+	if len(all) != goroutines {
+		t.Fatalf("expected %d associations, got %d", goroutines, len(all))
+	}
+	for addr, events := range all {
+		if len(events) != eventsEach {
+			t.Fatalf("addr %s: expected %d events, got %d", addr, eventsEach, len(events))
+		}
 	}
 }

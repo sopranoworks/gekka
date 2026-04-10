@@ -133,9 +133,13 @@ func (rb *RingBuffer) Snapshot() []FlightEvent {
 	return result
 }
 
-// Clear resets the buffer, discarding all events.
+// Clear resets the buffer, discarding all events and releasing GC references.
 func (rb *RingBuffer) Clear() {
 	rb.mu.Lock()
+	var zero FlightEvent
+	for i := range rb.events {
+		rb.events[i] = zero
+	}
 	rb.head = 0
 	rb.count = 0
 	rb.mu.Unlock()
@@ -146,21 +150,22 @@ func (rb *RingBuffer) Clear() {
 type FlightRecorder struct {
 	mu       sync.RWMutex
 	logs     map[string]*RingBuffer
-	level    EventLevel
 	enabled  bool
-	sampleN  uint64             // frame sampling denominator (default 100)
+	level    atomic.Int32  // stores EventLevel
+	sampleN  atomic.Uint64
 	counters map[string]*uint64 // per-association atomic frame counters
 }
 
 // NewFlightRecorder creates a FlightRecorder. When !enabled, all methods are no-ops.
 func NewFlightRecorder(enabled bool, level EventLevel) *FlightRecorder {
-	return &FlightRecorder{
+	fr := &FlightRecorder{
 		logs:     make(map[string]*RingBuffer),
-		level:    level,
 		enabled:  enabled,
-		sampleN:  100,
 		counters: make(map[string]*uint64),
 	}
+	fr.level.Store(int32(level))
+	fr.sampleN.Store(100)
+	return fr
 }
 
 // Emit records an event for the given association address ("host:port").
@@ -178,14 +183,14 @@ func (fr *FlightRecorder) Emit(remoteAddr string, e FlightEvent) {
 // At LevelSampled: records 1 in sampleN frames.
 // At LevelFull: records every frame.
 func (fr *FlightRecorder) EmitFrame(remoteAddr string, direction string, size int, serializerID int32) {
-	if !fr.enabled || fr.level < LevelSampled {
+	if !fr.enabled || EventLevel(fr.level.Load()) < LevelSampled {
 		return
 	}
 
 	counter := fr.getOrCreateCounter(remoteAddr)
 	seq := atomic.AddUint64(counter, 1)
 
-	if fr.level == LevelSampled && seq%fr.sampleN != 0 {
+	if EventLevel(fr.level.Load()) == LevelSampled && seq%fr.sampleN.Load() != 0 {
 		return
 	}
 
@@ -193,11 +198,7 @@ func (fr *FlightRecorder) EmitFrame(remoteAddr string, direction string, size in
 		Timestamp: time.Now(),
 		Severity:  SeverityInfo,
 		Category:  CatFrame,
-		Message:   direction,
-		Fields: map[string]any{
-			"size":         size,
-			"serializerID": serializerID,
-		},
+		Message:   fmt.Sprintf("%s size=%d sid=%d", direction, size, serializerID),
 	})
 }
 
@@ -248,14 +249,10 @@ func (fr *FlightRecorder) DumpOnQuarantine(remoteAddr string) {
 	if len(events) == 0 {
 		return
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "flight-recorder dump for quarantined association %s (%d events):\n", remoteAddr, len(events))
+	slog.Warn("flight-recorder: quarantine dump", "association", remoteAddr, "event_count", len(events))
 	for i := range events {
-		b.WriteString("  ")
-		b.WriteString(events[i].FormatText())
-		b.WriteByte('\n')
+		slog.Warn("flight-recorder: event", "line", events[i].FormatText())
 	}
-	slog.Warn(b.String())
 }
 
 // DumpAll writes all association event logs to w in human-readable text format.

@@ -112,6 +112,13 @@ type ClusterManager struct {
 	// by StartHeartbeat.
 	heartbeatMuted atomic.Bool
 
+	// exitingConfirmedSent guards against duplicate ExitingConfirmed sends.
+	// Pekko's leader will only transition this node from Exiting → Removed
+	// after it receives an ExitingConfirmed(selfUniqueAddress) message back
+	// from the leaving node. We send it once when our local gossip view
+	// first marks us as Exiting.
+	exitingConfirmedSent atomic.Bool
+
 	// Cluster event subscribers — managed by cluster_events.go methods.
 	SubMu sync.RWMutex
 	Subs  []eventSubscriber
@@ -499,11 +506,16 @@ func (cm *ClusterManager) LeaveCluster() error {
 	for _, m := range state.GetMembers() {
 		if m.GetStatus() == gproto_cluster.MemberStatus_Up || m.GetStatus() == gproto_cluster.MemberStatus_WeaklyUp {
 			addr := state.GetAllAddresses()[m.GetAddressIndex()]
+			a := addr.GetAddress()
+			// Skip self — no point sending Leave to ourselves and it adds noise.
+			if a.GetHostname() == localHost && a.GetPort() == localPort {
+				continue
+			}
 			path := fmt.Sprintf("%s://%s@%s:%d/system/cluster/core/daemon",
 				cm.Proto(),
-				addr.GetAddress().GetSystem(),
-				addr.GetAddress().GetHostname(),
-				addr.GetAddress().GetPort())
+				a.GetSystem(),
+				a.GetHostname(),
+				a.GetPort())
 			if err := cm.Router(context.Background(), path, leave); err != nil {
 				lastErr = err
 			}
@@ -1038,11 +1050,98 @@ func (cm *ClusterManager) processIncomingGossip(gossip *gproto_cluster.Gossip, r
 		cm.Metrics.RecordConvergence(0)
 	}
 
+	// If our own gossip status is now Exiting, send ExitingConfirmed back to
+	// the leader. Pekko's leader will not transition this node from Exiting
+	// to Removed until it receives this confirmation. The send is idempotent
+	// (Pekko keeps a Set), but we use a once-flag to avoid spam.
+	cm.maybeSendExitingConfirmed()
+
 	// Publish events outside the lock so slow subscribers can't stall gossip.
 	for _, evt := range events {
 		cm.publishEvent(evt)
 	}
 	return nil
+}
+
+// maybeSendExitingConfirmed checks whether the local node's current gossip
+// status is Exiting and, if so, sends a one-shot ExitingConfirmed message
+// to every Up/WeaklyUp member that could be the cluster leader. Pekko's
+// ClusterCoreDaemon adds the node to its `exitingConfirmed` set, which is
+// the precondition for the leader to remove the node from gossip.
+//
+// Without this confirmation Pekko will leave a Leaving node stuck in the
+// Exiting state forever and never emit MemberRemoved.
+func (cm *ClusterManager) maybeSendExitingConfirmed() {
+	if cm.exitingConfirmedSent.Load() {
+		return
+	}
+
+	cm.Mu.RLock()
+	localHost := cm.LocalAddress.GetAddress().GetHostname()
+	localPort := cm.LocalAddress.GetAddress().GetPort()
+
+	// Find our own member entry.
+	isExiting := false
+	for _, m := range cm.State.GetMembers() {
+		ua := cm.State.AllAddresses[m.GetAddressIndex()]
+		a := ua.GetAddress()
+		if a.GetHostname() == localHost && a.GetPort() == localPort {
+			if m.GetStatus() == gproto_cluster.MemberStatus_Exiting {
+				isExiting = true
+			}
+			break
+		}
+	}
+
+	if !isExiting {
+		cm.Mu.RUnlock()
+		return
+	}
+
+	// Snapshot recipient paths under the lock so we can release it before sending.
+	type target struct {
+		path string
+	}
+	var targets []target
+	for _, m := range cm.State.GetMembers() {
+		st := m.GetStatus()
+		if st != gproto_cluster.MemberStatus_Up && st != gproto_cluster.MemberStatus_WeaklyUp {
+			continue
+		}
+		ua := cm.State.AllAddresses[m.GetAddressIndex()]
+		a := ua.GetAddress()
+		if a.GetHostname() == localHost && a.GetPort() == localPort {
+			continue // skip self
+		}
+		path := fmt.Sprintf("%s://%s@%s:%d/system/cluster/core/daemon",
+			cm.Proto(), a.GetSystem(), a.GetHostname(), a.GetPort())
+		targets = append(targets, target{path: path})
+	}
+
+	// Build the ExitingConfirmed payload — our own UniqueAddress.
+	confirmation := &gproto_cluster.UniqueAddress{
+		Address: &gproto_cluster.Address{
+			Protocol: cm.LocalAddress.GetAddress().Protocol,
+			System:   cm.LocalAddress.GetAddress().System,
+			Hostname: cm.LocalAddress.GetAddress().Hostname,
+			Port:     cm.LocalAddress.GetAddress().Port,
+		},
+		Uid:  cm.LocalAddress.Uid,
+		Uid2: cm.LocalAddress.Uid2,
+	}
+	cm.Mu.RUnlock()
+
+	// CAS the once-flag — only the first goroutine to reach here sends.
+	if !cm.exitingConfirmedSent.CompareAndSwap(false, true) {
+		return
+	}
+
+	log.Printf("Cluster: local node is Exiting — sending ExitingConfirmed to %d Up members", len(targets))
+	for _, t := range targets {
+		if err := cm.Router(context.Background(), t.path, confirmation); err != nil {
+			log.Printf("Cluster: ExitingConfirmed to %s failed: %v", t.path, err)
+		}
+	}
 }
 
 // connectToNewMembers must be called with cm.Mu held (read or write).
@@ -1875,10 +1974,26 @@ func (cm *ClusterManager) collectSBRMembersLocked() (all []icluster.Member, unre
 
 	state := cm.State
 
+	// Find the local node's address index. The local observer's
+	// ObserverReachability records are keyed by THIS index — assuming 0
+	// only happens to work when the local node is the first joiner; for
+	// later joiners (e.g. Go joining a Scala seed) the local index is
+	// non-zero and a hardcoded 0 silently misses every reachability
+	// observation, leaving SBR blind to unreachable peers.
+	localHost := cm.LocalAddress.Address.GetHostname()
+	localPort := cm.LocalAddress.Address.GetPort()
+	localIdx := int32(-1)
+	for i, ua := range state.AllAddresses {
+		if ua.GetAddress().GetHostname() == localHost && ua.GetAddress().GetPort() == localPort {
+			localIdx = int32(i)
+			break
+		}
+	}
+
 	unreachableIdx := make(map[int32]struct{})
-	if state.Overview != nil {
+	if state.Overview != nil && localIdx >= 0 {
 		for _, obs := range state.Overview.ObserverReachability {
-			if obs.GetAddressIndex() != 0 {
+			if obs.GetAddressIndex() != localIdx {
 				continue
 			}
 			for _, sub := range obs.SubjectReachability {

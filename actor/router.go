@@ -723,6 +723,12 @@ func (r *Router) prepareMessage(msg any) ([]byte, int32, string, error) {
 		sid, manifest = ClusterSerializerID, "GE"
 	case reflect.TypeOf((*gproto_cluster.Address)(nil)):
 		sid, manifest = ClusterSerializerID, "L"
+	case reflect.TypeOf((*gproto_cluster.UniqueAddress)(nil)):
+		// "EC" = ExitingConfirmed. Pekko's ClusterCoreDaemon adds the
+		// node UID to its `exitingConfirmed` set, which is a precondition
+		// for the leader's Exiting → Removed transition. The wire format
+		// is the UniqueAddress proto bytes.
+		sid, manifest = ClusterSerializerID, "EC"
 	default:
 		if rs, ok := msg.(RemoteSerializable); ok {
 			// Custom message type with its own serializer ID and manifest.

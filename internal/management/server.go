@@ -198,6 +198,12 @@ func NewManagementServer(provider ClusterStateProvider, hostname string, port in
 	mux.HandleFunc("/durable-state/", ms.handleDurableState)
 	mux.HandleFunc("/dashboard", ms.handleDashboard)
 
+	if nm := provider.NodeManager(); nm != nil && nm.FlightRec != nil {
+		fr := nm.FlightRec
+		mux.HandleFunc("/flight-recorder/", flightRecorderHandler(fr))
+		mux.HandleFunc("/flight-recorder", flightRecorderHandler(fr))
+	}
+
 	if enableHealth {
 		mux.HandleFunc("/health/alive", ms.handleAlive)
 		mux.HandleFunc("/health/ready", ms.handleReady)
@@ -678,6 +684,53 @@ func writeNotFound(w http.ResponseWriter, address string) {
 // as returned by LeaveMember and DownMember when the address is unknown.
 func isNotFound(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "not found")
+}
+
+// flightRecorderHandler returns an http.HandlerFunc that serves the Artery
+// flight recorder log over HTTP in JSON (default) or plain-text format.
+//
+//	GET /flight-recorder              — all associations (JSON map or text dump)
+//	GET /flight-recorder/{host:port}  — single association events
+//	?format=text                       — human-readable text instead of JSON
+func flightRecorderHandler(fr *core.FlightRecorder) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		format := r.URL.Query().Get("format")
+
+		assocKey := strings.TrimPrefix(r.URL.Path, "/flight-recorder")
+		assocKey = strings.TrimPrefix(assocKey, "/")
+		if decoded, err := url.PathUnescape(assocKey); err == nil {
+			assocKey = decoded
+		}
+
+		if assocKey == "" {
+			all := fr.SnapshotAll()
+			if all == nil {
+				all = make(map[string][]core.FlightEvent)
+			}
+			if format == "text" {
+				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+				fr.DumpAll(w)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(all)
+			return
+		}
+
+		events := fr.Snapshot(assocKey)
+		if events == nil {
+			events = []core.FlightEvent{}
+		}
+		if format == "text" {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			for i := range events {
+				fmt.Fprintln(w, events[i].FormatText())
+			}
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(events)
+	}
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────

@@ -10,6 +10,7 @@ package core
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/sopranoworks/gekka/actor"
@@ -17,6 +18,19 @@ import (
 
 	hocon "github.com/sopranoworks/gekka-config"
 )
+
+// ResizerConfig holds the HOCON-parsed auto-resizer settings.
+// An empty/zero value means no resizer is configured.
+type ResizerConfig struct {
+	Enabled            bool
+	LowerBound         int
+	UpperBound         int
+	PressureThreshold  int
+	RampupRate         float64
+	BackoffRate        float64
+	BackoffThreshold   float64
+	MessagesPerResize  int
+}
 
 // ClusterRouterSettings holds the cluster-aware routing configuration.
 type ClusterRouterSettings struct {
@@ -67,6 +81,9 @@ type DeploymentConfig struct {
 
 	// Cluster holds settings for cluster-aware routing.
 	Cluster ClusterRouterSettings `hocon:"cluster"`
+
+	// Resizer holds the auto-resizer settings for pool routers.
+	Resizer ResizerConfig `hocon:"resizer"`
 }
 
 // LookupDeployment finds the deployment block for actorPath inside a parsed
@@ -163,7 +180,49 @@ func parseDeploymentObject(cfg hocon.Config) DeploymentConfig {
 		}
 	}
 
+	// resizer block
+	if r, err := cfg.GetConfig("resizer"); err == nil {
+		dc.Resizer.Enabled = true
+		if v, err := r.GetInt("lower-bound"); err == nil {
+			dc.Resizer.LowerBound = v
+		} else {
+			dc.Resizer.LowerBound = 1
+		}
+		if v, err := r.GetInt("upper-bound"); err == nil {
+			dc.Resizer.UpperBound = v
+		} else {
+			dc.Resizer.UpperBound = 10
+		}
+		if v, err := r.GetInt("pressure-threshold"); err == nil {
+			dc.Resizer.PressureThreshold = v
+		} else {
+			dc.Resizer.PressureThreshold = 1
+		}
+		dc.Resizer.RampupRate = getFloat64(r, "rampup-rate", 0.2)
+		dc.Resizer.BackoffRate = getFloat64(r, "backoff-rate", 0.3)
+		dc.Resizer.BackoffThreshold = getFloat64(r, "backoff-threshold", 0.3)
+		if v, err := r.GetInt("messages-per-resize"); err == nil {
+			dc.Resizer.MessagesPerResize = v
+		} else {
+			dc.Resizer.MessagesPerResize = 10
+		}
+	}
+
 	return dc
+}
+
+// getFloat64 extracts a float64 value from a HOCON Config using GetString +
+// strconv.ParseFloat, returning defaultVal when the key is absent or unparseable.
+func getFloat64(cfg hocon.Config, key string, defaultVal float64) float64 {
+	s, err := cfg.GetString(key)
+	if err != nil {
+		return defaultVal
+	}
+	f, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+	if err != nil {
+		return defaultVal
+	}
+	return f
 }
 
 // ── Pool router factory ───────────────────────────────────────────────────────
@@ -198,9 +257,33 @@ func DeploymentToPoolRouter(cm *cluster.ClusterManager, d DeploymentConfig, prop
 	}
 
 	if d.Cluster.Enabled {
-		return cluster.NewClusterPoolRouter(cm, logic, d.Cluster.TotalInstances, d.Cluster.AllowLocalRoutees, d.Cluster.UseRole, props), nil
+		pool := cluster.NewClusterPoolRouter(cm, logic, d.Cluster.TotalInstances, d.Cluster.AllowLocalRoutees, d.Cluster.UseRole, props)
+		if d.Resizer.Enabled {
+			pool.Resizer = &actor.DefaultResizer{
+				LowerBound:        d.Resizer.LowerBound,
+				UpperBound:        d.Resizer.UpperBound,
+				PressureThreshold: d.Resizer.PressureThreshold,
+				RampupRate:        d.Resizer.RampupRate,
+				BackoffRate:       d.Resizer.BackoffRate,
+				BackoffThreshold:  d.Resizer.BackoffThreshold,
+				MessagesPerResize: d.Resizer.MessagesPerResize,
+			}
+		}
+		return pool, nil
 	}
-	return actor.NewPoolRouter(logic, d.NrOfInstances, props), nil
+	pool := actor.NewPoolRouter(logic, d.NrOfInstances, props)
+	if d.Resizer.Enabled {
+		pool.Resizer = &actor.DefaultResizer{
+			LowerBound:        d.Resizer.LowerBound,
+			UpperBound:        d.Resizer.UpperBound,
+			PressureThreshold: d.Resizer.PressureThreshold,
+			RampupRate:        d.Resizer.RampupRate,
+			BackoffRate:       d.Resizer.BackoffRate,
+			BackoffThreshold:  d.Resizer.BackoffThreshold,
+			MessagesPerResize: d.Resizer.MessagesPerResize,
+		}
+	}
+	return pool, nil
 }
 
 // routingLogicFor maps a HOCON router-type string to the corresponding RoutingLogic.

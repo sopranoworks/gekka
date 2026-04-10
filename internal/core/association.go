@@ -125,6 +125,9 @@ type NodeManager struct {
 	// Nil-safe: all callers check before touching.
 	NodeMetrics *NodeMetrics
 
+	// FlightRec is the Artery Flight Recorder for this node. Nil-safe.
+	FlightRec *FlightRecorder
+
 	// UDPHandler is set when the Aeron-UDP transport is active.  When non-nil,
 	// DialRemote switches to the UDP path automatically.
 	UDPHandler *UdpArteryHandler
@@ -148,6 +151,7 @@ func NewNodeManager(local *gproto_remote.Address, uid uint64) *NodeManager {
 		mutedNodes:         make(map[string]struct{}),
 		udpSrcAssoc:        make(map[string]*GekkaAssociation),
 		quarantinedUIDs:    make(map[uint64]*gproto_remote.UniqueAddress),
+		FlightRec:          NewFlightRecorder(true, LevelLifecycle),
 	}
 }
 
@@ -177,6 +181,16 @@ func (nm *NodeManager) RegisterQuarantinedUID(remote *gproto_remote.UniqueAddres
 	nm.quarantinedUIDs[uid] = remote
 	nm.quarantinedMu.Unlock()
 	slog.Warn("node manager: registered permanently quarantined UID", "uid", uid, "address", remote.GetAddress())
+	if nm.FlightRec != nil {
+		key := fmt.Sprintf("%s:%d", remote.GetAddress().GetHostname(), remote.GetAddress().GetPort())
+		nm.FlightRec.Emit(key, FlightEvent{
+			Timestamp: time.Now(),
+			Severity:  SeverityWarn,
+			Category:  CatQuarantine,
+			Message:   "uid_registered",
+			Fields:    map[string]any{"uid": uid},
+		})
+	}
 }
 
 // QuarantinedUIDs returns a snapshot of all permanently quarantined UIDs.
@@ -483,6 +497,13 @@ func (nm *NodeManager) RegisterAssociation(remote *gproto_remote.UniqueAddress, 
 					existing.conn.Close()
 				}
 				existing.mu.Unlock()
+				existing.emitFlight(SeverityError, CatQuarantine, "QUARANTINED", map[string]any{
+					"remote":  existing.remoteKey(),
+					"new_uid": assoc.remote.GetUid(),
+				})
+				if nm.FlightRec != nil {
+					nm.FlightRec.DumpOnQuarantine(existing.remoteKey())
+				}
 				delete(nm.associations, k)
 				// Register the old UID permanently so the remote cannot re-associate
 				// with that UID after we drop the connection.
@@ -573,6 +594,10 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 		remote:    &gproto_remote.UniqueAddress{Address: remote, Uid: proto.Uint64(0)},
 		streamId:  streamId,
 	}
+	assoc.emitFlight(SeverityInfo, CatHandshake, "INITIATED", map[string]any{
+		"remote": assoc.remoteKey(),
+		"role":   role,
+	})
 	// Register early so handleHandshakeRsp can find it
 	if remote != nil {
 		nm.RegisterAssociation(assoc.remote, assoc)
@@ -680,6 +705,9 @@ func (assoc *GekkaAssociation) initiateHandshake(to *gproto_remote.Address) erro
 	assoc.state = WAITING_FOR_HANDSHAKE
 	uid := assoc.localUid
 	assoc.mu.Unlock()
+	assoc.emitFlight(SeverityInfo, CatHandshake, "WAITING_FOR_HANDSHAKE", map[string]any{
+		"remote": assoc.remoteKey(),
+	})
 
 	// Correctly initialize HandshakeReq using pointer types from proto package
 	req := &gproto_remote.HandshakeReq{
@@ -977,6 +1005,9 @@ func (assoc *GekkaAssociation) SendQuarantined(to *gproto_remote.UniqueAddress) 
 	if nm == nil || nm.LocalAddr == nil {
 		return
 	}
+	assoc.emitFlight(SeverityWarn, CatQuarantine, "notification_sent", map[string]any{
+		"remote": assoc.remoteKey(),
+	})
 	localUA := &gproto_remote.UniqueAddress{
 		Address: nm.LocalAddr,
 		Uid:     proto.Uint64(assoc.localUid),
@@ -1007,6 +1038,34 @@ func (assoc *GekkaAssociation) GetRTT() time.Duration {
 	assoc.mu.RLock()
 	defer assoc.mu.RUnlock()
 	return assoc.lastRTT
+}
+
+// remoteKey returns the "host:port" key used to identify this association in the flight recorder.
+func (assoc *GekkaAssociation) remoteKey() string {
+	if assoc.remote != nil {
+		a := assoc.remote.GetAddress()
+		if a != nil {
+			return fmt.Sprintf("%s:%d", a.GetHostname(), a.GetPort())
+		}
+	}
+	if assoc.conn != nil {
+		return assoc.conn.RemoteAddr().String()
+	}
+	return "unknown"
+}
+
+// emitFlight records a flight event if the node manager has a flight recorder.
+func (assoc *GekkaAssociation) emitFlight(severity EventSeverity, category EventCategory, msg string, fields map[string]any) {
+	if assoc.nodeMgr == nil || assoc.nodeMgr.FlightRec == nil {
+		return
+	}
+	assoc.nodeMgr.FlightRec.Emit(assoc.remoteKey(), FlightEvent{
+		Timestamp: time.Now(),
+		Severity:  severity,
+		Category:  category,
+		Message:   msg,
+		Fields:    fields,
+	})
 }
 
 func (assoc *GekkaAssociation) NextSeq() uint64 {
@@ -1137,6 +1196,10 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 			slog.Debug("artery: ArteryHeartbeatRsp received", "uid", hb.GetUid())
 		}
 		assoc.mu.Unlock()
+		assoc.emitFlight(SeverityInfo, CatHeartbeat, "RTT", map[string]any{
+			"remote": assoc.remoteKey(),
+			"rtt":    assoc.lastRTT.String(),
+		})
 		return nil
 
 	case "ActorRefCompressionAdvertisement", "ClassManifestCompressionAdvertisement":
@@ -1172,6 +1235,12 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 			assoc.conn.Close()
 		}
 		assoc.mu.Unlock()
+		assoc.emitFlight(SeverityError, CatQuarantine, "QUARANTINED", map[string]any{
+			"remote": assoc.remoteKey(),
+		})
+		if assoc.nodeMgr != nil && assoc.nodeMgr.FlightRec != nil {
+			assoc.nodeMgr.FlightRec.DumpOnQuarantine(assoc.remoteKey())
+		}
 		return nil
 
 	case "ActorRefCompressionAdvertisementAck", "ClassManifestCompressionAdvertisementAck":
@@ -1291,6 +1360,10 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 	// Quarantine guard: reject reconnection from a permanently quarantined UID.
 	if uid := req.GetFrom().GetUid(); uid != 0 && assoc.nodeMgr.IsQuarantined(uid) {
 		slog.Warn("artery: rejecting HandshakeReq from quarantined UID", "uid", uid)
+		assoc.emitFlight(SeverityWarn, CatQuarantine, "uid_rejected", map[string]any{
+			"remote": assoc.remoteKey(),
+			"uid":    uid,
+		})
 		// Inform the remote that it is quarantined and close.
 		assoc.SendQuarantined(req.From)
 		assoc.mu.Lock()
@@ -1306,6 +1379,10 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 	assoc.remote = req.From
 	assoc.state = ASSOCIATED
 	assoc.mu.Unlock()
+	assoc.emitFlight(SeverityInfo, CatHandshake, "ASSOCIATED", map[string]any{
+		"remote": assoc.remoteKey(),
+		"uid":    req.GetFrom().GetUid(),
+	})
 
 	assoc.nodeMgr.RegisterAssociation(req.From, assoc)
 
@@ -1432,6 +1509,9 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 			}
 			matched.pending = nil
 			matched.mu.Unlock()
+			matched.emitFlight(SeverityInfo, CatHandshake, "ASSOCIATED", map[string]any{
+				"remote": matched.remoteKey(),
+			})
 			nm.RegisterAssociation(req.From, matched)
 		}
 
@@ -1536,6 +1616,9 @@ func (assoc *GekkaAssociation) handleHandshakeRsp(mwa *gproto_remote.MessageWith
 		}
 		matched.pending = nil
 		matched.mu.Unlock()
+		matched.emitFlight(SeverityInfo, CatHandshake, "ASSOCIATED", map[string]any{
+			"remote": matched.remoteKey(),
+		})
 
 		// Re-register with full UniqueAddress (including UID from Pekko)
 		assoc.nodeMgr.RegisterAssociation(mwa.Address, matched)

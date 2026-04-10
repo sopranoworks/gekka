@@ -289,6 +289,8 @@ type PoolRouter struct {
 	RouterActor
 	nrOfInstances int
 	props         Props
+	Resizer       Resizer
+	resizeCounter int
 }
 
 // NrOfInstances returns the current configured pool size (the count that was
@@ -355,7 +357,54 @@ func (r *PoolRouter) Receive(msg any) {
 		r.nrOfInstances += m.Delta
 
 	default:
+		r.evaluateResizeIfNeeded()
 		r.RouterActor.Receive(msg)
+	}
+}
+
+// evaluateResizeIfNeeded increments the resize counter and, when the threshold
+// is reached, evaluates whether the pool should grow or shrink.
+func (r *PoolRouter) evaluateResizeIfNeeded() {
+	if r.Resizer == nil {
+		return
+	}
+	r.resizeCounter++
+	mpr := 10 // default
+	if dr, ok := r.Resizer.(*DefaultResizer); ok && dr.MessagesPerResize > 0 {
+		mpr = dr.MessagesPerResize
+	}
+	if r.resizeCounter < mpr {
+		return
+	}
+	r.resizeCounter = 0
+	r.evaluateResize()
+}
+
+// evaluateResize samples each routee's mailbox depth, calls the Resizer, and
+// applies the resulting delta — growing via AdjustPoolSize or shrinking by
+// stopping excess routees from the tail of the list.
+func (r *PoolRouter) evaluateResize() {
+	pending := make([]int, len(r.Routees))
+	for i, rt := range r.Routees {
+		if ms, ok := rt.(MailboxSizable); ok {
+			pending[i] = ms.MailboxLen()
+		}
+	}
+	delta := r.Resizer.Capacity(pending)
+	if delta > 0 {
+		r.Self().Tell(AdjustPoolSize{Delta: delta})
+	} else if delta < 0 {
+		// Shrink: stop routees from the end of the list.
+		remove := -delta
+		if remove > len(r.Routees) {
+			remove = len(r.Routees)
+		}
+		for i := 0; i < remove; i++ {
+			idx := len(r.Routees) - 1 - i
+			if stopper, ok := r.Routees[idx].(interface{ Tell(any, ...Ref) }); ok {
+				stopper.Tell(PoisonPill{})
+			}
+		}
 	}
 }
 

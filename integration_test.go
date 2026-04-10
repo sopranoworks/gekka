@@ -995,6 +995,16 @@ func TestCluster_GoDominantMixed(t *testing.T) {
 		t.Fatalf("Scala node failed to start within timeout")
 	}
 
+	// Wait for Scala to complete its join before flooding Go-Seed with
+	// more joins. Without this settling window, Scala's inbound Artery
+	// connections race against Go-2/3/4 and some get reset by Pekko when
+	// Go-Seed is busy processing the other handshakes.
+	log.Printf("[SETTLING] Waiting for Scala to join the cluster before spawning Go nodes...")
+	if err := waitForUpMembers(goSeed, 2, 30*time.Second); err != nil {
+		t.Fatalf("[SETTLING] Scala did not reach Up: %v", err)
+	}
+	log.Printf("[SETTLING] Scala is Up — proceeding to spawn Go-2, Go-3, Go-4.")
+
 	// ── Step 3: Spawn Go-2, Go-3, Go-4 ────────────────────────────────────
 	var goNodes [3]*Cluster
 	names := []string{"Go-2", "Go-3", "Go-4"}

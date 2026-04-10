@@ -98,20 +98,7 @@ func TestIntegration_PekkoServer(t *testing.T) {
 	log.Printf("[STARTING SERVER] Initializing Scala Pekko server...")
 	// ctx is used for command context as well
 
-	cmd := exec.CommandContext(ctx, "sbt", "runMain com.example.PekkoServer")
-	cmd.Dir = "scala-server"
-
-	stdout, _ := cmd.StdoutPipe()
-	cmd.Stderr = cmd.Stdout
-
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("failed to start sbt: %v", err)
-	}
-	defer func() {
-		if cmd.Process != nil {
-			cmd.Process.Kill()
-		}
-	}()
+	_, stdout := startSbtServer(t, ctx, "com.example.PekkoServer", 2552)
 
 	ready := make(chan struct{})
 	go func() {
@@ -201,19 +188,7 @@ func TestClusterSingletonProxy(t *testing.T) {
 	// 1. Start Scala ClusterSingletonServer
 	log.Printf("[STARTING] Initializing Scala ClusterSingletonServer...")
 
-	cmd := exec.CommandContext(ctx, "sbt", "runMain com.example.ClusterSingletonServer")
-	cmd.Dir = "scala-server"
-	stdout, _ := cmd.StdoutPipe()
-	cmd.Stderr = cmd.Stdout
-
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("failed to start sbt: %v", err)
-	}
-	defer func() {
-		if cmd.Process != nil {
-			cmd.Process.Kill()
-		}
-	}()
+	_, stdout := startSbtServer(t, ctx, "com.example.ClusterSingletonServer", 2552)
 
 	ready := make(chan struct{})
 	goNodeUpChan := make(chan struct{}, 1)
@@ -312,20 +287,7 @@ func TestClusterJoinLeave(t *testing.T) {
 	// 1. [STARTING SERVER]
 	log.Printf("[STARTING SERVER] Initializing Scala Cluster Seed Node...")
 
-	cmd := exec.CommandContext(ctx, "sbt", "runMain com.example.ClusterSeedNode")
-	cmd.Dir = "scala-server"
-
-	stdout, _ := cmd.StdoutPipe()
-	cmd.Stderr = cmd.Stdout
-
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("failed to start sbt: %v", err)
-	}
-	defer func() {
-		if cmd.Process != nil {
-			cmd.Process.Kill()
-		}
-	}()
+	_, stdout := startSbtServer(t, ctx, "com.example.ClusterSeedNode", 2552)
 
 	ready := make(chan struct{})
 	goNodeUpChan := make(chan struct{}, 1)
@@ -428,19 +390,7 @@ func TestDistributedData(t *testing.T) {
 	// 1. Start Scala DistributedDataServer
 	log.Printf("[STARTING] Initializing Scala DistributedDataServer...")
 
-	cmd := exec.CommandContext(ctx, "sbt", "runMain com.example.DistributedDataServer")
-	cmd.Dir = "scala-server"
-	stdout, _ := cmd.StdoutPipe()
-	cmd.Stderr = cmd.Stdout
-
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("failed to start sbt: %v", err)
-	}
-	defer func() {
-		if cmd.Process != nil {
-			cmd.Process.Kill()
-		}
-	}()
+	_, stdout := startSbtServer(t, ctx, "com.example.DistributedDataServer", 2552)
 
 	ready := make(chan struct{})
 	go func() {
@@ -544,19 +494,7 @@ func TestClusterFailureRecovery(t *testing.T) {
 	//    and then resume heartbeats before SBR downs the node.
 	log.Printf("[STARTING] Initializing Scala 2-node cluster (recovery config)...")
 
-	cmd := exec.CommandContext(ctx, "sbt", "runMain com.example.MultiNodeClusterRecovery")
-	cmd.Dir = "scala-server"
-	stdout, _ := cmd.StdoutPipe()
-	cmd.Stderr = cmd.Stdout
-
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("failed to start sbt: %v", err)
-	}
-	defer func() {
-		if cmd.Process != nil {
-			cmd.Process.Kill()
-		}
-	}()
+	_, stdout := startSbtServer(t, ctx, "com.example.MultiNodeClusterRecovery", 2552)
 
 	ready := make(chan struct{})
 	clusterSize4Chan := make(chan struct{}, 1)
@@ -1002,24 +940,9 @@ func TestCluster_GoDominantMixed(t *testing.T) {
 
 	// ── Step 2: Start Scala node joining Go-Seed ───────────────────────────
 	log.Printf("[SCALA] Starting Scala node to join Go-Seed...")
-	scalaCmd := exec.CommandContext(ctx, "sbt",
-		fmt.Sprintf("runMain com.example.ScalaClusterNode 127.0.0.1 %d", goSeedPort))
-	scalaCmd.Dir = "scala-server"
-	scalaStdout, _ := scalaCmd.StdoutPipe()
-	scalaStdin, _ := scalaCmd.StdinPipe()
-	scalaCmd.Stderr = scalaCmd.Stdout
-
-	if err := scalaCmd.Start(); err != nil {
-		t.Fatalf("failed to start ScalaClusterNode: %v", err)
-	}
-	defer func() {
-		// Best-effort graceful leave; kill ensures cleanup regardless.
-		scalaStdin.Write([]byte("leave\n"))
-		time.Sleep(2 * time.Second)
-		if scalaCmd.Process != nil {
-			scalaCmd.Process.Kill()
-		}
-	}()
+	scalaCmd, scalaStdout := startSbtServer(t, ctx,
+		fmt.Sprintf("com.example.ScalaClusterNode 127.0.0.1 %d", goSeedPort), 0)
+	_ = scalaCmd // stdin not needed — departure uses DownMember
 
 	scalaReady := make(chan struct{})
 	go func() {
@@ -1180,19 +1103,7 @@ func TestMultiNodeDynamicJoin(t *testing.T) {
 	// 1. [STARTING SCALA CLUSTER]
 	log.Printf("[STARTING] Initializing Scala 2-node cluster...")
 
-	cmd := exec.CommandContext(ctx, "sbt", "runMain com.example.MultiNodeCluster")
-	cmd.Dir = "scala-server"
-	stdout, _ := cmd.StdoutPipe()
-	cmd.Stderr = cmd.Stdout
-
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("failed to start sbt: %v", err)
-	}
-	defer func() {
-		if cmd.Process != nil {
-			cmd.Process.Kill()
-		}
-	}()
+	_, stdout := startSbtServer(t, ctx, "com.example.MultiNodeCluster", 2552)
 
 	ready := make(chan struct{})
 	clusterSize3Chan := make(chan struct{}, 1)
@@ -1332,22 +1243,8 @@ func TestCluster_CRDT_Consistency_Under_Failure(t *testing.T) {
 
 	// ── Step 2: Scala node joining Go-Seed ─────────────────────────────────
 	log.Printf("[CRDT] Starting Scala node to join Go-Seed...")
-	scalaCmd := exec.CommandContext(ctx, "sbt",
-		fmt.Sprintf("runMain com.example.ScalaClusterNode 127.0.0.1 %d", goSeedPort))
-	scalaCmd.Dir = "scala-server"
-	scalaStdout, _ := scalaCmd.StdoutPipe()
-	scalaStdin, _ := scalaCmd.StdinPipe()
-	scalaCmd.Stderr = scalaCmd.Stdout
-	if err := scalaCmd.Start(); err != nil {
-		t.Fatalf("start ScalaClusterNode: %v", err)
-	}
-	defer func() {
-		scalaStdin.Write([]byte("leave\n"))
-		time.Sleep(2 * time.Second)
-		if scalaCmd.Process != nil {
-			scalaCmd.Process.Kill()
-		}
-	}()
+	_, scalaStdout := startSbtServer(t, ctx,
+		fmt.Sprintf("com.example.ScalaClusterNode 127.0.0.1 %d", goSeedPort), 0)
 
 	scalaReady := make(chan struct{})
 	go func() {
@@ -1503,18 +1400,7 @@ func TestAsk_PekkoEcho(t *testing.T) {
 	defer cancel()
 
 	// Start Scala PekkoServer (RemoteSystem@127.0.0.1:2552 with /user/echo).
-	cmd := exec.CommandContext(ctx, "sbt", "runMain com.example.PekkoServer")
-	cmd.Dir = "scala-server"
-	stdout, _ := cmd.StdoutPipe()
-	cmd.Stderr = cmd.Stdout
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start sbt: %v", err)
-	}
-	defer func() {
-		if cmd.Process != nil {
-			cmd.Process.Kill()
-		}
-	}()
+	_, stdout := startSbtServer(t, ctx, "com.example.PekkoServer", 2552)
 
 	ready := make(chan struct{})
 	go func() {

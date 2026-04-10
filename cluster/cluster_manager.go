@@ -795,7 +795,12 @@ func (cm *ClusterManager) addMemberToGossipLocked(joiningAddr *gproto_cluster.Un
 	cm.incrementVersionWithLockHeld()
 }
 
-// mergeSeenLocked unions the incoming gossip's Overview.Seen into the local state.
+// mergeSeenLocked unions the incoming gossip's Overview.Seen into the local state,
+// remapping indices from the incoming AllAddresses space to the local AllAddresses
+// space. Without remapping, the Seen set becomes inconsistent after any member
+// join/leave because the same AllAddresses index refers to different nodes in the
+// sender's vs receiver's gossip. This inconsistency prevents leader convergence
+// and blocks Joining → Up promotion in multi-iteration churn scenarios.
 // Must be called with cm.Mu held (write).
 func (cm *ClusterManager) mergeSeenLocked(incoming *gproto_cluster.Gossip) {
 	if incoming.GetOverview() == nil {
@@ -804,14 +809,40 @@ func (cm *ClusterManager) mergeSeenLocked(incoming *gproto_cluster.Gossip) {
 	if cm.State.Overview == nil {
 		cm.State.Overview = &gproto_cluster.GossipOverview{}
 	}
+
+	// Build a lookup from UniqueAddress → local index for fast remapping.
+	type addrKey struct {
+		host string
+		port uint32
+		uid  uint64
+	}
+	localIndex := make(map[addrKey]int32, len(cm.State.AllAddresses))
+	for i, ua := range cm.State.AllAddresses {
+		a := ua.GetAddress()
+		uid := uint64(ua.GetUid()) | (uint64(ua.GetUid2()) << 32)
+		localIndex[addrKey{a.GetHostname(), a.GetPort(), uid}] = int32(i)
+	}
+
 	existing := make(map[int32]bool, len(cm.State.Overview.Seen))
 	for _, s := range cm.State.Overview.Seen {
 		existing[s] = true
 	}
-	for _, s := range incoming.GetOverview().GetSeen() {
-		if !existing[s] {
-			cm.State.Overview.Seen = append(cm.State.Overview.Seen, s)
-			existing[s] = true
+
+	for _, incomingIdx := range incoming.GetOverview().GetSeen() {
+		if int(incomingIdx) >= len(incoming.AllAddresses) {
+			continue // stale index
+		}
+		// Resolve the UniqueAddress the incoming index refers to.
+		iua := incoming.AllAddresses[incomingIdx]
+		ia := iua.GetAddress()
+		iuid := uint64(iua.GetUid()) | (uint64(iua.GetUid2()) << 32)
+
+		// Remap to the local index space.
+		if localIdx, ok := localIndex[addrKey{ia.GetHostname(), ia.GetPort(), iuid}]; ok {
+			if !existing[localIdx] {
+				cm.State.Overview.Seen = append(cm.State.Overview.Seen, localIdx)
+				existing[localIdx] = true
+			}
 		}
 	}
 }
@@ -1021,6 +1052,13 @@ func (cm *ClusterManager) processIncomingGossip(gossip *gproto_cluster.Gossip, r
 		// promoting Joining→Up). Without this, Pekko's convergence check fails
 		// and joining nodes are never promoted.
 		cm.markLocalSeenLocked()
+		// Increment VectorClock so this node's Seen update propagates on the
+		// next gossip round. Without the increment, this node and the sender
+		// have identical clocks, the next gossipTick sends GossipStatus (not
+		// a full GossipEnvelope), and the sender never learns this node has
+		// "seen" the state — blocking leader convergence indefinitely.
+		cm.ensureLocalHashInAllHashesLocked()
+		cm.incrementVersionWithLockHeld()
 		cm.connectToNewMembers(gossip)
 	} else if ordering == ClockConcurrent {
 		// Merge concurrent states: union of members, pairwise-max vector clock.
@@ -1057,7 +1095,36 @@ func (cm *ClusterManager) processIncomingGossip(gossip *gproto_cluster.Gossip, r
 		cm.Fd.Heartbeat(key)
 	}
 
+	// Snapshot state for immediate gossip-back (must happen while lock is held).
+	var immediateGossipTarget string
+	if (ordering == ClockBefore || ordering == ClockConcurrent) && remoteAddr != nil {
+		// After adopting/merging gossip and incrementing our clock, immediately
+		// gossip back to the sender so our Seen update reaches it before its
+		// next gossip round (which would otherwise overwrite our state again).
+		// This is critical for both join convergence (ClockBefore) and leave
+		// convergence (ClockConcurrent — both sides increment independently
+		// when Go calls Leave + Scala marks Leaving).
+		a := remoteAddr.GetAddress()
+		immediateGossipTarget = cm.ClusterCorePath(a.GetSystem(), a.GetHostname(), a.GetPort())
+	}
+	stateForGossip := proto.Clone(cm.State).(*gproto_cluster.Gossip)
 	cm.Mu.Unlock()
+
+	// Immediate gossip-back to avoid the race where the sender's next gossip
+	// round overwrites our Seen update before our 1s gossipTick fires.
+	if immediateGossipTarget != "" {
+		env := &gproto_cluster.GossipEnvelope{
+			From:             cm.LocalAddress,
+			SerializedGossip: func() []byte {
+			raw, _ := proto.Marshal(stateForGossip)
+			gz, _ := gzipCompress(raw)
+			return gz
+		}(),
+		}
+		if err := cm.Router(context.Background(), immediateGossipTarget, env); err != nil {
+			slog.Debug("cluster: immediate gossip-back failed", "error", err)
+		}
+	}
 
 	// Record convergence timestamp when all Up members have seen this state.
 	if cm.Metrics != nil && cm.CheckConvergence() {

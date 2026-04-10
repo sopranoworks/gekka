@@ -82,6 +82,17 @@ func (lc *LookupClassification) Publish(event any) {
 	}
 }
 
+// matches reports whether eventType satisfies topic.
+//   - If topic is an interface, eventType must implement it.
+//   - Otherwise, eventType must equal topic exactly (or be assignable to topic
+//     for pointer/value variants of the same struct).
+func matches(eventType, topic reflect.Type) bool {
+	if topic.Kind() == reflect.Interface {
+		return eventType.Implements(topic)
+	}
+	return eventType == topic || eventType.AssignableTo(topic)
+}
+
 // SubchannelClassification is a hierarchical channel-based event bus.
 // Subscribers register for a dotted channel path (e.g. "app.db") and receive
 // events published to that channel or any sub-channel beneath it. For example,

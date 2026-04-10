@@ -876,6 +876,42 @@ func (cm *ClusterManager) markLocalSeenLocked() {
 	cm.State.Overview.Seen = append(cm.State.Overview.Seen, localIdx)
 }
 
+// buildSeenDigest creates a compact bitfield encoding of Overview.Seen.
+// Bit i is set if AllAddresses[i] is in the Seen set. This matches
+// Pekko's SeenDigest wire format used in GossipStatus messages.
+// Must be called with cm.Mu held (read).
+func (cm *ClusterManager) buildSeenDigest() []byte {
+	n := len(cm.State.AllAddresses)
+	if n == 0 {
+		return nil
+	}
+	digest := make([]byte, (n+7)/8)
+	if cm.State.Overview != nil {
+		for _, idx := range cm.State.Overview.Seen {
+			if int(idx) < n {
+				digest[idx/8] |= 1 << (idx % 8)
+			}
+		}
+	}
+	return digest
+}
+
+// seenDigestHasNew returns true if localDigest has any bits set that
+// remoteDigest does not. This means the local node has Seen entries
+// that the remote node is missing.
+func seenDigestHasNew(local, remote []byte) bool {
+	for i := 0; i < len(local); i++ {
+		r := byte(0)
+		if i < len(remote) {
+			r = remote[i]
+		}
+		if local[i] & ^r != 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // ensureLocalHashInAllHashesLocked adds the local node's hash to AllHashes if
 // it is not already present. This is needed when AllHashes starts empty (e.g.
 // after adopting a Pekko seed's canonical gossip state) and this node is acting
@@ -988,12 +1024,17 @@ func (cm *ClusterManager) handleGossipStatus(payload []byte, manifest string) er
 	var statePayload []byte
 	var localVersion *gproto_cluster.VectorClock
 	var localHashes []string
+	var localDigest []byte
 	if ordering == ClockAfter || ordering == ClockConcurrent {
 		statePayload, _ = proto.Marshal(cm.State)
+	}
+	if ordering == ClockSame {
+		localDigest = cm.buildSeenDigest()
 	}
 	if ordering == ClockBefore {
 		localVersion = cm.State.Version
 		localHashes = cm.State.AllHashes
+		localDigest = cm.buildSeenDigest()
 	}
 	cm.Mu.RUnlock()
 
@@ -1017,13 +1058,37 @@ func (cm *ClusterManager) handleGossipStatus(payload []byte, manifest string) er
 		}
 	}
 
+	if ordering == ClockSame {
+		// Same VectorClock — compare SeenDigests. If we have Seen entries
+		// the remote doesn't, send a full GossipEnvelope so it can merge
+		// our Seen set and achieve convergence.
+		remoteDigest := status.GetSeenDigest()
+		if seenDigestHasNew(localDigest, remoteDigest) {
+			cm.Mu.RLock()
+			samePayload, _ := proto.Marshal(cm.State)
+			cm.Mu.RUnlock()
+			if samePayload != nil {
+				if compressed, err := gzipCompress(samePayload); err == nil {
+					env := &gproto_cluster.GossipEnvelope{
+						From:             cm.LocalAddress,
+						To:               status.From,
+						SerializedGossip: compressed,
+					}
+					_ = cm.Router(context.Background(), path, env)
+				}
+			}
+		}
+		return nil
+	}
+
 	if ordering == ClockBefore {
 		// Their state is strictly newer: send our GossipStatus so the partner
 		// knows to reply with its full GossipEnvelope.
 		myStatus := &gproto_cluster.GossipStatus{
-			From:      cm.LocalAddress,
-			AllHashes: localHashes,
-			Version:   localVersion,
+			From:       cm.LocalAddress,
+			AllHashes:  localHashes,
+			Version:    localVersion,
+			SeenDigest: localDigest,
 		}
 		return cm.Router(context.Background(), path, myStatus)
 	}
@@ -2269,10 +2334,15 @@ func (cm *ClusterManager) gossipTick() {
 	allHashes := cm.State.AllHashes
 	cm.Mu.RUnlock()
 
+	cm.Mu.RLock()
+	seenDigest := cm.buildSeenDigest()
+	cm.Mu.RUnlock()
+
 	status := &gproto_cluster.GossipStatus{
-		From:      cm.LocalAddress,
-		AllHashes: allHashes,
-		Version:   version,
+		From:       cm.LocalAddress,
+		AllHashes:  allHashes,
+		Version:    version,
+		SeenDigest: seenDigest,
 	}
 	_ = cm.Router(context.Background(), path, status)
 }

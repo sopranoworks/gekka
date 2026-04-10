@@ -96,7 +96,6 @@ func (f *controlAwareFactory) installInto(b *BaseActor) {
 				return
 			case out <- current:
 				// Delivered. Immediately pick the next item.
-				hasCurrent = false
 				mu.Lock()
 				current, hasCurrent = pop()
 				mu.Unlock()

@@ -678,10 +678,12 @@ func TestClusterChurn(t *testing.T) {
 
 	// nodeUpChan fires each time the cluster reaches size 3 (GoNode-A joined).
 	// nodeRemovedChan fires each time a cluster.MemberRemoved event is logged (GoNode-A left).
-	// Both are buffered generously so the scanner goroutine never blocks.
+	// nodeStableChan fires when the cluster is back to its baseline (Scala-only) size.
+	// All channels are buffered generously so the scanner goroutine never blocks.
 	ready := make(chan struct{})
 	nodeUpChan := make(chan struct{}, iterations+2)
 	nodeRemovedChan := make(chan struct{}, iterations+2)
+	nodeStableChan := make(chan struct{}, iterations+2)
 
 	go func() {
 		scanner := bufio.NewScanner(stdout)
@@ -700,10 +702,24 @@ func TestClusterChurn(t *testing.T) {
 				default:
 				}
 			}
-			// "[MULTI] cluster.MemberRemoved" means a member completed the Leave lifecycle.
-			if strings.Contains(line, "[MULTI] cluster.MemberRemoved") {
+			// "[MULTI] MemberRemoved port=..." (from MultiNodeCluster.scala) means a
+			// member completed the Leave lifecycle. The previous version of this
+			// scanner looked for "[MULTI] cluster.MemberRemoved" — a substring that
+			// the Scala monitor never emits — so the channel never fired and the
+			// churn test always timed out, regardless of whether Pekko actually
+			// processed the Leave message.
+			if strings.Contains(line, "[MULTI] MemberRemoved") {
 				select {
 				case nodeRemovedChan <- struct{}{}:
+				default:
+				}
+			}
+			// "(Total Up: 2)" means the cluster is back to the Scala-only baseline.
+			// Used by the churn loop to wait for full cluster stability between
+			// iterations rather than relying on a blind sleep.
+			if strings.Contains(line, "(Total Up: 2)") {
+				select {
+				case nodeStableChan <- struct{}{}:
 				default:
 				}
 			}
@@ -816,6 +832,22 @@ func TestClusterChurn(t *testing.T) {
 
 		nodeA.Shutdown()
 		log.Printf("[CHURN] Iteration %d complete.", i+1)
+
+		// Consume the (Total Up: 2) signal that fired when the GoNode was
+		// removed — this is the same Scala log line that ALSO triggered
+		// nodeRemovedChan above, so a stable signal is already queued. We
+		// take one without draining; this confirms Pekko reached baseline
+		// before the next iteration starts and prevents the next join from
+		// racing against leftover ObserverReachability state.
+		select {
+		case <-nodeStableChan:
+			log.Printf("[CHURN] Iteration %d: cluster stable at baseline; starting next iteration.", i+1)
+		case <-time.After(20 * time.Second):
+			close(stopTraffic)
+			t.Fatalf("[CHURN] Iteration %d: cluster did not return to baseline within 20s", i+1)
+		case <-ctx.Done():
+			t.Fatalf("[CHURN] context cancelled waiting for stable cluster")
+		}
 	}
 
 	// 4. Stop traffic goroutine and assess results.

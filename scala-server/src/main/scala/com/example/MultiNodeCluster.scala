@@ -56,6 +56,14 @@ object MultiNodeCluster extends App {
           println("--- MULTI-NODE CLUSTER READY ---")
         }
 
+      case MemberLeft(member) =>
+        val port = member.address.port.getOrElse(0)
+        println(s"[MULTI] MemberLeft port=$port")
+
+      case MemberExited(member) =>
+        val port = member.address.port.getOrElse(0)
+        println(s"[MULTI] MemberExited port=$port")
+
       case MemberRemoved(member, _) =>
         val port = member.address.port.getOrElse(0)
         upPorts -= port
@@ -64,7 +72,9 @@ object MultiNodeCluster extends App {
       case UnreachableMember(member) =>
         println(s"[MULTI] Unreachable: ${member.address}")
 
-      case _: MemberEvent => // Joining / WeaklyUp / Leaving / Exiting — ignored
+      case other: MemberEvent =>
+        val port = other.member.address.port.getOrElse(0)
+        println(s"[MULTI] Other ${other.getClass.getSimpleName} port=$port")
     }
   }
 

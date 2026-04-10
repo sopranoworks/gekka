@@ -655,10 +655,8 @@ func TestClusterChurn(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 
-	// 2 iterations proves the core churn feature: join → graceful leave →
-	// rejoin works. Iterations 3+ fail due to cumulative Seen-index divergence
-	// from gossip tombstones and require deeper work on mergeSeenLocked to
-	// fully remap indices across multiple member lifecycles.
+	// 2 iterations: proves join→leave→rejoin works. Iterations 3+ require
+	// deeper Seen-set propagation work (gossip SeenDigest protocol).
 	const iterations = 2
 
 	// 1. Start Scala 2-node cluster. We use MultiNodeCluster (stable-after=5s) because

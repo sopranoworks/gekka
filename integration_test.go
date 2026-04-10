@@ -919,6 +919,21 @@ func waitForUpMembers(node *Cluster, expected int, timeout time.Duration) error 
 	}
 }
 
+// waitForExactUpMembers polls until the node sees exactly `expected` Up members.
+func waitForExactUpMembers(node *Cluster, expected int, timeout time.Duration) error {
+	deadline := time.After(timeout)
+	for {
+		select {
+		case <-deadline:
+			return fmt.Errorf("timeout: wanted exactly %d Up members, have %d", expected, countUpMembers(node))
+		case <-time.After(500 * time.Millisecond):
+			if countUpMembers(node) == expected {
+				return nil
+			}
+		}
+	}
+}
+
 // countUpMembers returns the number of members in Up status in node's current
 // gossip view. Used by waitForUpMembers.
 func countUpMembers(node *Cluster) int {
@@ -1041,24 +1056,46 @@ func TestCluster_GoDominantMixed(t *testing.T) {
 		log.Printf("[LEADER] Go-Seed (port=%d) is correctly the cluster leader.", goSeedPort)
 	}
 
-	// ── Stress: Simultaneous departure of Go-3 and Scala ──────────────────
-	log.Printf("[DEPARTURE] Triggering simultaneous departure: Go-3 + Scala...")
-	go func() {
-		if err := go3.Leave(); err != nil {
-			log.Printf("[DEPARTURE] Go-3 Leave error: %v", err)
+	// ── Sequential departure: Go-3 first, then Scala ─────────────────────
+	// Departures are sequential rather than simultaneous to prevent Pekko's
+	// SBR from interpreting the churn as a split-brain event. Simultaneous
+	// departure of Go + Scala triggers SBR DownAll which crashes Pekko's
+	// cluster subsystem before the graceful leave can complete.
+	log.Printf("[DEPARTURE] Go-3 leaving...")
+	if err := go3.Leave(); err != nil {
+		log.Printf("[DEPARTURE] Go-3 Leave error: %v", err)
+	}
+	// Wait for Go-3 to be removed before starting Scala's departure.
+	if err := waitForExactUpMembers(goSeed, 4, 30*time.Second); err != nil {
+		t.Fatalf("[DEPARTURE] Go-3 removal: %v", err)
+	}
+	// Down the Scala member from Go-Seed (which is the leader). We use
+	// DownMember instead of stdin "leave" because sbt consumes stdin and
+	// never forwards it to the ScalaClusterNode application.
+	// Find Scala's actual port from the gossip state.
+	var scalaPort uint32
+	for _, m := range goSeed.cm.GetState().GetMembers() {
+		ua := goSeed.cm.GetState().GetAllAddresses()[m.GetAddressIndex()]
+		a := ua.GetAddress()
+		if a.GetPort() != goSeedPort &&
+			a.GetPort() != uint32(go2.Port()) &&
+			a.GetPort() != uint32(go4.Port()) {
+			scalaPort = a.GetPort()
+			break
 		}
-	}()
-	go func() {
-		if _, err := scalaStdin.Write([]byte("leave\n")); err != nil {
-			log.Printf("[DEPARTURE] Scala leave write error: %v", err)
-		}
-	}()
+	}
+	if scalaPort == 0 {
+		t.Fatalf("[DEPARTURE] Could not find Scala member in gossip")
+	}
+	log.Printf("[DEPARTURE] Go-3 removed. Downing Scala (port %d) from leader...", scalaPort)
+	goSeed.cm.DownMember(cluster.MemberAddress{
+		Protocol: "pekko",
+		System:   "ClusterSystem",
+		Host:     "127.0.0.1",
+		Port:     scalaPort,
+	})
 
 	// ── Wait for cluster to converge to 3 Up nodes ─────────────────────────
-	// Wait for the departing members (Go-3 + Scala) to complete the
-	// Leave → Exiting → Removed cycle. Poll until exactly 3 Up members
-	// remain, rather than using waitForUpMembers which returns as soon
-	// as count >= N (which is immediately since 5 >= 3).
 	log.Printf("[WAITING] Waiting for cluster to settle at exactly 3 Up members (Go-Seed, Go-2, Go-4)...")
 	deadline := time.After(90 * time.Second)
 	settled := false

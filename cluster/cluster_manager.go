@@ -1174,11 +1174,14 @@ func (cm *ClusterManager) CheckConvergenceLocked() bool {
 		return true // single node
 	}
 
-	// All UP/LEAVING members must have seen the current state
+	// All UP/LEAVING members must have seen the current state.
+	// Key by AddressIndex (the member's slot in AllAddresses), NOT by the
+	// member's position in the Members slice — Overview.Seen stores address
+	// indices, so the maps must use the same index space.
 	upMembers := make(map[int32]bool)
-	for i, m := range cm.State.Members {
+	for _, m := range cm.State.Members {
 		if m.GetStatus() == gproto_cluster.MemberStatus_Up || m.GetStatus() == gproto_cluster.MemberStatus_Leaving {
-			upMembers[int32(i)] = true
+			upMembers[m.GetAddressIndex()] = true
 		}
 	}
 

@@ -61,6 +61,7 @@ func TestClassicStash_BecomeAndUnstash(t *testing.T) {
 		expect:    3,
 	}
 	Start(a)
+	defer func() { a.Mailbox() <- PoisonPill{} }()
 
 	// Send 3 messages while locked — they should all be stashed.
 	a.Mailbox() <- "alpha"
@@ -112,10 +113,12 @@ func (a *cappedStashActor) PreStart() {
 }
 
 func (a *cappedStashActor) Receive(msg any) {
-	switch msg.(string) {
-	case "done":
-		close(a.done)
-		return
+	switch m := msg.(type) {
+	case string:
+		if m == "done" {
+			close(a.done)
+			return
+		}
 	}
 	err := a.Stash()
 	if err != nil {
@@ -131,6 +134,7 @@ func TestClassicStash_CapacityError(t *testing.T) {
 		done:      make(chan struct{}),
 	}
 	Start(a)
+	defer func() { a.Mailbox() <- PoisonPill{} }()
 
 	a.Mailbox() <- "m1"
 	a.Mailbox() <- "m2"
@@ -175,6 +179,7 @@ func TestClassicStash_EmptyUnstashIsNoop(t *testing.T) {
 		done:      make(chan struct{}),
 	}
 	Start(a)
+	defer func() { a.Mailbox() <- PoisonPill{} }()
 
 	a.Mailbox() <- "trigger"
 

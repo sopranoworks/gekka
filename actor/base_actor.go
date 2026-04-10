@@ -491,7 +491,9 @@ func (b *BaseActor) drainClassicStash() {
 		next := b.classicStashPending[0]
 		b.classicStashPending = b.classicStashPending[1:]
 		if b.drainDispatch != nil {
+			b.currentMessage = next
 			b.drainDispatch(next)
+			b.currentMessage = nil
 		}
 	}
 }

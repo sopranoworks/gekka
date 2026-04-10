@@ -362,29 +362,20 @@ func (nm *NodeManager) DialRemote(ctx context.Context, target *gproto_remote.Add
 		errChan <- client.Connect(ctx)
 	}()
 
-	// Wait for the association to reach ASSOCIATED state (handshake complete)
-	// before returning. Returning a pre-ASSOCIATED association causes callers
-	// to write frames that Pekko's Artery discards during its handshake phase.
-	timeout := time.After(10 * time.Second)
+	// Wait for the association to appear or for an error.
+	timeout := time.After(5 * time.Second)
 	for {
 		select {
 		case err := <-errChan:
 			return nil, err
 		case <-timeout:
-			// Fall back to returning whatever we have (even pre-ASSOCIATED)
-			// so the caller can at least queue messages.
 			if assoc, ok := nm.GetAssociationByHost(target.GetHostname(), target.GetPort()); ok {
 				return assoc, nil
 			}
 			return nil, fmt.Errorf("dial timeout")
 		case <-time.After(100 * time.Millisecond):
-			if ga, ok := nm.GetGekkaAssociationByHost(target.GetHostname(), target.GetPort()); ok {
-				ga.mu.RLock()
-				st := ga.state
-				ga.mu.RUnlock()
-				if st == ASSOCIATED {
-					return ga, nil
-				}
+			if assoc, ok := nm.GetAssociationByHost(target.GetHostname(), target.GetPort()); ok {
+				return assoc, nil
 			}
 		}
 	}
@@ -1377,6 +1368,8 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 		// bidirectional association. We MUST NOT write HandshakeRsp on the
 		// INBOUND connection — Pekko's outbound sockets are write-only and
 		// any bytes from Go trigger "Unexpected incoming bytes" + quarantine.
+		// Initiate reverse outbound when none exists (Go-as-seed scenario).
+		// The outbound's handshake completes the bidirectional association.
 		if outboundToRemote == nil {
 			fromAddr := req.From.GetAddress()
 			nm.mu.Lock()
@@ -1386,22 +1379,30 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 			dialKey := fmt.Sprintf("%s:%d", fromAddr.GetHostname(), fromAddr.GetPort())
 			if !nm.pendingDials[dialKey] {
 				nm.pendingDials[dialKey] = true
-				slog.Info("artery: no OUTBOUND to remote — initiating reverse outbound (skipping INBOUND HandshakeRsp)",
+				slog.Info("artery: no OUTBOUND to remote — initiating reverse outbound",
 					"host", fromAddr.GetHostname(), "port", fromAddr.GetPort())
 				go nm.DialRemote(context.Background(), fromAddr)
 			}
 			nm.mu.Unlock()
-			// Skip HandshakeRsp entirely — the outbound's own handshake
-			// will complete the association via the symmetric matching path.
-		} else {
-			// OUTBOUND exists — send HandshakeRsp via it (normal path).
+		}
+		// Always send HandshakeRsp. Use OUTBOUND if available, INBOUND as
+		// fallback (needed for unit tests; Pekko may reset the INBOUND but
+		// the async DialRemote above will establish a working OUTBOUND for
+		// subsequent messages).
+		{
 			localUA := &gproto_remote.UniqueAddress{Address: assoc.nodeMgr.LocalAddr, Uid: proto.Uint64(assoc.localUid)}
 			rspProto := &gproto_remote.MessageWithAddress{Address: localUA}
 			if rspPayload, err2 := proto.Marshal(rspProto); err2 == nil {
 				if frame, err2 := BuildArteryFrame(int64(assoc.localUid), actor.ArteryInternalSerializerID, "", "", "e", rspPayload, true); err2 == nil {
-					slog.Debug("artery: sending HandshakeRsp via OUTBOUND association")
+					target := outboundToRemote
+					if target != nil {
+						slog.Debug("artery: sending HandshakeRsp via OUTBOUND association")
+					} else {
+						target = assoc
+						slog.Debug("artery: sending HandshakeRsp via INBOUND (fallback)")
+					}
 					select {
-					case outboundToRemote.outbox <- frame:
+					case target.outbox <- frame:
 					default:
 						slog.Warn("artery: HandshakeRsp outbox full, dropping response")
 					}

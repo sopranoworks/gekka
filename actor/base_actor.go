@@ -85,6 +85,13 @@ type BaseActor struct {
 	onStop             func()
 	receiveStack       []func(msg any)  // behavior stack for become/unbecome
 	receiveTimeout     *receiveTimeoutConfig // classic receive timeout state
+
+	// Classic stash support
+	classicStash        *StashBufferImpl[any] // nil until first Stash() call
+	classicStashPending []any                 // populated by redeliver callback
+	drainingClassicStash bool                 // prevents recursive drain
+	currentMessage      any                   // set during Receive so Stash() can grab it
+	drainDispatch       func(any) bool        // set by Start(); used by drain to re-enter dispatch
 }
 
 // Sender returns the actor reference that sent the currently-processed message.
@@ -430,6 +437,73 @@ func (b *BaseActor) currentReceive() func(msg any) {
 	return nil
 }
 
+// ── Classic Stash ─────────────────────────────────────────────────────────
+
+// initClassicStash lazily creates the stash buffer on first use.
+func (b *BaseActor) initClassicStash() {
+	if b.classicStash != nil {
+		return
+	}
+	b.classicStash = NewStashBuffer[any](DefaultStashCapacity, func(msg any) {
+		b.classicStashPending = append(b.classicStashPending, msg)
+	})
+}
+
+// Stash stashes the currently-processed message for later redelivery.
+// It must be called from within Receive; calling it outside Receive returns
+// an error because there is no current message to stash.
+func (b *BaseActor) Stash() error {
+	if b.currentMessage == nil {
+		return fmt.Errorf("actor.Stash: no current message (must be called inside Receive)")
+	}
+	b.initClassicStash()
+	return b.classicStash.Stash(b.currentMessage)
+}
+
+// UnstashAll triggers redelivery of all stashed messages in FIFO order.
+// Each message re-enters the actor's dispatch path (including the become
+// stack). It is safe to call on an empty or uninitialised stash.
+func (b *BaseActor) UnstashAll() {
+	if b.classicStash == nil {
+		return
+	}
+	b.classicStash.UnstashAll()
+	b.drainClassicStash()
+}
+
+// StashBuffer returns the underlying stash buffer for inspection. Returns
+// nil if Stash() has never been called.
+func (b *BaseActor) StashBuffer() *StashBufferImpl[any] {
+	return b.classicStash
+}
+
+// drainClassicStash pops from classicStashPending and re-enters dispatch.
+// Guards against recursive drain (e.g. when a drained message calls
+// UnstashAll again).
+func (b *BaseActor) drainClassicStash() {
+	if b.drainingClassicStash {
+		return
+	}
+	b.drainingClassicStash = true
+	defer func() { b.drainingClassicStash = false }()
+
+	for len(b.classicStashPending) > 0 {
+		next := b.classicStashPending[0]
+		b.classicStashPending = b.classicStashPending[1:]
+		if b.drainDispatch != nil {
+			b.drainDispatch(next)
+		}
+	}
+}
+
+// setCurrentMessage is called by Start() before/after each dispatch to track
+// the message currently being processed.
+func (b *BaseActor) setCurrentMessage(msg any) { b.currentMessage = msg }
+
+// setDrainDispatch is called by Start() to wire the dispatch callback used
+// by drainClassicStash to re-enter the actor's message handling path.
+func (b *BaseActor) setDrainDispatch(fn func(any) bool) { b.drainDispatch = fn }
+
 // ── Classic ReceiveTimeout ─────────────────────────────────────────────────
 
 type receiveTimeoutConfig struct {
@@ -587,6 +661,14 @@ func Start(a Actor) {
 	}
 	bs, hasBecomeSupport := any(a).(becomeSupport)
 
+	// Detect classic stash support (BaseActor provides it).
+	type classicStashSupport interface {
+		setCurrentMessage(any)
+		setDrainDispatch(func(any) bool)
+		drainClassicStash()
+	}
+	css, hasClassicStash := any(a).(classicStashSupport)
+
 	// Acquire metric instruments once for this actor's lifetime.
 	mailboxGauge, processDuration := initActorMetrics()
 
@@ -650,6 +732,11 @@ func Start(a Actor) {
 			return true
 		}
 
+		// Wire classic stash dispatch callback now that dispatchMsg is defined.
+		if hasClassicStash {
+			css.setDrainDispatch(dispatchMsg)
+		}
+
 		for {
 			var shouldContinue bool
 			func() {
@@ -701,6 +788,9 @@ func Start(a Actor) {
 							cs.setCurrentCtx(msgCtx)
 						}
 						start := time.Now()
+						if hasClassicStash {
+							css.setCurrentMessage(m.Payload)
+						}
 						if !dispatchMsg(m.Payload) {
 							// PoisonPill: close mailbox to trigger graceful stop
 							span.End()
@@ -708,6 +798,10 @@ func Start(a Actor) {
 								closer.CloseMailbox()
 							}
 							return
+						}
+						if hasClassicStash {
+							css.setCurrentMessage(nil)
+							css.drainClassicStash()
 						}
 						processDuration.Record(msgCtx, time.Since(start).Seconds(), pathAttr)
 						span.End()
@@ -728,12 +822,19 @@ func Start(a Actor) {
 							cs.setCurrentCtx(msgCtx)
 						}
 						start := time.Now()
+						if hasClassicStash {
+							css.setCurrentMessage(m)
+						}
 						if !dispatchMsg(m) {
 							span.End()
 							if closer, ok := any(a).(interface{ CloseMailbox() }); ok {
 								closer.CloseMailbox()
 							}
 							return
+						}
+						if hasClassicStash {
+							css.setCurrentMessage(nil)
+							css.drainClassicStash()
 						}
 						processDuration.Record(msgCtx, time.Since(start).Seconds(), pathAttr)
 						span.End()

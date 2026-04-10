@@ -133,6 +133,15 @@ func LoadAllocationStrategy(conf config.Config, cm *cluster.ClusterManager, fall
 		rule, _ := dslCfg.GetString("rule")
 		return NewDSLShardAllocationStrategy(rule, cm, fallback)
 
+	case "consistent-hashing":
+		vnodes := 100
+		if chCfg, err := cfg.GetConfig("consistent-hashing"); err == nil {
+			if v, err := chCfg.GetInt("virtual-nodes-factor"); err == nil && v > 0 {
+				vnodes = v
+			}
+		}
+		return NewConsistentHashingAllocationStrategy(vnodes)
+
 	case "least-shard":
 		fallthrough
 	default:

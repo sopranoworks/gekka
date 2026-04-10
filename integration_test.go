@@ -15,9 +15,12 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log"
+	"net"
 	"os/exec"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -26,6 +29,61 @@ import (
 	"github.com/sopranoworks/gekka/cluster/ddata"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 )
+
+// startSbtServer spawns an sbt process with process-group isolation and
+// registers a t.Cleanup that kills the entire group and waits for port release.
+// This prevents stale JVM processes from blocking subsequent tests.
+func startSbtServer(t *testing.T, ctx context.Context, mainClass string, port int) (*exec.Cmd, io.ReadCloser) {
+	t.Helper()
+	cmd := exec.CommandContext(ctx, "sbt", fmt.Sprintf("runMain %s", mainClass))
+	cmd.Dir = "scala-server"
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("failed to get stdout pipe: %v", err)
+	}
+	cmd.Stderr = cmd.Stdout
+
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("failed to start sbt: %v", err)
+	}
+
+	t.Cleanup(func() {
+		// Kill entire process group to catch orphaned child JVMs
+		if cmd.Process != nil {
+			pgid, err := syscall.Getpgid(cmd.Process.Pid)
+			if err == nil {
+				_ = syscall.Kill(-pgid, syscall.SIGKILL)
+			} else {
+				_ = cmd.Process.Kill()
+			}
+		}
+		_ = cmd.Wait()
+
+		// Poll for port release — confirms kernel has freed the socket
+		if port > 0 {
+			addr := fmt.Sprintf("127.0.0.1:%d", port)
+			deadline := time.After(30 * time.Second)
+			ticker := time.NewTicker(500 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-deadline:
+					t.Logf("warning: timeout waiting for port %d release", port)
+					return
+				case <-ticker.C:
+					if l, err := net.Listen("tcp", addr); err == nil {
+						l.Close()
+						return
+					}
+				}
+			}
+		}
+	})
+
+	return cmd, stdout
+}
 
 // remoteSystem constructs an actor.Address for the Scala test server.
 func remoteSystem(system, host string, port int) actor.Address {
@@ -667,19 +725,7 @@ func TestClusterChurn(t *testing.T) {
 	// Use a single Scala seed node instead of a 2-node Scala cluster.
 	// MultiNodeCluster caused Scala-internal FD instability: Scala1 marked
 	// Scala2 Unreachable during Go churn, blocking leader convergence.
-	cmd := exec.CommandContext(ctx, "sbt", "runMain com.example.ClusterSeedNode")
-	cmd.Dir = "scala-server"
-	stdout, _ := cmd.StdoutPipe()
-	cmd.Stderr = cmd.Stdout
-
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("failed to start sbt: %v", err)
-	}
-	defer func() {
-		if cmd.Process != nil {
-			cmd.Process.Kill()
-		}
-	}()
+	_, stdout := startSbtServer(t, ctx, "com.example.ClusterSeedNode", 2552)
 
 	// nodeUpChan fires each time ClusterSeedNode detects GoNode-A as Up.
 	// nodeRemovedChan fires each time GoNode-A completes the Leave lifecycle.

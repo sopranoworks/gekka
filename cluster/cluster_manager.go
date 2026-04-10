@@ -587,7 +587,7 @@ func (cm *ClusterManager) isSelfRemovedOrGone(host string, port uint32) bool {
 // HandleIncomingClusterMessage dispatches cluster-level messages.
 // Pekko's ClusterMessageSerializer uses short manifests: "IJ", "IJA", "J", "W", "GE", "GS", "HB", "HBR", "L".
 // remoteAddr is the UniqueAddress of the node that sent this message (from the association handshake).
-func (cm *ClusterManager) HandleIncomingClusterMessage(ctx context.Context, payload []byte, manifest string, remoteAddr *gproto_cluster.UniqueAddress) error {
+func (cm *ClusterManager) HandleIncomingClusterMessage(ctx context.Context, payload []byte, manifest string, remoteAddr *gproto_cluster.UniqueAddress, senderPath string) error {
 	slog.Debug("cluster: HandleIncomingClusterMessage", "manifest", manifest)
 	switch manifest {
 	case "IJ": // InitJoin — we are the seed; reply with InitJoinAck
@@ -595,15 +595,29 @@ func (cm *ClusterManager) HandleIncomingClusterMessage(ctx context.Context, payl
 			slog.Debug("cluster: InitJoin: no remote address (handshake pending), ignoring")
 			return nil
 		}
-		slog.Info("cluster: received InitJoin", "from", remoteAddr.GetAddress())
+		slog.Info("cluster: received InitJoin", "from", remoteAddr.GetAddress(), "sender", senderPath)
+		// Include a minimal config so Pekko's JoinConfigCompatCheckCluster
+		// can parse it without crashing. The key checked unconditionally is
+		// pekko.cluster.downing-provider-class (same as the InitJoin fix).
+		minConfig := proto.String(`pekko.cluster.downing-provider-class = ""`)
 		ack := &gproto_cluster.InitJoinAck{
-			Address:     toClusterAddress(cm.LocalAddress.Address),
-			ConfigCheck: &gproto_cluster.ConfigCheck{Type: gproto_cluster.ConfigCheck_CompatibleConfig.Enum()},
+			Address: toClusterAddress(cm.LocalAddress.Address),
+			ConfigCheck: &gproto_cluster.ConfigCheck{
+				Type:          gproto_cluster.ConfigCheck_CompatibleConfig.Enum(),
+				ClusterConfig: minConfig,
+			},
 		}
+		// Reply to the SENDER of the InitJoin, not a hardcoded path.
+		// Pekko's InitJoin is sent by JoinSeedNodeProcess (a child actor
+		// of ClusterDaemon), not by ClusterCoreDaemon. Sending the reply
+		// to /system/cluster/core/daemon causes Pekko to log "unhandled"
+		// and the InitJoinAck goes to dead letters, preventing the join.
 		raddr := remoteAddr.GetAddress()
-		system := cm.LocalAddress.GetAddress().GetSystem()
-		path := cm.ClusterCorePath(system, raddr.GetHostname(), raddr.GetPort())
-		return cm.Router(ctx, path, ack)
+		replyPath := senderPath
+		if replyPath == "" {
+			replyPath = cm.ClusterCorePath(raddr.GetSystem(), raddr.GetHostname(), raddr.GetPort())
+		}
+		return cm.Router(ctx, replyPath, ack)
 	case "IJA": // InitJoinAck — received Ack, now send Join
 		ack := &gproto_cluster.InitJoinAck{}
 		if err := proto.Unmarshal(payload, ack); err != nil {

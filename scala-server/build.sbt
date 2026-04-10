@@ -20,7 +20,8 @@ lazy val root = (project in file("."))
       "org.apache.pekko" %% "pekko-distributed-data"      % PekkoVersion,
       "org.apache.pekko" %% "pekko-protobuf-v3"           % PekkoVersion,
       "org.apache.pekko" %% "pekko-serialization-jackson" % PekkoVersion,
-      "com.typesafe"      % "config"                       % "1.4.3"
+      "com.typesafe"      % "config"                       % "1.4.3",
+      "ch.qos.logback"    % "logback-classic"              % "1.4.14"
     ),
     Compile / mainClass       := Some("com.example.PekkoServer"),
     Compile / run / mainClass := Some("com.example.PekkoServer")

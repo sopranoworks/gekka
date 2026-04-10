@@ -802,7 +802,8 @@ func (assoc *GekkaAssociation) dispatch(ctx context.Context, meta *ArteryMetadat
 				assoc.mu.RLock()
 				remote := assoc.remote
 				assoc.mu.RUnlock()
-				return assoc.nodeMgr.clusterMgr.HandleIncomingClusterMessage(ctx, env.GetEnclosedMessage(), string(env.GetMessageManifest()), ToClusterUniqueAddress(remote))
+				senderPath := meta.Sender.GetPath()
+				return assoc.nodeMgr.clusterMgr.HandleIncomingClusterMessage(ctx, env.GetEnclosedMessage(), string(env.GetMessageManifest()), ToClusterUniqueAddress(remote), senderPath)
 			}
 			return nil
 		}
@@ -836,7 +837,8 @@ func (assoc *GekkaAssociation) dispatch(ctx context.Context, meta *ArteryMetadat
 			assoc.mu.RLock()
 			remote := assoc.remote
 			assoc.mu.RUnlock()
-			return assoc.nodeMgr.clusterMgr.HandleIncomingClusterMessage(ctx, meta.Payload, string(meta.MessageManifest), ToClusterUniqueAddress(remote))
+			senderPath := meta.Sender.GetPath()
+			return assoc.nodeMgr.clusterMgr.HandleIncomingClusterMessage(ctx, meta.Payload, string(meta.MessageManifest), ToClusterUniqueAddress(remote), senderPath)
 		}
 		return nil
 
@@ -1209,7 +1211,7 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 					assoc.mu.RUnlock()
 					slog.Debug("artery: forwarding actorSelection cluster message", "manifest", innerManifest)
 					return assoc.nodeMgr.clusterMgr.HandleIncomingClusterMessage(
-						ctx, env.GetEnclosedMessage(), innerManifest, ToClusterUniqueAddress(remote))
+						ctx, env.GetEnclosedMessage(), innerManifest, ToClusterUniqueAddress(remote), meta.Sender.GetPath())
 				}
 
 				// Handle Identify (sid=16) — respond with ActorIdentity so Pekko's
@@ -1369,14 +1371,14 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 		// the first time), we initiate one now. Without this, the fallback of
 		// writing HandshakeRsp on the INBOUND socket causes Pekko to reset
 		// the connection and Pekko can never join Go-seeded clusters.
+		// When no OUTBOUND exists (Go is seed, Pekko joining for first time),
+		// initiate a reverse outbound connection. The outbound's own handshake
+		// (Go→Pekko HandshakeReq + Pekko→Go HandshakeRsp) will establish the
+		// bidirectional association. We MUST NOT write HandshakeRsp on the
+		// INBOUND connection — Pekko's outbound sockets are write-only and
+		// any bytes from Go trigger "Unexpected incoming bytes" + quarantine.
 		if outboundToRemote == nil {
 			fromAddr := req.From.GetAddress()
-			// No outbound to the remote exists yet — this happens when
-			// Go is the seed and Pekko connects for the first time.
-			// Initiate a reverse connection ASYNCHRONOUSLY. The first
-			// HandshakeRsp will use the INBOUND fallback (which Pekko
-			// may reject), but by the time Scala retries InitJoin (~5s)
-			// the outbound will be ASSOCIATED and messages will flow.
 			nm.mu.Lock()
 			if nm.pendingDials == nil {
 				nm.pendingDials = make(map[string]bool)
@@ -1384,27 +1386,22 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 			dialKey := fmt.Sprintf("%s:%d", fromAddr.GetHostname(), fromAddr.GetPort())
 			if !nm.pendingDials[dialKey] {
 				nm.pendingDials[dialKey] = true
-				slog.Info("artery: no OUTBOUND to remote — initiating async control connection",
+				slog.Info("artery: no OUTBOUND to remote — initiating reverse outbound (skipping INBOUND HandshakeRsp)",
 					"host", fromAddr.GetHostname(), "port", fromAddr.GetPort())
 				go nm.DialRemote(context.Background(), fromAddr)
 			}
 			nm.mu.Unlock()
-		}
-		{
+			// Skip HandshakeRsp entirely — the outbound's own handshake
+			// will complete the association via the symmetric matching path.
+		} else {
+			// OUTBOUND exists — send HandshakeRsp via it (normal path).
 			localUA := &gproto_remote.UniqueAddress{Address: assoc.nodeMgr.LocalAddr, Uid: proto.Uint64(assoc.localUid)}
 			rspProto := &gproto_remote.MessageWithAddress{Address: localUA}
 			if rspPayload, err2 := proto.Marshal(rspProto); err2 == nil {
 				if frame, err2 := BuildArteryFrame(int64(assoc.localUid), actor.ArteryInternalSerializerID, "", "", "e", rspPayload, true); err2 == nil {
-					target := outboundToRemote
-					if target != nil {
-						slog.Debug("artery: sending HandshakeRsp via OUTBOUND association")
-					} else {
-						// Last resort fallback for unit tests without a real TCP stack.
-						target = assoc
-						slog.Warn("artery: no OUTBOUND association available, sending HandshakeRsp via INBOUND (may cause reset)")
-					}
+					slog.Debug("artery: sending HandshakeRsp via OUTBOUND association")
 					select {
-					case target.outbox <- frame:
+					case outboundToRemote.outbox <- frame:
 					default:
 						slog.Warn("artery: HandshakeRsp outbox full, dropping response")
 					}

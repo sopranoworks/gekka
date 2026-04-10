@@ -1055,23 +1055,30 @@ func TestCluster_GoDominantMixed(t *testing.T) {
 	}()
 
 	// ── Wait for cluster to converge to 3 Up nodes ─────────────────────────
-	log.Printf("[WAITING] Waiting for cluster to settle at 3 Up members (Go-Seed, Go-2, Go-4)...")
-	if err := waitForUpMembers(goSeed, 3, 90*time.Second); err != nil {
-		t.Fatalf("[CONVERGENCE] After simultaneous departure: %v", err)
-	}
-
-	// Verify the correct 3 remain: Go-Seed + Go-2 + Go-4 should all be Up.
-	state := goSeed.cm.GetState()
-	upCount := 0
-	for _, m := range state.GetMembers() {
-		if m.GetStatus() == gproto_cluster.MemberStatus_Up {
-			upCount++
+	// Wait for the departing members (Go-3 + Scala) to complete the
+	// Leave → Exiting → Removed cycle. Poll until exactly 3 Up members
+	// remain, rather than using waitForUpMembers which returns as soon
+	// as count >= N (which is immediately since 5 >= 3).
+	log.Printf("[WAITING] Waiting for cluster to settle at exactly 3 Up members (Go-Seed, Go-2, Go-4)...")
+	deadline := time.After(90 * time.Second)
+	settled := false
+	for !settled {
+		select {
+		case <-deadline:
+			t.Fatalf("[CONVERGENCE] After simultaneous departure: timed out waiting for exactly 3 Up members")
+		case <-time.After(500 * time.Millisecond):
+			upCount := 0
+			state := goSeed.cm.GetState()
+			for _, m := range state.GetMembers() {
+				if m.GetStatus() == gproto_cluster.MemberStatus_Up {
+					upCount++
+				}
+			}
+			if upCount == 3 {
+				settled = true
+				log.Printf("[CONVERGENCE] Cluster settled correctly at %d Up members.", upCount)
+			}
 		}
-	}
-	if upCount != 3 {
-		t.Errorf("[FAILURE] Expected exactly 3 Up members after departure, got %d", upCount)
-	} else {
-		log.Printf("[CONVERGENCE] Cluster settled correctly at %d Up members.", upCount)
 	}
 
 	// Go-2 and Go-4 should still be able to communicate (no send errors).

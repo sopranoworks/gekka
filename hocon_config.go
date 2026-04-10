@@ -225,6 +225,17 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		nodeCfg.TLS.ServerName = v
 	}
 
+	// ── Flight Recorder ─────────────────────────────────────────────────────
+	frPrefix := arteryPrefix + ".advanced.flight-recorder"
+	nodeCfg.FlightRecorder.Enabled = true // default on
+	if v, err := cfg.GetString(frPrefix + ".enabled"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		nodeCfg.FlightRecorder.Enabled = v == "true" || v == "on"
+	}
+	if v, err := cfg.GetString(frPrefix + ".level"); err == nil {
+		nodeCfg.FlightRecorder.Level = strings.TrimSpace(v)
+	}
+
 	// ── Persistence plugins ─────────────────────────────────────────────────
 	if v, err := cfg.GetString(prefix + ".persistence.journal.plugin"); err == nil {
 		nodeCfg.Persistence.JournalPlugin = strings.TrimSpace(v)

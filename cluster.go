@@ -142,6 +142,15 @@ type ClusterConfig struct {
 	// TLS holds TLS parameters; only used when Transport == "tls-tcp".
 	TLS core.TLSConfig
 
+	// FlightRecorder configures the Artery flight recorder.
+	// Parse from HOCON:
+	//
+	//	gekka.remote.artery.advanced.flight-recorder {
+	//	    enabled = true
+	//	    level   = "lifecycle"   # "lifecycle" | "sampled" | "full"
+	//	}
+	FlightRecorder FlightRecorderConfig
+
 	// Deployments maps actor paths to their router deployment configurations.
 	// When ActorOf is called for a path that has a Deployments entry with a
 	// non-empty Router field, the system automatically wraps the supplied Props
@@ -368,6 +377,12 @@ type ClusterSingletonManagerInterface = gcluster.ClusterSingletonManagerInterfac
 
 // ClusterSingletonProxyInterface is an alias for gcluster.ClusterSingletonProxyInterface.
 type ClusterSingletonProxyInterface = gcluster.ClusterSingletonProxyInterface
+
+// FlightRecorderConfig controls the Artery flight recorder verbosity.
+type FlightRecorderConfig struct {
+	Enabled bool   // default: true
+	Level   string // "lifecycle" (default), "sampled", "full"
+}
 
 // TelemetryConfig controls the built-in OTEL instrumentation hooks.
 type TelemetryConfig struct {
@@ -603,6 +618,15 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	metrics := &core.NodeMetrics{}
 	nm := core.NewNodeManager(localAddr, uid)
 	nm.NodeMetrics = metrics
+	// Apply flight recorder config from HOCON (defaults: enabled=true, level=lifecycle).
+	frEnabled := cfg.FlightRecorder.Enabled
+	// When neither LoadConfig nor explicit struct init has been called,
+	// FlightRecorderConfig is zero-valued (Enabled==false). Treat that as
+	// "not configured" and keep the default-on behaviour.
+	if cfg.FlightRecorder == (FlightRecorderConfig{}) {
+		frEnabled = true
+	}
+	nm.FlightRec = core.NewFlightRecorder(frEnabled, core.ParseEventLevel(cfg.FlightRecorder.Level))
 	typed.SetGlobalMessagingProvider(nm)
 	router := actor.NewRouter(nm)
 	cm := gcluster.NewClusterManager(core.ToClusterUniqueAddress(localUA), func(ctx context.Context, path string, msg any) error {

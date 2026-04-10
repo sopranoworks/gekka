@@ -627,6 +627,9 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	// Wire the lightweight internal SBR strategy (icluster.Strategy).
 	gcluster.ApplyInternalSBRConfig(cm, cfg.InternalSBR)
 
+	// Wire the flight recorder heartbeat-miss emitter.
+	cm.MissEmitter = nm.FlightRec
+
 	nm.SetClusterManager(cm)
 
 	ctx, cancel := context.WithCancel(context.Background())

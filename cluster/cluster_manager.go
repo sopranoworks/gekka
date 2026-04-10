@@ -122,6 +122,16 @@ type ClusterManager struct {
 	// Cluster event subscribers — managed by cluster_events.go methods.
 	SubMu sync.RWMutex
 	Subs  []eventSubscriber
+
+	// MissEmitter is notified when the failure detector marks a node unreachable.
+	// Implemented by *core.FlightRecorder via a thin interface to avoid an import cycle.
+	MissEmitter FlightMissEmitter
+}
+
+// FlightMissEmitter can record a heartbeat-miss event.
+// Implemented by *core.FlightRecorder via a thin adapter.
+type FlightMissEmitter interface {
+	EmitHeartbeatMiss(remoteAddr string, phi float64)
 }
 
 // Metrics is an interface for recording cluster-related counters.
@@ -2022,6 +2032,10 @@ func (cm *ClusterManager) CheckReachability() {
 		if !cm.Fd.IsAvailable(key) {
 			// Mark as UNREACHABLE
 			slog.Debug("cluster: failure detector marked node UNREACHABLE", "key", key, "phi", phi)
+			if cm.MissEmitter != nil {
+				remoteKey := fmt.Sprintf("%s:%d", a.GetHostname(), a.GetPort())
+				cm.MissEmitter.EmitHeartbeatMiss(remoteKey, phi)
+			}
 			cm.Mu.Lock()
 			cm.updateReachability(int32(i), gproto_cluster.ReachabilityStatus_Unreachable)
 			cm.Mu.Unlock()

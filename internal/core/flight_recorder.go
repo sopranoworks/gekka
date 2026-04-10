@@ -270,6 +270,17 @@ func (fr *FlightRecorder) DumpAll(w io.Writer) {
 	}
 }
 
+// EmitHeartbeatMiss records a heartbeat MISS event. Implements cluster.FlightMissEmitter.
+func (fr *FlightRecorder) EmitHeartbeatMiss(remoteAddr string, phi float64) {
+	fr.Emit(remoteAddr, FlightEvent{
+		Timestamp: time.Now(),
+		Severity:  SeverityWarn,
+		Category:  CatHeartbeat,
+		Message:   "MISS",
+		Fields:    map[string]any{"phi": phi, "remote": remoteAddr},
+	})
+}
+
 func (fr *FlightRecorder) getOrCreateBuffer(remoteAddr string) *RingBuffer {
 	fr.mu.RLock()
 	rb, ok := fr.logs[remoteAddr]

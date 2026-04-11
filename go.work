@@ -6,6 +6,7 @@ use (
 	./extensions/cluster/aws
 	./extensions/cluster/consul
 	./extensions/cluster/k8s
+	./extensions/persistence/cassandra
 	./extensions/persistence/redis
 	./extensions/persistence/spanner
 	./extensions/telemetry/otel

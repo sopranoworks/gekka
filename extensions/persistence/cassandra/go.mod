@@ -4,6 +4,8 @@ go 1.26.1
 
 require (
 	github.com/gocql/gocql v1.7.0
+	github.com/google/uuid v1.6.0
+	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/sopranoworks/gekka v0.14.0-dev
 	github.com/sopranoworks/gekka-config v1.0.4
 )

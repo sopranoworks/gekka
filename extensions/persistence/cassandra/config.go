@@ -214,13 +214,13 @@ func ParseConfig(cfg hocon.Config) (*CassandraConfig, error) {
 		c.SnapshotAutoTables = v
 	}
 
-	if v, err := cfg.GetString("tag-table"); err == nil && v != "" {
+	if v, err := cfg.GetString("events-by-tag.table"); err == nil && v != "" {
 		c.TagTable = v
 	}
-	if v, err := cfg.GetString("scanning-table"); err == nil && v != "" {
+	if v, err := cfg.GetString("events-by-tag.scanning-table"); err == nil && v != "" {
 		c.ScanningTable = v
 	}
-	if v, err := cfg.GetString("bucket-size"); err == nil && v != "" {
+	if v, err := cfg.GetString("events-by-tag.bucket-size"); err == nil && v != "" {
 		c.BucketSize = ParseBucketSize(v)
 	}
 

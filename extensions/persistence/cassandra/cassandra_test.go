@@ -23,6 +23,8 @@ import (
 	mobyClient "github.com/moby/moby/client"
 	cassandrastore "github.com/sopranoworks/gekka-extensions-persistence-cassandra"
 	"github.com/sopranoworks/gekka/persistence"
+	"github.com/sopranoworks/gekka/persistence/query"
+	"github.com/sopranoworks/gekka/stream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -407,4 +409,101 @@ func TestCassandra_State_Delete(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, got)
 	assert.Equal(t, uint64(0), rev)
+}
+
+// ── Snapshot batch delete test ───────────────────────────────────────────────
+
+func TestCassandra_Snapshot_DeleteSnapshots(t *testing.T) {
+	cfg := uniqueKeyspace(t)
+	codec := cassandrastore.NewJSONCodec()
+	codec.Register(CartState{})
+	ss := cassandrastore.NewCassandraSnapshotStore(testSession, cfg, codec)
+	ctx := context.Background()
+	pid := "cart-batch-delete"
+
+	for _, seqNr := range []uint64{1, 3, 5, 7, 9} {
+		meta := persistence.SnapshotMetadata{PersistenceID: pid, SequenceNr: seqNr}
+		require.NoError(t, ss.SaveSnapshot(ctx, meta, CartState{Items: []string{fmt.Sprintf("s%d", seqNr)}}))
+	}
+
+	// Delete snapshots with seqNr <= 5.
+	require.NoError(t, ss.DeleteSnapshots(ctx, pid, persistence.SnapshotSelectionCriteria{
+		MaxSequenceNr: 5,
+	}))
+
+	// Only seqNr 7 and 9 should remain.
+	snap, err := ss.LoadSnapshot(ctx, pid, persistence.LatestSnapshotCriteria())
+	require.NoError(t, err)
+	require.NotNil(t, snap)
+	assert.Equal(t, uint64(9), snap.Metadata.SequenceNr)
+
+	// seqNr 5 should be gone.
+	snap5, err := ss.LoadSnapshot(ctx, pid, persistence.SnapshotSelectionCriteria{
+		MaxSequenceNr: 5,
+	})
+	require.NoError(t, err)
+	assert.Nil(t, snap5)
+}
+
+// ── Query journal tests ──────────────────────────────────────────────────────
+
+func TestCassandra_CurrentEventsByPersistenceId(t *testing.T) {
+	cfg := uniqueKeyspace(t)
+	codec := cassandrastore.NewJSONCodec()
+	codec.Register(OrderPlaced{})
+
+	j := cassandrastore.NewCassandraJournal(testSession, cfg, codec)
+	rj := cassandrastore.NewCassandraReadJournal(testSession, cfg, codec)
+	ctx := context.Background()
+	pid := "query-pid-1"
+
+	var events []persistence.PersistentRepr
+	for i := uint64(1); i <= 5; i++ {
+		events = append(events, persistence.PersistentRepr{
+			PersistenceID: pid,
+			SequenceNr:    i,
+			Payload:       OrderPlaced{Item: fmt.Sprintf("item-%d", i)},
+		})
+	}
+	require.NoError(t, j.AsyncWriteMessages(ctx, events))
+
+	src := rj.CurrentEventsByPersistenceId(pid, 1, 0)
+	result, err := stream.RunWith[query.EventEnvelope, stream.NotUsed, []query.EventEnvelope](src, stream.Collect[query.EventEnvelope](), nil)
+	require.NoError(t, err)
+	require.Len(t, result, 5)
+	assert.Equal(t, uint64(1), result[0].SequenceNr)
+	assert.Equal(t, uint64(5), result[4].SequenceNr)
+}
+
+func TestCassandra_CurrentEventsByTag(t *testing.T) {
+	cfg := uniqueKeyspace(t)
+	codec := cassandrastore.NewJSONCodec()
+	codec.Register(OrderPlaced{})
+
+	j := cassandrastore.NewCassandraJournal(testSession, cfg, codec)
+	rj := cassandrastore.NewCassandraReadJournal(testSession, cfg, codec)
+	ctx := context.Background()
+	pid := "query-tag-1"
+
+	events := []persistence.PersistentRepr{
+		{PersistenceID: pid, SequenceNr: 1, Payload: OrderPlaced{Item: "apple"}, Tags: []string{"fruit"}},
+		{PersistenceID: pid, SequenceNr: 2, Payload: OrderPlaced{Item: "carrot"}},
+		{PersistenceID: pid, SequenceNr: 3, Payload: OrderPlaced{Item: "banana"}, Tags: []string{"fruit"}},
+		{PersistenceID: pid, SequenceNr: 4, Payload: OrderPlaced{Item: "potato"}},
+	}
+	require.NoError(t, j.AsyncWriteMessages(ctx, events))
+
+	// Small delay to ensure tag_views writes are visible.
+	time.Sleep(500 * time.Millisecond)
+
+	src := rj.CurrentEventsByTag("fruit", query.NoOffset{})
+	result, err := stream.RunWith[query.EventEnvelope, stream.NotUsed, []query.EventEnvelope](src, stream.Collect[query.EventEnvelope](), nil)
+	require.NoError(t, err)
+	require.Len(t, result, 2)
+	// Both should be fruit-tagged events.
+	for _, env := range result {
+		ev, ok := env.Event.(OrderPlaced)
+		require.True(t, ok)
+		assert.Contains(t, []string{"apple", "banana"}, ev.Item)
+	}
 }

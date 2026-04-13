@@ -9,6 +9,7 @@ use (
 	./extensions/persistence/cassandra
 	./extensions/persistence/redis
 	./extensions/persistence/spanner
+	./extensions/stream/kafka
 	./extensions/telemetry/otel
 	./test/bench
 )

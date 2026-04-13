@@ -357,14 +357,16 @@ func (r *PoolRouter) Receive(msg any) {
 		r.nrOfInstances += m.Delta
 
 	default:
-		r.evaluateResizeIfNeeded()
+		r.EvaluateResizeIfNeeded()
 		r.RouterActor.Receive(msg)
 	}
 }
 
-// evaluateResizeIfNeeded increments the resize counter and, when the threshold
+// EvaluateResizeIfNeeded increments the resize counter and, when the threshold
 // is reached, evaluates whether the pool should grow or shrink.
-func (r *PoolRouter) evaluateResizeIfNeeded() {
+// It is exported so that cluster-aware routers (e.g. ClusterPoolRouter) that
+// override Receive can participate in automatic resizing.
+func (r *PoolRouter) EvaluateResizeIfNeeded() {
 	if r.Resizer == nil {
 		return
 	}

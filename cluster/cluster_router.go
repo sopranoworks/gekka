@@ -169,6 +169,19 @@ func NewClusterPoolRouter(cm *ClusterManager, logic actor.RoutingLogic, totalIns
 	}
 }
 
+// NewClusterPoolRouterWithResizer creates a ClusterPoolRouter with an automatic
+// Resizer attached to the embedded PoolRouter.
+func NewClusterPoolRouterWithResizer(cm *ClusterManager, logic actor.RoutingLogic, totalInstances int, allowLocalRoutees bool, useRole string, props actor.Props, resizer actor.Resizer) *ClusterPoolRouter {
+	r := NewClusterPoolRouter(cm, logic, totalInstances, allowLocalRoutees, useRole, props)
+	r.PoolRouter.Resizer = resizer
+	return r
+}
+
+// PoolSize returns the current number of local routees in the embedded PoolRouter.
+func (r *ClusterPoolRouter) PoolSize() int {
+	return r.PoolRouter.NrOfInstances()
+}
+
 func (r *ClusterPoolRouter) PreStart() {
 	// 1. Subscribe to cluster events
 	r.cm.Subscribe(r.Self(), reflect.TypeOf(MemberUp{}), reflect.TypeOf(MemberRemoved{}), reflect.TypeOf(UnreachableMember{}), reflect.TypeOf(ReachableMember{}))
@@ -281,6 +294,7 @@ func (r *ClusterPoolRouter) Receive(msg any) {
 		if target != nil {
 			target.Tell(msg, r.Sender())
 		}
+		r.PoolRouter.EvaluateResizeIfNeeded()
 	}
 }
 

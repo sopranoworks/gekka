@@ -12,9 +12,24 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/sopranoworks/gekka/actor"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 	"google.golang.org/protobuf/proto"
 )
+
+// countingResizer is a test Resizer that records how many times Capacity is
+// called and always returns 0 (no grow, no shrink) to avoid requiring Self().
+type countingResizer struct {
+	calls int
+}
+
+func (c *countingResizer) Capacity(pending []int) int { c.calls++; return 0 }
+
+// mockRef is a minimal actor.Ref that silently discards all messages.
+type mockRef struct{}
+
+func (m *mockRef) Tell(msg any, sender ...actor.Ref) {}
+func (m *mockRef) Path() string                      { return "/user/mock" }
 
 func newUniqueAddress(addr *gproto_cluster.Address, uid uint64) *gproto_cluster.UniqueAddress {
 	return &gproto_cluster.UniqueAddress{
@@ -216,5 +231,34 @@ func TestClusterRouter_RoleFiltering(t *testing.T) {
 	}
 	if ua.GetAddress().GetPort() != 2621 {
 		t.Errorf("expected port 2621, got %d", ua.GetAddress().GetPort())
+	}
+}
+
+// TestClusterPoolRouter_AutoResize verifies that ClusterPoolRouter.Receive
+// invokes EvaluateResizeIfNeeded for normal (non-cluster-event) messages.
+// Without a real actor system we use a counting Resizer that returns 0 so
+// evaluateResize never calls Self().Tell — safe with no system context.
+func TestClusterPoolRouter_AutoResize(t *testing.T) {
+	resizer := &countingResizer{}
+	// Props factory is never called: resizer returns 0, so AdjustPoolSize is
+	// never triggered and no routees are spawned.
+	router := NewClusterPoolRouterWithResizer(
+		nil,                                // cm=nil: no cluster, no PreStart subscription
+		&actor.RoundRobinRoutingLogic{},
+		0, true, "", actor.Props{},
+		resizer,
+	)
+	// Inject a mock routee so the default case doesn't short-circuit at
+	// "len(allRoutees) == 0".
+	router.PoolRouter.Routees = []actor.Ref{&mockRef{}}
+
+	// EvaluateResizeIfNeeded uses mpr=10 when the Resizer is not *DefaultResizer.
+	const mpr = 10
+	for i := 0; i < mpr; i++ {
+		router.Receive("ping")
+	}
+
+	if resizer.calls < 1 {
+		t.Fatalf("expected Capacity to be called at least once after %d messages, got %d calls", mpr, resizer.calls)
 	}
 }

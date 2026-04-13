@@ -10,6 +10,7 @@ package kinesis
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awskinesis "github.com/aws/aws-sdk-go-v2/service/kinesis"
@@ -53,12 +54,19 @@ func Sink(cfg SinkConfig) stream.Sink[SinkRecord, stream.NotUsed] {
 			if len(batch) == 0 {
 				return nil
 			}
-			_, err := cfg.Client.PutRecords(ctx, &awskinesis.PutRecordsInput{
+			n := len(batch)
+			out, err := cfg.Client.PutRecords(ctx, &awskinesis.PutRecordsInput{
 				StreamName: aws.String(cfg.StreamName),
 				Records:    batch,
 			})
 			batch = batch[:0]
-			return err
+			if err != nil {
+				return err
+			}
+			if out.FailedRecordCount != nil && *out.FailedRecordCount > 0 {
+				return fmt.Errorf("kinesis PutRecords: %d of %d records failed", *out.FailedRecordCount, n)
+			}
+			return nil
 		}
 
 		for {

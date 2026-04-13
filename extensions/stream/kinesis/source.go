@@ -10,6 +10,7 @@ package kinesis
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -87,6 +88,9 @@ func Source(cfg SourceConfig) stream.Source[Record, stream.NotUsed] {
 			return Record{}, false, initErr
 		}
 
+		pollTimer := time.NewTimer(pollInterval)
+		defer pollTimer.Stop()
+
 		for {
 			// Check context cancellation.
 			select {
@@ -127,6 +131,11 @@ func Source(cfg SourceConfig) stream.Source[Record, stream.NotUsed] {
 					if ctx.Err() != nil {
 						return Record{}, false, nil
 					}
+					// Skip throttled shards; they'll be retried on the next poll cycle.
+					var throughputErr *types.ProvisionedThroughputExceededException
+					if errors.As(err, &throughputErr) {
+						continue
+					}
 					return Record{}, false, err
 				}
 				buf = append(buf, out.Records...)
@@ -140,10 +149,11 @@ func Source(cfg SourceConfig) stream.Source[Record, stream.NotUsed] {
 
 			// If no records arrived, sleep before polling again.
 			if fetched == 0 {
+				pollTimer.Reset(pollInterval)
 				select {
 				case <-ctx.Done():
 					return Record{}, false, nil
-				case <-time.After(pollInterval):
+				case <-pollTimer.C:
 				}
 			}
 		}

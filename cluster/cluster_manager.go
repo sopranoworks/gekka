@@ -2395,18 +2395,25 @@ var (
 )
 
 func (cm *ClusterManager) StartHeartbeat(target *gproto_cluster.Address) {
-	cm.heartbeatMuted.Store(false)
 	key := fmt.Sprintf("%s:%d", target.GetHostname(), target.GetPort())
 
 	heartbeatTasksMu.Lock()
 	if _, ok := heartbeatTasks[key]; ok {
 		heartbeatTasksMu.Unlock()
-		return // already heartbeating
+		// Task already running — do NOT clear heartbeatMuted here.
+		// Clearing it unconditionally caused a bug: connectToNewMembers calls
+		// StartHeartbeat for already-running peers and was inadvertently unblocking
+		// a StopHeartbeat-induced mute, preventing the failure detector from firing.
+		return
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	heartbeatTasks[key] = heartbeatTask{cancel: cancel}
 	heartbeatTasksMu.Unlock()
+
+	// Only clear the muted flag when actually starting a new task.  This is the
+	// "resume" path (after StopHeartbeat deleted the entry) or the initial start.
+	cm.heartbeatMuted.Store(false)
 
 	go func() {
 		ticker := time.NewTicker(1 * time.Second)
@@ -2419,6 +2426,9 @@ func (cm *ClusterManager) StartHeartbeat(target *gproto_cluster.Address) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				if cm.heartbeatMuted.Load() {
+					continue
+				}
 				seq++
 				hb := &gproto_cluster.Heartbeat{
 					From:         toClusterAddress(cm.LocalAddress.Address),

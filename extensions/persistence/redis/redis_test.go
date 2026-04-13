@@ -14,6 +14,7 @@ import (
 	"os"
 	"testing"
 
+	mobyClient "github.com/moby/moby/client"
 	"github.com/redis/go-redis/v9"
 	"github.com/sopranoworks/gekka/persistence"
 	redisstore "github.com/sopranoworks/gekka-extensions-persistence-redis"
@@ -40,7 +41,7 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, "Docker not found, skipping Redis integration tests.")
 		os.Exit(0)
 	}
-	if _, err := cli.Ping(ctx); err != nil {
+	if _, err := cli.Ping(ctx, mobyClient.PingOptions{}); err != nil {
 		fmt.Fprintln(os.Stderr, "Docker not found, skipping Redis integration tests.")
 		os.Exit(0)
 	}

@@ -4,6 +4,7 @@ go 1.26.1
 
 require (
 	github.com/fxamacker/cbor/v2 v2.9.1
+	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/sopranoworks/gekka-config v1.0.4
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/protobuf v1.36.11

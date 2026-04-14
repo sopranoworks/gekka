@@ -9,9 +9,10 @@ use (
 	./extensions/persistence/cassandra
 	./extensions/persistence/redis
 	./extensions/persistence/spanner
-	./extensions/stream/kafka
 	./extensions/stream/amqp
+	./extensions/stream/kafka
 	./extensions/stream/kinesis
+	./extensions/stream/s3
 	./extensions/telemetry/otel
 	./test/bench
 )

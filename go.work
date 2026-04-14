@@ -3,6 +3,8 @@ go 1.26.1
 use (
 	.
 	./cmd
+	./http
+	./serialization/cbor
 	./extensions/cluster/aws
 	./extensions/cluster/consul
 	./extensions/cluster/k8s
@@ -13,6 +15,7 @@ use (
 	./extensions/stream/kafka
 	./extensions/stream/kinesis
 	./extensions/stream/s3
+	./extensions/stream/sqs
 	./extensions/telemetry/otel
 	./test/bench
 )

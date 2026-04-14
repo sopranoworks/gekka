@@ -12,8 +12,7 @@ import (
 )
 
 func TestSimpleSender(t *testing.T) {
-	// Open a receiver on an ephemeral port (IPv4 loopback).
-	pc, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("ListenPacket: %v", err)
 	}
@@ -46,7 +45,7 @@ func TestSimpleSender(t *testing.T) {
 
 func TestBind(t *testing.T) {
 	// Bind a UDP server that echoes every packet back to its sender.
-	binding, err := udp.Bind(":0", func(msg udp.Received) {
+	binding, err := udp.Bind("127.0.0.1:0", func(msg udp.Received) {
 		_ = msg.Conn.Send(msg.Sender, msg.Data)
 	})
 	if err != nil {
@@ -54,8 +53,8 @@ func TestBind(t *testing.T) {
 	}
 	defer binding.Unbind()
 
-	// Client socket with a fixed source port so the binding can echo back (IPv4).
-	clientConn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero})
+	// Client socket used to send and receive the echo.
+	clientConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero})
 	if err != nil {
 		t.Fatalf("ListenUDP client: %v", err)
 	}

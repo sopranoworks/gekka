@@ -31,13 +31,7 @@ func Bind(addr string, handler func(Received)) (*Binding, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Choose network family based on the resolved address to avoid cross-family
-	// routing issues (e.g. IPv6 socket sending to IPv4 destinations on macOS).
-	network := "udp6"
-	if udpAddr.IP == nil || udpAddr.IP.To4() != nil {
-		network = "udp4"
-	}
-	conn, err := net.ListenUDP(network, udpAddr)
+	conn, err := net.ListenUDP("udp", udpAddr)
 	if err != nil {
 		return nil, err
 	}
@@ -83,9 +77,8 @@ type SimpleSender struct {
 }
 
 // NewSimpleSender creates a SimpleSender bound to an ephemeral local port.
-// Uses IPv4 by default to avoid cross-family routing issues on macOS.
 func NewSimpleSender() (*SimpleSender, error) {
-	conn, err := net.ListenUDP("udp4", &net.UDPAddr{})
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{})
 	if err != nil {
 		return nil, err
 	}

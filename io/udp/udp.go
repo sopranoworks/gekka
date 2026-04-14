@@ -5,7 +5,10 @@
 // and Udp.SimpleSender actors.
 package udp
 
-import "net"
+import (
+	"net"
+	"sync"
+)
 
 // Received is delivered to the Bind handler for each incoming UDP packet.
 type Received struct {
@@ -18,7 +21,7 @@ type Received struct {
 type Binding struct {
 	conn    *net.UDPConn
 	handler func(Received)
-	done    chan struct{}
+	once    sync.Once
 }
 
 // Bind opens a UDP socket at addr and calls handler for each received datagram.
@@ -38,7 +41,7 @@ func Bind(addr string, handler func(Received)) (*Binding, error) {
 	if err != nil {
 		return nil, err
 	}
-	b := &Binding{conn: conn, handler: handler, done: make(chan struct{})}
+	b := &Binding{conn: conn, handler: handler}
 	go b.readLoop()
 	return b, nil
 }
@@ -48,10 +51,6 @@ func (b *Binding) readLoop() {
 	for {
 		n, addr, err := b.conn.ReadFromUDP(buf)
 		if err != nil {
-			select {
-			case <-b.done:
-			default:
-			}
 			return
 		}
 		data := make([]byte, n)
@@ -71,10 +70,11 @@ func (b *Binding) LocalAddr() *net.UDPAddr {
 	return b.conn.LocalAddr().(*net.UDPAddr)
 }
 
-// Unbind closes the socket and stops the read loop.
+// Unbind closes the socket and stops the read loop. Safe to call multiple times.
 func (b *Binding) Unbind() {
-	close(b.done)
-	b.conn.Close()
+	b.once.Do(func() {
+		b.conn.Close()
+	})
 }
 
 // SimpleSender is a fire-and-forget UDP sender (no listening socket).

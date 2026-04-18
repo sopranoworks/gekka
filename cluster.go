@@ -1617,8 +1617,12 @@ func (c *Cluster) StopHeartbeat() {
 }
 
 // StartHeartbeat resumes heartbeats to the seed node after StopHeartbeat.
+// It explicitly clears the heartbeatMuted flag first so that
+// ClusterManager.StartHeartbeat creates the task (it skips creation while
+// muted to prevent connectToNewMembers from undoing a StopHeartbeat).
 func (c *Cluster) StartHeartbeat() {
 	if c.seedAddr != nil {
+		c.cm.ClearHeartbeatMute()
 		c.cm.StartHeartbeat(core.ToClusterAddress(c.seedAddr))
 	}
 }

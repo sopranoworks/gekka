@@ -795,10 +795,12 @@ func TestClusterChurn(t *testing.T) {
 		shutdownDone := make(chan error, 1)
 		go func() { shutdownDone <- nodeA.GracefulShutdown(shutCtx) }()
 
-		// Wait for EITHER Scala to confirm removal OR the shutdown to complete.
+		// Wait for GracefulShutdown to run through the full Leave → Exiting →
+		// Removed lifecycle.  This ensures the Go node's gossip state is fully
+		// converged (it has seen its own Removed status) before the next
+		// iteration.  Cancelling early causes stale gossip that blocks the
+		// leader's convergence check in the next join.
 		select {
-		case <-nodeRemovedChan:
-			log.Printf("[CHURN] Iteration %d: GoNode-A removed.", i+1)
 		case err := <-shutdownDone:
 			if err != nil {
 				log.Printf("[CHURN] Iteration %d: GracefulShutdown error: %v", i+1, err)

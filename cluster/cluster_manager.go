@@ -2407,12 +2407,22 @@ func (cm *ClusterManager) StartHeartbeat(target *gproto_cluster.Address) {
 		return
 	}
 
+	// When heartbeats are globally muted (StopHeartbeat was called), do not
+	// create new tasks.  This prevents connectToNewMembers from re-creating a
+	// deleted task and undoing the mute via the Store(false) below.
+	// The mute is cleared explicitly by ResumeHeartbeat (called from
+	// Cluster.StartHeartbeat) which sets heartbeatMuted=false first.
+	if cm.heartbeatMuted.Load() {
+		heartbeatTasksMu.Unlock()
+		return
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	heartbeatTasks[key] = heartbeatTask{cancel: cancel}
 	heartbeatTasksMu.Unlock()
 
 	// Only clear the muted flag when actually starting a new task.  This is the
-	// "resume" path (after StopHeartbeat deleted the entry) or the initial start.
+	// initial start path (heartbeatMuted is false).
 	cm.heartbeatMuted.Store(false)
 
 	go func() {
@@ -2443,6 +2453,13 @@ func (cm *ClusterManager) StartHeartbeat(target *gproto_cluster.Address) {
 			}
 		}
 	}()
+}
+
+// ClearHeartbeatMute explicitly un-mutes heartbeat responses.  Called by
+// Cluster.StartHeartbeat before re-creating the heartbeat task so that the
+// guard in StartHeartbeat (which skips task creation while muted) is cleared.
+func (cm *ClusterManager) ClearHeartbeatMute() {
+	cm.heartbeatMuted.Store(false)
 }
 
 // StopHeartbeat stops sending heartbeats to simulate failure.

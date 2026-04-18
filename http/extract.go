@@ -63,3 +63,29 @@ func ExtractRequest(inner func(*nethttp.Request) Route) Route {
 		inner(ctx.Request)(ctx)
 	}
 }
+
+// RespondWithHeader sets a response header before delegating to inner.
+func RespondWithHeader(name, value string, inner Route) Route {
+	return func(ctx *RequestContext) {
+		ctx.Writer.Header().Set(name, value)
+		inner(ctx)
+	}
+}
+
+// RespondWithHeaders sets multiple response headers before delegating to inner.
+func RespondWithHeaders(headers map[string]string, inner Route) Route {
+	return func(ctx *RequestContext) {
+		for k, v := range headers {
+			ctx.Writer.Header().Set(k, v)
+		}
+		inner(ctx)
+	}
+}
+
+// MapResponseHeaders applies a transformation to response headers after inner runs.
+func MapResponseHeaders(transform func(nethttp.Header), inner Route) Route {
+	return func(ctx *RequestContext) {
+		inner(ctx)
+		transform(ctx.Writer.Header())
+	}
+}

@@ -121,10 +121,12 @@ For more detailed results, see the [Benchmark Report](docs/BENCHMARKS.md).
 
 ## Operational Tooling
 
-Gekka provides a powerful suite of operational tools for managing and monitoring your cluster.
-Use **`gekka-cli`** for dynamic shard rebalancing and cluster management, and **`gekka-metrics`** for real-time observability via OpenTelemetry.
+Gekka provides two companion CLI tools, maintained as independent repositories:
 
-For detailed usage and command references, see the [Operational Tooling Guide](docs/OPERATIONAL_TOOLING.md).
+- **[gekka-cli](https://github.com/sopranoworks/gekka-cli)** -- interactive cluster management, shard rebalancing, TUI dashboard
+- **[gekka-metrics](https://github.com/sopranoworks/gekka-metrics)** -- real-time cluster metrics via OpenTelemetry (joins the ring as a gossip-aware exporter)
+
+For metrics reference and tracing configuration, see the [Operational Tooling Guide](docs/OPERATIONAL_TOOLING.md).
 
 ---
 

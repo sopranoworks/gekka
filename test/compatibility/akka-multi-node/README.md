@@ -38,7 +38,7 @@ the test.
 From the repository root:
 
 ```bash
-go build -o bin/gekka-compat-test ./cmd/gekka-compat-test
+go build -o bin/gekka-compat-test ./test/compat-bin/gekka-compat-test
 ```
 
 ## Run the test
@@ -79,7 +79,7 @@ COMPAT_TEST_PASSED
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `binary not found` | Go binary not built | `go build -o bin/gekka-compat-test ./cmd/gekka-compat-test` |
+| `binary not found` | Go binary not built | `go build -o bin/gekka-compat-test ./test/compat-bin/gekka-compat-test` |
 | `WaitForHandshake timeout` | Artery protocol mismatch | Check logs for `OptionVal.None.get` on the Akka side — ensure manifest codes are correct |
 | `GET /cluster/members: connection refused` | Management server not started | Verify `management.enabled = true` in gekka config |
 | `timeout waiting for MemberUp` | SBR not down-ing unreachable node | Increase `acceptable-heartbeat-pause` or reduce `stable-after` |

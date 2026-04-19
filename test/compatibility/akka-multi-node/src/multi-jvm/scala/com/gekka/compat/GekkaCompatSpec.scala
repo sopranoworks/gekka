@@ -122,7 +122,7 @@ abstract class GekkaSystem
    *
    *  Checks, in order:
    *    1. GEKKA_COMPAT_TEST_BIN env variable (absolute path or relative to cwd)
-   *    2. ../../bin/gekka-compat-test  (built by: go build -o bin/gekka-compat-test ./cmd/gekka-compat-test)
+   *    2. ../../bin/gekka-compat-test  (built by: go build -o bin/gekka-compat-test ./test/compat-bin/gekka-compat-test)
    *    3. gekka-compat-test on $PATH
    */
   private def findGoBinary: String = {
@@ -139,7 +139,7 @@ abstract class GekkaSystem
     }.getOrElse {
       fail(
         s"gekka-compat-test binary not found. " +
-          s"Build it with:  go build -o bin/gekka-compat-test ./cmd/gekka-compat-test  " +
+          s"Build it with:  go build -o bin/gekka-compat-test ./test/compat-bin/gekka-compat-test  " +
           s"or set GEKKA_COMPAT_TEST_BIN env var."
       )
     }

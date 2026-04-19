@@ -25,8 +25,8 @@
  *   OR:      sbt "multi-jvm:testOnly com.gekka.compat.AeronSystemMultiJvmNode1"
  *
  * Required binaries (build first):
- *   go build -o bin/gekka-aeron-compat-test ./cmd/gekka-aeron-compat-test
- *   go build -o bin/gekka-compat-test        ./cmd/gekka-compat-test
+ *   go build -o bin/gekka-aeron-compat-test ./test/compat-bin/gekka-aeron-compat-test
+ *   go build -o bin/gekka-compat-test        ./test/compat-bin/gekka-compat-test
  */
 package com.gekka.compat
 
@@ -148,7 +148,7 @@ abstract class AeronSystem
     }.getOrElse {
       fail(
         "gekka-aeron-compat-test binary not found. " +
-          "Build with: go build -o bin/gekka-aeron-compat-test ./cmd/gekka-aeron-compat-test  " +
+          "Build with: go build -o bin/gekka-aeron-compat-test ./test/compat-bin/gekka-aeron-compat-test  " +
           "or set GEKKA_AERON_COMPAT_TEST_BIN."
       )
     }

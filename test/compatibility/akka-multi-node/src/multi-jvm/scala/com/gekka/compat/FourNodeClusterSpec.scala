@@ -104,7 +104,7 @@ abstract class FourNodeClusterSpec
     }.getOrElse {
       fail(
         "gekka-compat-test binary not found. " +
-          "Build it with:  go build -o bin/gekka-compat-test ./cmd/gekka-compat-test  " +
+          "Build it with:  go build -o bin/gekka-compat-test ./test/compat-bin/gekka-compat-test  " +
           "or set GEKKA_COMPAT_TEST_BIN env var."
       )
     }

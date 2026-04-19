@@ -2,7 +2,6 @@ go 1.26.1
 
 use (
 	.
-	./cmd
 	./http
 	./serialization/cbor
 	./extensions/cluster/aws
@@ -18,4 +17,5 @@ use (
 	./extensions/stream/sqs
 	./extensions/telemetry/otel
 	./test/bench
+	./test/compat-bin
 )

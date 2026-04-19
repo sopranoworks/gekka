@@ -9,4 +9,4 @@
 package gekka
 
 // Version is the current release of the gekka library.
-const Version = "0.16.0"
+const Version = "1.0.0-rc1"

@@ -5,7 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.0-rc1] - 2026-04-19
+
+### Added
+
+- 🚀 **HTTP Server & Routing DSL** (`http/`): Full Pekko HTTP-style routing DSL — `Route`, `Concat`, path/method/parameter extraction directives, JSON entity decoding, form-urlencoded, multipart file upload, Server-Sent Events, WebSocket support, `SingleRequest` HTTP client, `HostConnectionPool`, CORS, response header directives, and `RouteTestKit` for in-process testing.
+- 🚀 **Cassandra Persistence Plugin** (`extensions/persistence/cassandra/`): Journal, SnapshotStore, DurableStateStore, and ReadJournal with Pekko-compatible partition bucketing and timebucket tag queries.
+- 🚀 **Stream Connectors**: Kafka (`extensions/stream/kafka/`), Kinesis (`extensions/stream/kinesis/`), AMQP/RabbitMQ (`extensions/stream/amqp/`), S3/MinIO (`extensions/stream/s3/`), SQS (`extensions/stream/sqs/`) Source and Sink operators.
+- 🚀 **Stream Operators**: `ZipLatest`, `CombineLatest` (goroutine fan-in bridge), `ZipAll`, `ZipAllWith`, `MergeSorted` (N-source heap merge), `MapAsyncPartitioned` (ordered per-key async).
+- 🚀 **Flight Recorder**: Ring-buffer event recorder with level-gated emission, association state tracking, compression/frame path events, heartbeat MISS events, and `/flight-recorder` HTTP management endpoint.
+- 🚀 **Classic Actor Stash**: `StashBuffer` with `Become` + `UnstashAll` FIFO drain loop, wired into typed actors with real redeliver hook.
+- 🚀 **SeenDigest Protocol**: Gossip convergence protocol with Seen-index remapping and VectorClock improvements.
+- 🚀 **Actor Infrastructure**: `DefaultResizer` for automatic pool scaling, `ControlAwareMailbox` with control-priority queuing, `LookupClassification`/`SubchannelClassification` for EventStream, HOCON mailbox-type and resizer config.
+- 🚀 **Cluster Sharding**: `ConsistentHashingAllocationStrategy` with minimal shard movement.
+- 🚀 **UDP API**: User-facing `Bind` and `SimpleSender` API (`io/udp/`).
+- 🚀 **Management Debug Endpoints**: Debug CRDT list/detail, debug actor tree, and debug provider interface.
+- 🚀 **gekka-cli Enhancements**: `health`, `durable-state`, `services`, `config`, `debug actors`, `debug crdt`, `members down`, `members leave` subcommands; `ConfirmExit` sub-model; `--quiet` flag.
+
+### Changed
+
+- 🔄 **Extracted gekka-cli to independent repository**: `cmd/gekka-cli/` is now maintained at [github.com/sopranoworks/gekka-cli](https://github.com/sopranoworks/gekka-cli). Install via `go install github.com/sopranoworks/gekka-cli@latest`.
+- 🔄 **Extracted gekka-metrics to independent repository**: `cmd/gekka-metrics/` is now maintained at [github.com/sopranoworks/gekka-metrics](https://github.com/sopranoworks/gekka-metrics). Install via `go install github.com/sopranoworks/gekka-metrics@latest`.
+- 🔄 **Relocated compat-test binaries**: `cmd/gekka-compat-test/` and `cmd/gekka-aeron-compat-test/` moved to `test/compat-bin/`.
+- 🔄 **Removed cmd/ module**: The `cmd/` workspace module has been removed from `go.work`. CLI tools are now independent repositories with their own release cycles.
+- 🔄 **Documentation restructured**: Distributed Tracing section extracted from `OPERATIONAL_TOOLING.md` into `docs/DISTRIBUTED_TRACING.md`. Operational tooling guide now links to the independent tool repositories.
+
+### Bug Fixes
+
+- 🐛 **Cluster**: Fix `connectToNewMembers` undoing heartbeat mute; fix Go-as-seed cluster join (three protocol bugs); fix `ExitingConfirmed` protocol for graceful leave; fix SBR local observer index lookup; seed phi-accrual history on first heartbeat.
+- 🐛 **Artery**: Restore INBOUND HandshakeRsp fallback; initiate reverse outbound when Go is seed; fix Seen-index remapping and VectorClock increment.
+- 🐛 **Stream/Kinesis**: Fix PutRecords partial failure, timer leak, and shard throttle handling.
+- 🐛 **IO/UDP**: Use platform-agnostic "udp" network; remove dead done channel, guard Unbind with sync.Once.
+- 🐛 **Cluster Sharding**: Wire Resizer into ClusterPoolRouter default message path.
 
 ## [0.16.0] - 2026-04-09
 
@@ -137,7 +168,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Tests
 
 - 🧪 **Multi-JVM Aeron Compatibility Test** (`AeronClusterSpec.scala`): New `sbt multi-jvm:test` spec that launches a Go binary as a second cluster member via `aeron-udp`, verifies `MemberUp`, exercises a Step-1→Step-2→Step-3→Step-4 Ping/Pong echo chain, and asserts 60-second reachability.
-- 🧪 **`gekka-aeron-compat-test` binary** (`cmd/gekka-aeron-compat-test/main.go`): Standalone test harness for the multi-JVM Aeron UDP compatibility spec.
+- 🧪 **`gekka-aeron-compat-test` binary** (`test/compat-bin/gekka-aeron-compat-test/main.go`): Standalone test harness for the multi-JVM Aeron UDP compatibility spec.
 
 ## [0.13.0] - 2026-03-24
 
@@ -392,7 +423,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Message Dispatch**: Fixed a critical bug where messages were not correctly routed to registered actors by default when incoming envelopes contained full URIs.
 
 
-[Unreleased]: https://github.com/sopranoworks/gekka/compare/v0.15.0...HEAD
+[1.0.0-rc1]: https://github.com/sopranoworks/gekka/compare/v0.16.0...v1.0.0-rc1
+[0.16.0]: https://github.com/sopranoworks/gekka/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/sopranoworks/gekka/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/sopranoworks/gekka/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/sopranoworks/gekka/compare/v0.12.0...v0.13.0

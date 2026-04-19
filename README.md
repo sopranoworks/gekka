@@ -1,8 +1,6 @@
-# gekka &nbsp;[![Version](https://img.shields.io/badge/version-0.16.0-blue)](https://github.com/sopranoworks/gekka)
+# gekka &nbsp;[![Version](https://img.shields.io/badge/version-1.0.0--rc1-blue)](https://github.com/sopranoworks/gekka)
 
  [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Go CI](https://github.com/sopranoworks/gekka/actions/workflows/go.yml/badge.svg)](https://github.com/sopranoworks/gekka/actions/workflows/go.yml)
-
-⚠️ Warning: Gekka is currently under active development. The public API and internal protocols are subject to change until v1.0.0 is released.
 
 A Go implementation of the Pekko/Akka actor protocol, with wire-level interoperability with [Apache Pekko](https://pekko.apache.org/) and [Lightbend Akka](https://www.lightbend.com/akka).
 
@@ -12,23 +10,18 @@ Configuration is loaded via [`gekka-config`](https://github.com/sopranoworks/gek
 
 ---
 
-## What's New in v0.16.0
+## What's New in v1.0.0-rc1
 
-- **Actor Dispatchers** — `PinnedDispatcher` (OS-thread pinning), `CallingThreadDispatcher` (synchronous for tests), `LoggingMailbox` decorator; HOCON dispatcher config via `Props.DispatcherKey`.
-- **Classic Actor Completeness** — `become`/`unbecome` behavior stack; `PoisonPill`/`Kill` lifecycle messages; `Identify`/`ActorIdentity` protocol; `GracefulStop` pattern; `SetReceiveTimeout`/`CancelReceiveTimeout`.
-- **Typed Actor Completeness** — `PipeToSelf`, `MessageAdapter`, `AskWithStatus`/`StatusReply`, `WatchWith`, `SetReceiveTimeout` (typed); `Behaviors.empty`/`ignore`/`unhandled`; `WithMdc`; `Behaviors.supervise` (Restart/Stop/Resume/Backoff); `SpawnProtocol`; `TransformMessages`; `StoppedWithPostStop`; `ReceiveSignal`; `ReceivePartial`.
-- **Cluster Bootstrap & Resilience** — `ClusterBootstrap` with discovery polling and quorum-based self-join; `ClusterMetricsRoutingLogic` (pressure-driven routing); Singleton lease coordination; `AppVersion` in handshake for rolling updates.
-- **Distributed Data** — `GSet[T]` grow-only set CRDT with delta propagation.
-- **Typed Persistence Completeness** — `RetentionCriteria` (snapshot scheduling + journal cleanup); `RecoveryStrategy` (Disabled/SnapshotSelection/ReplayFilter); `RecoveryCompleted` signal; `ReplicatedEventSourcing` for multi-DC event sourcing.
-- **Streams — Source** — `Single`, `Empty`, `Range`, `Tick`, `FromFuture`, `Queue` (overflow strategies), `Unfold`, `UnfoldAsync`, `Cycle`, `ZipWithIndex`, `Combine`.
-- **Streams — Flow** — Token-bucket `Throttle` with `costCalculation`; `MapConcat`, `FlatMapMerge`; `TakeWithin`, `DropWithin`; `DivertTo`, `AlsoTo`; `InitialTimeout`, `CompletionTimeout`, `IdleTimeout`, `KeepAlive`; `DelayWith`, `OrElse`, `Prepend`; `WatchTermination`, `Monitor`; `Intersperse`, `RecoverWithRetries`, `MapError`, `StatefulMap`, `BatchWeighted`.
-- **Streams — Sink & Buffering** — `Fold`, `Reduce`, `Last`, `LastOption`, `HeadOption`, `Cancelled`; `ActorRefWithBackpressure`; `RestartSink`; `Batch`, `Expand`, `Extrapolate`, `Sliding`, `SplitWhen`, `SplitAfter`, `ScanAsync`.
-- **Streams — Custom GraphStage** — `GraphStage[S]`/`GraphStageLogic` API for fully custom back-pressure stages; `LazySource`/`LazySink`/`LazyFlow`; Reactive Streams `Publisher`/`Subscriber`/`Processor` interop.
-- **Routers** — `BalancingPool` (work-stealing shared channel); `SmallestMailboxPool`; `ConsistentHashRouter` with 100-replica virtual-node ring; `Behaviors.monitor` typed DeathWatch.
-- **Serialization & Remote Deploy** — CBOR serializer (`serialization/cbor`); Remote actor deployment via `RemoteScope`/`RemoteDeploy`.
-- **Testing** — `BehaviorTestKit`, `SerializationTestKit`, `ManualTime`, `PersistenceTestKit`, `LoggingTestKit`, `MultiNodeTestKit` (in-process cluster with `Barrier`/`RunOn`).
-- **Extension Framework** — `ExtensionId`/`Extension` lazy singleton API; `AggregateProvider` for multi-source seed discovery.
-- **Bug Fixes & Compatibility** — 11 integration test failures resolved (Artery delivery, serialization dispatch); 4-node multi-JVM test (2 Akka + 2 Go).
+- **HTTP Server & Routing DSL** — Full Pekko HTTP-style routing DSL (`http/`): path/method/parameter extraction directives, JSON entity decoding, form-urlencoded, multipart file upload, SSE, WebSocket, `SingleRequest` HTTP client, `HostConnectionPool`, CORS, response header directives, and `RouteTestKit` for in-process testing.
+- **Cassandra Persistence Plugin** — Journal, SnapshotStore, DurableStateStore, and ReadJournal with Pekko-compatible partition bucketing and timebucket tag queries (`extensions/persistence/cassandra/`).
+- **Stream Connectors** — Kafka, Kinesis, AMQP/RabbitMQ, S3/MinIO, SQS Source and Sink operators as extension modules.
+- **Stream Operators** — `ZipLatest`, `CombineLatest` (goroutine fan-in bridge), `ZipAll`, `ZipAllWith`, `MergeSorted` (N-source heap merge), `MapAsyncPartitioned` (ordered per-key async).
+- **Flight Recorder** — Ring-buffer event recorder with level-gated emission, association state tracking, heartbeat MISS events, and `/flight-recorder` HTTP management endpoint.
+- **Classic Actor Stash** — `StashBuffer` with `Become` + `UnstashAll` FIFO drain loop, wired into typed actors.
+- **SeenDigest Protocol** — Gossip convergence protocol with Seen-index remapping.
+- **Actor Infrastructure** — `DefaultResizer` for automatic pool scaling, `ControlAwareMailbox`, `LookupClassification`/`SubchannelClassification` for EventStream, HOCON mailbox-type and resizer config, `ConsistentHashingAllocationStrategy`.
+- **UDP API** — User-facing `Bind` and `SimpleSender` API (`io/udp/`).
+- **Tooling Extraction** — `gekka-cli` and `gekka-metrics` extracted to independent repositories ([gekka-cli](https://github.com/sopranoworks/gekka-cli), [gekka-metrics](https://github.com/sopranoworks/gekka-metrics)).
 
 ## Configuration
 

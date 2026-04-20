@@ -41,11 +41,13 @@ Gekka uses HOCON for flexible, layered configuration. Standard `pekko.*` and `ak
 | `pekko.management.http.hostname` | `127.0.0.1` | Binding interface for the Management API |
 | `pekko.management.http.enabled` | `false` | Explicitly enable/disable the Management API |
 
-### Other Settings
+### Other Settings (Pekko-compatible)
 
 | Key | Default | Description |
 |---|---|---|
-| `gekka.logging.level` | `INFO` | Minimum log level (`DEBUG`, `INFO`, `WARN`, `ERROR`) |
+| `pekko.loglevel` | `INFO` | Minimum log level (`DEBUG`, `INFO`, `WARN`, `ERROR`) |
+| `pekko.cluster.distributed-data.enabled` | `false` | Enable the CRDT Distributed Data replicator |
+| `pekko.cluster.distributed-data.gossip-interval` | `2s` | Interval between DData gossip rounds |
 | `gekka.telemetry.exporter.otlp.endpoint` | `""` | OTLP/HTTP collector endpoint for metrics/traces |
 
 ### Auto-Enable Logic

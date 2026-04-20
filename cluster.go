@@ -133,7 +133,9 @@ type ClusterConfig struct {
 
 	// LogLevel is the minimum logging level for the node.
 	// Defaults to "INFO". Can be "DEBUG", "INFO", "WARN", "ERROR".
-	LogLevel string `hocon:"gekka.logging.level"`
+	// Corresponds to pekko.loglevel (Pekko-compatible).
+	// Fallback: gekka.logging.level (deprecated).
+	LogLevel string `hocon:"pekko.loglevel"`
 
 	// Transport selects the Artery transport: "tcp" (default) or "tls-tcp".
 	// When "tls-tcp", the TLS field must be populated with valid PEM paths.
@@ -361,11 +363,13 @@ type DiscoveryConfig struct {
 // DistributedDataConfig holds settings for the CRDT replicator.
 type DistributedDataConfig struct {
 	// Enabled enables the replicator when true.
-	// Corresponds to HOCON: gekka.cluster.distributed-data.enabled
+	// Corresponds to HOCON: pekko.cluster.distributed-data.enabled
+	// Fallback: gekka.cluster.distributed-data.enabled
 	Enabled bool
 
 	// GossipInterval is the duration between gossip rounds.
-	// Corresponds to HOCON: gekka.cluster.distributed-data.gossip-interval
+	// Corresponds to HOCON: pekko.cluster.distributed-data.gossip-interval
+	// Fallback: gekka.cluster.distributed-data.gossip-interval
 	GossipInterval time.Duration
 }
 

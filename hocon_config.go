@@ -138,6 +138,18 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		}
 	}
 
+	// Log level: pekko.loglevel (or akka.loglevel), fallback gekka.logging.level
+	if nodeCfg.LogLevel == "" {
+		if v, err := cfg.GetString(prefix + ".loglevel"); err == nil {
+			nodeCfg.LogLevel = strings.TrimSpace(v)
+		}
+	}
+	if nodeCfg.LogLevel == "" {
+		if v, err := cfg.GetString("gekka.logging.level"); err == nil {
+			nodeCfg.LogLevel = strings.TrimSpace(v)
+		}
+	}
+
 	// Provider
 	if proto == "akka" {
 		nodeCfg.Provider = ProviderAkka
@@ -593,14 +605,18 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 	}
 
 	// ── Distributed Data ─────────────────────────────────────────────────────
-	ddataPrefix := "gekka.cluster.distributed-data"
-	if v, err := cfg.GetString(ddataPrefix + ".enabled"); err == nil {
-		v = strings.ToLower(strings.TrimSpace(v))
-		nodeCfg.DistributedData.Enabled = v == "true" || v == "on"
-	}
-	if v, err := cfg.GetString(ddataPrefix + ".gossip-interval"); err == nil {
-		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
-			nodeCfg.DistributedData.GossipInterval = d
+	// Primary: pekko.cluster.distributed-data (Pekko-compatible)
+	// Fallback: gekka.cluster.distributed-data (deprecated)
+	ddataPrefixes := []string{prefix + ".cluster.distributed-data", "gekka.cluster.distributed-data"}
+	for _, ddataPrefix := range ddataPrefixes {
+		if v, err := cfg.GetString(ddataPrefix + ".enabled"); err == nil {
+			v = strings.ToLower(strings.TrimSpace(v))
+			nodeCfg.DistributedData.Enabled = v == "true" || v == "on"
+		}
+		if v, err := cfg.GetString(ddataPrefix + ".gossip-interval"); err == nil {
+			if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+				nodeCfg.DistributedData.GossipInterval = d
+			}
 		}
 	}
 

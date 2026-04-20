@@ -10,6 +10,7 @@ package gekka
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -439,21 +440,94 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		nodeCfg.Telemetry.OtlpEndpoint = strings.TrimSpace(v)
 	}
 
-	// ── Discovery ────────────────────────────────────────────────────────────
-	discoveryPrefix := "gekka.cluster.discovery"
-	if v, err := cfg.GetString(discoveryPrefix + ".enabled"); err == nil {
-		v = strings.ToLower(strings.TrimSpace(v))
-		nodeCfg.Discovery.Enabled = v == "true" || v == "on"
-	}
-	if v, err := cfg.GetString(discoveryPrefix + ".type"); err == nil {
-		nodeCfg.Discovery.Type = strings.TrimSpace(v)
-	}
-
+	// ── Cluster Bootstrap (Pekko-compatible) ─────────────────────────────────
+	// Primary: pekko.management.cluster.bootstrap.contact-point-discovery
+	// Deprecated fallback: gekka.cluster.discovery (logs warning if used)
 	if nodeCfg.Discovery.Config.Config == nil {
 		nodeCfg.Discovery.Config.Config = make(map[string]any)
 	}
-	if configObj, err := cfg.GetConfig(discoveryPrefix + ".config"); err == nil {
-		_ = configObj.Unmarshal(&nodeCfg.Discovery.Config.Config)
+
+	bootstrapPrefix := "pekko.management.cluster.bootstrap.contact-point-discovery"
+	bootstrapUsed := false
+	if v, err := cfg.GetString(bootstrapPrefix + ".discovery-method"); err == nil {
+		nodeCfg.Discovery.Enabled = true
+		nodeCfg.Discovery.Type = strings.TrimSpace(v)
+		bootstrapUsed = true
+	}
+	if v, err := cfg.GetString(bootstrapPrefix + ".required-contact-point-nr"); err == nil {
+		if n, parseErr := strconv.Atoi(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.Discovery.Config.Config["required-contact-points"] = n
+		}
+	}
+	if v, err := cfg.GetString(bootstrapPrefix + ".stable-margin"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.Discovery.Config.Config["stable-margin"] = d
+		}
+	}
+	if v, err := cfg.GetString(bootstrapPrefix + ".discovery-interval"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.Discovery.Config.Config["discovery-interval"] = d
+		}
+	}
+
+	// pekko.discovery.{method}.* — provider-specific config
+	if v, err := cfg.GetString("pekko.discovery.method"); err == nil && !bootstrapUsed {
+		nodeCfg.Discovery.Enabled = true
+		nodeCfg.Discovery.Type = strings.TrimSpace(v)
+	}
+	if discoveryObj, err := cfg.GetConfig("pekko.discovery.kubernetes-api"); err == nil {
+		if ns, e := discoveryObj.GetString("namespace"); e == nil {
+			nodeCfg.Discovery.Config.Config["namespace"] = strings.TrimSpace(ns)
+		}
+		if ls, e := discoveryObj.GetString("label-selector"); e == nil {
+			nodeCfg.Discovery.Config.Config["label-selector"] = strings.TrimSpace(ls)
+		}
+		if p, e := discoveryObj.GetInt("port"); e == nil {
+			nodeCfg.Discovery.Config.Config["port"] = p
+		}
+	}
+	if discoveryObj, err := cfg.GetConfig("pekko.discovery.kubernetes-dns"); err == nil {
+		if sn, e := discoveryObj.GetString("service-name"); e == nil {
+			nodeCfg.Discovery.Config.Config["service-name"] = strings.TrimSpace(sn)
+		}
+		if p, e := discoveryObj.GetInt("port"); e == nil {
+			nodeCfg.Discovery.Config.Config["port"] = p
+		}
+	}
+
+	// Deprecated: gekka.cluster.discovery (fallback with warning)
+	if !nodeCfg.Discovery.Enabled {
+		deprecatedPrefix := "gekka.cluster.discovery"
+		if v, err := cfg.GetString(deprecatedPrefix + ".enabled"); err == nil {
+			v = strings.ToLower(strings.TrimSpace(v))
+			if v == "true" || v == "on" {
+				slog.Warn("config: gekka.cluster.discovery is deprecated, use pekko.management.cluster.bootstrap instead")
+				nodeCfg.Discovery.Enabled = true
+			}
+		}
+		if v, err := cfg.GetString(deprecatedPrefix + ".type"); err == nil {
+			nodeCfg.Discovery.Type = strings.TrimSpace(v)
+		}
+		if configObj, err := cfg.GetConfig(deprecatedPrefix + ".config"); err == nil {
+			_ = configObj.Unmarshal(&nodeCfg.Discovery.Config.Config)
+		}
+		apiPrefix := deprecatedPrefix + ".kubernetes-api"
+		if v, err := cfg.GetString(apiPrefix + ".namespace"); err == nil {
+			nodeCfg.Discovery.Config.Config["namespace"] = strings.TrimSpace(v)
+		}
+		if v, err := cfg.GetString(apiPrefix + ".label-selector"); err == nil {
+			nodeCfg.Discovery.Config.Config["label-selector"] = strings.TrimSpace(v)
+		}
+		if v, err := cfg.GetInt(apiPrefix + ".port"); err == nil {
+			nodeCfg.Discovery.Config.Config["port"] = v
+		}
+		dnsPrefix := deprecatedPrefix + ".kubernetes-dns"
+		if v, err := cfg.GetString(dnsPrefix + ".service-name"); err == nil {
+			nodeCfg.Discovery.Config.Config["service-name"] = strings.TrimSpace(v)
+		}
+		if v, err := cfg.GetInt(dnsPrefix + ".port"); err == nil {
+			nodeCfg.Discovery.Config.Config["port"] = v
+		}
 	}
 
 	// ── Distributed Data ─────────────────────────────────────────────────────
@@ -466,27 +540,6 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
 			nodeCfg.DistributedData.GossipInterval = d
 		}
-	}
-
-	// Support for specific blocks (v0.9.0)
-	apiPrefix := discoveryPrefix + ".kubernetes-api"
-	if v, err := cfg.GetString(apiPrefix + ".namespace"); err == nil {
-		nodeCfg.Discovery.Config.Config["namespace"] = strings.TrimSpace(v)
-	}
-	if v, err := cfg.GetString(apiPrefix + ".label-selector"); err == nil {
-		nodeCfg.Discovery.Config.Config["label-selector"] = strings.TrimSpace(v)
-	}
-	if v, err := cfg.GetInt(apiPrefix + ".port"); err == nil {
-		nodeCfg.Discovery.Config.Config["port"] = v
-	}
-
-	dnsPrefix := discoveryPrefix + ".kubernetes-dns"
-	if v, err := cfg.GetString(dnsPrefix + ".service-name"); err == nil {
-		nodeCfg.Discovery.Config.Config["service-name"] = strings.TrimSpace(v)
-	}
-	if v, err := cfg.GetInt(dnsPrefix + ".port"); err == nil {
-		// Only override if not already set by apiPrefix or config block (though port is usually distinct)
-		nodeCfg.Discovery.Config.Config["port"] = v
 	}
 
 	// ── Dispatcher Configuration ────────────────────────────────────────────

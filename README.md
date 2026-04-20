@@ -1,4 +1,4 @@
-# gekka &nbsp;[![Version](https://img.shields.io/badge/version-1.0.0--rc1-blue)](https://github.com/sopranoworks/gekka)
+# gekka &nbsp;[![Version](https://img.shields.io/badge/version-1.0.0--rc2-blue)](https://github.com/sopranoworks/gekka)
 
  [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Go CI](https://github.com/sopranoworks/gekka/actions/workflows/go.yml/badge.svg)](https://github.com/sopranoworks/gekka/actions/workflows/go.yml)
 
@@ -10,18 +10,11 @@ Configuration is loaded via [`gekka-config`](https://github.com/sopranoworks/gek
 
 ---
 
-## What's New in v1.0.0-rc1
+## What's New in v1.0.0-rc2
 
-- **HTTP Server & Routing DSL** — Full Pekko HTTP-style routing DSL (`http/`): path/method/parameter extraction directives, JSON entity decoding, form-urlencoded, multipart file upload, SSE, WebSocket, `SingleRequest` HTTP client, `HostConnectionPool`, CORS, response header directives, and `RouteTestKit` for in-process testing.
-- **Cassandra Persistence Plugin** — Journal, SnapshotStore, DurableStateStore, and ReadJournal with Pekko-compatible partition bucketing and timebucket tag queries (`extensions/persistence/cassandra/`).
-- **Stream Connectors** — Kafka, Kinesis, AMQP/RabbitMQ, S3/MinIO, SQS Source and Sink operators as extension modules.
-- **Stream Operators** — `ZipLatest`, `CombineLatest` (goroutine fan-in bridge), `ZipAll`, `ZipAllWith`, `MergeSorted` (N-source heap merge), `MapAsyncPartitioned` (ordered per-key async).
-- **Flight Recorder** — Ring-buffer event recorder with level-gated emission, association state tracking, heartbeat MISS events, and `/flight-recorder` HTTP management endpoint.
-- **Classic Actor Stash** — `StashBuffer` with `Become` + `UnstashAll` FIFO drain loop, wired into typed actors.
-- **SeenDigest Protocol** — Gossip convergence protocol with Seen-index remapping.
-- **Actor Infrastructure** — `DefaultResizer` for automatic pool scaling, `ControlAwareMailbox`, `LookupClassification`/`SubchannelClassification` for EventStream, HOCON mailbox-type and resizer config, `ConsistentHashingAllocationStrategy`.
-- **UDP API** — User-facing `Bind` and `SimpleSender` API (`io/udp/`).
-- **Tooling Extraction** — `gekka-cli` and `gekka-metrics` extracted to independent repositories ([gekka-cli](https://github.com/sopranoworks/gekka-cli), [gekka-metrics](https://github.com/sopranoworks/gekka-metrics)).
+- **Pekko-compatible Cluster Bootstrap Config** — Discovery config migrated from `gekka.cluster.discovery` to `pekko.management.cluster.bootstrap` for full Pekko HOCON compatibility. Old namespace still works with deprecation warning.
+- **gekka-dashboard** — New web-based operational console ([gekka-dashboard](https://github.com/sopranoworks/gekka-dashboard)) with real-time WebSocket cluster monitoring, dark/light theme, and management actions.
+- **Notification Engine** — Event-driven alert dispatcher in [gekka-metrics](https://github.com/sopranoworks/gekka-metrics) with Email/Slack channels, role-based filtering, and per-rule throttle.
 
 ## Configuration
 

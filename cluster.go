@@ -289,16 +289,21 @@ type ClusterConfig struct {
 	//	}
 	Metrics core.MetricsExporterConfig `hocon:"gekka.metrics"`
 
-	// Discovery configures the dynamic seed node discovery (v0.9.0).
+	// Discovery configures cluster bootstrap via service discovery.
 	// When Enabled is true, the cluster will use the specified Type to
-	// discover seed nodes at startup.
+	// discover seed nodes at startup via ClusterBootstrap.
 	//
-	// Parse from HOCON:
+	// Parse from HOCON (Pekko-compatible):
 	//
-	//	gekka.cluster.discovery {
-	//	    enabled = true
-	//	    type    = "kubernetes-api"
-	//	    config {
+	//	pekko.management.cluster.bootstrap {
+	//	    contact-point-discovery {
+	//	        discovery-method = "kubernetes-api"
+	//	        required-contact-point-nr = 2
+	//	        stable-margin = 5s
+	//	    }
+	//	}
+	//	pekko.discovery {
+	//	    kubernetes-api {
 	//	        namespace      = "default"
 	//	        label-selector = "app=gekka"
 	//	        port           = 2552
@@ -605,14 +610,14 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 
 	localAddr := &gproto_remote.Address{
 		Protocol: &scheme,
-		System:   proto.String(system),
-		Hostname: proto.String(host),
-		Port:     proto.Uint32(port),
+		System:   &system,
+		Hostname: &host,
+		Port:     &port,
 	}
 	uid := uint64(time.Now().UnixNano())
 	localUA := &gproto_remote.UniqueAddress{
 		Address: localAddr,
-		Uid:     proto.Uint64(uid),
+		Uid:     &uid,
 	}
 
 	metrics := &core.NodeMetrics{}
@@ -699,7 +704,7 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	if port == 0 {
 		if tcpAddr, ok := server.Addr().(*net.TCPAddr); ok {
 			actualPort = uint32(tcpAddr.Port)
-			localAddr.Port = proto.Uint32(actualPort)
+			localAddr.Port = &actualPort
 			// Patch the gossip state that was snapshotted in Newgcluster.ClusterManager.
 			// This is needed because the port might have been 0 and assigned by the OS.
 			nm.LocalAddr = localAddr
@@ -951,13 +956,13 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	nm.SerializerRegistry.RegisterSerializer(core.MiscMessageSerializerID, &core.MiscMessageSerializer{})
 	nm.SerializerRegistry.RegisterSerializer(ddata.DDataReplicatorMsgSerializerID, &ddata.DDataSerializer{})
 	nm.SerializerRegistry.RegisterSerializer(stream.StreamRefSerializerID, &stream.StreamRefSerializer{})
-	nm.SerializerRegistry.RegisterManifest("A", reflect.TypeOf((*stream.SequencedOnNext)(nil)), stream.StreamRefSerializerID)
-	nm.SerializerRegistry.RegisterManifest("B", reflect.TypeOf((*stream.CumulativeDemand)(nil)), stream.StreamRefSerializerID)
-	nm.SerializerRegistry.RegisterManifest("C", reflect.TypeOf((*stream.RemoteStreamFailure)(nil)), stream.StreamRefSerializerID)
-	nm.SerializerRegistry.RegisterManifest("D", reflect.TypeOf((*stream.RemoteStreamCompleted)(nil)), stream.StreamRefSerializerID)
-	nm.SerializerRegistry.RegisterManifest("E", reflect.TypeOf((*stream.SourceRef)(nil)), stream.StreamRefSerializerID)
-	nm.SerializerRegistry.RegisterManifest("F", reflect.TypeOf((*stream.SinkRef)(nil)), stream.StreamRefSerializerID)
-	nm.SerializerRegistry.RegisterManifest("G", reflect.TypeOf((*stream.OnSubscribeHandshake)(nil)), stream.StreamRefSerializerID)
+	nm.SerializerRegistry.RegisterManifest("A", reflect.TypeFor[*stream.SequencedOnNext](), stream.StreamRefSerializerID)
+	nm.SerializerRegistry.RegisterManifest("B", reflect.TypeFor[*stream.CumulativeDemand](), stream.StreamRefSerializerID)
+	nm.SerializerRegistry.RegisterManifest("C", reflect.TypeFor[*stream.RemoteStreamFailure](), stream.StreamRefSerializerID)
+	nm.SerializerRegistry.RegisterManifest("D", reflect.TypeFor[*stream.RemoteStreamCompleted](), stream.StreamRefSerializerID)
+	nm.SerializerRegistry.RegisterManifest("E", reflect.TypeFor[*stream.SourceRef](), stream.StreamRefSerializerID)
+	nm.SerializerRegistry.RegisterManifest("F", reflect.TypeFor[*stream.SinkRef](), stream.StreamRefSerializerID)
+	nm.SerializerRegistry.RegisterManifest("G", reflect.TypeFor[*stream.OnSubscribeHandshake](), stream.StreamRefSerializerID)
 
 	return cluster, nil
 }
@@ -1198,7 +1203,7 @@ func (c *Cluster) SelfAddress() actor.Address {
 //   - []byte           → raw bytes (Pekko ByteArraycore.Serializer, ID 4)
 //   - proto.Message    → Protobuf (ID 2)
 //   - cluster messages → handled automatically by Router
-func (c *Cluster) Send(ctx context.Context, dst interface{}, msg interface{}) error {
+func (c *Cluster) Send(ctx context.Context, dst any, msg any) error {
 	var pathStr string
 	switch d := dst.(type) {
 	case string:
@@ -1225,7 +1230,7 @@ func (c *Cluster) Send(ctx context.Context, dst interface{}, msg interface{}) er
 //	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 //	defer cancel()
 //	reply, err := node.Ask(ctx, echoPath, []byte("ping"))
-func (c *Cluster) Ask(ctx context.Context, dst interface{}, msg interface{}) (*IncomingMessage, error) {
+func (c *Cluster) Ask(ctx context.Context, dst any, msg any) (*IncomingMessage, error) {
 	// Resolve destination path string.
 	var pathStr string
 	switch d := dst.(type) {
@@ -1467,11 +1472,12 @@ func (c *Cluster) Actors(includeSystem bool) []management.ActorEntry {
 
 func (c *Cluster) Join(seedHost string, seedPort uint32) error {
 	scheme := c.localAddr.GetProtocol() // "pekko" or "akka"
+	seedSystem := c.localAddr.GetSystem()
 	c.seedAddr = &gproto_remote.Address{
 		Protocol: &scheme,
-		System:   proto.String(c.localAddr.GetSystem()),
-		Hostname: proto.String(seedHost),
-		Port:     proto.Uint32(seedPort),
+		System:   &seedSystem,
+		Hostname: &seedHost,
+		Port:     &seedPort,
 	}
 	if err := c.cm.JoinCluster(c.ctx, seedHost, seedPort); err != nil {
 		return err
@@ -1553,11 +1559,15 @@ func (c *Cluster) LeaveMember(address string) error {
 	// The router maps *gproto_cluster.Address → cluster serializer ID with manifest "L".
 	remotePath := fmt.Sprintf("%s://%s@%s:%d/system/cluster/core/daemon",
 		addr.Protocol, addr.System, addr.Host, addr.Port)
+	leaveProto := addr.Protocol
+	leaveSys := addr.System
+	leaveHost := addr.Host
+	leavePort := uint32(addr.Port)
 	leaveMsg := &gproto_cluster.Address{
-		Protocol: proto.String(addr.Protocol),
-		System:   proto.String(addr.System),
-		Hostname: proto.String(addr.Host),
-		Port:     proto.Uint32(uint32(addr.Port)),
+		Protocol: &leaveProto,
+		System:   &leaveSys,
+		Hostname: &leaveHost,
+		Port:     &leavePort,
 	}
 	if err := c.cm.Router(context.Background(), remotePath, leaveMsg); err != nil {
 		return fmt.Errorf("management: send Leave to %q: %w", remotePath, err)
@@ -1953,9 +1963,10 @@ func (c *Cluster) DeliverSelection(s actor.ActorSelection, msg any, sender ...ac
 
 	elements := make([]*gproto_remote.Selection, len(s.Path))
 	for i, p := range s.Path {
+		matcher := p.Matcher
 		elements[i] = &gproto_remote.Selection{
 			Type:    gproto_remote.PatternType(p.Type).Enum(),
-			Matcher: proto.String(p.Matcher),
+			Matcher: &matcher,
 		}
 	}
 

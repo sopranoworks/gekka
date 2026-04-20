@@ -285,18 +285,20 @@ type ClusterConfig struct {
 	// When Management.Enabled is true, an HTTP server is started on
 	// Management.Hostname:Management.Port exposing cluster management endpoints.
 	//
-	// Parse from HOCON:
+	// Parse from HOCON (Pekko Management-compatible):
 	//
-	//	gekka.management.http {
+	//	pekko.management.http {
 	//	    hostname = "127.0.0.1"
 	//	    port     = 8558
 	//	    enabled  = false
 	//	}
 	//
+	// Deprecated fallback: gekka.management.http.*
+	//
 	// Endpoints:
 	//   GET /cluster/members            — list all members and their status
 	//   GET /cluster/members/{address}  — detail for a specific member
-	Management core.ManagementConfig `hocon:"gekka.management.http"`
+	Management core.ManagementConfig `hocon:"pekko.management.http"`
 
 	// Metrics holds configuration for the optional metrics exporter that
 	// periodically scrapes the Management HTTP API and emits cluster state

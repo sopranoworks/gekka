@@ -33,17 +33,23 @@ Gekka uses HOCON for flexible, layered configuration. Standard `pekko.*` and `ak
 | `pekko.cluster.failure-detector.acceptable-heartbeat-pause` | `3s` | Tolerable heartbeat gap |
 | `pekko.cluster.failure-detector.max-sample-size` | `1000` | Heartbeat history window |
 
-### Gekka-Specific Settings
+### Management (Pekko Management-compatible)
+
+| Key | Default | Description |
+|---|---|---|
+| `pekko.management.http.port` | `8558` | TCP port for the HTTP Management API |
+| `pekko.management.http.hostname` | `127.0.0.1` | Binding interface for the Management API |
+| `pekko.management.http.enabled` | `false` | Explicitly enable/disable the Management API |
+
+### Other Settings
 
 | Key | Default | Description |
 |---|---|---|
 | `gekka.logging.level` | `INFO` | Minimum log level (`DEBUG`, `INFO`, `WARN`, `ERROR`) |
-| `gekka.management.http.port` | `8558` | TCP port for the HTTP Management API |
-| `gekka.management.http.hostname` | `127.0.0.1` | Binding interface for the Management API |
 | `gekka.telemetry.exporter.otlp.endpoint` | `""` | OTLP/HTTP collector endpoint for metrics/traces |
 
 ### Auto-Enable Logic
-If either `gekka.management.http.hostname` or `gekka.management.http.port` is explicitly defined in your configuration, the Management Server will be enabled automatically (`enabled = true`).
+If either `pekko.management.http.hostname` or `pekko.management.http.port` is explicitly defined in your configuration, the Management Server will be enabled automatically (`enabled = true`).
 
 ---
 

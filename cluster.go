@@ -178,17 +178,39 @@ type ClusterConfig struct {
 	SBR SBRConfig
 
 	// FailureDetector tunes the Phi Accrual Failure Detector.
-	// Zero values are replaced by safe defaults (threshold=10.0, maxSamples=1000,
+	// Zero values are replaced by safe defaults (threshold=8.0, maxSamples=1000,
 	// minStdDeviation=500ms).
 	//
-	// Parse from HOCON:
+	// Parse from HOCON (pekko-compatible namespace takes priority):
 	//
-	//	gekka.cluster.failure-detector {
-	//	    threshold         = 10.0
-	//	    max-sample-size   = 1000
-	//	    min-std-deviation = 100ms
+	//	pekko.cluster.failure-detector {
+	//	    threshold                    = 8.0
+	//	    max-sample-size              = 1000
+	//	    min-std-deviation            = 100ms
+	//	    heartbeat-interval           = 1s
+	//	    acceptable-heartbeat-pause   = 3s
+	//	    expected-response-after      = 1s
 	//	}
+	//
+	// Fallback: gekka.cluster.failure-detector.*
 	FailureDetector FailureDetectorConfig
+
+	// MinNrOfMembers is the minimum number of members that must join before the
+	// leader promotes Joining members to Up status.
+	// Corresponds to pekko.cluster.min-nr-of-members.
+	// Default: 1 (no gate).
+	MinNrOfMembers int
+
+	// RetryUnsuccessfulJoinAfter is how often to retry the initial join (InitJoin)
+	// when no Welcome has been received.
+	// Corresponds to pekko.cluster.retry-unsuccessful-join-after.
+	// Default: 10s (Pekko default).
+	RetryUnsuccessfulJoinAfter time.Duration
+
+	// GossipInterval is the duration between gossip rounds.
+	// Corresponds to pekko.cluster.gossip-interval.
+	// Default: 1s.
+	GossipInterval time.Duration
 
 	// InternalSBR configures the lightweight internal SBR strategy
 	// (icluster.Strategy) that is evaluated inline by CheckReachability.
@@ -652,6 +674,20 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 
 	// Apply Phi Accrual Failure Detector configuration from HOCON.
 	gcluster.ApplyDetectorConfig(cm, cfg.FailureDetector)
+
+	// Apply cluster timing configuration from HOCON.
+	if cfg.FailureDetector.HeartbeatInterval > 0 {
+		cm.HeartbeatInterval = cfg.FailureDetector.HeartbeatInterval
+	}
+	if cfg.RetryUnsuccessfulJoinAfter > 0 {
+		cm.RetryUnsuccessfulJoinAfter = cfg.RetryUnsuccessfulJoinAfter
+	}
+	if cfg.MinNrOfMembers > 0 {
+		cm.MinNrOfMembers = cfg.MinNrOfMembers
+	}
+	if cfg.GossipInterval > 0 {
+		cm.GossipInterval = cfg.GossipInterval
+	}
 
 	// Wire the lightweight internal SBR strategy (icluster.Strategy).
 	gcluster.ApplyInternalSBRConfig(cm, cfg.InternalSBR)

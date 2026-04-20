@@ -126,6 +126,27 @@ type ClusterManager struct {
 	// MissEmitter is notified when the failure detector marks a node unreachable.
 	// Implemented by *core.FlightRecorder via a thin interface to avoid an import cycle.
 	MissEmitter FlightMissEmitter
+
+	// HeartbeatInterval is how often heartbeat messages are sent.
+	// Corresponds to pekko.cluster.failure-detector.heartbeat-interval.
+	// Default: 1s.
+	HeartbeatInterval time.Duration
+
+	// GossipInterval is the duration between gossip rounds.
+	// Corresponds to pekko.cluster.gossip-interval.
+	// Default: 1s.
+	GossipInterval time.Duration
+
+	// RetryUnsuccessfulJoinAfter is how often to retry InitJoin when no Welcome is received.
+	// Corresponds to pekko.cluster.retry-unsuccessful-join-after.
+	// Default: 10s (Pekko default).
+	RetryUnsuccessfulJoinAfter time.Duration
+
+	// MinNrOfMembers is the minimum number of members that must join before the
+	// leader promotes Joining members to Up status.
+	// Corresponds to pekko.cluster.min-nr-of-members.
+	// Default: 1 (no gate).
+	MinNrOfMembers int
 }
 
 // FlightMissEmitter can record a heartbeat-miss event.
@@ -258,7 +279,7 @@ func NewClusterManager(local *gproto_cluster.UniqueAddress, router func(context.
 		LocalAddress: local,
 		LocalHash:    localHash,
 		Router:       router,
-		Fd:           NewPhiAccrualFailureDetector(12.0, 1000),
+		Fd:           NewPhiAccrualFailureDetector(8.0, 1000),
 		State: &gproto_cluster.Gossip{
 			Members: []*gproto_cluster.Member{
 				{
@@ -349,7 +370,11 @@ func (cm *ClusterManager) JoinCluster(ctx context.Context, seedHost string, seed
 	_ = cm.Router(ctx, path, initJoin)
 
 	go func() {
-		ticker := time.NewTicker(1 * time.Second)
+		retryInterval := cm.RetryUnsuccessfulJoinAfter
+		if retryInterval <= 0 {
+			retryInterval = 10 * time.Second
+		}
+		ticker := time.NewTicker(retryInterval)
 		defer ticker.Stop()
 		for {
 			select {
@@ -1948,7 +1973,13 @@ func (cm *ClusterManager) performLeaderActions() {
 				// Only promote Joining to Up if we have convergence (everyone has
 				// seen the state) or if it's the very first node (bootstrap).
 				// Pekko convergence check: all members in Overview.Seen.
-				if len(cm.State.Members) == 1 || cm.CheckConvergenceLocked() {
+				// Also gate on min-nr-of-members (pekko.cluster.min-nr-of-members).
+				minMembers := cm.MinNrOfMembers
+				if minMembers <= 0 {
+					minMembers = 1
+				}
+				meetsMinMembers := len(cm.State.Members) >= minMembers
+				if meetsMinMembers && (len(cm.State.Members) == 1 || cm.CheckConvergenceLocked()) {
 					m.Status = gproto_cluster.MemberStatus_Up.Enum()
 					m.UpNumber = proto.Int32(int32(len(cm.State.Members))) // Simplified upNumber
 					events = append(events, MemberUp{Member: ma})
@@ -2363,7 +2394,11 @@ func (cm *ClusterManager) gossipTick() {
 
 // StartGossipLoop begins the background gossip process.
 func (cm *ClusterManager) StartGossipLoop(ctx context.Context) {
-	ticker := time.NewTicker(1 * time.Second)
+	interval := cm.GossipInterval
+	if interval <= 0 {
+		interval = 1 * time.Second
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
@@ -2426,7 +2461,11 @@ func (cm *ClusterManager) StartHeartbeat(target *gproto_cluster.Address) {
 	cm.heartbeatMuted.Store(false)
 
 	go func() {
-		ticker := time.NewTicker(1 * time.Second)
+		interval := cm.HeartbeatInterval
+		if interval <= 0 {
+			interval = 1 * time.Second
+		}
+		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		path := cm.HeartbeatPath(target.GetSystem(), target.GetHostname(), target.GetPort())
 		var seq int64 = 0

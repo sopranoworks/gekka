@@ -414,6 +414,89 @@ gekka.cluster.failure-detector.min-std-deviation = 200ms
 	}
 }
 
+// ── Pekko-namespace Failure Detector ─────────────────────────────────────────
+
+func TestParseHOCON_PekkoFailureDetector(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery.canonical {
+    hostname = "127.0.0.1"
+    port = 2552
+  }
+  cluster {
+    seed-nodes = ["pekko://Sys@127.0.0.1:2552"]
+    failure-detector {
+      threshold = 12.0
+      max-sample-size = 500
+      min-std-deviation = 200ms
+      heartbeat-interval = 2s
+      acceptable-heartbeat-pause = 10s
+      expected-response-after = 3s
+    }
+    min-nr-of-members = 3
+    retry-unsuccessful-join-after = 15s
+    gossip-interval = 500ms
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.FailureDetector.Threshold != 12.0 {
+		t.Errorf("Threshold = %v, want 12.0", cfg.FailureDetector.Threshold)
+	}
+	if cfg.FailureDetector.MaxSampleSize != 500 {
+		t.Errorf("MaxSampleSize = %d, want 500", cfg.FailureDetector.MaxSampleSize)
+	}
+	if cfg.FailureDetector.MinStdDeviation != 200*time.Millisecond {
+		t.Errorf("MinStdDeviation = %v, want 200ms", cfg.FailureDetector.MinStdDeviation)
+	}
+	if cfg.FailureDetector.HeartbeatInterval != 2*time.Second {
+		t.Errorf("HeartbeatInterval = %v, want 2s", cfg.FailureDetector.HeartbeatInterval)
+	}
+	if cfg.FailureDetector.AcceptableHeartbeatPause != 10*time.Second {
+		t.Errorf("AcceptableHeartbeatPause = %v, want 10s", cfg.FailureDetector.AcceptableHeartbeatPause)
+	}
+	if cfg.FailureDetector.ExpectedResponseAfter != 3*time.Second {
+		t.Errorf("ExpectedResponseAfter = %v, want 3s", cfg.FailureDetector.ExpectedResponseAfter)
+	}
+	if cfg.MinNrOfMembers != 3 {
+		t.Errorf("MinNrOfMembers = %d, want 3", cfg.MinNrOfMembers)
+	}
+	if cfg.RetryUnsuccessfulJoinAfter != 15*time.Second {
+		t.Errorf("RetryUnsuccessfulJoinAfter = %v, want 15s", cfg.RetryUnsuccessfulJoinAfter)
+	}
+	if cfg.GossipInterval != 500*time.Millisecond {
+		t.Errorf("GossipInterval = %v, want 500ms", cfg.GossipInterval)
+	}
+}
+
+func TestParseHOCON_PekkoFailureDetector_PekkoOverridesGekka(t *testing.T) {
+	// pekko namespace takes priority over gekka namespace
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery.canonical {
+    hostname = "127.0.0.1"
+    port = 2552
+  }
+  cluster {
+    seed-nodes = ["pekko://Sys@127.0.0.1:2552"]
+    failure-detector {
+      threshold = 9.0
+    }
+  }
+}
+gekka.cluster.failure-detector.threshold = 15.0
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	// pekko namespace should win
+	if cfg.FailureDetector.Threshold != 9.0 {
+		t.Errorf("Threshold = %v, want 9.0 (pekko wins over gekka)", cfg.FailureDetector.Threshold)
+	}
+}
+
 // ── Internal SBR HOCON parsing ────────────────────────────────────────────────
 
 func TestParseHOCON_InternalSBR_ActiveStrategy(t *testing.T) {

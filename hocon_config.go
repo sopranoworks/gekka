@@ -322,19 +322,81 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		nodeCfg.Sharding.AdaptiveRebalancing.MaxSimultaneousRebalance = v
 	}
 
-	// ── Failure Detector (gekka-native) ─────────────────────────────────────
-	fdPrefix := "gekka.cluster.failure-detector"
-	if v, err := cfg.GetString(fdPrefix + ".threshold"); err == nil {
+	// ── Failure Detector ────────────────────────────────────────────────────
+	// Parse pekko/akka namespace first (standard Pekko config), then fall back
+	// to gekka-native namespace for any fields not yet set.
+	pekkoFdPrefix := prefix + ".cluster.failure-detector"
+	if v, err := cfg.GetString(pekkoFdPrefix + ".threshold"); err == nil {
 		if f, parseErr := strconv.ParseFloat(strings.TrimSpace(v), 64); parseErr == nil {
 			nodeCfg.FailureDetector.Threshold = f
 		}
 	}
-	if v, err := cfg.GetInt(fdPrefix + ".max-sample-size"); err == nil {
+	// Pekko also supports "phi-threshold" as an alias
+	if nodeCfg.FailureDetector.Threshold == 0 {
+		if v, err := cfg.GetString(pekkoFdPrefix + ".phi-threshold"); err == nil {
+			if f, parseErr := strconv.ParseFloat(strings.TrimSpace(v), 64); parseErr == nil {
+				nodeCfg.FailureDetector.Threshold = f
+			}
+		}
+	}
+	if v, err := cfg.GetInt(pekkoFdPrefix + ".max-sample-size"); err == nil {
 		nodeCfg.FailureDetector.MaxSampleSize = v
 	}
-	if v, err := cfg.GetString(fdPrefix + ".min-std-deviation"); err == nil {
+	if v, err := cfg.GetString(pekkoFdPrefix + ".min-std-deviation"); err == nil {
 		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
 			nodeCfg.FailureDetector.MinStdDeviation = d
+		}
+	}
+	if v, err := cfg.GetString(pekkoFdPrefix + ".heartbeat-interval"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.FailureDetector.HeartbeatInterval = d
+		}
+	}
+	if v, err := cfg.GetString(pekkoFdPrefix + ".acceptable-heartbeat-pause"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.FailureDetector.AcceptableHeartbeatPause = d
+		}
+	}
+	if v, err := cfg.GetString(pekkoFdPrefix + ".expected-response-after"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.FailureDetector.ExpectedResponseAfter = d
+		}
+	}
+
+	// Fallback: gekka-native namespace (lower priority)
+	fdPrefix := "gekka.cluster.failure-detector"
+	if nodeCfg.FailureDetector.Threshold == 0 {
+		if v, err := cfg.GetString(fdPrefix + ".threshold"); err == nil {
+			if f, parseErr := strconv.ParseFloat(strings.TrimSpace(v), 64); parseErr == nil {
+				nodeCfg.FailureDetector.Threshold = f
+			}
+		}
+	}
+	if nodeCfg.FailureDetector.MaxSampleSize == 0 {
+		if v, err := cfg.GetInt(fdPrefix + ".max-sample-size"); err == nil {
+			nodeCfg.FailureDetector.MaxSampleSize = v
+		}
+	}
+	if nodeCfg.FailureDetector.MinStdDeviation == 0 {
+		if v, err := cfg.GetString(fdPrefix + ".min-std-deviation"); err == nil {
+			if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+				nodeCfg.FailureDetector.MinStdDeviation = d
+			}
+		}
+	}
+
+	// ── Cluster Timing ──────────────────────────────────────────────────────
+	if v, err := cfg.GetInt(prefix + ".cluster.min-nr-of-members"); err == nil {
+		nodeCfg.MinNrOfMembers = v
+	}
+	if v, err := cfg.GetString(prefix + ".cluster.retry-unsuccessful-join-after"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.RetryUnsuccessfulJoinAfter = d
+		}
+	}
+	if v, err := cfg.GetString(prefix + ".cluster.gossip-interval"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.GossipInterval = d
 		}
 	}
 

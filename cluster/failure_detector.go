@@ -30,20 +30,41 @@ type PhiAccrualFailureDetector struct {
 // All fields are optional; zero values fall back to safe defaults.
 type FailureDetectorConfig struct {
 	// Threshold is the φ value above which a node is declared unreachable.
-	// Corresponds to HOCON: gekka.cluster.failure-detector.threshold
-	// Default: 10.0
+	// Corresponds to HOCON: pekko.cluster.failure-detector.threshold (or phi-threshold)
+	// Also: gekka.cluster.failure-detector.threshold
+	// Default: 8.0 (Pekko default)
 	Threshold float64
 
 	// MaxSampleSize is the sliding-window size for heartbeat inter-arrival history.
-	// Corresponds to HOCON: gekka.cluster.failure-detector.max-sample-size
+	// Corresponds to HOCON: pekko.cluster.failure-detector.max-sample-size
+	// Also: gekka.cluster.failure-detector.max-sample-size
 	// Default: 1000
 	MaxSampleSize int
 
 	// MinStdDeviation is the lower bound on σ to prevent φ explosions when
 	// heartbeats are very regular or the window is small.
-	// Corresponds to HOCON: gekka.cluster.failure-detector.min-std-deviation
+	// Corresponds to HOCON: pekko.cluster.failure-detector.min-std-deviation
+	// Also: gekka.cluster.failure-detector.min-std-deviation
 	// Default: 500ms
 	MinStdDeviation time.Duration
+
+	// HeartbeatInterval is how often heartbeat messages are sent to monitored nodes.
+	// Corresponds to HOCON: pekko.cluster.failure-detector.heartbeat-interval
+	// Default: 1s
+	HeartbeatInterval time.Duration
+
+	// AcceptableHeartbeatPause is the duration of lost heartbeats that are
+	// acceptable before considering it an anomaly. This margin is important to
+	// avoid false-positive phi spikes during GC pauses or transient network issues.
+	// Corresponds to HOCON: pekko.cluster.failure-detector.acceptable-heartbeat-pause
+	// Default: 3s (Pekko default)
+	AcceptableHeartbeatPause time.Duration
+
+	// ExpectedResponseAfter is the expected time between heartbeat request and response.
+	// Used to estimate the heartbeat interval on the receiving side.
+	// Corresponds to HOCON: pekko.cluster.failure-detector.expected-response-after
+	// Default: 1s
+	ExpectedResponseAfter time.Duration
 }
 
 func NewPhiAccrualFailureDetector(threshold float64, windowSize int) *PhiAccrualFailureDetector {

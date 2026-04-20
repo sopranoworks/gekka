@@ -135,8 +135,8 @@ func TestApplyDetectorConfig_FallsBackToDefaults_WhenFieldsNegative(t *testing.T
 		MaxSampleSize:   -1,
 		MinStdDeviation: -1,
 	})
-	if cm.Fd.threshold != 10.0 {
-		t.Errorf("threshold = %v, want default 10.0", cm.Fd.threshold)
+	if cm.Fd.threshold != 8.0 {
+		t.Errorf("threshold = %v, want default 8.0", cm.Fd.threshold)
 	}
 	if cm.Fd.maxSampleSize != 1000 {
 		t.Errorf("maxSampleSize = %d, want default 1000", cm.Fd.maxSampleSize)

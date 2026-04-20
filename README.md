@@ -13,12 +13,27 @@ Configuration is loaded via [`gekka-config`](https://github.com/sopranoworks/gek
 ## What's New in v1.0.0-rc2
 
 - **Pekko-compatible Cluster Bootstrap Config** — Discovery config migrated from `gekka.cluster.discovery` to `pekko.management.cluster.bootstrap` for full Pekko HOCON compatibility. Old namespace still works with deprecation warning.
+- **Pekko-compatible Cluster Configuration** — Standard `pekko.cluster.*` settings now parsed directly: `failure-detector` (threshold, heartbeat-interval, acceptable-heartbeat-pause), `min-nr-of-members`, `retry-unsuccessful-join-after`, `gossip-interval`. Existing Pekko/Akka configs work without translation.
 - **gekka-dashboard** — New web-based operational console ([gekka-dashboard](https://github.com/sopranoworks/gekka-dashboard)) with real-time WebSocket cluster monitoring, dark/light theme, and management actions.
 - **Notification Engine** — Event-driven alert dispatcher in [gekka-metrics](https://github.com/sopranoworks/gekka-metrics) with Email/Slack channels, role-based filtering, and per-rule throttle.
 
 ## Configuration
 
-Gekka uses HOCON for flexible, layered configuration. Below are the key Gekka-specific settings:
+Gekka uses HOCON for flexible, layered configuration. Standard `pekko.*` and `akka.*` configuration keys are supported directly for full compatibility with existing Pekko/Akka configs.
+
+### Cluster Settings (Pekko-compatible)
+
+| Key | Default | Description |
+|---|---|---|
+| `pekko.cluster.min-nr-of-members` | `1` | Min members before leader promotes Joining to Up |
+| `pekko.cluster.retry-unsuccessful-join-after` | `10s` | InitJoin retry interval |
+| `pekko.cluster.gossip-interval` | `1s` | Duration between gossip rounds |
+| `pekko.cluster.failure-detector.threshold` | `8.0` | Phi threshold for unreachable declaration |
+| `pekko.cluster.failure-detector.heartbeat-interval` | `1s` | Heartbeat send interval |
+| `pekko.cluster.failure-detector.acceptable-heartbeat-pause` | `3s` | Tolerable heartbeat gap |
+| `pekko.cluster.failure-detector.max-sample-size` | `1000` | Heartbeat history window |
+
+### Gekka-Specific Settings
 
 | Key | Default | Description |
 |---|---|---|

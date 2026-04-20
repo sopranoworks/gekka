@@ -38,8 +38,45 @@ type ClusterConfig struct {
 
     EnableMonitoring bool // enable /healthz and /metrics HTTP endpoints
     MonitoringPort   int  // 0 = OS-assigned
+
+    // Cluster timing (Pekko-compatible)
+    MinNrOfMembers             int           // min members before Joining→Up (default: 1)
+    RetryUnsuccessfulJoinAfter time.Duration // InitJoin retry interval (default: 10s)
+    GossipInterval             time.Duration // gossip round interval (default: 1s)
+
+    // Failure Detector (Pekko-compatible)
+    FailureDetector FailureDetectorConfig
+}
+
+type FailureDetectorConfig struct {
+    Threshold                float64       // phi threshold (default: 8.0)
+    MaxSampleSize            int           // heartbeat history window (default: 1000)
+    MinStdDeviation          time.Duration // floor on sigma (default: 500ms)
+    HeartbeatInterval        time.Duration // send interval (default: 1s)
+    AcceptableHeartbeatPause time.Duration // tolerable gap (default: 3s)
+    ExpectedResponseAfter    time.Duration // expected RTT (default: 1s)
 }
 ```
+
+These settings can be configured via HOCON using the standard Pekko namespace:
+
+```hocon
+pekko.cluster {
+  min-nr-of-members = 3
+  retry-unsuccessful-join-after = 10s
+  gossip-interval = 1s
+  failure-detector {
+    threshold = 8.0
+    max-sample-size = 1000
+    min-std-deviation = 500ms
+    heartbeat-interval = 1s
+    acceptable-heartbeat-pause = 3s
+    expected-response-after = 1s
+  }
+}
+```
+
+The `gekka.cluster.failure-detector.*` namespace is also supported as a fallback.
 
 ---
 

@@ -72,7 +72,22 @@ child, _ := gekka.Spawn(ctx, Child(), "child")
 
 Gekka uses the same **HOCON** syntax as Pekko, powered by the [`gekka-config`](https://github.com/sopranoworks/gekka-config) engine.
 
-- **Naming**: While Gekka recognizes `pekko.*` and `akka.*` prefixes for interoperability, we recommend using Go-style naming in your custom configs.
+- **Naming**: Gekka recognizes both `pekko.*` and `akka.*` prefixes. Standard Pekko/Akka configuration keys work directly — no need to translate to a gekka-specific namespace.
+- **Cluster Settings**: All standard `pekko.cluster.*` settings are supported:
+  ```hocon
+  pekko.cluster {
+    min-nr-of-members = 3
+    retry-unsuccessful-join-after = 10s
+    gossip-interval = 1s
+    failure-detector {
+      threshold = 8.0
+      max-sample-size = 1000
+      heartbeat-interval = 1s
+      acceptable-heartbeat-pause = 3s
+      expected-response-after = 1s
+    }
+  }
+  ```
 - **Deployment**: Routers can be configured in HOCON just like in Scala:
   ```hocon
   pekko.actor.deployment {

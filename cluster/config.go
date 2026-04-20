@@ -131,7 +131,7 @@ func ApplyDetectorConfig(cm *ClusterManager, cfg FailureDetectorConfig) {
 	}
 	threshold := cfg.Threshold
 	if threshold <= 0 {
-		threshold = 10.0
+		threshold = 8.0 // Pekko default
 	}
 	maxSamples := cfg.MaxSampleSize
 	if maxSamples <= 0 {

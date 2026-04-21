@@ -327,12 +327,8 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 
 	// ── Cluster Sharding ────────────────────────────────────────────────────
 	shardingPrefix := prefix + ".cluster.sharding"
-	// Passivation: try the correct Pekko path first, then fall back to the legacy short path.
+	// Passivation: correct Pekko path only (no fallback to legacy .passivation.idle-timeout)
 	if v, err := cfg.GetString(shardingPrefix + ".passivation.default-idle-strategy.idle-entity.timeout"); err == nil {
-		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
-			nodeCfg.Sharding.PassivationIdleTimeout = d
-		}
-	} else if v, err := cfg.GetString(shardingPrefix + ".passivation.idle-timeout"); err == nil {
 		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
 			nodeCfg.Sharding.PassivationIdleTimeout = d
 		}
@@ -351,6 +347,18 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 	}
 	if v, err := cfg.GetString(shardingPrefix + ".role"); err == nil {
 		nodeCfg.Sharding.Role = strings.TrimSpace(v)
+	}
+	if v, err := cfg.GetString(shardingPrefix + ".guardian-name"); err == nil {
+		nodeCfg.Sharding.GuardianName = strings.TrimSpace(v)
+	}
+	if v, err := cfg.GetString(shardingPrefix + ".remember-entities-store"); err == nil {
+		nodeCfg.Sharding.RememberEntitiesStore = strings.TrimSpace(v)
+	}
+	if v, err := cfg.GetString(shardingPrefix + ".passivation.strategy"); err == nil {
+		nodeCfg.Sharding.PassivationStrategy = strings.TrimSpace(v)
+	}
+	if v, err := cfg.GetInt(shardingPrefix + ".passivation.custom-lru-strategy.active-entity-limit"); err == nil {
+		nodeCfg.Sharding.PassivationActiveEntityLimit = v
 	}
 
 	// ── Sharding Adaptive Rebalancing (gekka-native) ────────────────────────
@@ -398,6 +406,12 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 			nodeCfg.Singleton.HandOverRetryInterval = d
 		}
 	}
+	if v, err := cfg.GetString(singletonPrefix + ".singleton-name"); err == nil {
+		nodeCfg.Singleton.SingletonName = strings.TrimSpace(v)
+	}
+	if v, err := cfg.GetInt(singletonPrefix + ".min-number-of-hand-over-retries"); err == nil {
+		nodeCfg.Singleton.MinNumberOfHandOverRetries = v
+	}
 
 	// ── Cluster Singleton Proxy ────────────────────────────────────────────
 	singletonProxyPrefix := prefix + ".cluster.singleton-proxy"
@@ -408,6 +422,12 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 	}
 	if v, err := cfg.GetInt(singletonProxyPrefix + ".buffer-size"); err == nil {
 		nodeCfg.SingletonProxy.BufferSize = v
+	}
+	if v, err := cfg.GetString(singletonProxyPrefix + ".singleton-name"); err == nil {
+		nodeCfg.SingletonProxy.SingletonName = strings.TrimSpace(v)
+	}
+	if v, err := cfg.GetString(singletonProxyPrefix + ".role"); err == nil {
+		nodeCfg.SingletonProxy.Role = strings.TrimSpace(v)
 	}
 
 	// ── Failure Detector ────────────────────────────────────────────────────
@@ -687,6 +707,9 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 	}
 	if v, err := cfg.GetInt(sbrPrefix + ".static-quorum.quorum-size"); err == nil {
 		nodeCfg.SBR.QuorumSize = v
+	}
+	if v, err := cfg.GetString(sbrPrefix + ".static-quorum.role"); err == nil {
+		nodeCfg.SBR.StaticQuorumRole = strings.TrimSpace(v)
 	}
 	if v, err := cfg.GetString(sbrPrefix + ".down-all-when-unstable"); err == nil {
 		v = strings.ToLower(strings.TrimSpace(v))

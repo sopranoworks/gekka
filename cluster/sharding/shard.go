@@ -299,6 +299,11 @@ func (s *Shard) handleEnvelope(m ShardingEnvelope) {
 		}
 		// Journal path: persist EntityStarted event.
 		s.persistEntityStarted(m.EntityId)
+
+		// LRU eviction: if using custom-lru-strategy, check entity limit.
+		if s.settings.PassivationStrategy == "custom-lru-strategy" {
+			s.checkLRUEviction()
+		}
 	}
 
 	// Update activity timestamp for passivation tracking.
@@ -344,6 +349,32 @@ func (s *Shard) handleTerminated(terminated actor.Ref) {
 			s.persistEntityStopped(id)
 			s.Log().Info("entity terminated (removed from store)", "entityId", id)
 			return
+		}
+	}
+}
+
+// checkLRUEviction evicts the least-recently-used entity when the active
+// entity count exceeds the configured limit (custom-lru-strategy).
+func (s *Shard) checkLRUEviction() {
+	limit := s.settings.PassivationActiveEntityLimit
+	if limit <= 0 {
+		limit = 100000
+	}
+	if len(s.entities) <= limit {
+		return
+	}
+	var oldestID EntityId
+	var oldestTime time.Time
+	for id, t := range s.lastActivity {
+		if oldestTime.IsZero() || t.Before(oldestTime) {
+			oldestID = id
+			oldestTime = t
+		}
+	}
+	if oldestID != "" {
+		if ref, ok := s.entities[oldestID]; ok {
+			s.Log().Info("LRU evicting entity", "entityId", oldestID, "activeEntities", len(s.entities), "limit", limit)
+			s.handlePassivate(ref)
 		}
 	}
 }

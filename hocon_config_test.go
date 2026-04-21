@@ -259,6 +259,30 @@ pekko {
 	}
 }
 
+func TestHOCON_SBRConfig_StaticQuorumRole(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery.canonical { hostname = "127.0.0.1", port = 2552 }
+  cluster {
+    seed-nodes = []
+    split-brain-resolver {
+      active-strategy = static-quorum
+      static-quorum {
+        quorum-size = 3
+        role = "backend"
+      }
+    }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.SBR.StaticQuorumRole != "backend" {
+		t.Errorf("StaticQuorumRole = %q, want %q", cfg.SBR.StaticQuorumRole, "backend")
+	}
+}
+
 func TestHOCON_SBRConfig_DownAllWhenUnstable_On(t *testing.T) {
 	cfg, err := parseHOCONString(`
 pekko.remote.artery.canonical.hostname = "127.0.0.1"
@@ -325,7 +349,7 @@ func TestHOCON_ShardingConfig(t *testing.T) {
 pekko.remote.artery.canonical.hostname = "127.0.0.1"
 pekko.remote.artery.canonical.port = 2552
 pekko.cluster.seed-nodes = []
-pekko.cluster.sharding.passivation.idle-timeout = "2m"
+pekko.cluster.sharding.passivation.default-idle-strategy.idle-entity.timeout = "2m"
 pekko.cluster.sharding.remember-entities = on
 `)
 	if err != nil {
@@ -340,20 +364,98 @@ pekko.cluster.sharding.remember-entities = on
 }
 
 func TestHOCON_ShardingConfig_PekkoPassivationPath(t *testing.T) {
-	// The correct Pekko path takes priority over the legacy short path.
+	// Only the correct Pekko path is parsed.
 	cfg, err := parseHOCONString(`
 pekko.remote.artery.canonical.hostname = "127.0.0.1"
 pekko.remote.artery.canonical.port = 2552
 pekko.cluster.seed-nodes = []
 pekko.cluster.sharding.passivation.default-idle-strategy.idle-entity.timeout = "5m"
-pekko.cluster.sharding.passivation.idle-timeout = "2m"
 `)
 	if err != nil {
 		t.Fatalf("parseHOCONString: %v", err)
 	}
-	// Should use the correct Pekko path (5m), not the fallback (2m).
 	if cfg.Sharding.PassivationIdleTimeout != 5*time.Minute {
 		t.Errorf("PassivationIdleTimeout = %v, want 5m (correct Pekko path)", cfg.Sharding.PassivationIdleTimeout)
+	}
+}
+
+func TestHOCON_ShardingConfig_OldPassivationPath_Ignored(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery.canonical { hostname = "127.0.0.1", port = 2552 }
+  cluster {
+    seed-nodes = []
+    sharding.passivation.idle-timeout = 45s
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.Sharding.PassivationIdleTimeout != 0 {
+		t.Errorf("PassivationIdleTimeout = %v, want 0 (old path should be ignored)", cfg.Sharding.PassivationIdleTimeout)
+	}
+}
+
+func TestHOCON_ShardingConfig_GuardianName(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery.canonical { hostname = "127.0.0.1", port = 2552 }
+  cluster {
+    seed-nodes = []
+    sharding.guardian-name = "mySharding"
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.Sharding.GuardianName != "mySharding" {
+		t.Errorf("GuardianName = %q, want %q", cfg.Sharding.GuardianName, "mySharding")
+	}
+}
+
+func TestHOCON_ShardingConfig_PassivationStrategy(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery.canonical { hostname = "127.0.0.1", port = 2552 }
+  cluster {
+    seed-nodes = []
+    sharding {
+      passivation {
+        strategy = "custom-lru-strategy"
+        custom-lru-strategy.active-entity-limit = 5000
+      }
+    }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.Sharding.PassivationStrategy != "custom-lru-strategy" {
+		t.Errorf("PassivationStrategy = %q, want %q", cfg.Sharding.PassivationStrategy, "custom-lru-strategy")
+	}
+	if cfg.Sharding.PassivationActiveEntityLimit != 5000 {
+		t.Errorf("PassivationActiveEntityLimit = %d, want 5000", cfg.Sharding.PassivationActiveEntityLimit)
+	}
+}
+
+func TestHOCON_ShardingConfig_RememberEntitiesStore(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery.canonical { hostname = "127.0.0.1", port = 2552 }
+  cluster {
+    seed-nodes = []
+    sharding.remember-entities-store = "eventsourced"
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.Sharding.RememberEntitiesStore != "eventsourced" {
+		t.Errorf("RememberEntitiesStore = %q, want %q", cfg.Sharding.RememberEntitiesStore, "eventsourced")
 	}
 }
 
@@ -1088,6 +1190,40 @@ pekko.cluster.seed-nodes = []
 	}
 	if cfg.SingletonProxy.BufferSize != 0 {
 		t.Errorf("SingletonProxy.BufferSize = %d, want 0 (use default)", cfg.SingletonProxy.BufferSize)
+	}
+}
+
+func TestHOCON_SingletonConfig_NewFields(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery.canonical { hostname = "127.0.0.1", port = 2552 }
+  cluster {
+    seed-nodes = []
+    singleton {
+      singleton-name = "mySingleton"
+      min-number-of-hand-over-retries = 20
+    }
+    singleton-proxy {
+      singleton-name = "mySingleton"
+      role = "backend"
+    }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.Singleton.SingletonName != "mySingleton" {
+		t.Errorf("SingletonName = %q, want %q", cfg.Singleton.SingletonName, "mySingleton")
+	}
+	if cfg.Singleton.MinNumberOfHandOverRetries != 20 {
+		t.Errorf("MinNumberOfHandOverRetries = %d, want 20", cfg.Singleton.MinNumberOfHandOverRetries)
+	}
+	if cfg.SingletonProxy.SingletonName != "mySingleton" {
+		t.Errorf("SingletonProxy.SingletonName = %q, want %q", cfg.SingletonProxy.SingletonName, "mySingleton")
+	}
+	if cfg.SingletonProxy.Role != "backend" {
+		t.Errorf("SingletonProxy.Role = %q, want %q", cfg.SingletonProxy.Role, "backend")
 	}
 }
 

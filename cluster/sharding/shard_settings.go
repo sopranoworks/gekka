@@ -82,4 +82,20 @@ type ShardSettings struct {
 	// Equivalent HOCON key:
 	//   pekko.cluster.sharding.number-of-shards = 1000
 	NumberOfShards int
+
+	// GuardianName is the actor name for the sharding guardian.
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.guardian-name = "sharding"
+	GuardianName string
+
+	// PassivationStrategy selects the passivation strategy.
+	// "default-idle-strategy" (idle timeout) or "custom-lru-strategy" (LRU eviction).
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.passivation.strategy = "default-idle-strategy"
+	PassivationStrategy string
+
+	// PassivationActiveEntityLimit is the max active entities for LRU strategy.
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.passivation.custom-lru-strategy.active-entity-limit = 100000
+	PassivationActiveEntityLimit int
 }

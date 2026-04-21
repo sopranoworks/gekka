@@ -349,3 +349,48 @@ func TestShardSettings_Defaults(t *testing.T) {
 		t.Error("expected nil Journal by default")
 	}
 }
+
+// TestLRUPassivation verifies that when PassivationStrategy is "custom-lru-strategy"
+// and the active entity count exceeds the limit, the oldest entity is evicted.
+func TestLRUPassivation(t *testing.T) {
+	shard, mctx := newTestShard(t, "TestType", "shard-0", ShardSettings{
+		PassivationStrategy:         "custom-lru-strategy",
+		PassivationActiveEntityLimit: 3,
+	})
+	shard.PreStart()
+
+	// Spawn 3 entities — at the limit, no eviction yet.
+	sendEnvelope(shard, "e1", "msg1")
+	sendEnvelope(shard, "e2", "msg2")
+	sendEnvelope(shard, "e3", "msg3")
+
+	if len(shard.entities) != 3 {
+		t.Fatalf("expected 3 entities, got %d", len(shard.entities))
+	}
+
+	// Set distinct timestamps so e2 is the oldest (LRU target).
+	now := time.Now()
+	shard.lastActivity["e1"] = now.Add(2 * time.Second)
+	shard.lastActivity["e2"] = now // oldest
+	shard.lastActivity["e3"] = now.Add(1 * time.Second)
+
+	// Spawn a 4th entity — should trigger LRU eviction of e2 (oldest activity).
+	sendEnvelope(shard, "e4", "msg4")
+
+	if len(shard.entities) != 3 {
+		t.Errorf("expected 3 entities after LRU eviction, got %d", len(shard.entities))
+	}
+	if _, ok := shard.entities["e2"]; ok {
+		t.Error("expected e2 to be evicted (oldest activity)")
+	}
+	// e1, e3, e4 should still exist.
+	for _, id := range []EntityId{"e1", "e3", "e4"} {
+		if _, ok := shard.entities[id]; !ok {
+			t.Errorf("expected entity %q to still exist", id)
+		}
+	}
+
+	if len(mctx.stopped) != 1 {
+		t.Errorf("expected 1 stop call (evicted entity), got %d", len(mctx.stopped))
+	}
+}

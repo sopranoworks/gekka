@@ -64,6 +64,24 @@ type ShardingSettings struct {
 	//
 	// HOCON: gekka.cluster.sharding.handoff-timeout
 	HandoffTimeout time.Duration
+
+	// GuardianName is the actor name for the sharding guardian.
+	// Corresponds to pekko.cluster.sharding.guardian-name. Default: "sharding".
+	GuardianName string
+
+	// RememberEntitiesStore selects the backend: "eventsourced" or "ddata".
+	// Corresponds to pekko.cluster.sharding.remember-entities-store. Default: "ddata".
+	RememberEntitiesStore string
+
+	// PassivationStrategy selects the passivation strategy.
+	// "default-idle-strategy" (idle timeout) or "custom-lru-strategy" (LRU eviction).
+	// Corresponds to pekko.cluster.sharding.passivation.strategy. Default: "default-idle-strategy".
+	PassivationStrategy string
+
+	// PassivationActiveEntityLimit is the max active entities for LRU strategy.
+	// Corresponds to pekko.cluster.sharding.passivation.custom-lru-strategy.active-entity-limit.
+	// Default: 100000.
+	PassivationActiveEntityLimit int
 }
 
 // StartSharding starts cluster sharding for a given entity type.
@@ -104,6 +122,18 @@ func StartSharding[Command any, Event any, State any](
 		}
 		if settings.PassivationIdleTimeout == 0 && cluster.cfg.Sharding.PassivationIdleTimeout > 0 {
 			settings.PassivationIdleTimeout = cluster.cfg.Sharding.PassivationIdleTimeout
+		}
+		if settings.GuardianName == "" && cluster.cfg.Sharding.GuardianName != "" {
+			settings.GuardianName = cluster.cfg.Sharding.GuardianName
+		}
+		if settings.RememberEntitiesStore == "" && cluster.cfg.Sharding.RememberEntitiesStore != "" {
+			settings.RememberEntitiesStore = cluster.cfg.Sharding.RememberEntitiesStore
+		}
+		if settings.PassivationStrategy == "" && cluster.cfg.Sharding.PassivationStrategy != "" {
+			settings.PassivationStrategy = cluster.cfg.Sharding.PassivationStrategy
+		}
+		if settings.PassivationActiveEntityLimit == 0 && cluster.cfg.Sharding.PassivationActiveEntityLimit > 0 {
+			settings.PassivationActiveEntityLimit = cluster.cfg.Sharding.PassivationActiveEntityLimit
 		}
 	}
 
@@ -203,12 +233,15 @@ func StartSharding[Command any, Event any, State any](
 	}
 
 	shardSettings := sharding.ShardSettings{
-		PassivationIdleTimeout: settings.PassivationIdleTimeout,
-		RememberEntities:       settings.RememberEntities,
-		Journal:                settings.Journal,
-		DataCenter:             settings.DataCenter,
-		HandoffTimeout:         settings.HandoffTimeout,
-		NumberOfShards:         settings.NumberOfShards,
+		PassivationIdleTimeout:      settings.PassivationIdleTimeout,
+		RememberEntities:            settings.RememberEntities,
+		Journal:                     settings.Journal,
+		DataCenter:                  settings.DataCenter,
+		HandoffTimeout:              settings.HandoffTimeout,
+		NumberOfShards:              settings.NumberOfShards,
+		GuardianName:                settings.GuardianName,
+		PassivationStrategy:         settings.PassivationStrategy,
+		PassivationActiveEntityLimit: settings.PassivationActiveEntityLimit,
 	}
 
 	// Populate IsLocalDC when both the cluster and DataCenter are available.

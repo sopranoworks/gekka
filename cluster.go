@@ -637,7 +637,6 @@ type ShardingConfig struct {
 	// PassivationIdleTimeout is the duration after which an entity that
 	// has not received a message is automatically stopped.
 	// Corresponds to pekko.cluster.sharding.passivation.default-idle-strategy.idle-entity.timeout
-	// (with fallback to .passivation.idle-timeout for backwards compatibility).
 	PassivationIdleTimeout time.Duration
 
 	// RememberEntities, when true, persists entity lifecycle events so
@@ -663,6 +662,24 @@ type ShardingConfig struct {
 	// that carry this role.
 	// Corresponds to pekko.cluster.sharding.role.
 	Role string
+
+	// GuardianName is the actor name for the sharding guardian.
+	// Corresponds to pekko.cluster.sharding.guardian-name. Default: "sharding".
+	GuardianName string
+
+	// RememberEntitiesStore selects the backend: "eventsourced" or "ddata".
+	// Corresponds to pekko.cluster.sharding.remember-entities-store. Default: "ddata".
+	RememberEntitiesStore string
+
+	// PassivationStrategy selects the passivation strategy.
+	// "default-idle-strategy" (idle timeout) or "custom-lru-strategy" (LRU eviction).
+	// Corresponds to pekko.cluster.sharding.passivation.strategy. Default: "default-idle-strategy".
+	PassivationStrategy string
+
+	// PassivationActiveEntityLimit is the max active entities for LRU strategy.
+	// Corresponds to pekko.cluster.sharding.passivation.custom-lru-strategy.active-entity-limit.
+	// Default: 100000.
+	PassivationActiveEntityLimit int
 
 	// AdaptiveRebalancing, when enabled, rebalances shards based on real-time
 	// node metrics (CPU, Memory, Mailbox size).
@@ -712,6 +729,17 @@ type SingletonConfig struct {
 	// Corresponds to pekko.cluster.singleton.hand-over-retry-interval.
 	// Default: 1s.
 	HandOverRetryInterval time.Duration
+
+	// SingletonName is the name of the child actor spawned by the manager.
+	// Corresponds to pekko.cluster.singleton.singleton-name.
+	// Default: "singleton".
+	SingletonName string
+
+	// MinNumberOfHandOverRetries is the minimum number of hand-over retries
+	// before the manager gives up. Corresponds to
+	// pekko.cluster.singleton.min-number-of-hand-over-retries.
+	// Default: 15.
+	MinNumberOfHandOverRetries int
 }
 
 // SingletonProxyConfig holds cluster singleton proxy settings parsed from HOCON.
@@ -728,6 +756,17 @@ type SingletonProxyConfig struct {
 	// Corresponds to pekko.cluster.singleton-proxy.buffer-size.
 	// Default: 1000.
 	BufferSize int
+
+	// SingletonName is the name of the singleton child actor that the proxy
+	// appends to the manager path when routing messages.
+	// Corresponds to pekko.cluster.singleton-proxy.singleton-name.
+	// Default: "singleton".
+	SingletonName string
+
+	// Role restricts which nodes the proxy considers when resolving the
+	// oldest node. Corresponds to pekko.cluster.singleton-proxy.role.
+	// Default: "" (any node).
+	Role string
 }
 
 // resolve returns the effective (scheme, system, host, port) for this config.
@@ -2124,12 +2163,18 @@ func (c *Cluster) Replicator() *ddata.Replicator {
 //	proxy := node.SingletonProxy("/user/singletonManager", "")
 //	proxy.Send(ctx, []byte("ping"))
 func (c *Cluster) SingletonProxy(managerPath, role string) gcluster.ClusterSingletonProxyInterface {
+	if role == "" && c.cfg.SingletonProxy.Role != "" {
+		role = c.cfg.SingletonProxy.Role
+	}
 	proxy := singleton.NewClusterSingletonProxy(c.cm, c.router, managerPath, role)
 	if c.cfg.SingletonProxy.SingletonIdentificationInterval > 0 {
 		proxy.WithIdentificationInterval(c.cfg.SingletonProxy.SingletonIdentificationInterval)
 	}
 	if c.cfg.SingletonProxy.BufferSize > 0 {
 		proxy.WithBufferSize(c.cfg.SingletonProxy.BufferSize)
+	}
+	if c.cfg.SingletonProxy.SingletonName != "" {
+		proxy.WithSingletonName(c.cfg.SingletonProxy.SingletonName)
 	}
 	proxy.Start()
 	return proxy
@@ -2150,6 +2195,12 @@ func (c *Cluster) SingletonManager(singletonProps actor.Props, role string) gclu
 	mgr := singleton.NewClusterSingletonManager(c.cm, singletonProps, role)
 	if c.cfg.Singleton.HandOverRetryInterval > 0 {
 		mgr.WithHandOverRetryInterval(c.cfg.Singleton.HandOverRetryInterval)
+	}
+	if c.cfg.Singleton.SingletonName != "" {
+		mgr.WithSingletonName(c.cfg.Singleton.SingletonName)
+	}
+	if c.cfg.Singleton.MinNumberOfHandOverRetries > 0 {
+		mgr.WithMinHandOverRetries(c.cfg.Singleton.MinNumberOfHandOverRetries)
 	}
 	return mgr
 }

@@ -98,6 +98,7 @@ pekko.cluster.split-brain-resolver {
 |---|---|---|---|
 | `active-strategy` | `SBRConfig.ActiveStrategy` | `""` (disabled) | One of the four strategy names |
 | `stable-after` | `SBRConfig.StableAfter` | `20s` | How long reachability must remain stable |
+| `down-all-when-unstable` | `SBRConfig.DownAllWhenUnstable` | `on` | Down all nodes if instability persists beyond stable-after + derived duration |
 | `keep-majority.role` | `SBRConfig.Role` | `""` | Count only members with this role |
 | `keep-oldest.role` | `SBRConfig.Role` | `""` | Count only members with this role |
 | `keep-oldest.down-if-alone` | `SBRConfig.DownIfAlone` | `false` | |

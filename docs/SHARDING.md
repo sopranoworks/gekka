@@ -341,9 +341,17 @@ See [PERSISTENCE.md](PERSISTENCE.md) for journal and snapshot configuration.
 
 ```hocon
 pekko.cluster.sharding {
+    # Total number of shards. Cannot be changed after cluster start.
+    # Wired to ShardCoordinator and ShardRegion.
+    number-of-shards = 1000
+
+    # Restrict sharding to nodes with this cluster role.
+    # Empty (default) means all nodes participate.
+    role = ""
+
     # Automatically stop entities idle longer than this duration.
-    # 0 (default) disables passivation.
-    passivation.idle-timeout = 30m
+    # "120s" (default). Set to 0 to disable passivation.
+    passivation.default-idle-strategy.idle-entity.timeout = 120s
 
     # When "on", entity lifecycle events are persisted so entities are
     # re-spawned after a Shard restart.  Requires a Journal.

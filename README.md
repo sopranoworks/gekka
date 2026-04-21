@@ -32,6 +32,71 @@ Gekka uses HOCON for flexible, layered configuration. Standard `pekko.*` and `ak
 | `pekko.cluster.failure-detector.heartbeat-interval` | `1s` | Heartbeat send interval |
 | `pekko.cluster.failure-detector.acceptable-heartbeat-pause` | `3s` | Tolerable heartbeat gap |
 | `pekko.cluster.failure-detector.max-sample-size` | `1000` | Heartbeat history window |
+| `pekko.cluster.failure-detector.monitored-by-nr-of-members` | `9` | Max heartbeat targets per node |
+| `pekko.cluster.leader-actions-interval` | `1s` | Independent leader action ticker |
+| `pekko.cluster.periodic-tasks-initial-delay` | `1s` | Delay before first periodic tick |
+| `pekko.cluster.shutdown-after-unsuccessful-join-seed-nodes` | `off` | Shutdown on join timeout (`off` = disabled) |
+| `pekko.cluster.allow-weakly-up-members` | `7s` | WeaklyUp promotion timeout (`off` = disabled) |
+| `pekko.cluster.log-info` | `on` | Gate info-level cluster log messages |
+| `pekko.cluster.log-info-verbose` | `off` | Verbose heartbeat, phi, and gossip logging |
+| `pekko.cluster.app-version` | `"0.0.0"` | Application version advertised in handshake |
+| `pekko.cluster.gossip-different-view-probability` | `0.8` | Prefer different-view gossip targets |
+| `pekko.cluster.reduce-gossip-different-view-probability` | `400` | Halve probability at large cluster sizes |
+| `pekko.cluster.gossip-time-to-live` | `2s` | Discard stale incoming gossip |
+| `pekko.cluster.unreachable-nodes-reaper-interval` | `1s` | Periodic phi re-evaluation interval |
+| `pekko.cluster.prune-gossip-tombstones-after` | `24h` | Prune removed-member tombstones |
+| `pekko.cluster.down-removal-margin` | `off` | Delay Down→Removed transition |
+| `pekko.cluster.seed-node-timeout` | `5s` | Warn when seed doesn't respond in time |
+| `pekko.cluster.quarantine-removed-node-after` | `5s` | Schedule UID quarantine after removal |
+| `pekko.cluster.run-coordinated-shutdown-when-down` | `on` | Trigger shutdown when self is downed |
+| `pekko.cluster.configuration-compatibility-check.enforce-on-join` | `on` | Validate config on incoming InitJoin |
+| `pekko.cluster.role.{name}.min-nr-of-members` | — | Per-role gating before leader promotes |
+
+### Singleton & Singleton Proxy (Pekko-compatible)
+
+| Key | Default | Description |
+|---|---|---|
+| `pekko.cluster.singleton.role` | `""` | Restrict singleton to nodes with this role |
+| `pekko.cluster.singleton.hand-over-retry-interval` | `1s` | Retry interval during leadership transfer |
+| `pekko.cluster.singleton-proxy.singleton-identification-interval` | `1s` | Periodic re-resolution of singleton location |
+| `pekko.cluster.singleton-proxy.buffer-size` | `1000` | Buffer messages while singleton is unknown |
+
+### Sharding (Pekko-compatible)
+
+| Key | Default | Description |
+|---|---|---|
+| `pekko.cluster.sharding.number-of-shards` | `1000` | Total shard count (immutable after start) |
+| `pekko.cluster.sharding.role` | `""` | Restrict sharding to nodes with this role |
+| `pekko.cluster.sharding.remember-entities` | `off` | Persist entity lifecycle for auto-respawn |
+| `pekko.cluster.sharding.passivation.default-idle-strategy.idle-entity.timeout` | `120s` | Stop idle entities after this duration |
+
+### Split Brain Resolver (Pekko-compatible)
+
+| Key | Default | Description |
+|---|---|---|
+| `pekko.cluster.split-brain-resolver.active-strategy` | `""` | Strategy: keep-majority, keep-oldest, static-quorum, keep-referee |
+| `pekko.cluster.split-brain-resolver.stable-after` | `20s` | Stability window before decision |
+| `pekko.cluster.split-brain-resolver.down-all-when-unstable` | `on` | Down all nodes if instability persists |
+
+### Pub-Sub (Pekko-compatible)
+
+| Key | Default | Description |
+|---|---|---|
+| `pekko.cluster.pub-sub.gossip-interval` | `1s` | Subscription gossip interval |
+
+### Persistence
+
+| Key | Default | Description |
+|---|---|---|
+| `pekko.persistence.max-concurrent-recoveries` | `50` | Global semaphore for concurrent actor recoveries |
+
+### Remote Transport (Pekko-compatible)
+
+| Key | Default | Description |
+|---|---|---|
+| `pekko.remote.artery.advanced.maximum-frame-size` | `256 KiB` | Maximum Artery frame payload size |
+| `pekko.remote.artery.bind.hostname` | `""` | NAT/Docker: bind address (advertise canonical) |
+| `pekko.remote.artery.bind.port` | `""` | NAT/Docker: bind port (advertise canonical) |
 
 ### Management (Pekko Management-compatible)
 

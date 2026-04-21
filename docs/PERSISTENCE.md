@@ -234,6 +234,24 @@ ref, err := gekka.SpawnDurableState(cluster.System, behavior, "counter-1")
 
 ---
 
+## Recovery Concurrency Limit
+
+By default, Gekka limits the number of persistent actors recovering concurrently
+to **50** (matching Pekko's `pekko.persistence.max-concurrent-recoveries`). This
+prevents a burst of journal replays from overwhelming the database on node restart.
+
+```hocon
+pekko.persistence {
+    max-concurrent-recoveries = 50
+}
+```
+
+The limiter is a global semaphore shared across all persistent actor types
+(`EventSourcedBehavior`, `PersistentFSM`, `ReplicatedEventSourcing`, `DurableStateBehavior`).
+When the limit is reached, additional actors wait until a slot becomes available.
+
+---
+
 ## Integration with Cluster Sharding
 
 When using `StartSharding`, each entity is automatically a persistent actor.

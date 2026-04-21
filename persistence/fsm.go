@@ -294,6 +294,14 @@ func (f *PersistentFSM[S, D, E]) startAsyncWriter() {
 func (f *PersistentFSM[S, D, E]) recover() {
 	ctx := context.Background()
 
+	// Acquire a recovery slot from the global limiter.
+	rl, err := AcquireRecovery(ctx)
+	if err != nil {
+		f.Log().Error("Recovery limiter acquisition failed", "persistenceID", f.persistenceID, "error", err)
+		return
+	}
+	defer rl.Release()
+
 	if f.journal != nil {
 		err := f.journal.ReplayMessages(ctx, f.persistenceID, f.seqNr+1, ^uint64(0), 0, func(repr PersistentRepr) {
 			if event, ok := repr.Payload.(E); ok {

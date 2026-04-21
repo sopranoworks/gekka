@@ -24,7 +24,12 @@ import (
 )
 
 const (
-	// MaxArteryPayloadLength is the maximum allowed payload length (128MB).
+	// DefaultMaxFrameSize is the default maximum allowed payload length.
+	// Pekko's default is 256 KiB (pekko.remote.artery.advanced.maximum-frame-size).
+	DefaultMaxFrameSize = 256 * 1024
+
+	// MaxArteryPayloadLength is the absolute upper bound for validation.
+	// Even with a configurable frame size we never accept more than 128 MB.
 	MaxArteryPayloadLength = 128 * 1024 * 1024
 )
 
@@ -55,11 +60,12 @@ func TcpArteryHandlerWithNodeManager(nm *NodeManager) TcpHandler {
 }
 
 // TcpArteryHandlerWithCallback is an inbound handler that proceeds directly to the read loop with a known streamId.
-func TcpArteryHandlerWithCallback(ctx context.Context, conn net.Conn, handler FrameHandler, ctm *CompressionTableManager, remoteUid uint64, streamId int32) error {
-	return tcpArteryReadLoop(ctx, conn, handler, ctm, remoteUid, streamId)
+func TcpArteryHandlerWithCallback(ctx context.Context, conn net.Conn, handler FrameHandler, ctm *CompressionTableManager, remoteUid uint64, streamId int32, maxFrameSize ...int) error {
+	limit := resolveMaxFrameSize(maxFrameSize)
+	return tcpArteryReadLoop(ctx, conn, handler, ctm, remoteUid, streamId, limit)
 }
 
-func TcpArteryOutboundHandler(ctx context.Context, conn net.Conn, handler FrameHandler, ctm *CompressionTableManager, remoteUid uint64, streamId int32, protocol string) error {
+func TcpArteryOutboundHandler(ctx context.Context, conn net.Conn, handler FrameHandler, ctm *CompressionTableManager, remoteUid uint64, streamId int32, protocol string, maxFrameSize ...int) error {
 	// Both Pekko 1.x and Akka 2.6.x use the AKKA preamble on the wire.
 	// Pekko kept the same Artery TCP framing for backwards compatibility;
 	// the "pekko://" vs "akka://" distinction is only in actor-path URIs,
@@ -71,10 +77,20 @@ func TcpArteryOutboundHandler(ctx context.Context, conn net.Conn, handler FrameH
 		return fmt.Errorf("failed to write stream magic header: %w", err)
 	}
 
-	return tcpArteryReadLoop(ctx, conn, handler, ctm, remoteUid, streamId)
+	limit := resolveMaxFrameSize(maxFrameSize)
+	return tcpArteryReadLoop(ctx, conn, handler, ctm, remoteUid, streamId, limit)
 }
 
-func tcpArteryReadLoop(ctx context.Context, conn net.Conn, handler FrameHandler, ctm *CompressionTableManager, remoteUid uint64, streamId int32) error {
+// resolveMaxFrameSize returns the first element of the variadic slice, or
+// DefaultMaxFrameSize when empty/zero.
+func resolveMaxFrameSize(vals []int) int32 {
+	if len(vals) > 0 && vals[0] > 0 {
+		return int32(vals[0])
+	}
+	return DefaultMaxFrameSize
+}
+
+func tcpArteryReadLoop(ctx context.Context, conn net.Conn, handler FrameHandler, ctm *CompressionTableManager, remoteUid uint64, streamId int32, maxFrameSize int32) error {
 	headerBuf := make([]byte, 4)
 	payloadBuf := make([]byte, 64*1024)
 
@@ -101,8 +117,8 @@ func tcpArteryReadLoop(ctx context.Context, conn net.Conn, handler FrameHandler,
 		if payloadLength < 0 {
 			return fmt.Errorf("invalid payload length: %d", payloadLength)
 		}
-		if payloadLength > MaxArteryPayloadLength {
-			return fmt.Errorf("payload length exceeds limit: %d > %d", payloadLength, MaxArteryPayloadLength)
+		if payloadLength > maxFrameSize {
+			return fmt.Errorf("payload length exceeds limit: %d > %d", payloadLength, maxFrameSize)
 		}
 
 		if payloadLength == 0 {

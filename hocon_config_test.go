@@ -259,6 +259,67 @@ pekko {
 	}
 }
 
+func TestHOCON_SBRConfig_DownAllWhenUnstable_On(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko.remote.artery.canonical.hostname = "127.0.0.1"
+pekko.remote.artery.canonical.port = 2552
+pekko.cluster.seed-nodes = []
+pekko.cluster.split-brain-resolver {
+  active-strategy = keep-majority
+  stable-after = 20s
+  down-all-when-unstable = on
+}
+`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.SBR.DownAllWhenUnstableEnabled == nil || !*cfg.SBR.DownAllWhenUnstableEnabled {
+		t.Fatal("expected DownAllWhenUnstableEnabled = true")
+	}
+	if cfg.SBR.DownAllWhenUnstable != 0 {
+		t.Errorf("expected DownAllWhenUnstable = 0 (derived), got %v", cfg.SBR.DownAllWhenUnstable)
+	}
+}
+
+func TestHOCON_SBRConfig_DownAllWhenUnstable_Off(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko.remote.artery.canonical.hostname = "127.0.0.1"
+pekko.remote.artery.canonical.port = 2552
+pekko.cluster.seed-nodes = []
+pekko.cluster.split-brain-resolver {
+  active-strategy = keep-majority
+  down-all-when-unstable = off
+}
+`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.SBR.DownAllWhenUnstableEnabled == nil || *cfg.SBR.DownAllWhenUnstableEnabled {
+		t.Fatal("expected DownAllWhenUnstableEnabled = false")
+	}
+}
+
+func TestHOCON_SBRConfig_DownAllWhenUnstable_ExplicitDuration(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko.remote.artery.canonical.hostname = "127.0.0.1"
+pekko.remote.artery.canonical.port = 2552
+pekko.cluster.seed-nodes = []
+pekko.cluster.split-brain-resolver {
+  active-strategy = keep-majority
+  down-all-when-unstable = 15s
+}
+`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.SBR.DownAllWhenUnstableEnabled == nil || !*cfg.SBR.DownAllWhenUnstableEnabled {
+		t.Fatal("expected DownAllWhenUnstableEnabled = true")
+	}
+	if cfg.SBR.DownAllWhenUnstable != 15*time.Second {
+		t.Errorf("expected DownAllWhenUnstable = 15s, got %v", cfg.SBR.DownAllWhenUnstable)
+	}
+}
+
 func TestHOCON_ShardingConfig(t *testing.T) {
 	cfg, err := parseHOCONString(`
 pekko.remote.artery.canonical.hostname = "127.0.0.1"
@@ -275,6 +336,54 @@ pekko.cluster.sharding.remember-entities = on
 	}
 	if !cfg.Sharding.RememberEntities {
 		t.Error("RememberEntities = false, want true")
+	}
+}
+
+func TestHOCON_ShardingConfig_PekkoPassivationPath(t *testing.T) {
+	// The correct Pekko path takes priority over the legacy short path.
+	cfg, err := parseHOCONString(`
+pekko.remote.artery.canonical.hostname = "127.0.0.1"
+pekko.remote.artery.canonical.port = 2552
+pekko.cluster.seed-nodes = []
+pekko.cluster.sharding.passivation.default-idle-strategy.idle-entity.timeout = "5m"
+pekko.cluster.sharding.passivation.idle-timeout = "2m"
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	// Should use the correct Pekko path (5m), not the fallback (2m).
+	if cfg.Sharding.PassivationIdleTimeout != 5*time.Minute {
+		t.Errorf("PassivationIdleTimeout = %v, want 5m (correct Pekko path)", cfg.Sharding.PassivationIdleTimeout)
+	}
+}
+
+func TestHOCON_ShardingConfig_NumberOfShards(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko.remote.artery.canonical.hostname = "127.0.0.1"
+pekko.remote.artery.canonical.port = 2552
+pekko.cluster.seed-nodes = []
+pekko.cluster.sharding.number-of-shards = 500
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.Sharding.NumberOfShards != 500 {
+		t.Errorf("NumberOfShards = %d, want 500", cfg.Sharding.NumberOfShards)
+	}
+}
+
+func TestHOCON_ShardingConfig_Role(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko.remote.artery.canonical.hostname = "127.0.0.1"
+pekko.remote.artery.canonical.port = 2552
+pekko.cluster.seed-nodes = []
+pekko.cluster.sharding.role = "worker"
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.Sharding.Role != "worker" {
+		t.Errorf("Role = %q, want worker", cfg.Sharding.Role)
 	}
 }
 
@@ -703,5 +812,606 @@ gekka.management.http { enabled = true }
 	}
 	if cfg.Management.DebugEnabled {
 		t.Error("expected Management.DebugEnabled=false by default")
+	}
+}
+
+func TestParseHOCON_ClusterTimingBatchA(t *testing.T) {
+	hocon := `
+pekko {
+  remote.artery.canonical.hostname = "127.0.0.1"
+  remote.artery.canonical.port = 2552
+  cluster {
+    seed-nodes = ["pekko://TestSystem@127.0.0.1:2552"]
+    leader-actions-interval = 2s
+    periodic-tasks-initial-delay = 3s
+    shutdown-after-unsuccessful-join-seed-nodes = 30s
+    log-info = off
+    log-info-verbose = on
+    allow-weakly-up-members = 10s
+  }
+}
+`
+	cfg, err := ParseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("ParseHOCONString: %v", err)
+	}
+	if cfg.LeaderActionsInterval != 2*time.Second {
+		t.Errorf("LeaderActionsInterval = %v, want 2s", cfg.LeaderActionsInterval)
+	}
+	if cfg.PeriodicTasksInitialDelay != 3*time.Second {
+		t.Errorf("PeriodicTasksInitialDelay = %v, want 3s", cfg.PeriodicTasksInitialDelay)
+	}
+	if cfg.ShutdownAfterUnsuccessfulJoinSeedNodes != 30*time.Second {
+		t.Errorf("ShutdownAfterUnsuccessfulJoinSeedNodes = %v, want 30s", cfg.ShutdownAfterUnsuccessfulJoinSeedNodes)
+	}
+	if cfg.LogInfo == nil || *cfg.LogInfo != false {
+		t.Errorf("LogInfo = %v, want false", cfg.LogInfo)
+	}
+	if !cfg.LogInfoVerbose {
+		t.Error("LogInfoVerbose = false, want true")
+	}
+	if cfg.AllowWeaklyUpMembers != 10*time.Second {
+		t.Errorf("AllowWeaklyUpMembers = %v, want 10s", cfg.AllowWeaklyUpMembers)
+	}
+}
+
+func TestParseHOCON_ShutdownJoinOff(t *testing.T) {
+	hocon := `
+pekko {
+  remote.artery.canonical.hostname = "127.0.0.1"
+  remote.artery.canonical.port = 2552
+  cluster {
+    seed-nodes = ["pekko://TestSystem@127.0.0.1:2552"]
+    shutdown-after-unsuccessful-join-seed-nodes = off
+  }
+}
+`
+	cfg, err := ParseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("ParseHOCONString: %v", err)
+	}
+	if cfg.ShutdownAfterUnsuccessfulJoinSeedNodes != 0 {
+		t.Errorf("ShutdownAfterUnsuccessfulJoinSeedNodes = %v, want 0 (off)", cfg.ShutdownAfterUnsuccessfulJoinSeedNodes)
+	}
+}
+
+func TestParseHOCON_AllowWeaklyUpOff(t *testing.T) {
+	hocon := `
+pekko {
+  remote.artery.canonical.hostname = "127.0.0.1"
+  remote.artery.canonical.port = 2552
+  cluster {
+    seed-nodes = ["pekko://TestSystem@127.0.0.1:2552"]
+    allow-weakly-up-members = off
+  }
+}
+`
+	cfg, err := ParseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("ParseHOCONString: %v", err)
+	}
+	if cfg.AllowWeaklyUpMembers != 0 {
+		t.Errorf("AllowWeaklyUpMembers = %v, want 0 (off)", cfg.AllowWeaklyUpMembers)
+	}
+}
+
+func TestParseHOCON_GossipTuningBatchF1(t *testing.T) {
+	hocon := `
+pekko {
+  remote.artery.canonical.hostname = "127.0.0.1"
+  remote.artery.canonical.port = 2552
+  cluster {
+    seed-nodes = ["pekko://TestSystem@127.0.0.1:2552"]
+    gossip-different-view-probability = 0.9
+    reduce-gossip-different-view-probability = 200
+    gossip-time-to-live = 3s
+    prune-gossip-tombstones-after = 12h
+  }
+}
+`
+	cfg, err := ParseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("ParseHOCONString: %v", err)
+	}
+	if cfg.GossipDifferentViewProbability != 0.9 {
+		t.Errorf("GossipDifferentViewProbability = %v, want 0.9", cfg.GossipDifferentViewProbability)
+	}
+	if cfg.ReduceGossipDifferentViewProbability != 200 {
+		t.Errorf("ReduceGossipDifferentViewProbability = %d, want 200", cfg.ReduceGossipDifferentViewProbability)
+	}
+	if cfg.GossipTimeToLive != 3*time.Second {
+		t.Errorf("GossipTimeToLive = %v, want 3s", cfg.GossipTimeToLive)
+	}
+	if cfg.PruneGossipTombstonesAfter != 12*time.Hour {
+		t.Errorf("PruneGossipTombstonesAfter = %v, want 12h", cfg.PruneGossipTombstonesAfter)
+	}
+}
+
+func TestParseHOCON_FailureDetectorBatchF2(t *testing.T) {
+	hocon := `
+pekko {
+  remote.artery.canonical.hostname = "127.0.0.1"
+  remote.artery.canonical.port = 2552
+  cluster {
+    seed-nodes = ["pekko://TestSystem@127.0.0.1:2552"]
+    unreachable-nodes-reaper-interval = 500ms
+    failure-detector {
+      monitored-by-nr-of-members = 5
+    }
+  }
+}
+`
+	cfg, err := ParseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("ParseHOCONString: %v", err)
+	}
+	if cfg.FailureDetector.MonitoredByNrOfMembers != 5 {
+		t.Errorf("MonitoredByNrOfMembers = %d, want 5", cfg.FailureDetector.MonitoredByNrOfMembers)
+	}
+	if cfg.UnreachableNodesReaperInterval != 500*time.Millisecond {
+		t.Errorf("UnreachableNodesReaperInterval = %v, want 500ms", cfg.UnreachableNodesReaperInterval)
+	}
+}
+
+func TestParseHOCON_ClusterLifecycleBatchF3(t *testing.T) {
+	hocon := `
+pekko {
+  remote.artery.canonical.hostname = "127.0.0.1"
+  remote.artery.canonical.port = 2552
+  cluster {
+    seed-nodes = ["pekko://TestSystem@127.0.0.1:2552"]
+    down-removal-margin = 10s
+    seed-node-timeout = 8s
+    configuration-compatibility-check {
+      enforce-on-join = on
+    }
+  }
+}
+`
+	cfg, err := ParseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("ParseHOCONString: %v", err)
+	}
+	if cfg.DownRemovalMargin != 10*time.Second {
+		t.Errorf("DownRemovalMargin = %v, want 10s", cfg.DownRemovalMargin)
+	}
+	if cfg.SeedNodeTimeout != 8*time.Second {
+		t.Errorf("SeedNodeTimeout = %v, want 8s", cfg.SeedNodeTimeout)
+	}
+	if cfg.ConfigCompatCheck.EnforceOnJoin == nil {
+		t.Fatal("ConfigCompatCheck.EnforceOnJoin should not be nil")
+	}
+	if *cfg.ConfigCompatCheck.EnforceOnJoin != true {
+		t.Errorf("ConfigCompatCheck.EnforceOnJoin = %v, want true", *cfg.ConfigCompatCheck.EnforceOnJoin)
+	}
+}
+
+func TestParseHOCON_DownRemovalMarginOff(t *testing.T) {
+	hocon := `
+pekko {
+  remote.artery.canonical.hostname = "127.0.0.1"
+  remote.artery.canonical.port = 2552
+  cluster {
+    seed-nodes = []
+    down-removal-margin = off
+  }
+}
+`
+	cfg, err := ParseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("ParseHOCONString: %v", err)
+	}
+	if cfg.DownRemovalMargin != 0 {
+		t.Errorf("DownRemovalMargin = %v, want 0 (off)", cfg.DownRemovalMargin)
+	}
+}
+
+func TestParseHOCON_EnforceOnJoinOff(t *testing.T) {
+	hocon := `
+pekko {
+  remote.artery.canonical.hostname = "127.0.0.1"
+  remote.artery.canonical.port = 2552
+  cluster {
+    seed-nodes = []
+    configuration-compatibility-check {
+      enforce-on-join = off
+    }
+  }
+}
+`
+	cfg, err := ParseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("ParseHOCONString: %v", err)
+	}
+	if cfg.ConfigCompatCheck.EnforceOnJoin == nil {
+		t.Fatal("ConfigCompatCheck.EnforceOnJoin should not be nil")
+	}
+	if *cfg.ConfigCompatCheck.EnforceOnJoin != false {
+		t.Errorf("ConfigCompatCheck.EnforceOnJoin = %v, want false", *cfg.ConfigCompatCheck.EnforceOnJoin)
+	}
+}
+
+func TestHOCON_SingletonConfig(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery.canonical {
+    hostname = "127.0.0.1"
+    port = 2552
+  }
+  cluster {
+    seed-nodes = []
+    singleton {
+      role = "backend"
+      hand-over-retry-interval = 2s
+    }
+    singleton-proxy {
+      singleton-identification-interval = 3s
+      buffer-size = 500
+    }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.Singleton.Role != "backend" {
+		t.Errorf("Singleton.Role = %q, want %q", cfg.Singleton.Role, "backend")
+	}
+	if cfg.Singleton.HandOverRetryInterval != 2*time.Second {
+		t.Errorf("Singleton.HandOverRetryInterval = %v, want 2s", cfg.Singleton.HandOverRetryInterval)
+	}
+	if cfg.SingletonProxy.SingletonIdentificationInterval != 3*time.Second {
+		t.Errorf("SingletonProxy.SingletonIdentificationInterval = %v, want 3s", cfg.SingletonProxy.SingletonIdentificationInterval)
+	}
+	if cfg.SingletonProxy.BufferSize != 500 {
+		t.Errorf("SingletonProxy.BufferSize = %d, want 500", cfg.SingletonProxy.BufferSize)
+	}
+}
+
+func TestHOCON_SingletonConfig_Defaults(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko.remote.artery.canonical.hostname = "127.0.0.1"
+pekko.remote.artery.canonical.port = 2552
+pekko.cluster.seed-nodes = []
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.Singleton.Role != "" {
+		t.Errorf("Singleton.Role = %q, want empty", cfg.Singleton.Role)
+	}
+	if cfg.Singleton.HandOverRetryInterval != 0 {
+		t.Errorf("Singleton.HandOverRetryInterval = %v, want 0 (use default)", cfg.Singleton.HandOverRetryInterval)
+	}
+	if cfg.SingletonProxy.SingletonIdentificationInterval != 0 {
+		t.Errorf("SingletonProxy.SingletonIdentificationInterval = %v, want 0 (use default)", cfg.SingletonProxy.SingletonIdentificationInterval)
+	}
+	if cfg.SingletonProxy.BufferSize != 0 {
+		t.Errorf("SingletonProxy.BufferSize = %d, want 0 (use default)", cfg.SingletonProxy.BufferSize)
+	}
+}
+
+func TestHOCON_MaxFrameSize(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery {
+    canonical {
+      hostname = "127.0.0.1"
+      port = 2552
+    }
+    advanced {
+      maximum-frame-size = 524288
+    }
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	want := 512 * 1024
+	if cfg.MaxFrameSize != want {
+		t.Errorf("MaxFrameSize = %d, want %d", cfg.MaxFrameSize, want)
+	}
+}
+
+func TestHOCON_MaxFrameSize_WithUnit(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery {
+    canonical {
+      hostname = "127.0.0.1"
+      port = 2552
+    }
+    advanced {
+      maximum-frame-size = "512KiB"
+    }
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	want := 512 * 1024
+	if cfg.MaxFrameSize != want {
+		t.Errorf("MaxFrameSize = %d, want %d", cfg.MaxFrameSize, want)
+	}
+}
+
+func TestHOCON_MaxFrameSize_Default(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko.remote.artery.canonical.hostname = "127.0.0.1"
+pekko.remote.artery.canonical.port = 2552
+pekko.cluster.seed-nodes = []
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.MaxFrameSize != 0 {
+		t.Errorf("MaxFrameSize = %d, want 0 (use default)", cfg.MaxFrameSize)
+	}
+}
+
+func TestHOCON_AppVersion(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery.canonical {
+    hostname = "127.0.0.1"
+    port = 2552
+  }
+  cluster {
+    seed-nodes = []
+    app-version = "2.1.0"
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.AppVersion != "2.1.0" {
+		t.Errorf("AppVersion = %q, want %q", cfg.AppVersion, "2.1.0")
+	}
+}
+
+func TestHOCON_RunCoordinatedShutdownWhenDown(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery.canonical {
+    hostname = "127.0.0.1"
+    port = 2552
+  }
+  cluster {
+    seed-nodes = []
+    run-coordinated-shutdown-when-down = off
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.RunCoordinatedShutdownWhenDown == nil {
+		t.Fatal("RunCoordinatedShutdownWhenDown should not be nil")
+	}
+	if *cfg.RunCoordinatedShutdownWhenDown != false {
+		t.Errorf("RunCoordinatedShutdownWhenDown = %v, want false", *cfg.RunCoordinatedShutdownWhenDown)
+	}
+}
+
+func TestHOCON_QuarantineRemovedNodeAfter(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery.canonical {
+    hostname = "127.0.0.1"
+    port = 2552
+  }
+  cluster {
+    seed-nodes = []
+    quarantine-removed-node-after = 10s
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.QuarantineRemovedNodeAfter != 10*time.Second {
+		t.Errorf("QuarantineRemovedNodeAfter = %v, want 10s", cfg.QuarantineRemovedNodeAfter)
+	}
+}
+
+func TestHOCON_QuarantineRemovedNodeAfter_Off(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery.canonical {
+    hostname = "127.0.0.1"
+    port = 2552
+  }
+  cluster {
+    seed-nodes = []
+    quarantine-removed-node-after = off
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.QuarantineRemovedNodeAfter != 0 {
+		t.Errorf("QuarantineRemovedNodeAfter = %v, want 0 (off)", cfg.QuarantineRemovedNodeAfter)
+	}
+}
+
+func TestHOCON_BindHostnameAndPort(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery {
+    canonical {
+      hostname = "10.0.0.1"
+      port = 2552
+    }
+    bind {
+      hostname = "0.0.0.0"
+      port = 9000
+    }
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.Host != "10.0.0.1" {
+		t.Errorf("Host = %q, want %q", cfg.Host, "10.0.0.1")
+	}
+	if cfg.Port != 2552 {
+		t.Errorf("Port = %d, want 2552", cfg.Port)
+	}
+	if cfg.BindHostname != "0.0.0.0" {
+		t.Errorf("BindHostname = %q, want %q", cfg.BindHostname, "0.0.0.0")
+	}
+	if cfg.BindPort != 9000 {
+		t.Errorf("BindPort = %d, want 9000", cfg.BindPort)
+	}
+}
+
+func TestHOCON_BindHostnameOnly(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery {
+    canonical {
+      hostname = "10.0.0.1"
+      port = 2552
+    }
+    bind {
+      hostname = "0.0.0.0"
+    }
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.BindHostname != "0.0.0.0" {
+		t.Errorf("BindHostname = %q, want %q", cfg.BindHostname, "0.0.0.0")
+	}
+	if cfg.BindPort != 0 {
+		t.Errorf("BindPort = %d, want 0 (unset)", cfg.BindPort)
+	}
+}
+
+func TestHOCON_BindEmpty(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery.canonical {
+    hostname = "127.0.0.1"
+    port = 2552
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.BindHostname != "" {
+		t.Errorf("BindHostname = %q, want empty (unset)", cfg.BindHostname)
+	}
+	if cfg.BindPort != 0 {
+		t.Errorf("BindPort = %d, want 0 (unset)", cfg.BindPort)
+	}
+}
+
+func TestHOCON_PubSubGossipInterval(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery.canonical {
+    hostname = "127.0.0.1"
+    port = 2552
+  }
+  cluster {
+    seed-nodes = []
+    pub-sub {
+      gossip-interval = 500ms
+    }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.PubSub.GossipInterval != 500*time.Millisecond {
+		t.Errorf("PubSub.GossipInterval = %v, want 500ms", cfg.PubSub.GossipInterval)
+	}
+}
+
+func TestHOCON_MaxConcurrentRecoveries(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery.canonical {
+    hostname = "127.0.0.1"
+    port = 2552
+  }
+  cluster.seed-nodes = []
+  persistence {
+    max-concurrent-recoveries = 25
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.Persistence.MaxConcurrentRecoveries != 25 {
+		t.Errorf("MaxConcurrentRecoveries = %d, want 25", cfg.Persistence.MaxConcurrentRecoveries)
+	}
+}
+
+func TestHOCON_RoleMinNrOfMembers(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery.canonical {
+    hostname = "127.0.0.1"
+    port = 2552
+  }
+  cluster {
+    seed-nodes = []
+    role {
+      backend {
+        min-nr-of-members = 3
+      }
+      frontend {
+        min-nr-of-members = 1
+      }
+    }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.RoleMinNrOfMembers == nil {
+		t.Fatal("RoleMinNrOfMembers is nil")
+	}
+	if cfg.RoleMinNrOfMembers["backend"] != 3 {
+		t.Errorf("RoleMinNrOfMembers[backend] = %d, want 3", cfg.RoleMinNrOfMembers["backend"])
+	}
+	if cfg.RoleMinNrOfMembers["frontend"] != 1 {
+		t.Errorf("RoleMinNrOfMembers[frontend] = %d, want 1", cfg.RoleMinNrOfMembers["frontend"])
+	}
+}
+
+func TestHOCON_RoleMinNrOfMembers_Empty(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery.canonical {
+    hostname = "127.0.0.1"
+    port = 2552
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.RoleMinNrOfMembers != nil {
+		t.Errorf("RoleMinNrOfMembers should be nil when not configured, got %v", cfg.RoleMinNrOfMembers)
 	}
 }

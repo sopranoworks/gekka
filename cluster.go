@@ -35,6 +35,7 @@ import (
 	"github.com/sopranoworks/gekka/discovery"
 	"github.com/sopranoworks/gekka/internal/core"
 	"github.com/sopranoworks/gekka/internal/management"
+	"github.com/sopranoworks/gekka/persistence"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 	"github.com/sopranoworks/gekka/stream"
@@ -94,6 +95,22 @@ type ClusterConfig struct {
 	// Ignored when Address is set.
 	Port uint32 `hocon:"pekko.remote.artery.canonical.port"`
 
+	// BindHostname is the address the TCP listener actually binds to.
+	// When set, the server listens on BindHostname while advertising the
+	// canonical Host to the rest of the cluster. This supports NAT/Docker
+	// environments where the external (canonical) address differs from the
+	// internal (bind) address.
+	// Corresponds to pekko.remote.artery.bind.hostname.
+	// Default: "" (use canonical hostname).
+	BindHostname string
+
+	// BindPort is the port the TCP listener actually binds to.
+	// When non-zero, the server listens on BindPort while advertising the
+	// canonical Port to the rest of the cluster.
+	// Corresponds to pekko.remote.artery.bind.port.
+	// Default: 0 (use canonical port).
+	BindPort uint32
+
 	// Provider selects the actor-path protocol prefix.
 	// Ignored when Address is set. Defaults to ProviderPekko.
 	Provider Provider
@@ -136,6 +153,12 @@ type ClusterConfig struct {
 	// Corresponds to pekko.loglevel (Pekko-compatible).
 	// Fallback: gekka.logging.level (deprecated).
 	LogLevel string `hocon:"pekko.loglevel"`
+
+	// MaxFrameSize is the maximum Artery frame payload size in bytes.
+	// Frames larger than this are rejected by the read loop.
+	// Corresponds to pekko.remote.artery.advanced.maximum-frame-size.
+	// Default: 256 KiB (Pekko default). Set to 0 to use the default.
+	MaxFrameSize int
 
 	// Transport selects the Artery transport: "tcp" (default) or "tls-tcp".
 	// When "tls-tcp", the TLS field must be populated with valid PEM paths.
@@ -203,6 +226,13 @@ type ClusterConfig struct {
 	// Default: 1 (no gate).
 	MinNrOfMembers int
 
+	// RoleMinNrOfMembers maps role names to the minimum number of members
+	// with that role required before the leader promotes Joining members to Up.
+	// Corresponds to pekko.cluster.role.{name}.min-nr-of-members.
+	// When set, both the global MinNrOfMembers AND each per-role minimum must
+	// be satisfied before any promotions occur.
+	RoleMinNrOfMembers map[string]int
+
 	// RetryUnsuccessfulJoinAfter is how often to retry the initial join (InitJoin)
 	// when no Welcome has been received.
 	// Corresponds to pekko.cluster.retry-unsuccessful-join-after.
@@ -213,6 +243,76 @@ type ClusterConfig struct {
 	// Corresponds to pekko.cluster.gossip-interval.
 	// Default: 1s.
 	GossipInterval time.Duration
+
+	// LeaderActionsInterval is how often leader actions are evaluated.
+	// When zero, leader actions run on every gossip tick (legacy behavior).
+	// Corresponds to pekko.cluster.leader-actions-interval.
+	// Default: 0 (run on gossip tick).
+	LeaderActionsInterval time.Duration
+
+	// PeriodicTasksInitialDelay is the delay before starting gossip and
+	// heartbeat loops after cluster initialization.
+	// Corresponds to pekko.cluster.periodic-tasks-initial-delay.
+	// Default: 1s.
+	PeriodicTasksInitialDelay time.Duration
+
+	// ShutdownAfterUnsuccessfulJoinSeedNodes is the maximum time to retry
+	// joining seed nodes before aborting. Zero means no timeout (retry forever).
+	// Corresponds to pekko.cluster.shutdown-after-unsuccessful-join-seed-nodes.
+	// Default: 0 (off).
+	ShutdownAfterUnsuccessfulJoinSeedNodes time.Duration
+
+	// LogInfo controls whether informational cluster messages are logged.
+	// Corresponds to pekko.cluster.log-info.
+	// Default: true.
+	LogInfo *bool
+
+	// LogInfoVerbose controls whether verbose cluster messages are logged
+	// (gossip details, heartbeat events).
+	// Corresponds to pekko.cluster.log-info-verbose.
+	// Default: false.
+	LogInfoVerbose bool
+
+	// AllowWeaklyUpMembers is the duration after which Joining members are
+	// promoted to WeaklyUp without convergence. Zero disables WeaklyUp.
+	// Corresponds to pekko.cluster.allow-weakly-up-members.
+	// Default: 7s.
+	AllowWeaklyUpMembers time.Duration
+
+	// GossipDifferentViewProbability is the probability [0.0, 1.0] that a
+	// gossip round targets a node with a different state hash (to speed up
+	// convergence). When random selection picks a same-view node, it is
+	// re-rolled with this probability to prefer a different-view node.
+	// Corresponds to pekko.cluster.gossip-different-view-probability.
+	// Default: 0.8.
+	GossipDifferentViewProbability float64
+
+	// ReduceGossipDifferentViewProbability is the cluster size above which
+	// GossipDifferentViewProbability is reduced to 0.4 (halved).
+	// Corresponds to pekko.cluster.reduce-gossip-different-view-probability.
+	// Default: 400.
+	ReduceGossipDifferentViewProbability int
+
+	// GossipTimeToLive is the maximum acceptable age of incoming gossip.
+	// Gossip received after TTL duration since the last local gossip update
+	// is discarded. Zero disables TTL checking.
+	// Corresponds to pekko.cluster.gossip-time-to-live.
+	// Default: 2s.
+	GossipTimeToLive time.Duration
+
+	// PruneGossipTombstonesAfter is how long removed-member tombstones are
+	// retained in gossip state before being pruned. This prevents indefinite
+	// growth of the removed-member list.
+	// Corresponds to pekko.cluster.prune-gossip-tombstones-after.
+	// Default: 24h.
+	PruneGossipTombstonesAfter time.Duration
+
+	// UnreachableNodesReaperInterval is how often the periodic reaper goroutine
+	// re-evaluates phi for all nodes and publishes unreachable events.
+	// A zero value disables the reaper (relies on gossipTick-driven checks only).
+	// Corresponds to pekko.cluster.unreachable-nodes-reaper-interval.
+	// Default: 1s.
+	UnreachableNodesReaperInterval time.Duration
 
 	// InternalSBR configures the lightweight internal SBR strategy
 	// (icluster.Strategy) that is evaluated inline by CheckReachability.
@@ -238,6 +338,49 @@ type ClusterConfig struct {
 	//	    remember-entities = on
 	//	}
 	Sharding ShardingConfig `hocon:"gekka.cluster.sharding"`
+
+	// Singleton holds singleton manager configuration parsed from HOCON.
+	// Corresponds to pekko.cluster.singleton.*
+	Singleton SingletonConfig
+
+	// SingletonProxy holds singleton proxy configuration parsed from HOCON.
+	// Corresponds to pekko.cluster.singleton-proxy.*
+	SingletonProxy SingletonProxyConfig
+
+	// AppVersion is the application version advertised during the cluster join
+	// handshake. Used for rolling update coordination.
+	// Corresponds to pekko.cluster.app-version.
+	// Default: "0.0.0" (unset).
+	AppVersion string
+
+	// RunCoordinatedShutdownWhenDown controls whether the node triggers a
+	// coordinated shutdown when it is marked as Down by the cluster.
+	// Corresponds to pekko.cluster.run-coordinated-shutdown-when-down.
+	// Default: true (nil pointer means on).
+	RunCoordinatedShutdownWhenDown *bool
+
+	// QuarantineRemovedNodeAfter is the delay after a member is removed before
+	// its UID is quarantined, preventing reconnection.
+	// Corresponds to pekko.cluster.quarantine-removed-node-after.
+	// Default: 5s.
+	QuarantineRemovedNodeAfter time.Duration
+
+	// DownRemovalMargin is the duration to delay the Down → Removed transition
+	// after a member is marked as Down. This gives time for the downed node to
+	// detect its own downed status and perform coordinated shutdown before it is
+	// removed from the cluster. Zero or "off" means immediate removal (legacy).
+	// Corresponds to pekko.cluster.down-removal-margin.
+	// Default: 0 (off).
+	DownRemovalMargin time.Duration
+
+	// SeedNodeTimeout is the maximum time to wait for the first seed node to
+	// respond before falling back to self-join (when this node is itself a seed).
+	// Corresponds to pekko.cluster.seed-node-timeout.
+	// Default: 5s.
+	SeedNodeTimeout time.Duration
+
+	// ConfigCompatCheck holds configuration compatibility check settings.
+	ConfigCompatCheck ConfigCompatCheckConfig
 
 	// DataCenter identifies which data center this node belongs to.
 	// Corresponds to pekko.cluster.multi-data-center.self-data-center.
@@ -337,6 +480,10 @@ type ClusterConfig struct {
 	//	}
 	Discovery DiscoveryConfig
 
+	// PubSub holds distributed pub-sub configuration parsed from HOCON.
+	// Corresponds to pekko.cluster.pub-sub.*
+	PubSub PubSubConfig
+
 	// DistributedData configures the Distributed Data Replicator (v0.10.0).
 	DistributedData DistributedDataConfig
 
@@ -358,6 +505,15 @@ type DiscoveryConfig struct {
 
 	// Config holds provider-specific configuration.
 	Config discovery.DiscoveryConfig
+}
+
+// PubSubConfig holds distributed pub-sub configuration parsed from HOCON.
+type PubSubConfig struct {
+	// GossipInterval is the interval between gossip rounds that propagate
+	// subscription state across cluster nodes.
+	// Corresponds to pekko.cluster.pub-sub.gossip-interval.
+	// Default: 1s.
+	GossipInterval time.Duration
 }
 
 // DistributedDataConfig holds settings for the CRDT replicator.
@@ -389,6 +545,13 @@ type PersistenceConfig struct {
 	// Corresponds to pekko.persistence.snapshot-store.plugin.
 	// Leave empty to use InMemorySnapshotStore (the default).
 	SnapshotPlugin string
+
+	// MaxConcurrentRecoveries limits how many persistent actors can recover
+	// (replay events from the journal) concurrently. This prevents a burst
+	// of actors from overwhelming the journal backend on startup.
+	// Corresponds to pekko.persistence.max-concurrent-recoveries.
+	// Default: 50. Zero means use default.
+	MaxConcurrentRecoveries int
 }
 
 // SBRConfig is a re-export of cluster.SBRConfig for use in ClusterConfig.
@@ -410,6 +573,16 @@ type ClusterSingletonManagerInterface = gcluster.ClusterSingletonManagerInterfac
 
 // ClusterSingletonProxyInterface is an alias for gcluster.ClusterSingletonProxyInterface.
 type ClusterSingletonProxyInterface = gcluster.ClusterSingletonProxyInterface
+
+// ConfigCompatCheckConfig holds configuration compatibility check settings.
+type ConfigCompatCheckConfig struct {
+	// EnforceOnJoin, when true, validates the incoming InitJoin config against
+	// the local node's config. If the downing-provider-class values do not match,
+	// the join is rejected. When false, config mismatches are logged but allowed.
+	// Corresponds to pekko.cluster.configuration-compatibility-check.enforce-on-join.
+	// Default: true (nil means on).
+	EnforceOnJoin *bool
+}
 
 // FlightRecorderConfig controls the Artery flight recorder verbosity.
 type FlightRecorderConfig struct {
@@ -442,7 +615,8 @@ type TelemetryConfig struct {
 type ShardingConfig struct {
 	// PassivationIdleTimeout is the duration after which an entity that
 	// has not received a message is automatically stopped.
-	// Corresponds to pekko.cluster.sharding.passivation.idle-timeout.
+	// Corresponds to pekko.cluster.sharding.passivation.default-idle-strategy.idle-entity.timeout
+	// (with fallback to .passivation.idle-timeout for backwards compatibility).
 	PassivationIdleTimeout time.Duration
 
 	// RememberEntities, when true, persists entity lifecycle events so
@@ -457,6 +631,17 @@ type ShardingConfig struct {
 	//
 	// HOCON: gekka.cluster.sharding.handoff-timeout
 	HandoffTimeout time.Duration
+
+	// NumberOfShards is the total number of shards distributed across the cluster.
+	// This value is immutable after sharding starts.
+	// Corresponds to pekko.cluster.sharding.number-of-shards.
+	// Default: 1000.
+	NumberOfShards int
+
+	// Role, when non-empty, restricts shard allocation to cluster members
+	// that carry this role.
+	// Corresponds to pekko.cluster.sharding.role.
+	Role string
 
 	// AdaptiveRebalancing, when enabled, rebalances shards based on real-time
 	// node metrics (CPU, Memory, Mailbox size).
@@ -492,6 +677,36 @@ type AdaptiveRebalancingConfig struct {
 	// MaxSimultaneousRebalance is the maximum number of shards being moved at once.
 	// HOCON: gekka.cluster.sharding.adaptive-rebalancing.max-simultaneous-rebalance
 	MaxSimultaneousRebalance int
+}
+
+// SingletonConfig holds cluster singleton manager settings parsed from HOCON.
+type SingletonConfig struct {
+	// Role restricts the singleton to nodes carrying this role.
+	// Corresponds to pekko.cluster.singleton.role.
+	// Default: "" (any node).
+	Role string
+
+	// HandOverRetryInterval is how often the manager retries handover
+	// coordination during leadership transfer.
+	// Corresponds to pekko.cluster.singleton.hand-over-retry-interval.
+	// Default: 1s.
+	HandOverRetryInterval time.Duration
+}
+
+// SingletonProxyConfig holds cluster singleton proxy settings parsed from HOCON.
+type SingletonProxyConfig struct {
+	// SingletonIdentificationInterval is how often the proxy re-resolves
+	// the oldest node to identify the singleton location.
+	// Corresponds to pekko.cluster.singleton-proxy.singleton-identification-interval.
+	// Default: 1s.
+	SingletonIdentificationInterval time.Duration
+
+	// BufferSize is the maximum number of messages buffered when the
+	// singleton location is unknown. When the buffer is full, the oldest
+	// messages are dropped.
+	// Corresponds to pekko.cluster.singleton-proxy.buffer-size.
+	// Default: 1000.
+	BufferSize int
 }
 
 // resolve returns the effective (scheme, system, host, port) for this config.
@@ -651,6 +866,9 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	metrics := &core.NodeMetrics{}
 	nm := core.NewNodeManager(localAddr, uid)
 	nm.NodeMetrics = metrics
+	if cfg.MaxFrameSize > 0 {
+		nm.MaxFrameSize = cfg.MaxFrameSize
+	}
 	// Apply flight recorder config from HOCON (defaults: enabled=true, level=lifecycle).
 	frEnabled := cfg.FlightRecorder.Enabled
 	// When neither LoadConfig nor explicit struct init has been called,
@@ -691,9 +909,57 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	if cfg.MinNrOfMembers > 0 {
 		cm.MinNrOfMembers = cfg.MinNrOfMembers
 	}
+	if len(cfg.RoleMinNrOfMembers) > 0 {
+		cm.RoleMinNrOfMembers = cfg.RoleMinNrOfMembers
+	}
 	if cfg.GossipInterval > 0 {
 		cm.GossipInterval = cfg.GossipInterval
 	}
+	if cfg.LeaderActionsInterval > 0 {
+		cm.LeaderActionsInterval = cfg.LeaderActionsInterval
+	}
+	if cfg.PeriodicTasksInitialDelay > 0 {
+		cm.PeriodicTasksInitialDelay = cfg.PeriodicTasksInitialDelay
+	}
+	if cfg.ShutdownAfterUnsuccessfulJoinSeedNodes > 0 {
+		cm.ShutdownAfterUnsuccessfulJoinSeedNodes = cfg.ShutdownAfterUnsuccessfulJoinSeedNodes
+	}
+	if cfg.LogInfo != nil {
+		cm.LogInfo = *cfg.LogInfo
+	}
+	cm.LogInfoVerbose = cfg.LogInfoVerbose
+	if cfg.AppVersion != "" {
+		cm.SetLocalAppVersion(gcluster.ParseAppVersion(cfg.AppVersion))
+	}
+	if cfg.AllowWeaklyUpMembers > 0 {
+		cm.AllowWeaklyUpMembers = cfg.AllowWeaklyUpMembers
+	}
+	if cfg.GossipDifferentViewProbability > 0 {
+		cm.GossipDifferentViewProbability = cfg.GossipDifferentViewProbability
+	}
+	if cfg.ReduceGossipDifferentViewProbability > 0 {
+		cm.ReduceGossipDifferentViewProbability = cfg.ReduceGossipDifferentViewProbability
+	}
+	if cfg.GossipTimeToLive > 0 {
+		cm.GossipTimeToLive = cfg.GossipTimeToLive
+	}
+	if cfg.PruneGossipTombstonesAfter > 0 {
+		cm.PruneGossipTombstonesAfter = cfg.PruneGossipTombstonesAfter
+	}
+	if cfg.FailureDetector.MonitoredByNrOfMembers > 0 {
+		cm.MonitoredByNrOfMembers = cfg.FailureDetector.MonitoredByNrOfMembers
+	}
+	if cfg.UnreachableNodesReaperInterval > 0 {
+		cm.UnreachableNodesReaperInterval = cfg.UnreachableNodesReaperInterval
+	}
+	if cfg.DownRemovalMargin > 0 {
+		cm.DownRemovalMargin = cfg.DownRemovalMargin
+	}
+	if cfg.SeedNodeTimeout > 0 {
+		cm.SeedNodeTimeout = cfg.SeedNodeTimeout
+	}
+	// EnforceConfigCompatOnJoin defaults to true (Pekko default).
+	cm.EnforceConfigCompatOnJoin = cfg.ConfigCompatCheck.EnforceOnJoin == nil || *cfg.ConfigCompatCheck.EnforceOnJoin
 
 	// Wire the lightweight internal SBR strategy (icluster.Strategy).
 	gcluster.ApplyInternalSBRConfig(cm, cfg.InternalSBR)
@@ -725,8 +991,24 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 		}
 	}
 
+	// Apply persistence recovery concurrency limit from HOCON.
+	if cfg.Persistence.MaxConcurrentRecoveries > 0 {
+		persistence.SetMaxConcurrentRecoveries(cfg.Persistence.MaxConcurrentRecoveries)
+	}
+
+	// Determine the bind address: use BindHostname/BindPort when configured
+	// (NAT/Docker), otherwise fall back to the canonical host/port.
+	bindHost := host
+	if cfg.BindHostname != "" {
+		bindHost = cfg.BindHostname
+	}
+	bindPort := port
+	if cfg.BindPort != 0 {
+		bindPort = cfg.BindPort
+	}
+
 	server, err := core.NewTcpServer(core.TcpServerConfig{
-		Addr: fmt.Sprintf("%s:%d", host, port),
+		Addr: fmt.Sprintf("%s:%d", bindHost, bindPort),
 		Handler: func(c context.Context, conn net.Conn) error {
 			return nm.ProcessConnection(c, conn, core.INBOUND, nil, 0)
 		},
@@ -766,7 +1048,15 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	// Aeron-UDP transport: start native UDP handler and override DialRemote.
 	var udpH *core.UdpArteryHandler
 	if strings.EqualFold(cfg.Transport, "aeron-udp") {
-		udpAddr := fmt.Sprintf("%s:%d", host, actualPort)
+		udpBindHost := host
+		if cfg.BindHostname != "" {
+			udpBindHost = cfg.BindHostname
+		}
+		udpBindPort := actualPort
+		if cfg.BindPort != 0 {
+			udpBindPort = cfg.BindPort
+		}
+		udpAddr := fmt.Sprintf("%s:%d", udpBindHost, udpBindPort)
 		udpH, err = core.NewUdpArteryHandler(ctx, udpAddr, nm, nil)
 		if err != nil {
 			cancel()
@@ -880,6 +1170,7 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	// members join, but it ensures leader actions (like transitioning
 	// Joining -> Up) happen as soon as possible.
 	go cluster.cm.StartGossipLoop(cluster.ctx)
+	cluster.cm.StartReaper(cluster.ctx)
 	cluster.mg.Start(cluster.ctx)
 
 	// ── Distributed Data ─────────────────────────────────────────────────────
@@ -941,11 +1232,94 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	cluster.cs = actor.NewCoordinatedShutdown()
 	cluster.registerBuiltinShutdownTasks()
 
+	// Wire the join-timeout shutdown callback so that
+	// shutdown-after-unsuccessful-join-seed-nodes triggers CoordinatedShutdown,
+	// matching Pekko's CoordinatedShutdown(system).run(clusterDowningReason).
+	cm.ShutdownCallback = func() {
+		go cluster.GracefulShutdown(context.Background())
+	}
+
 	// ── Split Brain Resolver ─────────────────────────────────────────────────
 	// Start the SBR manager goroutine when a strategy is configured.
 	if sbr := gcluster.NewSBRManager(cm, cfg.SBR); sbr != nil {
 		go sbr.Start(ctx)
 	}
+
+	// ── Coordinated Shutdown on Self-Down ────────────────────────────────────
+	// When run-coordinated-shutdown-when-down is enabled (default), trigger the
+	// full coordinated-shutdown sequence when this node is downed by the cluster.
+	runCSWhenDown := cfg.RunCoordinatedShutdownWhenDown == nil || *cfg.RunCoordinatedShutdownWhenDown
+	if runCSWhenDown {
+		go func() {
+			sub := cm.SubscribeChannel(gcluster.EventMemberDowned)
+			defer sub.Cancel()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case evt, ok := <-sub.C:
+					if !ok {
+						return
+					}
+					if downed, ok := evt.(gcluster.MemberDowned); ok {
+						// Check if self was downed.
+						selfAddr := cm.LocalAddress.GetAddress()
+						if downed.Member.Host == selfAddr.GetHostname() &&
+							downed.Member.Port == selfAddr.GetPort() {
+							log.Printf("[CoordinatedShutdown] self downed — triggering shutdown")
+							go cluster.GracefulShutdown(context.Background())
+							return
+						}
+					}
+				}
+			}
+		}()
+	}
+
+	// ── Quarantine Removed Node After ────────────────────────────────────────
+	// When a member is removed, schedule quarantine of its UID after the
+	// configured delay to prevent it from reconnecting.
+	quarantineDelay := cfg.QuarantineRemovedNodeAfter
+	if quarantineDelay == 0 {
+		quarantineDelay = 5 * time.Second // Pekko default
+	}
+	go func() {
+		sub := cm.SubscribeChannel(gcluster.EventMemberRemoved)
+		defer sub.Cancel()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case evt, ok := <-sub.C:
+				if !ok {
+					return
+				}
+				if removed, ok := evt.(gcluster.MemberRemoved); ok {
+					// Don't quarantine self.
+					selfAddr := cm.LocalAddress.GetAddress()
+					if removed.Member.Host == selfAddr.GetHostname() &&
+						removed.Member.Port == selfAddr.GetPort() {
+						continue
+					}
+					// Schedule quarantine after delay.
+					go func(addr gcluster.MemberAddress) {
+						select {
+						case <-ctx.Done():
+							return
+						case <-time.After(quarantineDelay):
+							// Find the association UID for this address and quarantine it.
+							if assoc, ok := nm.GetGekkaAssociationByHost(addr.Host, addr.Port); ok && assoc != nil {
+								remote := assoc.Remote()
+								if remote != nil && remote.GetUid() != 0 {
+									nm.RegisterQuarantinedUID(remote)
+								}
+							}
+						}
+					}(removed.Member)
+				}
+			}
+		}
+	}()
 
 	// ── Telemetry: cluster member count ──────────────────────────────────────
 	// Subscribe to member events and update the OTEL UpDownCounter so
@@ -1716,7 +2090,34 @@ func (c *Cluster) Replicator() *ddata.Replicator {
 //	proxy := node.SingletonProxy("/user/singletonManager", "")
 //	proxy.Send(ctx, []byte("ping"))
 func (c *Cluster) SingletonProxy(managerPath, role string) gcluster.ClusterSingletonProxyInterface {
-	return singleton.NewClusterSingletonProxy(c.cm, c.router, managerPath, role)
+	proxy := singleton.NewClusterSingletonProxy(c.cm, c.router, managerPath, role)
+	if c.cfg.SingletonProxy.SingletonIdentificationInterval > 0 {
+		proxy.WithIdentificationInterval(c.cfg.SingletonProxy.SingletonIdentificationInterval)
+	}
+	if c.cfg.SingletonProxy.BufferSize > 0 {
+		proxy.WithBufferSize(c.cfg.SingletonProxy.BufferSize)
+	}
+	proxy.Start()
+	return proxy
+}
+
+// SingletonManager creates a ClusterSingletonManager that hosts a singleton
+// actor on the oldest Up cluster node. HOCON settings for singleton.role and
+// singleton.hand-over-retry-interval are applied automatically.
+//
+//	mgr := node.SingletonManager(actor.Props{
+//	    New: func() actor.Actor { return &MyActor{} },
+//	}, "")
+//	ref, _ := node.System.ActorOf(actor.Props{New: func() actor.Actor { return mgr }}, "singletonManager")
+func (c *Cluster) SingletonManager(singletonProps actor.Props, role string) gcluster.ClusterSingletonManagerInterface {
+	if role == "" && c.cfg.Singleton.Role != "" {
+		role = c.cfg.Singleton.Role
+	}
+	mgr := singleton.NewClusterSingletonManager(c.cm, singletonProps, role)
+	if c.cfg.Singleton.HandOverRetryInterval > 0 {
+		mgr.WithHandOverRetryInterval(c.cfg.Singleton.HandOverRetryInterval)
+	}
+	return mgr
 }
 
 // Subscribe registers an ActorRef to receive cluster domain events.

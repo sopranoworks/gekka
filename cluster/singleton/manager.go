@@ -44,6 +44,10 @@ type ClusterSingletonManager struct {
 	singletonProps actor.Props // factory for the singleton actor
 	singletonRef   actor.Ref   // non-nil when the singleton is running on this node
 
+	// HandOverRetryInterval is how often the manager retries handover
+	// coordination during leadership transfer. Default: 1s.
+	handOverRetryInterval time.Duration
+
 	// Lease-based coordination (optional). When set, the manager must acquire
 	// the lease before starting the singleton and releases it on handoff/stop.
 	lease            icluster.Lease
@@ -59,12 +63,28 @@ type ClusterSingletonManager struct {
 // role restricts the set of eligible nodes; pass "" to consider all Up nodes.
 func NewClusterSingletonManager(cm *cluster.ClusterManager, singletonProps actor.Props, role string) *ClusterSingletonManager {
 	return &ClusterSingletonManager{
-		BaseActor:      actor.NewBaseActor(),
-		cm:             cm,
-		role:           role,
-		singletonProps: singletonProps,
+		BaseActor:             actor.NewBaseActor(),
+		cm:                    cm,
+		role:                  role,
+		singletonProps:        singletonProps,
+		handOverRetryInterval: 1 * time.Second,
 	}
 }
+
+// WithHandOverRetryInterval sets how often the manager retries handover
+// coordination during leadership transfer.
+func (m *ClusterSingletonManager) WithHandOverRetryInterval(d time.Duration) *ClusterSingletonManager {
+	if d > 0 {
+		m.handOverRetryInterval = d
+	}
+	return m
+}
+
+// Role returns the configured role filter.
+func (m *ClusterSingletonManager) Role() string { return m.role }
+
+// HandOverRetryInterval returns the configured hand-over retry interval.
+func (m *ClusterSingletonManager) HandOverRetryInterval() time.Duration { return m.handOverRetryInterval }
 
 // WithDataCenter restricts this manager to host the singleton only when this
 // node is the oldest member of the given data center.
@@ -194,7 +214,7 @@ func (m *ClusterSingletonManager) acquireLease() bool {
 	if err != nil || !ok {
 		retryDelay := m.leaseRetryDelay
 		if retryDelay == 0 {
-			retryDelay = 5 * time.Second
+			retryDelay = m.handOverRetryInterval
 		}
 		log.Printf("ClusterSingletonManager: lease acquisition failed, retrying in %s", retryDelay)
 		time.Sleep(retryDelay)

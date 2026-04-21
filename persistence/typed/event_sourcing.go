@@ -313,6 +313,16 @@ func (p *persistentActor[Command, Event, State]) drainUserStash() {
 func (p *persistentActor[Command, Event, State]) recover() {
 	ctx := context.Background()
 
+	// Acquire a recovery slot from the global limiter to prevent
+	// overwhelming the journal backend when many actors start at once.
+	// Corresponds to pekko.persistence.max-concurrent-recoveries.
+	rl, err := persistence.AcquireRecovery(ctx)
+	if err != nil {
+		p.Log().Error("Recovery limiter acquisition failed", "error", err)
+		return
+	}
+	defer rl.Release()
+
 	// Check for disabled recovery
 	if p.behavior.RecoveryStrategy != nil && p.behavior.RecoveryStrategy.Disabled {
 		// Skip recovery — start fresh but read highest seqNr to avoid conflicts

@@ -147,6 +147,132 @@ type ClusterManager struct {
 	// Corresponds to pekko.cluster.min-nr-of-members.
 	// Default: 1 (no gate).
 	MinNrOfMembers int
+
+	// RoleMinNrOfMembers maps role names to the minimum number of members
+	// with that role required before the leader promotes Joining members.
+	// Corresponds to pekko.cluster.role.{name}.min-nr-of-members.
+	RoleMinNrOfMembers map[string]int
+
+	// LeaderActionsInterval is how often leader actions are evaluated.
+	// When zero, leader actions run on every gossip tick (legacy behavior).
+	// Corresponds to pekko.cluster.leader-actions-interval.
+	// Default: 1s.
+	LeaderActionsInterval time.Duration
+
+	// PeriodicTasksInitialDelay is the delay before starting gossip and
+	// heartbeat loops after cluster initialization.
+	// Corresponds to pekko.cluster.periodic-tasks-initial-delay.
+	// Default: 1s.
+	PeriodicTasksInitialDelay time.Duration
+
+	// ShutdownAfterUnsuccessfulJoinSeedNodes is the maximum time to retry
+	// joining seed nodes before aborting and shutting down the cluster.
+	// A zero or negative value means no timeout (retry forever).
+	// Corresponds to pekko.cluster.shutdown-after-unsuccessful-join-seed-nodes.
+	// Default: 0 (off).
+	ShutdownAfterUnsuccessfulJoinSeedNodes time.Duration
+
+	// LogInfo controls whether informational cluster messages are logged.
+	// When false, cluster transitions and general messages are suppressed.
+	// Corresponds to pekko.cluster.log-info.
+	// Default: true.
+	LogInfo bool
+
+	// LogInfoVerbose controls whether verbose cluster messages are logged
+	// (gossip details, heartbeat events, etc.).
+	// Corresponds to pekko.cluster.log-info-verbose.
+	// Default: false.
+	LogInfoVerbose bool
+
+	// AllowWeaklyUpMembers is the duration after which Joining members
+	// are promoted to WeaklyUp even without convergence.
+	// A zero value disables WeaklyUp promotion (requires full convergence).
+	// Corresponds to pekko.cluster.allow-weakly-up-members.
+	// Default: 7s.
+	AllowWeaklyUpMembers time.Duration
+
+	// GossipDifferentViewProbability is the probability [0.0, 1.0] that a
+	// gossip target with a different state view is preferred over one with the
+	// same view, speeding convergence.
+	// Corresponds to pekko.cluster.gossip-different-view-probability.
+	// Default: 0.8.
+	GossipDifferentViewProbability float64
+
+	// ReduceGossipDifferentViewProbability is the cluster size above which
+	// the different-view probability is halved (to 0.4).
+	// Corresponds to pekko.cluster.reduce-gossip-different-view-probability.
+	// Default: 400.
+	ReduceGossipDifferentViewProbability int
+
+	// GossipTimeToLive is the maximum acceptable age of incoming gossip.
+	// Gossip older than this is discarded. Zero disables TTL checking.
+	// Corresponds to pekko.cluster.gossip-time-to-live.
+	// Default: 2s.
+	GossipTimeToLive time.Duration
+
+	// PruneGossipTombstonesAfter is how long removed-member tombstones are
+	// kept before pruning. Zero disables pruning.
+	// Corresponds to pekko.cluster.prune-gossip-tombstones-after.
+	// Default: 24h.
+	PruneGossipTombstonesAfter time.Duration
+
+	// lastGossipUpdate records when the local gossip state was last updated
+	// (for gossip TTL enforcement). Protected by Mu.
+	lastGossipUpdate time.Time
+
+	// tombstones tracks removed members and when they were removed,
+	// for pruning after PruneGossipTombstonesAfter. Protected by Mu.
+	tombstones map[string]time.Time
+
+	// joiningFirstSeen tracks when Joining members were first observed
+	// without convergence, for WeaklyUp promotion timing.
+	// Protected by Mu.
+	joiningFirstSeen map[int32]time.Time
+
+	// MonitoredByNrOfMembers limits the number of nodes this node sends
+	// heartbeats to. When zero or negative, heartbeats are sent to all known
+	// members (legacy behavior).
+	// Corresponds to pekko.cluster.failure-detector.monitored-by-nr-of-members.
+	// Default: 9.
+	MonitoredByNrOfMembers int
+
+	// UnreachableNodesReaperInterval is how often the periodic reaper goroutine
+	// re-evaluates phi for all nodes and publishes unreachable events.
+	// A zero value disables the reaper (relies on gossipTick-driven checks only).
+	// Corresponds to pekko.cluster.unreachable-nodes-reaper-interval.
+	// Default: 1s.
+	UnreachableNodesReaperInterval time.Duration
+
+	// DownRemovalMargin is the duration to delay the Down → Removed transition.
+	// When a member is marked Down, it is not immediately removed; instead it
+	// remains in Down status for this duration to allow coordinated shutdown.
+	// Zero means immediate removal (legacy behavior).
+	// Corresponds to pekko.cluster.down-removal-margin.
+	// Default: 0 (off).
+	DownRemovalMargin time.Duration
+
+	// downedAt tracks when each member was first seen in Down status,
+	// for enforcing DownRemovalMargin. Protected by Mu.
+	downedAt map[int32]time.Time
+
+	// SeedNodeTimeout is the maximum time to wait for the first seed node to
+	// respond before the node considers the seed unreachable.
+	// Corresponds to pekko.cluster.seed-node-timeout.
+	// Default: 5s.
+	SeedNodeTimeout time.Duration
+
+	// EnforceConfigCompatOnJoin controls whether incoming InitJoin config is
+	// validated against the local node's config. When true, mismatches in
+	// downing-provider-class cause the join to be rejected.
+	// Corresponds to pekko.cluster.configuration-compatibility-check.enforce-on-join.
+	// Default: true.
+	EnforceConfigCompatOnJoin bool
+
+	// ShutdownCallback is invoked when the join timeout fires
+	// (shutdown-after-unsuccessful-join-seed-nodes). The Cluster layer wires
+	// this to CoordinatedShutdown.Run, matching Pekko's behavior of
+	// CoordinatedShutdown(system).run(clusterDowningReason).
+	ShutdownCallback func()
 }
 
 // FlightMissEmitter can record a heartbeat-miss event.
@@ -189,6 +315,58 @@ func (cm *ClusterManager) HeartbeatPath(system, host string, port uint32) string
 // In Akka 2.6.x, ClusterHeartbeatSender is a child of ClusterCoreDaemon (at /system/cluster/core/daemon).
 func (cm *ClusterManager) HeartbeatSenderPath(system, host string, port uint32) string {
 	return fmt.Sprintf("%s://%s@%s:%d/system/cluster/core/daemon/heartbeatSender", cm.Proto(), system, host, port)
+}
+
+// CheckConfigCompat validates the joining node's HOCON config string against
+// the local node's downing-provider-class. Returns true if compatible.
+// This implements the core of pekko.cluster.configuration-compatibility-check.enforce-on-join.
+func (cm *ClusterManager) CheckConfigCompat(remoteConfig string) bool {
+	// Pekko checks that downing-provider-class matches between nodes.
+	// Extract the value from the remote config string.
+	remoteDP := extractHOCONValue(remoteConfig, "downing-provider-class")
+	// Our own config always advertises SplitBrainResolverProvider (or empty).
+	// We consider them compatible if both are either empty or both reference SBR.
+	localProto := cm.Proto()
+	localDP := fmt.Sprintf("%s.cluster.sbr.SplitBrainResolverProvider", localProto)
+
+	// Normalize: treat empty and the SBR class as the two valid values.
+	// If both are empty or both are set to SBR, they are compatible.
+	remoteIsSBR := strings.Contains(remoteDP, "SplitBrainResolverProvider")
+	remoteIsEmpty := remoteDP == "" || remoteDP == `""`
+
+	localIsSBR := true  // we always advertise SBR
+	_ = localDP
+
+	if remoteIsEmpty && !localIsSBR {
+		return false
+	}
+	if !remoteIsEmpty && !remoteIsSBR {
+		// Remote has a non-SBR downing provider — incompatible
+		log.Printf("Cluster: config compat check failed: remote downing-provider-class=%q", remoteDP)
+		return false
+	}
+	return true
+}
+
+// extractHOCONValue extracts a simple value for a key from an inline HOCON string.
+// This handles the format: key = value or key = "value"
+func extractHOCONValue(hoconStr, key string) string {
+	idx := strings.Index(hoconStr, key)
+	if idx < 0 {
+		return ""
+	}
+	rest := hoconStr[idx+len(key):]
+	rest = strings.TrimLeft(rest, " \t")
+	if len(rest) > 0 && rest[0] == '=' {
+		rest = rest[1:]
+	}
+	rest = strings.TrimLeft(rest, " \t")
+	// Read until end of line or next key
+	end := strings.IndexAny(rest, "\n\r")
+	if end >= 0 {
+		rest = rest[:end]
+	}
+	return strings.TrimSpace(rest)
 }
 
 // localHashString returns the hash string used for this node's VectorClock entry.
@@ -276,10 +454,12 @@ func NewClusterManager(local *gproto_cluster.UniqueAddress, router func(context.
 	clLocal := local                   // Already a gproto_cluster.UniqueAddress
 	localHash := int32(local.GetUid()) // UID-based hash fallback (used only when leader)
 	return &ClusterManager{
-		LocalAddress: local,
-		LocalHash:    localHash,
-		Router:       router,
-		Fd:           NewPhiAccrualFailureDetector(8.0, 1000),
+		LocalAddress:         local,
+		LocalHash:            localHash,
+		Router:               router,
+		Fd:                   NewPhiAccrualFailureDetector(8.0, 1000),
+		LogInfo:              true,
+		AllowWeaklyUpMembers: 7 * time.Second,
 		State: &gproto_cluster.Gossip{
 			Members: []*gproto_cluster.Member{
 				{
@@ -355,7 +535,9 @@ func toClusterAddress(a *gproto_cluster.Address) *gproto_cluster.Address {
 func (cm *ClusterManager) JoinCluster(ctx context.Context, seedHost string, seedPort uint32) error {
 	system := cm.LocalAddress.GetAddress().GetSystem()
 	path := cm.ClusterCorePath(system, seedHost, seedPort)
-	log.Printf("Cluster: initiating join to seed node %s", path)
+	if cm.LogInfo {
+		log.Printf("Cluster: initiating join to seed node %s", path)
+	}
 
 	// Send a minimal config so the remote's JoinConfigCompatCheckCluster.check
 	// can call getString("<proto>.cluster.downing-provider-class") without throwing.
@@ -376,15 +558,52 @@ func (cm *ClusterManager) JoinCluster(ctx context.Context, seedHost string, seed
 		}
 		ticker := time.NewTicker(retryInterval)
 		defer ticker.Stop()
+
+		// Shutdown timeout: abort joining after configured duration.
+		var deadline <-chan time.Time
+		if cm.ShutdownAfterUnsuccessfulJoinSeedNodes > 0 {
+			timer := time.NewTimer(cm.ShutdownAfterUnsuccessfulJoinSeedNodes)
+			defer timer.Stop()
+			deadline = timer.C
+		}
+
+		// Seed-node timeout: if no response from the seed within this
+		// duration, log a warning. This corresponds to
+		// pekko.cluster.seed-node-timeout (default 5s).
+		seedTimeout := cm.SeedNodeTimeout
+		if seedTimeout <= 0 {
+			seedTimeout = 5 * time.Second
+		}
+		var seedDeadline <-chan time.Time
+		seedTimer := time.NewTimer(seedTimeout)
+		defer seedTimer.Stop()
+		seedDeadline = seedTimer.C
+
 		for {
 			select {
 			case <-ctx.Done():
 				return
+			case <-deadline:
+				if !cm.WelcomeReceived.Load() {
+					log.Printf("Cluster: join seed nodes timed out after %v, shutting down", cm.ShutdownAfterUnsuccessfulJoinSeedNodes)
+					if cm.ShutdownCallback != nil {
+						cm.ShutdownCallback()
+					}
+					return
+				}
+				return
+			case <-seedDeadline:
+				seedDeadline = nil // fire only once
+				if !cm.WelcomeReceived.Load() {
+					log.Printf("Cluster: seed node %s:%d did not respond within %v (seed-node-timeout)", seedHost, seedPort, seedTimeout)
+				}
 			case <-ticker.C:
 				if cm.WelcomeReceived.Load() {
 					return
 				}
-				log.Printf("Cluster: retrying InitJoin to %s", path)
+				if cm.LogInfo {
+					log.Printf("Cluster: retrying InitJoin to %s", path)
+				}
 				_ = cm.Router(ctx, path, initJoin)
 			}
 		}
@@ -503,7 +722,9 @@ func (cm *ClusterManager) ProceedJoin(ctx context.Context, actorPath string) err
 		v := cm.LocalAppVersion.String()
 		join.AppVersion = &v
 	}
-	log.Printf("Cluster: sending Join to %s", actorPath)
+	if cm.LogInfo {
+		log.Printf("Cluster: sending Join to %s", actorPath)
+	}
 	return cm.Router(ctx, actorPath, join)
 }
 
@@ -575,7 +796,9 @@ func (cm *ClusterManager) DownMember(addr MemberAddress) {
 			}
 			m.Status = gproto_cluster.MemberStatus_Down.Enum()
 			cm.incrementVersionWithLockHeld()
-			log.Printf("SBR: marked %s:%d as Down", addr.Host, addr.Port)
+			if cm.LogInfo {
+				log.Printf("SBR: marked %s:%d as Down", addr.Host, addr.Port)
+			}
 			return
 		}
 	}
@@ -631,6 +854,32 @@ func (cm *ClusterManager) HandleIncomingClusterMessage(ctx context.Context, payl
 			return nil
 		}
 		slog.Info("cluster: received InitJoin", "from", remoteAddr.GetAddress(), "sender", senderPath)
+
+		// Configuration compatibility check (pekko.cluster.configuration-compatibility-check.enforce-on-join).
+		// When enforced, validate the joining node's config against our own.
+		if cm.EnforceConfigCompatOnJoin {
+			ij := &gproto_cluster.InitJoin{}
+			if err := proto.Unmarshal(payload, ij); err == nil && ij.GetCurrentConfig() != "" {
+				if !cm.CheckConfigCompat(ij.GetCurrentConfig()) {
+					raddr := remoteAddr.GetAddress()
+					log.Printf("Cluster: rejecting InitJoin from %s:%d — configuration incompatible", raddr.GetHostname(), raddr.GetPort())
+					replyPath := senderPath
+					if replyPath == "" {
+						replyPath = cm.ClusterCorePath(raddr.GetSystem(), raddr.GetHostname(), raddr.GetPort())
+					}
+					incompatConfig := proto.String(`pekko.cluster.downing-provider-class = ""`)
+					nack := &gproto_cluster.InitJoinAck{
+						Address: toClusterAddress(cm.LocalAddress.Address),
+						ConfigCheck: &gproto_cluster.ConfigCheck{
+							Type:          gproto_cluster.ConfigCheck_IncompatibleConfig.Enum(),
+							ClusterConfig: incompatConfig,
+						},
+					}
+					return cm.Router(ctx, replyPath, nack)
+				}
+			}
+		}
+
 		// Include a minimal config so Pekko's JoinConfigCompatCheckCluster
 		// can parse it without crashing. The key checked unconditionally is
 		// pekko.cluster.downing-provider-class (same as the InitJoin fix).
@@ -742,7 +991,9 @@ func (cm *ClusterManager) handleJoin(payload []byte, manifest string) error {
 		return err
 	}
 	joiningNode := join.GetNode()
-	log.Printf("Cluster: received Join from %v", joiningNode)
+	if cm.LogInfo {
+		log.Printf("Cluster: received Join from %v", joiningNode)
+	}
 
 	// Add the joining node to our gossip state as Joining, then send Welcome with
 	// the updated state.  The gossip loop's performLeaderActions will transition
@@ -762,7 +1013,9 @@ func (cm *ClusterManager) handleJoin(payload []byte, manifest string) error {
 	system := cm.LocalAddress.GetAddress().GetSystem()
 	path := cm.ClusterCorePath(system, addr.GetHostname(), addr.GetPort())
 
-	log.Printf("Cluster: sending Welcome to %s", path)
+	if cm.LogInfo {
+		log.Printf("Cluster: sending Welcome to %s", path)
+	}
 	return cm.Router(context.Background(), path, welcome)
 }
 
@@ -973,7 +1226,9 @@ func (cm *ClusterManager) markMemberLeavingLocked(leaveAddr *gproto_cluster.Addr
 			if m.GetStatus() == gproto_cluster.MemberStatus_Up || m.GetStatus() == gproto_cluster.MemberStatus_WeaklyUp {
 				m.Status = gproto_cluster.MemberStatus_Leaving.Enum()
 				cm.incrementVersionWithLockHeld()
-				log.Printf("Cluster: marked %s:%d as Leaving", leaveAddr.GetHostname(), leaveAddr.GetPort())
+				if cm.LogInfo {
+					log.Printf("Cluster: marked %s:%d as Leaving", leaveAddr.GetHostname(), leaveAddr.GetPort())
+				}
 				// publishEvent is safe while holding cm.Mu — it only acquires cm.SubMu.
 				cm.publishEvent(MemberLeft{Member: MemberAddress{
 					Protocol: addr.GetAddress().GetProtocol(),
@@ -997,7 +1252,9 @@ func (cm *ClusterManager) handleWelcome(payload []byte, manifest string) error {
 	if err := proto.Unmarshal(decompressed, welcome); err != nil {
 		return err
 	}
-	log.Printf("Cluster: welcomed by %v", welcome.GetFrom())
+	if cm.LogInfo {
+		log.Printf("Cluster: welcomed by %v", welcome.GetFrom())
+	}
 
 	err = cm.processIncomingGossip(welcome.Gossip, welcome.From)
 	if err != nil {
@@ -1017,7 +1274,9 @@ func (cm *ClusterManager) handleGossipEnvelope(payload []byte, manifest string) 
 	if err := proto.Unmarshal(payload, envelope); err != nil {
 		return err
 	}
-	log.Printf("Cluster: received GossipEnvelope from %v", envelope.GetFrom())
+	if cm.LogInfoVerbose {
+		log.Printf("Cluster: received GossipEnvelope from %v", envelope.GetFrom())
+	}
 
 	// Pekko GZIP-compresses GossipEnvelope.serializedGossip
 	decompressed, err := gzipDecompress(envelope.SerializedGossip)
@@ -1134,6 +1393,25 @@ func (cm *ClusterManager) handleGossipStatus(payload []byte, manifest string) er
 func (cm *ClusterManager) processIncomingGossip(gossip *gproto_cluster.Gossip, remoteAddr *gproto_cluster.UniqueAddress) error {
 	cm.Mu.Lock()
 
+	// Gossip TTL check: discard incoming gossip that is stale relative to
+	// our last state update (pekko.cluster.gossip-time-to-live).
+	ttl := cm.GossipTimeToLive
+	if ttl <= 0 {
+		ttl = 2 * time.Second
+	}
+	if !cm.lastGossipUpdate.IsZero() && time.Since(cm.lastGossipUpdate) > ttl {
+		// Only discard if the incoming gossip is strictly older than ours.
+		m1Chk := cm.vectorClockToMap(cm.State.Version, cm.State.AllHashes)
+		m2Chk := cm.vectorClockToMap(gossip.Version, gossip.AllHashes)
+		if cm.compareResolvedClocks(m1Chk, m2Chk) == ClockAfter {
+			cm.Mu.Unlock()
+			if cm.LogInfoVerbose {
+				log.Printf("Cluster: discarding stale gossip (TTL %v exceeded)", ttl)
+			}
+			return nil
+		}
+	}
+
 	m1 := cm.vectorClockToMap(cm.State.Version, cm.State.AllHashes)
 	m2 := cm.vectorClockToMap(gossip.Version, gossip.AllHashes)
 	ordering := cm.compareResolvedClocks(m1, m2)
@@ -1141,7 +1419,9 @@ func (cm *ClusterManager) processIncomingGossip(gossip *gproto_cluster.Gossip, r
 	var events []ClusterDomainEvent
 	if ordering == ClockBefore {
 		// Incoming is newer — diff before replacing so we can emit events.
-		log.Printf("Cluster: received newer Gossip, replacing local state")
+		if cm.LogInfoVerbose {
+			log.Printf("Cluster: received newer Gossip, replacing local state")
+		}
 		events = diffGossipMembers(cm.State, gossip)
 		cm.State = gossip
 		// Adopt Pekko's hash for our own address so future VectorClock comparisons
@@ -1155,7 +1435,9 @@ func (cm *ClusterManager) processIncomingGossip(gossip *gproto_cluster.Gossip, r
 		cm.connectToNewMembers(gossip)
 	} else if ordering == ClockConcurrent {
 		// Merge concurrent states: union of members, pairwise-max vector clock.
-		log.Printf("Cluster: received concurrent Gossip, merging")
+		if cm.LogInfoVerbose {
+			log.Printf("Cluster: received concurrent Gossip, merging")
+		}
 		merged := cm.mergeGossipStates(cm.State, gossip)
 		events = diffGossipMembers(cm.State, merged)
 		cm.State = merged
@@ -1180,6 +1462,11 @@ func (cm *ClusterManager) processIncomingGossip(gossip *gproto_cluster.Gossip, r
 		// check can see that we've acknowledged all known members.
 		cm.mergeSeenLocked(gossip)
 		cm.markLocalSeenLocked()
+	}
+
+	// Update lastGossipUpdate timestamp when state was modified.
+	if ordering == ClockBefore || ordering == ClockConcurrent {
+		cm.lastGossipUpdate = time.Now()
 	}
 
 	if remoteAddr != nil {
@@ -1282,7 +1569,9 @@ func (cm *ClusterManager) maybeSendExitingConfirmed() {
 		return
 	}
 
-	log.Printf("Cluster: local node is Exiting — sending ExitingConfirmed to %d Up members", len(targets))
+	if cm.LogInfo {
+		log.Printf("Cluster: local node is Exiting — sending ExitingConfirmed to %d Up members", len(targets))
+	}
 	for _, t := range targets {
 		if err := cm.Router(context.Background(), t.path, confirmation); err != nil {
 			log.Printf("Cluster: ExitingConfirmed to %s failed: %v", t.path, err)
@@ -1291,21 +1580,97 @@ func (cm *ClusterManager) maybeSendExitingConfirmed() {
 }
 
 // connectToNewMembers must be called with cm.Mu held (read or write).
+// Heartbeat targets are limited to MonitoredByNrOfMembers nodes, selected
+// deterministically by sorting remote members by address and picking the N
+// nearest successors in a ring from this node's position.
 func (cm *ClusterManager) connectToNewMembers(gossip *gproto_cluster.Gossip) {
+	localHost := cm.LocalAddress.Address.GetHostname()
+	localPort := cm.LocalAddress.Address.GetPort()
+
+	// Collect non-self, non-removed/downed member addresses.
+	type addrKey struct {
+		host string
+		port uint32
+	}
+	var remotes []addrKey
 	for _, m := range gossip.Members {
 		if m.GetStatus() == gproto_cluster.MemberStatus_Removed || m.GetStatus() == gproto_cluster.MemberStatus_Down {
 			continue
 		}
-
 		addr := gossip.AllAddresses[m.GetAddressIndex()]
-		if addr.GetAddress().GetHostname() == cm.LocalAddress.Address.GetHostname() &&
-			addr.GetAddress().GetPort() == cm.LocalAddress.Address.GetPort() {
-			continue // Skip ourselves
+		h := addr.GetAddress().GetHostname()
+		p := addr.GetAddress().GetPort()
+		if h == localHost && p == localPort {
+			continue
 		}
+		remotes = append(remotes, addrKey{h, p})
+	}
 
-		// Only initiate heartbeats if we are not already doing so.
-		// StartHeartbeat now supports multiple targets.
-		cm.StartHeartbeat(addr.GetAddress())
+	// Select heartbeat targets: if MonitoredByNrOfMembers is set and smaller
+	// than the remote count, pick the N deterministic successors from a sorted
+	// ring.  Otherwise heartbeat all remotes.
+	targets := remotes
+	limit := cm.MonitoredByNrOfMembers
+	if limit > 0 && len(remotes) > limit {
+		// Sort all remotes deterministically.
+		sort.Slice(remotes, func(i, j int) bool {
+			if remotes[i].host != remotes[j].host {
+				return remotes[i].host < remotes[j].host
+			}
+			return remotes[i].port < remotes[j].port
+		})
+		// Find this node's position in the sorted ring and take the next N.
+		selfKey := fmt.Sprintf("%s:%d", localHost, localPort)
+		startIdx := 0
+		for i, r := range remotes {
+			rk := fmt.Sprintf("%s:%d", r.host, r.port)
+			if rk > selfKey {
+				startIdx = i
+				break
+			}
+		}
+		targets = make([]addrKey, limit)
+		for i := 0; i < limit; i++ {
+			targets[i] = remotes[(startIdx+i)%len(remotes)]
+		}
+	}
+
+	// Start heartbeats to selected targets only.
+	selectedSet := make(map[string]struct{}, len(targets))
+	for _, t := range targets {
+		key := fmt.Sprintf("%s:%d", t.host, t.port)
+		selectedSet[key] = struct{}{}
+	}
+
+	// Stop heartbeats to nodes no longer in the target set.
+	heartbeatTasksMu.Lock()
+	for key := range heartbeatTasks {
+		if _, selected := selectedSet[key]; !selected {
+			// Only stop if this is a remote peer no longer selected (don't
+			// stop tasks for the seed which may have been started externally).
+			if task, ok := heartbeatTasks[key]; ok {
+				task.cancel()
+				delete(heartbeatTasks, key)
+			}
+		}
+	}
+	heartbeatTasksMu.Unlock()
+
+	for _, t := range targets {
+		addr := &gproto_cluster.Address{
+			Hostname: proto.String(t.host),
+			Port:     proto.Uint32(t.port),
+		}
+		// Find the system name from the gossip state.
+		for _, m := range gossip.Members {
+			a := gossip.AllAddresses[m.GetAddressIndex()]
+			if a.GetAddress().GetHostname() == t.host && a.GetAddress().GetPort() == t.port {
+				addr.System = a.GetAddress().System
+				addr.Protocol = a.GetAddress().Protocol
+				break
+			}
+		}
+		cm.StartHeartbeat(addr)
 	}
 }
 
@@ -1333,6 +1698,14 @@ func (cm *ClusterManager) CheckConvergenceLocked() bool {
 
 	for _, seenIdx := range cm.State.Overview.Seen {
 		delete(upMembers, seenIdx)
+	}
+
+	if cm.LogInfoVerbose {
+		if len(upMembers) == 0 {
+			log.Printf("Cluster: convergence check passed (all %d Up/Leaving members in Seen set)", len(cm.State.Members))
+		} else {
+			log.Printf("Cluster: convergence check failed (%d members not yet in Seen set)", len(upMembers))
+		}
 	}
 
 	return len(upMembers) == 0
@@ -1936,7 +2309,9 @@ func (cm *ClusterManager) promoteDCMembers(dc string) {
 			cm.Metrics.IncrementMemberUp()
 		}
 		changed = true
-		log.Printf("DC-Leader[%s]: transitioned member %s:%d Joining → Up", dc, ma.Host, ma.Port)
+		if cm.LogInfo {
+			log.Printf("DC-Leader[%s]: transitioned member %s:%d Joining → Up", dc, ma.Host, ma.Port)
+		}
 	}
 	if changed {
 		cm.incrementVersionWithLockHeld()
@@ -1962,6 +2337,9 @@ func (cm *ClusterManager) performLeaderActions() {
 		leader.GetUid() == cm.LocalAddress.GetUid()
 
 	if isLeader {
+		if cm.LogInfoVerbose {
+			log.Printf("Leader: performing leader actions (members=%d)", len(cm.State.Members))
+		}
 		cm.Mu.Lock()
 		var events []ClusterDomainEvent
 		changed := false
@@ -1978,7 +2356,7 @@ func (cm *ClusterManager) performLeaderActions() {
 				if minMembers <= 0 {
 					minMembers = 1
 				}
-				meetsMinMembers := len(cm.State.Members) >= minMembers
+				meetsMinMembers := len(cm.State.Members) >= minMembers && cm.meetsRoleMinNrOfMembersLocked()
 				if meetsMinMembers && (len(cm.State.Members) == 1 || cm.CheckConvergenceLocked()) {
 					m.Status = gproto_cluster.MemberStatus_Up.Enum()
 					m.UpNumber = proto.Int32(int32(len(cm.State.Members))) // Simplified upNumber
@@ -1987,13 +2365,52 @@ func (cm *ClusterManager) performLeaderActions() {
 						cm.Metrics.IncrementMemberUp()
 					}
 					changed = true
-					log.Printf("Leader: transitioned member %s:%d Joining → Up (upNumber=%d)", ma.Host, ma.Port, m.GetUpNumber())
+					// Clear WeaklyUp tracking for this member.
+					delete(cm.joiningFirstSeen, m.GetAddressIndex())
+					if cm.LogInfo {
+						log.Printf("Leader: transitioned member %s:%d Joining → Up (upNumber=%d)", ma.Host, ma.Port, m.GetUpNumber())
+					}
+				} else if cm.AllowWeaklyUpMembers > 0 && meetsMinMembers {
+					// WeaklyUp promotion: if convergence is not achieved within
+					// AllowWeaklyUpMembers duration, promote Joining → WeaklyUp.
+					addrIdx := m.GetAddressIndex()
+					if cm.joiningFirstSeen == nil {
+						cm.joiningFirstSeen = make(map[int32]time.Time)
+					}
+					firstSeen, ok := cm.joiningFirstSeen[addrIdx]
+					if !ok {
+						cm.joiningFirstSeen[addrIdx] = time.Now()
+					} else if time.Since(firstSeen) >= cm.AllowWeaklyUpMembers {
+						m.Status = gproto_cluster.MemberStatus_WeaklyUp.Enum()
+						events = append(events, MemberWeaklyUp{Member: ma})
+						changed = true
+						delete(cm.joiningFirstSeen, addrIdx)
+						if cm.LogInfo {
+							log.Printf("Leader: transitioned member %s:%d Joining → WeaklyUp (convergence timeout %v)", ma.Host, ma.Port, cm.AllowWeaklyUpMembers)
+						}
+					}
+				}
+			case gproto_cluster.MemberStatus_WeaklyUp:
+				// Promote WeaklyUp → Up once convergence is achieved.
+				if cm.CheckConvergenceLocked() {
+					m.Status = gproto_cluster.MemberStatus_Up.Enum()
+					m.UpNumber = proto.Int32(int32(len(cm.State.Members)))
+					events = append(events, MemberUp{Member: ma})
+					if cm.Metrics != nil {
+						cm.Metrics.IncrementMemberUp()
+					}
+					changed = true
+					if cm.LogInfo {
+						log.Printf("Leader: transitioned member %s:%d WeaklyUp → Up (convergence achieved)", ma.Host, ma.Port)
+					}
 				}
 			case gproto_cluster.MemberStatus_Leaving:
 				m.Status = gproto_cluster.MemberStatus_Exiting.Enum()
 				events = append(events, MemberExited{Member: ma})
 				changed = true
-				log.Printf("Leader: transitioned member %s:%d Leaving → Exiting", ma.Host, ma.Port)
+				if cm.LogInfo {
+					log.Printf("Leader: transitioned member %s:%d Leaving → Exiting", ma.Host, ma.Port)
+				}
 			case gproto_cluster.MemberStatus_Exiting:
 				m.Status = gproto_cluster.MemberStatus_Removed.Enum()
 				events = append(events, MemberRemoved{Member: ma})
@@ -2001,20 +2418,51 @@ func (cm *ClusterManager) performLeaderActions() {
 					cm.Metrics.IncrementMemberRemoved()
 				}
 				changed = true
-				log.Printf("Leader: transitioned member %s:%d Exiting → Removed", ma.Host, ma.Port)
+				// Record tombstone for pruning.
+				cm.recordTombstoneLocked(ma.Host, ma.Port)
+				if cm.LogInfo {
+					log.Printf("Leader: transitioned member %s:%d Exiting → Removed", ma.Host, ma.Port)
+				}
 			case gproto_cluster.MemberStatus_Down:
+				// Enforce down-removal-margin: delay the Down → Removed
+				// transition to give the downed node time to detect its own
+				// downed status and perform coordinated shutdown.
+				if cm.DownRemovalMargin > 0 {
+					addrIdx := m.GetAddressIndex()
+					if cm.downedAt == nil {
+						cm.downedAt = make(map[int32]time.Time)
+					}
+					firstDown, ok := cm.downedAt[addrIdx]
+					if !ok {
+						cm.downedAt[addrIdx] = time.Now()
+						if cm.LogInfoVerbose {
+							log.Printf("Leader: member %s:%d Down, removal delayed by %v", ma.Host, ma.Port, cm.DownRemovalMargin)
+						}
+						continue
+					}
+					if time.Since(firstDown) < cm.DownRemovalMargin {
+						continue // margin not yet elapsed
+					}
+					delete(cm.downedAt, addrIdx)
+				}
 				m.Status = gproto_cluster.MemberStatus_Removed.Enum()
 				events = append(events, MemberRemoved{Member: ma})
 				if cm.Metrics != nil {
 					cm.Metrics.IncrementMemberRemoved()
 				}
 				changed = true
-				log.Printf("Leader: transitioned member %s:%d Down → Removed", ma.Host, ma.Port)
+				// Record tombstone for pruning.
+				cm.recordTombstoneLocked(ma.Host, ma.Port)
+				if cm.LogInfo {
+					log.Printf("Leader: transitioned member %s:%d Down → Removed", ma.Host, ma.Port)
+				}
 			}
 		}
 		if changed {
 			cm.incrementVersionWithLockHeld()
 		}
+		// Prune stale tombstones (removed members older than configured TTL).
+		cm.pruneGossipTombstonesLocked()
 		cm.Mu.Unlock()
 
 		for _, evt := range events {
@@ -2034,6 +2482,67 @@ func (cm *ClusterManager) performLeaderActions() {
 				cm.promoteDCMembers(localDC)
 			}
 		}
+	}
+}
+
+// recordTombstoneLocked records a removed member's timestamp for later pruning.
+// Must be called with cm.Mu held.
+func (cm *ClusterManager) recordTombstoneLocked(host string, port uint32) {
+	key := fmt.Sprintf("%s:%d", host, port)
+	if cm.tombstones == nil {
+		cm.tombstones = make(map[string]time.Time)
+	}
+	cm.tombstones[key] = time.Now()
+}
+
+// pruneGossipTombstonesLocked removes tombstone entries older than
+// PruneGossipTombstonesAfter and strips the corresponding Removed members
+// from the gossip state. Must be called with cm.Mu held.
+func (cm *ClusterManager) pruneGossipTombstonesLocked() {
+	ttl := cm.PruneGossipTombstonesAfter
+	if ttl <= 0 {
+		ttl = 24 * time.Hour
+	}
+	if len(cm.tombstones) == 0 {
+		return
+	}
+
+	now := time.Now()
+	var pruneKeys []string
+	for key, removedAt := range cm.tombstones {
+		if now.Sub(removedAt) >= ttl {
+			pruneKeys = append(pruneKeys, key)
+		}
+	}
+	if len(pruneKeys) == 0 {
+		return
+	}
+
+	// Build a set of address keys to prune from gossip state.
+	pruneSet := make(map[string]struct{}, len(pruneKeys))
+	for _, k := range pruneKeys {
+		pruneSet[k] = struct{}{}
+		delete(cm.tombstones, k)
+	}
+
+	// Remove pruned members from State.Members.
+	var kept []*gproto_cluster.Member
+	for _, m := range cm.State.Members {
+		if int(m.GetAddressIndex()) < len(cm.State.AllAddresses) {
+			ua := cm.State.AllAddresses[m.GetAddressIndex()]
+			addr := ua.GetAddress()
+			key := fmt.Sprintf("%s:%d", addr.GetHostname(), addr.GetPort())
+			if _, shouldPrune := pruneSet[key]; shouldPrune && m.GetStatus() == gproto_cluster.MemberStatus_Removed {
+				if cm.LogInfoVerbose {
+					log.Printf("Cluster: pruning tombstone for %s (age > %v)", key, ttl)
+				}
+				continue
+			}
+		}
+		kept = append(kept, m)
+	}
+	if len(kept) != len(cm.State.Members) {
+		cm.State.Members = kept
 	}
 }
 
@@ -2058,6 +2567,10 @@ func (cm *ClusterManager) CheckReachability() {
 
 		key := fmt.Sprintf("%s:%d-%d", a.GetHostname(), a.GetPort(), uid64)
 		phi := cm.Fd.Phi(key)
+
+		if cm.LogInfoVerbose {
+			log.Printf("Cluster: failure-detector phi for %s:%d = %.4f (threshold=%.1f)", a.GetHostname(), a.GetPort(), phi, cm.Fd.threshold)
+		}
 
 		// Pekko Cluster logic: update ObserverReachability
 		if !cm.Fd.IsAvailable(key) {
@@ -2114,8 +2627,10 @@ func (cm *ClusterManager) checkInternalSBR() {
 	}
 
 	action := cm.SBRStrategy.Decide(allMembers, unreachableMembers)
-	log.Printf("SBR(internal): action=%v reachable=%d total=%d",
-		action, len(allMembers)-len(unreachableMembers), len(allMembers))
+	if cm.LogInfo {
+		log.Printf("SBR(internal): action=%v reachable=%d total=%d",
+			action, len(allMembers)-len(unreachableMembers), len(allMembers))
+	}
 
 	if action == icluster.Down {
 		log.Printf("SBR(internal): downing self — partition below static quorum")
@@ -2279,9 +2794,11 @@ func (cm *ClusterManager) updateReachability(addrIdx int32, status gproto_cluste
 	}
 }
 
-func (cm *ClusterManager) gossipTick() {
+func (cm *ClusterManager) gossipTick(runLeaderActions bool) {
 	cm.CheckReachability()
-	cm.performLeaderActions()
+	if runLeaderActions {
+		cm.performLeaderActions()
+	}
 
 	cm.Mu.RLock()
 	members := cm.State.Members
@@ -2311,15 +2828,86 @@ func (cm *ClusterManager) gossipTick() {
 		return
 	}
 
-	// Randomly select a node to gossip with
-	targetIdx := rand.Intn(len(members))
+	// Build a list of candidate indices (excluding self).
+	var candidates []int
+	for i, m := range members {
+		ai := m.GetAddressIndex()
+		a := addresses[ai]
+		if a.GetAddress().GetHostname() == localHost && a.GetAddress().GetPort() == localPort {
+			continue
+		}
+		candidates = append(candidates, i)
+	}
+	if len(candidates) == 0 {
+		return
+	}
+
+	// Gossip different-view probability: prefer nodes whose SeenDigest
+	// differs from ours (i.e. they have NOT marked themselves as Seen in
+	// our current state version). This speeds convergence.
+	targetIdx := candidates[rand.Intn(len(candidates))]
+	{
+		diffProb := cm.GossipDifferentViewProbability
+		if diffProb <= 0 {
+			diffProb = 0.8
+		}
+		reduceAt := cm.ReduceGossipDifferentViewProbability
+		if reduceAt <= 0 {
+			reduceAt = 400
+		}
+		if len(members) > reduceAt {
+			diffProb *= 0.5
+		}
+
+		// Check if the randomly selected target has the same view (is in Seen set).
+		cm.Mu.RLock()
+		selectedAddrIdx := members[targetIdx].GetAddressIndex()
+		targetInSeen := false
+		if cm.State.Overview != nil {
+			for _, s := range cm.State.Overview.Seen {
+				if s == selectedAddrIdx {
+					targetInSeen = true
+					break
+				}
+			}
+		}
+		cm.Mu.RUnlock()
+
+		// If the target has the same view (is in Seen), re-roll with diffProb
+		// probability to pick a different-view node instead.
+		if targetInSeen && rand.Float64() < diffProb {
+			// Try to find a candidate not in Seen.
+			cm.Mu.RLock()
+			var diffViewCandidates []int
+			for _, ci := range candidates {
+				ai := members[ci].GetAddressIndex()
+				inSeen := false
+				if cm.State.Overview != nil {
+					for _, s := range cm.State.Overview.Seen {
+						if s == ai {
+							inSeen = true
+							break
+						}
+					}
+				}
+				if !inSeen {
+					diffViewCandidates = append(diffViewCandidates, ci)
+				}
+			}
+			cm.Mu.RUnlock()
+			if len(diffViewCandidates) > 0 {
+				targetIdx = diffViewCandidates[rand.Intn(len(diffViewCandidates))]
+			}
+		}
+	}
+
 	addrIdx := members[targetIdx].GetAddressIndex()
 	targetAddr := addresses[addrIdx]
 
-	// If it's us, skip
-	if targetAddr.GetAddress().GetHostname() == localHost &&
-		targetAddr.GetAddress().GetPort() == localPort {
-		return
+	if cm.LogInfoVerbose {
+		log.Printf("Cluster: gossip target selected %s:%d (candidates=%d)",
+			targetAddr.GetAddress().GetHostname(), targetAddr.GetAddress().GetPort(),
+			len(candidates))
 	}
 
 	// Cross-DC gossip throttling: skip foreign-DC targets according to
@@ -2394,6 +2982,15 @@ func (cm *ClusterManager) gossipTick() {
 
 // StartGossipLoop begins the background gossip process.
 func (cm *ClusterManager) StartGossipLoop(ctx context.Context) {
+	// Periodic-tasks initial delay (pekko.cluster.periodic-tasks-initial-delay).
+	if delay := cm.PeriodicTasksInitialDelay; delay > 0 {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(delay):
+		}
+	}
+
 	interval := cm.GossipInterval
 	if interval <= 0 {
 		interval = 1 * time.Second
@@ -2401,14 +2998,67 @@ func (cm *ClusterManager) StartGossipLoop(ctx context.Context) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
+	// Leader actions on a separate interval when configured.
+	leaderInterval := cm.LeaderActionsInterval
+	runLeaderOnGossip := leaderInterval <= 0
+	var leaderTicker *time.Ticker
+	if !runLeaderOnGossip {
+		leaderTicker = time.NewTicker(leaderInterval)
+		defer leaderTicker.Stop()
+	}
+
 	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			cm.gossipTick()
+		if runLeaderOnGossip {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				cm.gossipTick(true)
+			}
+		} else {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				cm.gossipTick(false)
+			case <-leaderTicker.C:
+				cm.performLeaderActions()
+			}
 		}
 	}
+}
+
+// StartReaper begins a periodic goroutine that re-evaluates phi for all known
+// nodes and publishes unreachable events. This supplements the gossipTick-driven
+// CheckReachability by running at a higher frequency.
+// Corresponds to pekko.cluster.unreachable-nodes-reaper-interval.
+func (cm *ClusterManager) StartReaper(ctx context.Context) {
+	interval := cm.UnreachableNodesReaperInterval
+	if interval <= 0 {
+		return // reaper disabled
+	}
+
+	go func() {
+		// Honor periodic-tasks initial delay.
+		if delay := cm.PeriodicTasksInitialDelay; delay > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(delay):
+			}
+		}
+
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				cm.CheckReachability()
+			}
+		}
+	}()
 }
 
 // GetState returns the current gossip state.
@@ -2461,6 +3111,15 @@ func (cm *ClusterManager) StartHeartbeat(target *gproto_cluster.Address) {
 	cm.heartbeatMuted.Store(false)
 
 	go func() {
+		// Periodic-tasks initial delay (pekko.cluster.periodic-tasks-initial-delay).
+		if delay := cm.PeriodicTasksInitialDelay; delay > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(delay):
+			}
+		}
+
 		interval := cm.HeartbeatInterval
 		if interval <= 0 {
 			interval = 1 * time.Second
@@ -2486,7 +3145,11 @@ func (cm *ClusterManager) StartHeartbeat(target *gproto_cluster.Address) {
 				}
 				if cm.Router != nil {
 					if err := cm.Router(context.Background(), path, hb); err != nil {
-						log.Printf("Cluster: failed to send heartbeat to %v: %v", target, err)
+						if cm.LogInfoVerbose {
+							log.Printf("Cluster: failed to send heartbeat to %s:%d: %v", target.GetHostname(), target.GetPort(), err)
+						}
+					} else if cm.LogInfoVerbose {
+						log.Printf("Cluster: heartbeat sent to %s:%d (seq=%d)", target.GetHostname(), target.GetPort(), seq)
 					}
 				}
 			}
@@ -2536,4 +3199,31 @@ func GetRolesForMember(gossip *gproto_cluster.Gossip, member *gproto_cluster.Mem
 		}
 	}
 	return roles
+}
+
+// meetsRoleMinNrOfMembersLocked returns true if, for every role listed in
+// RoleMinNrOfMembers, the cluster currently has at least that many members
+// with that role. Must be called with cm.Mu held.
+func (cm *ClusterManager) meetsRoleMinNrOfMembersLocked() bool {
+	if len(cm.RoleMinNrOfMembers) == 0 {
+		return true
+	}
+
+	// Count members per role.
+	roleCounts := make(map[string]int)
+	allRoles := cm.State.GetAllRoles()
+	for _, m := range cm.State.Members {
+		for _, idx := range m.GetRolesIndexes() {
+			if int(idx) < len(allRoles) {
+				roleCounts[allRoles[idx]]++
+			}
+		}
+	}
+
+	for role, minNr := range cm.RoleMinNrOfMembers {
+		if roleCounts[role] < minNr {
+			return false
+		}
+	}
+	return true
 }

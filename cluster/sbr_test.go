@@ -10,6 +10,7 @@ package cluster
 
 import (
 	"testing"
+	"time"
 )
 
 // stubLease implements LeaseChecker for unit tests.
@@ -453,3 +454,57 @@ func TestLeaseMajority_ViaNewStrategy(t *testing.T) {
 		t.Fatalf("expected *LeaseMajority, got %T", strat)
 	}
 }
+
+// ── DownAllWhenUnstable duration derivation tests ────────────────────────────
+
+func TestDownAllWhenUnstableDuration_DefaultOn(t *testing.T) {
+	// Default (nil DownAllWhenUnstableEnabled) means "on" with derived duration.
+	m := &SBRManager{cfg: SBRConfig{
+		ActiveStrategy: "keep-majority",
+		StableAfter:    20 * time.Second,
+	}}
+	got := m.downAllWhenUnstableDuration()
+	// 3/4 of 20s = 15s
+	if got != 15*time.Second {
+		t.Fatalf("expected 15s, got %s", got)
+	}
+}
+
+func TestDownAllWhenUnstableDuration_DerivedMinimum4s(t *testing.T) {
+	// When 3/4 of StableAfter < 4s, clamp to 4s.
+	m := &SBRManager{cfg: SBRConfig{
+		ActiveStrategy: "keep-majority",
+		StableAfter:    4 * time.Second, // 3/4 = 3s < 4s
+	}}
+	got := m.downAllWhenUnstableDuration()
+	if got != 4*time.Second {
+		t.Fatalf("expected 4s (minimum), got %s", got)
+	}
+}
+
+func TestDownAllWhenUnstableDuration_ExplicitDuration(t *testing.T) {
+	m := &SBRManager{cfg: SBRConfig{
+		ActiveStrategy:            "keep-majority",
+		StableAfter:               20 * time.Second,
+		DownAllWhenUnstable:       10 * time.Second,
+		DownAllWhenUnstableEnabled: boolPtr(true),
+	}}
+	got := m.downAllWhenUnstableDuration()
+	if got != 10*time.Second {
+		t.Fatalf("expected 10s, got %s", got)
+	}
+}
+
+func TestDownAllWhenUnstableDuration_Off(t *testing.T) {
+	m := &SBRManager{cfg: SBRConfig{
+		ActiveStrategy:            "keep-majority",
+		StableAfter:               20 * time.Second,
+		DownAllWhenUnstableEnabled: boolPtr(false),
+	}}
+	got := m.downAllWhenUnstableDuration()
+	if got != 0 {
+		t.Fatalf("expected 0 (disabled), got %s", got)
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }

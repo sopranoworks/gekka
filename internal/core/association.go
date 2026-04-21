@@ -128,6 +128,12 @@ type NodeManager struct {
 	// FlightRec is the Artery Flight Recorder for this node. Nil-safe.
 	FlightRec *FlightRecorder
 
+	// MaxFrameSize is the maximum Artery frame payload size accepted by the
+	// read loop.  Frames larger than this are rejected.
+	// Corresponds to pekko.remote.artery.advanced.maximum-frame-size.
+	// Default: DefaultMaxFrameSize (256 KiB).  Zero means use the default.
+	MaxFrameSize int
+
 	// UDPHandler is set when the Aeron-UDP transport is active.  When non-nil,
 	// DialRemote switches to the UDP path automatically.
 	UDPHandler *UdpArteryHandler
@@ -715,6 +721,13 @@ func (assoc *GekkaAssociation) LocalUid() uint64 {
 	return assoc.localUid
 }
 
+// Remote returns the remote UniqueAddress for this association. Thread-safe.
+func (assoc *GekkaAssociation) Remote() *gproto_remote.UniqueAddress {
+	assoc.mu.RLock()
+	defer assoc.mu.RUnlock()
+	return assoc.remote
+}
+
 func (assoc *GekkaAssociation) Outbox() chan []byte {
 	return assoc.outbox
 }
@@ -778,10 +791,11 @@ func (assoc *GekkaAssociation) Process(ctx context.Context, protocol string) err
 	if assoc.remote != nil {
 		remoteUid = assoc.remote.GetUid()
 	}
+	maxFrame := assoc.nodeMgr.MaxFrameSize
 	if assoc.role == OUTBOUND {
-		return TcpArteryOutboundHandler(ctx, assoc.conn, dispatch, assoc.nodeMgr.compressionMgr, remoteUid, assoc.streamId, protocol)
+		return TcpArteryOutboundHandler(ctx, assoc.conn, dispatch, assoc.nodeMgr.compressionMgr, remoteUid, assoc.streamId, protocol, maxFrame)
 	}
-	return TcpArteryHandlerWithCallback(ctx, assoc.conn, dispatch, assoc.nodeMgr.compressionMgr, remoteUid, assoc.streamId)
+	return TcpArteryHandlerWithCallback(ctx, assoc.conn, dispatch, assoc.nodeMgr.compressionMgr, remoteUid, assoc.streamId, maxFrame)
 }
 
 func (assoc *GekkaAssociation) dispatch(ctx context.Context, meta *ArteryMetadata) error {

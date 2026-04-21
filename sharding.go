@@ -94,6 +94,19 @@ func StartSharding[Command any, Event any, State any](
 	sys.RegisterType("sharding.RebalanceShard", reflect.TypeOf(sharding.RebalanceShard{}))
 	sys.RegisterType("string", reflect.TypeOf(""))
 
+	// Apply HOCON defaults from ClusterConfig when settings fields are zero.
+	if cluster, ok := sys.(*Cluster); ok {
+		if settings.NumberOfShards == 0 && cluster.cfg.Sharding.NumberOfShards > 0 {
+			settings.NumberOfShards = cluster.cfg.Sharding.NumberOfShards
+		}
+		if settings.Role == "" && cluster.cfg.Sharding.Role != "" {
+			settings.Role = cluster.cfg.Sharding.Role
+		}
+		if settings.PassivationIdleTimeout == 0 && cluster.cfg.Sharding.PassivationIdleTimeout > 0 {
+			settings.PassivationIdleTimeout = cluster.cfg.Sharding.PassivationIdleTimeout
+		}
+	}
+
 	// 1. Start ShardCoordinator as a singleton
 	strategy := settings.AllocationStrategy
 	if strategy == nil {
@@ -195,6 +208,7 @@ func StartSharding[Command any, Event any, State any](
 		Journal:                settings.Journal,
 		DataCenter:             settings.DataCenter,
 		HandoffTimeout:         settings.HandoffTimeout,
+		NumberOfShards:         settings.NumberOfShards,
 	}
 
 	// Populate IsLocalDC when both the cluster and DataCenter are available.

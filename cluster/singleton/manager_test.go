@@ -162,6 +162,48 @@ func newWiredManager(cm *cluster.ClusterManager, ctx *singletonTestContext) *Clu
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+// TestSingletonManager_RoleFromConstructor verifies that the role parameter
+// is stored and accessible, matching HOCON pekko.cluster.singleton.role flow.
+func TestSingletonManager_RoleFromConstructor(t *testing.T) {
+	cm := newSingletonTestCM("127.0.0.1", 2552, 0)
+	props := actor.Props{New: func() actor.Actor { return &noopSingletonActor{} }}
+
+	mgr := NewClusterSingletonManager(cm, props, "backend")
+	if mgr.Role() != "backend" {
+		t.Errorf("Role() = %q, want %q", mgr.Role(), "backend")
+	}
+
+	mgr2 := NewClusterSingletonManager(cm, props, "")
+	if mgr2.Role() != "" {
+		t.Errorf("Role() = %q, want empty", mgr2.Role())
+	}
+}
+
+// TestSingletonManager_HandOverRetryInterval verifies the default and
+// configured hand-over-retry-interval, matching HOCON flow.
+func TestSingletonManager_HandOverRetryInterval(t *testing.T) {
+	cm := newSingletonTestCM("127.0.0.1", 2552, 0)
+	props := actor.Props{New: func() actor.Actor { return &noopSingletonActor{} }}
+
+	// Default is 1s.
+	mgr := NewClusterSingletonManager(cm, props, "")
+	if mgr.HandOverRetryInterval() != 1*time.Second {
+		t.Errorf("HandOverRetryInterval() = %v, want 1s", mgr.HandOverRetryInterval())
+	}
+
+	// WithHandOverRetryInterval overrides.
+	mgr.WithHandOverRetryInterval(3 * time.Second)
+	if mgr.HandOverRetryInterval() != 3*time.Second {
+		t.Errorf("HandOverRetryInterval() = %v, want 3s", mgr.HandOverRetryInterval())
+	}
+
+	// Zero is ignored (keeps previous value).
+	mgr.WithHandOverRetryInterval(0)
+	if mgr.HandOverRetryInterval() != 3*time.Second {
+		t.Errorf("HandOverRetryInterval() = %v after zero, want 3s (unchanged)", mgr.HandOverRetryInterval())
+	}
+}
+
 // TestSingletonManager_SpawnsWhenOldest verifies that PreStart spawns the
 // singleton immediately when the local node is the only Up member.
 func TestSingletonManager_SpawnsWhenOldest(t *testing.T) {

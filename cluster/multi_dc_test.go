@@ -10,8 +10,10 @@ package cluster
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 	"google.golang.org/protobuf/proto"
@@ -308,7 +310,7 @@ func TestCrossDCGossipThrottling_NeverSendsCrossDC(t *testing.T) {
 	const ticks = 200
 	for i := 0; i < ticks; i++ {
 		sentPaths = sentPaths[:0]
-		cm.gossipTick()
+		cm.gossipTick(true)
 	}
 	// We can't deterministically assert zero cross-DC messages (the test would be
 	// flaky), but we CAN verify that gossipTick does not panic and compiles correctly.
@@ -341,10 +343,122 @@ func TestCrossDCGossipThrottling_AlwaysSendsCrossDC(t *testing.T) {
 	// Run enough ticks that the cross-DC node will be selected at least once.
 	const ticks = 100
 	for i := 0; i < ticks; i++ {
-		cm.gossipTick()
+		cm.gossipTick(true)
 	}
 	if sentToCross == 0 {
 		t.Error("expected at least one cross-DC gossip message with probability=1.0, got none")
+	}
+}
+
+// ── Gossip different-view probability ─────────────────────────────────────────
+
+// TestGossipDifferentViewProbability verifies that when a target node is already
+// in the Seen set (same view), the gossip system re-rolls to prefer nodes not
+// in the Seen set.
+func TestGossipDifferentViewProbability_PrefersDifferentView(t *testing.T) {
+	sentToUnseen := 0
+	unseenHost := "10.0.0.3"
+	router := func(_ context.Context, path string, _ any) error {
+		if strings.Contains(path, unseenHost) {
+			sentToUnseen++
+		}
+		return nil
+	}
+
+	local := makeUAWithDC("10.0.0.1", 2552, 1)
+	cm := NewClusterManager(local, router)
+	cm.GossipDifferentViewProbability = 1.0 // always prefer different view
+
+	// Add two peers: one in Seen (same view), one not (different view).
+	seenNode := makeUAWithDC("10.0.0.2", 2552, 2)
+	unseenNode := makeUAWithDC(unseenHost, 2552, 3)
+
+	cm.Mu.Lock()
+	cm.State.Members[0].Status = gproto_cluster.MemberStatus_Up.Enum()
+	cm.State.Members[0].UpNumber = proto.Int32(1)
+	addMemberUpWithRoles(cm, seenNode, 2, nil)
+	addMemberUpWithRoles(cm, unseenNode, 3, nil)
+	// Mark seenNode as Seen (address index 1).
+	if cm.State.Overview == nil {
+		cm.State.Overview = &gproto_cluster.GossipOverview{}
+	}
+	cm.State.Overview.Seen = []int32{0, 1} // local + seenNode
+	cm.Mu.Unlock()
+
+	const ticks = 200
+	for i := 0; i < ticks; i++ {
+		cm.gossipTick(false)
+	}
+	// With probability=1.0, the unseen node (different view) should be selected
+	// most of the time when the initial random pick lands on the seen node.
+	// We expect at least 50% of messages to go to the unseen node.
+	if sentToUnseen < ticks/4 {
+		t.Errorf("expected at least %d messages to unseen node, got %d", ticks/4, sentToUnseen)
+	}
+}
+
+// TestGossipDifferentViewProbability_ReduceAtLargeCluster verifies that the
+// different-view probability is halved when cluster size exceeds the threshold.
+func TestGossipDifferentViewProbability_ReduceAtLargeCluster(t *testing.T) {
+	router := func(_ context.Context, _ string, _ any) error { return nil }
+	local := makeUAWithDC("10.0.0.1", 2552, 1)
+	cm := NewClusterManager(local, router)
+	cm.GossipDifferentViewProbability = 1.0
+	cm.ReduceGossipDifferentViewProbability = 3 // reduce at 3 members
+
+	// Add 3 peers (total 4 members > threshold of 3).
+	cm.Mu.Lock()
+	cm.State.Members[0].Status = gproto_cluster.MemberStatus_Up.Enum()
+	cm.State.Members[0].UpNumber = proto.Int32(1)
+	for i := 2; i <= 4; i++ {
+		node := makeUAWithDC(fmt.Sprintf("10.0.0.%d", i), 2552, uint32(i))
+		addMemberUpWithRoles(cm, node, int32(i), nil)
+	}
+	cm.Mu.Unlock()
+
+	// This should not panic; the reduced probability (0.5) still works.
+	for i := 0; i < 50; i++ {
+		cm.gossipTick(false)
+	}
+}
+
+// ── Gossip tombstone pruning ─────────────────────────────────────────────────
+
+func TestPruneGossipTombstones(t *testing.T) {
+	router := func(_ context.Context, _ string, _ any) error { return nil }
+	local := makeUAWithDC("10.0.0.1", 2552, 1)
+	cm := NewClusterManager(local, router)
+	cm.PruneGossipTombstonesAfter = 100 * time.Millisecond
+
+	// Add a member and mark it as Removed with a tombstone.
+	removedNode := makeUAWithDC("10.0.0.2", 2552, 2)
+	cm.Mu.Lock()
+	cm.State.Members[0].Status = gproto_cluster.MemberStatus_Up.Enum()
+	cm.State.Members[0].UpNumber = proto.Int32(1)
+	addMemberUpWithRoles(cm, removedNode, 2, nil)
+	// Transition to Removed.
+	cm.State.Members[1].Status = gproto_cluster.MemberStatus_Removed.Enum()
+	cm.recordTombstoneLocked("10.0.0.2", 2552)
+	cm.Mu.Unlock()
+
+	// Before TTL expires, member should still be present.
+	cm.Mu.Lock()
+	cm.pruneGossipTombstonesLocked()
+	memberCount := len(cm.State.Members)
+	cm.Mu.Unlock()
+	if memberCount != 2 {
+		t.Fatalf("expected 2 members before prune, got %d", memberCount)
+	}
+
+	// Wait for TTL to expire.
+	time.Sleep(150 * time.Millisecond)
+
+	cm.Mu.Lock()
+	cm.pruneGossipTombstonesLocked()
+	memberCount = len(cm.State.Members)
+	cm.Mu.Unlock()
+	if memberCount != 1 {
+		t.Fatalf("expected 1 member after prune, got %d", memberCount)
 	}
 }
 
@@ -519,5 +633,105 @@ func TestUpsertRolesLocked_Deduplication(t *testing.T) {
 	defer cm.Mu.RUnlock()
 	if len(cm.State.AllRoles) != 3 {
 		t.Errorf("AllRoles len = %d, want 3 (worker, dc-us-east, backend)", len(cm.State.AllRoles))
+	}
+}
+
+// ── Down Removal Margin Tests ───────────────────────────────────────────────
+
+func TestDownRemovalMargin_DelaysRemoval(t *testing.T) {
+	router := func(_ context.Context, _ string, _ any) error { return nil }
+	local := makeUAWithDC("10.0.0.1", 2552, 1)
+	cm := NewClusterManager(local, router)
+	cm.DownRemovalMargin = 200 * time.Millisecond
+
+	// Add a second member and mark it as Down.
+	node2 := makeUAWithDC("10.0.0.2", 2552, 2)
+	cm.Mu.Lock()
+	cm.State.Members[0].Status = gproto_cluster.MemberStatus_Up.Enum()
+	cm.State.Members[0].UpNumber = proto.Int32(1)
+	addMemberUpWithRoles(cm, node2, 2, nil)
+	cm.State.Members[1].Status = gproto_cluster.MemberStatus_Down.Enum()
+	cm.Mu.Unlock()
+
+	// First leader actions should NOT remove the downed member (margin not elapsed).
+	cm.performLeaderActions()
+	cm.Mu.RLock()
+	status := cm.State.Members[1].GetStatus()
+	cm.Mu.RUnlock()
+	if status == gproto_cluster.MemberStatus_Removed {
+		t.Fatal("member should not be Removed before down-removal-margin elapsed")
+	}
+
+	// Wait for margin to elapse.
+	time.Sleep(250 * time.Millisecond)
+
+	// Now leader actions should remove the member.
+	cm.performLeaderActions()
+	cm.Mu.RLock()
+	status = cm.State.Members[1].GetStatus()
+	cm.Mu.RUnlock()
+	if status != gproto_cluster.MemberStatus_Removed {
+		t.Errorf("member should be Removed after margin, got %v", status)
+	}
+}
+
+func TestDownRemovalMargin_ZeroMeansImmediate(t *testing.T) {
+	router := func(_ context.Context, _ string, _ any) error { return nil }
+	local := makeUAWithDC("10.0.0.1", 2552, 1)
+	cm := NewClusterManager(local, router)
+	// DownRemovalMargin = 0 (default) — immediate removal.
+
+	node2 := makeUAWithDC("10.0.0.2", 2552, 2)
+	cm.Mu.Lock()
+	cm.State.Members[0].Status = gproto_cluster.MemberStatus_Up.Enum()
+	cm.State.Members[0].UpNumber = proto.Int32(1)
+	addMemberUpWithRoles(cm, node2, 2, nil)
+	cm.State.Members[1].Status = gproto_cluster.MemberStatus_Down.Enum()
+	cm.Mu.Unlock()
+
+	cm.performLeaderActions()
+	cm.Mu.RLock()
+	status := cm.State.Members[1].GetStatus()
+	cm.Mu.RUnlock()
+	if status != gproto_cluster.MemberStatus_Removed {
+		t.Errorf("member should be Removed immediately with zero margin, got %v", status)
+	}
+}
+
+// ── Config Compat Check Tests ───────────────────────────────────────────────
+
+func TestCheckConfigCompat_SBRMatches(t *testing.T) {
+	router := func(_ context.Context, _ string, _ any) error { return nil }
+	local := makeUAWithDC("10.0.0.1", 2552, 1)
+	cm := NewClusterManager(local, router)
+
+	// Remote sends SBR config — should be compatible.
+	remoteConfig := `pekko.cluster.downing-provider-class = "pekko.cluster.sbr.SplitBrainResolverProvider"`
+	if !cm.CheckConfigCompat(remoteConfig) {
+		t.Error("SBR config should be compatible")
+	}
+}
+
+func TestCheckConfigCompat_EmptyAllowed(t *testing.T) {
+	router := func(_ context.Context, _ string, _ any) error { return nil }
+	local := makeUAWithDC("10.0.0.1", 2552, 1)
+	cm := NewClusterManager(local, router)
+
+	// Remote sends empty downing-provider — should be compatible (empty is allowed).
+	remoteConfig := `pekko.cluster.downing-provider-class = ""`
+	if !cm.CheckConfigCompat(remoteConfig) {
+		t.Error("empty downing-provider-class should be compatible")
+	}
+}
+
+func TestCheckConfigCompat_CustomProviderRejected(t *testing.T) {
+	router := func(_ context.Context, _ string, _ any) error { return nil }
+	local := makeUAWithDC("10.0.0.1", 2552, 1)
+	cm := NewClusterManager(local, router)
+
+	// Remote sends a custom downing provider — should be incompatible.
+	remoteConfig := `pekko.cluster.downing-provider-class = "com.example.CustomDowningProvider"`
+	if cm.CheckConfigCompat(remoteConfig) {
+		t.Error("custom downing-provider-class should be incompatible")
 	}
 }

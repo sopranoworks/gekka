@@ -73,4 +73,13 @@ type ShardSettings struct {
 	// Equivalent HOCON key:
 	//   gekka.cluster.sharding.handoff-timeout = 10s
 	HandoffTimeout time.Duration
+
+	// NumberOfShards is the total number of shards distributed across the
+	// cluster.  This value is used by HashCodeExtractor to compute shard IDs
+	// from entity IDs (entityId.hashCode % numberOfShards).  Once sharding
+	// has started, this value must not change.  Defaults to 1000 when zero.
+	//
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.number-of-shards = 1000
+	NumberOfShards int
 }

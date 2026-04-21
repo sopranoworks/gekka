@@ -256,6 +256,9 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 	if v, err := cfg.GetString(prefix + ".persistence.snapshot-store.plugin"); err == nil {
 		nodeCfg.Persistence.SnapshotPlugin = strings.TrimSpace(v)
 	}
+	if v, err := cfg.GetInt(prefix + ".persistence.max-concurrent-recoveries"); err == nil && v > 0 {
+		nodeCfg.Persistence.MaxConcurrentRecoveries = v
+	}
 
 	// ── Cluster Roles ───────────────────────────────────────────────────────
 	var rolesTmp struct {
@@ -284,7 +287,12 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 
 	// ── Cluster Sharding ────────────────────────────────────────────────────
 	shardingPrefix := prefix + ".cluster.sharding"
-	if v, err := cfg.GetString(shardingPrefix + ".passivation.idle-timeout"); err == nil {
+	// Passivation: try the correct Pekko path first, then fall back to the legacy short path.
+	if v, err := cfg.GetString(shardingPrefix + ".passivation.default-idle-strategy.idle-entity.timeout"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.Sharding.PassivationIdleTimeout = d
+		}
+	} else if v, err := cfg.GetString(shardingPrefix + ".passivation.idle-timeout"); err == nil {
 		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
 			nodeCfg.Sharding.PassivationIdleTimeout = d
 		}
@@ -297,6 +305,12 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
 			nodeCfg.Sharding.HandoffTimeout = d
 		}
+	}
+	if v, err := cfg.GetInt(shardingPrefix + ".number-of-shards"); err == nil {
+		nodeCfg.Sharding.NumberOfShards = v
+	}
+	if v, err := cfg.GetString(shardingPrefix + ".role"); err == nil {
+		nodeCfg.Sharding.Role = strings.TrimSpace(v)
 	}
 
 	// ── Sharding Adaptive Rebalancing (gekka-native) ────────────────────────
@@ -332,6 +346,28 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 	}
 	if v, err := cfg.GetInt(adaptivePrefix + ".max-simultaneous-rebalance"); err == nil {
 		nodeCfg.Sharding.AdaptiveRebalancing.MaxSimultaneousRebalance = v
+	}
+
+	// ── Cluster Singleton ──────────────────────────────────────────────────
+	singletonPrefix := prefix + ".cluster.singleton"
+	if v, err := cfg.GetString(singletonPrefix + ".role"); err == nil {
+		nodeCfg.Singleton.Role = strings.TrimSpace(v)
+	}
+	if v, err := cfg.GetString(singletonPrefix + ".hand-over-retry-interval"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.Singleton.HandOverRetryInterval = d
+		}
+	}
+
+	// ── Cluster Singleton Proxy ────────────────────────────────────────────
+	singletonProxyPrefix := prefix + ".cluster.singleton-proxy"
+	if v, err := cfg.GetString(singletonProxyPrefix + ".singleton-identification-interval"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.SingletonProxy.SingletonIdentificationInterval = d
+		}
+	}
+	if v, err := cfg.GetInt(singletonProxyPrefix + ".buffer-size"); err == nil {
+		nodeCfg.SingletonProxy.BufferSize = v
 	}
 
 	// ── Failure Detector ────────────────────────────────────────────────────
@@ -374,6 +410,9 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 			nodeCfg.FailureDetector.ExpectedResponseAfter = d
 		}
 	}
+	if v, err := cfg.GetInt(pekkoFdPrefix + ".monitored-by-nr-of-members"); err == nil {
+		nodeCfg.FailureDetector.MonitoredByNrOfMembers = v
+	}
 
 	// Fallback: gekka-native namespace (lower priority)
 	fdPrefix := "gekka.cluster.failure-detector"
@@ -397,6 +436,72 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		}
 	}
 
+	// ── Maximum Frame Size ─────────────────────────────────────────────────
+	if v, err := cfg.GetString(arteryPrefix + ".advanced.maximum-frame-size"); err == nil {
+		if size, parseErr := parseHOCONByteSize(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.MaxFrameSize = size
+		}
+	}
+
+	// ── Bind Address (NAT/Docker support) ──────────────────────────────────
+	if v, err := cfg.GetString(arteryPrefix + ".bind.hostname"); err == nil {
+		nodeCfg.BindHostname = strings.TrimSpace(v)
+	}
+	if v, err := cfg.GetString(arteryPrefix + ".bind.port"); err == nil {
+		v = strings.TrimSpace(v)
+		if v != "" {
+			if p, parseErr := strconv.Atoi(v); parseErr == nil && p > 0 {
+				nodeCfg.BindPort = uint32(p)
+			}
+		}
+	}
+
+	// ── App Version ─────────────────────────────────────────────────────────
+	if v, err := cfg.GetString(prefix + ".cluster.app-version"); err == nil {
+		nodeCfg.AppVersion = strings.TrimSpace(v)
+	}
+
+	// ── Coordinated Shutdown When Down ──────────────────────────────────────
+	if v, err := cfg.GetString(prefix + ".cluster.run-coordinated-shutdown-when-down"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		b := v == "on" || v == "true"
+		nodeCfg.RunCoordinatedShutdownWhenDown = &b
+	}
+
+	// ── Down Removal Margin ────────────────────────────────────────────────
+	if v, err := cfg.GetString(prefix + ".cluster.down-removal-margin"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		if v != "off" && v != "" {
+			if d, parseErr := parseHOCONDuration(v); parseErr == nil {
+				nodeCfg.DownRemovalMargin = d
+			}
+		}
+	}
+
+	// ── Seed Node Timeout ──────────────────────────────────────────────────
+	if v, err := cfg.GetString(prefix + ".cluster.seed-node-timeout"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.SeedNodeTimeout = d
+		}
+	}
+
+	// ── Configuration Compatibility Check ──────────────────────────────────
+	if v, err := cfg.GetString(prefix + ".cluster.configuration-compatibility-check.enforce-on-join"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		b := v == "on" || v == "true"
+		nodeCfg.ConfigCompatCheck.EnforceOnJoin = &b
+	}
+
+	// ── Quarantine Removed Node After ───────────────────────────────────────
+	if v, err := cfg.GetString(prefix + ".cluster.quarantine-removed-node-after"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		if v != "off" && v != "" {
+			if d, parseErr := parseHOCONDuration(v); parseErr == nil {
+				nodeCfg.QuarantineRemovedNodeAfter = d
+			}
+		}
+	}
+
 	// ── Cluster Timing ──────────────────────────────────────────────────────
 	if v, err := cfg.GetInt(prefix + ".cluster.min-nr-of-members"); err == nil {
 		nodeCfg.MinNrOfMembers = v
@@ -409,6 +514,90 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 	if v, err := cfg.GetString(prefix + ".cluster.gossip-interval"); err == nil {
 		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
 			nodeCfg.GossipInterval = d
+		}
+	}
+	if v, err := cfg.GetString(prefix + ".cluster.leader-actions-interval"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.LeaderActionsInterval = d
+		}
+	}
+	if v, err := cfg.GetString(prefix + ".cluster.periodic-tasks-initial-delay"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.PeriodicTasksInitialDelay = d
+		}
+	}
+	if v, err := cfg.GetString(prefix + ".cluster.shutdown-after-unsuccessful-join-seed-nodes"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		if v != "off" && v != "" {
+			if d, parseErr := parseHOCONDuration(v); parseErr == nil {
+				nodeCfg.ShutdownAfterUnsuccessfulJoinSeedNodes = d
+			}
+		}
+	}
+	if v, err := cfg.GetString(prefix + ".cluster.log-info"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		b := v == "on" || v == "true"
+		nodeCfg.LogInfo = &b
+	}
+	if v, err := cfg.GetString(prefix + ".cluster.log-info-verbose"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		nodeCfg.LogInfoVerbose = v == "on" || v == "true"
+	}
+	if v, err := cfg.GetString(prefix + ".cluster.allow-weakly-up-members"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		if v == "off" || v == "false" {
+			// Explicit zero disables WeaklyUp
+			nodeCfg.AllowWeaklyUpMembers = 0
+		} else {
+			if d, parseErr := parseHOCONDuration(v); parseErr == nil {
+				nodeCfg.AllowWeaklyUpMembers = d
+			}
+		}
+	}
+	if v, err := cfg.GetString(prefix + ".cluster.gossip-different-view-probability"); err == nil {
+		if f, parseErr := strconv.ParseFloat(strings.TrimSpace(v), 64); parseErr == nil {
+			nodeCfg.GossipDifferentViewProbability = f
+		}
+	}
+	if v, err := cfg.GetString(prefix + ".cluster.reduce-gossip-different-view-probability"); err == nil {
+		if n, parseErr := strconv.Atoi(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.ReduceGossipDifferentViewProbability = n
+		}
+	}
+	if v, err := cfg.GetString(prefix + ".cluster.gossip-time-to-live"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.GossipTimeToLive = d
+		}
+	}
+	if v, err := cfg.GetString(prefix + ".cluster.prune-gossip-tombstones-after"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.PruneGossipTombstonesAfter = d
+		}
+	}
+	if v, err := cfg.GetString(prefix + ".cluster.unreachable-nodes-reaper-interval"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.UnreachableNodesReaperInterval = d
+		}
+	}
+
+	// ── Pub-Sub ────────────────────────────────────────────────────────────
+	if v, err := cfg.GetString(prefix + ".cluster.pub-sub.gossip-interval"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.PubSub.GossipInterval = d
+		}
+	}
+
+	// ��─ Per-Role Min Nr Of Members ──────────────────────────────────────────
+	// Parse pekko.cluster.role.{name}.min-nr-of-members for each role.
+	rolePrefix := prefix + ".cluster.role"
+	if roleObj, err := cfg.GetConfig(rolePrefix); err == nil {
+		for _, roleName := range roleObj.Keys() {
+			if v, e := cfg.GetInt(rolePrefix + "." + roleName + ".min-nr-of-members"); e == nil && v > 0 {
+				if nodeCfg.RoleMinNrOfMembers == nil {
+					nodeCfg.RoleMinNrOfMembers = make(map[string]int)
+				}
+				nodeCfg.RoleMinNrOfMembers[roleName] = v
+			}
 		}
 	}
 
@@ -458,6 +647,24 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 	}
 	if v, err := cfg.GetInt(sbrPrefix + ".static-quorum.quorum-size"); err == nil {
 		nodeCfg.SBR.QuorumSize = v
+	}
+	if v, err := cfg.GetString(sbrPrefix + ".down-all-when-unstable"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		switch v {
+		case "off", "false":
+			f := false
+			nodeCfg.SBR.DownAllWhenUnstableEnabled = &f
+		case "on", "true":
+			t := true
+			nodeCfg.SBR.DownAllWhenUnstableEnabled = &t
+		default:
+			// Explicit duration
+			if d, parseErr := parseHOCONDuration(v); parseErr == nil {
+				t := true
+				nodeCfg.SBR.DownAllWhenUnstableEnabled = &t
+				nodeCfg.SBR.DownAllWhenUnstable = d
+			}
+		}
 	}
 
 	// Unmarshal Management and Metrics configs from HOCON.
@@ -668,6 +875,44 @@ func extractDispatchers(cfg *hocon.Config, prefix string) {
 		}
 		actor.RegisterDispatcherConfig(key, dcfg)
 	}
+}
+
+// parseHOCONByteSize parses a Pekko/HOCON byte-size string such as "256 KiB",
+// "256k", "1048576", "1 MiB" into an int (number of bytes).
+func parseHOCONByteSize(s string) (int, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, fmt.Errorf("empty byte size")
+	}
+
+	// Find where the numeric part ends.
+	i := 0
+	for i < len(s) && (s[i] >= '0' && s[i] <= '9' || s[i] == '.') {
+		i++
+	}
+	numStr := strings.TrimSpace(s[:i])
+	unit := strings.ToLower(strings.TrimSpace(s[i:]))
+
+	num, err := strconv.ParseFloat(numStr, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parseHOCONByteSize: cannot parse number %q: %w", numStr, err)
+	}
+
+	multiplier := 1.0
+	switch unit {
+	case "", "b":
+		multiplier = 1
+	case "k", "kb", "kib":
+		multiplier = 1024
+	case "m", "mb", "mib":
+		multiplier = 1024 * 1024
+	case "g", "gb", "gib":
+		multiplier = 1024 * 1024 * 1024
+	default:
+		return 0, fmt.Errorf("parseHOCONByteSize: unknown unit %q", unit)
+	}
+
+	return int(num * multiplier), nil
 }
 
 // parseHOCONDuration parses a Pekko/HOCON duration string such as "20s", "5 seconds",

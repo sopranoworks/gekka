@@ -65,6 +65,12 @@ type FailureDetectorConfig struct {
 	// Corresponds to HOCON: pekko.cluster.failure-detector.expected-response-after
 	// Default: 1s
 	ExpectedResponseAfter time.Duration
+
+	// MonitoredByNrOfMembers limits how many cluster members this node sends
+	// heartbeats to. A zero or negative value means heartbeat all members.
+	// Corresponds to HOCON: pekko.cluster.failure-detector.monitored-by-nr-of-members
+	// Default: 9
+	MonitoredByNrOfMembers int
 }
 
 func NewPhiAccrualFailureDetector(threshold float64, windowSize int) *PhiAccrualFailureDetector {

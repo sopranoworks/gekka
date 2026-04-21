@@ -76,6 +76,10 @@ func DataCenterForMember(gossip *gproto_cluster.Gossip, member *gproto_cluster.M
 // The member is now available for work and cluster singleton hosting.
 type MemberUp struct{ Member MemberAddress }
 
+// MemberWeaklyUp is published when a Joining member is promoted to WeaklyUp
+// because convergence was not achieved within the allow-weakly-up-members timeout.
+type MemberWeaklyUp struct{ Member MemberAddress }
+
 // MemberLeft is published when a member requests graceful departure
 // (transitions to Leaving status).
 type MemberLeft struct{ Member MemberAddress }
@@ -109,6 +113,7 @@ type AppVersionChanged struct {
 
 // Marker method implementations — satisfy ClusterDomainEvent.
 func (MemberUp) clusterDomainEvent()          {}
+func (MemberWeaklyUp) clusterDomainEvent()    {}
 func (MemberLeft) clusterDomainEvent()        {}
 func (MemberExited) clusterDomainEvent()      {}
 func (MemberDowned) clusterDomainEvent()      {}

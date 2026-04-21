@@ -176,6 +176,15 @@ type replicatedEventEnvelope[E any] struct {
 
 func (a *replicatedActor[Command, Event, State]) recover() {
 	ctx := context.Background()
+
+	// Acquire a recovery slot from the global limiter.
+	rl, limErr := persistence.AcquireRecovery(ctx)
+	if limErr != nil {
+		a.Log().Error("Recovery limiter acquisition failed", "error", limErr)
+		return
+	}
+	defer rl.Release()
+
 	selfReplicaId := a.behavior.ReplicationId.ReplicaId
 	selfPersistenceId := a.behavior.ReplicationId.PersistenceId()
 

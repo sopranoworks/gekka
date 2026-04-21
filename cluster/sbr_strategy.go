@@ -59,6 +59,26 @@ type SBRConfig struct {
 	// Defaults to 0 (disabled).  Recommended value: 60s.
 	AutoDownUnreachableAfter time.Duration
 
+	// DownAllWhenUnstable triggers a down-all decision when the cluster remains
+	// unstable (has unreachable members that neither recover nor get resolved by
+	// the configured strategy) for longer than stable-after + this duration.
+	//
+	// This mirrors Pekko's pekko.cluster.split-brain-resolver.down-all-when-unstable.
+	//
+	// Values:
+	//   - positive duration: explicit timeout after stable-after fires
+	//   - zero with DownAllWhenUnstableEnabled=true ("on"): derived as 3/4 of
+	//     StableAfter, minimum 4s
+	//   - DownAllWhenUnstableEnabled=false ("off"): feature disabled
+	//
+	// Default: enabled ("on"), derived duration.
+	DownAllWhenUnstable time.Duration
+
+	// DownAllWhenUnstableEnabled controls whether the down-all-when-unstable
+	// safety net is active. When true and DownAllWhenUnstable is zero, the
+	// timeout is derived as max(3/4 * StableAfter, 4s).
+	DownAllWhenUnstableEnabled *bool
+
 	// Role restricts SBR to only count members with this role.
 	// Empty means count all members.
 	Role string

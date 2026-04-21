@@ -262,6 +262,15 @@ func (p *durableStateActor[Command, State]) drainUserStash() {
 
 func (p *durableStateActor[Command, State]) recover() {
 	ctx := context.Background()
+
+	// Acquire a recovery slot from the global limiter.
+	rl, limErr := persistence.AcquireRecovery(ctx)
+	if limErr != nil {
+		p.Log().Error("Recovery limiter acquisition failed", "error", limErr)
+		return
+	}
+	defer rl.Release()
+
 	state, revision, err := p.behavior.StateStore.Get(ctx, p.behavior.PersistenceID)
 	if err != nil {
 		p.Log().Error("Recovery failed", "error", err)

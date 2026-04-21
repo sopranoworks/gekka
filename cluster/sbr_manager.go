@@ -155,6 +155,28 @@ func NewSBRManager(cm *ClusterManager, cfg SBRConfig) *SBRManager {
 	}
 }
 
+// downAllWhenUnstableDuration returns the effective down-all-when-unstable
+// timeout, or 0 if the feature is disabled.
+func (m *SBRManager) downAllWhenUnstableDuration() time.Duration {
+	// Explicitly disabled
+	if m.cfg.DownAllWhenUnstableEnabled != nil && !*m.cfg.DownAllWhenUnstableEnabled {
+		return 0
+	}
+	// Explicit duration set
+	if m.cfg.DownAllWhenUnstable > 0 {
+		return m.cfg.DownAllWhenUnstable
+	}
+	// Default "on": derive as 3/4 of StableAfter, minimum 4s
+	if m.cfg.DownAllWhenUnstableEnabled == nil || *m.cfg.DownAllWhenUnstableEnabled {
+		derived := m.cfg.StableAfter * 3 / 4
+		if derived < 4*time.Second {
+			derived = 4 * time.Second
+		}
+		return derived
+	}
+	return 0
+}
+
 // SetInfraProvider attaches an InfrastructureProvider to the manager.
 // When non-nil, PodStatus is queried on every UnreachableMember event and
 // also during the decide phase so that infra-confirmed-dead members are
@@ -211,15 +233,32 @@ func (m *SBRManager) Start(ctx context.Context) {
 		autoDownTickC = ticker.C
 	}
 
+	// down-all-when-unstable: after stable-after fires and the strategy executes
+	// but unreachable members remain, this timer fires to down ALL nodes as a
+	// last-resort safety net.
+	var unstableTimer *time.Timer
+	unstableDuration := m.downAllWhenUnstableDuration()
+	stopUnstableTimer := func() {
+		if unstableTimer != nil {
+			unstableTimer.Stop()
+			unstableTimer = nil
+		}
+	}
+
 	for {
 		var stableC <-chan time.Time
 		if stableTimer != nil {
 			stableC = stableTimer.C
 		}
+		var unstableC <-chan time.Time
+		if unstableTimer != nil {
+			unstableC = unstableTimer.C
+		}
 
 		select {
 		case <-ctx.Done():
 			stopStableTimer()
+			stopUnstableTimer()
 			return
 
 		case evt, ok := <-sub.C:
@@ -245,6 +284,7 @@ func (m *SBRManager) Start(ctx context.Context) {
 						delete(m.unreachableSince, key)
 						if !m.hasUnreachable() {
 							stopStableTimer()
+							stopUnstableTimer()
 						}
 						continue
 					}
@@ -258,12 +298,27 @@ func (m *SBRManager) Start(ctx context.Context) {
 				if !m.hasUnreachable() {
 					log.Printf("SBR: all members reachable — cancelling stable-after timer")
 					stopStableTimer()
+					stopUnstableTimer()
 				}
 			}
 
 		case <-stableC:
 			stableTimer = nil
 			m.decide(ctx)
+			// If unreachable members remain after the strategy decision,
+			// start the unstable timer as a last-resort safety net.
+			if m.hasUnreachable() && unstableDuration > 0 {
+				log.Printf("SBR: unreachable members remain after decision — starting down-all-when-unstable timer (%s)", unstableDuration)
+				stopUnstableTimer()
+				unstableTimer = time.NewTimer(unstableDuration)
+			}
+
+		case <-unstableC:
+			unstableTimer = nil
+			if m.hasUnreachable() {
+				log.Printf("SBR: down-all-when-unstable timer fired — downing ALL members")
+				m.downAllUnstable(ctx)
+			}
 
 		case <-autoDownTickC:
 			m.checkAutoDown(ctx)
@@ -291,6 +346,32 @@ func (m *SBRManager) checkAutoDown(ctx context.Context) {
 			m.decide(ctx)
 			return // decide handles all unreachable members at once
 		}
+	}
+}
+
+// downAllUnstable is the last-resort action triggered by down-all-when-unstable.
+// It downs every reachable and unreachable member and then downs self, forcing a
+// complete cluster restart.
+func (m *SBRManager) downAllUnstable(_ context.Context) {
+	reachable, unreachable := m.classifyMembers()
+	// Down all unreachable members.
+	for _, u := range unreachable {
+		log.Printf("SBR: down-all-when-unstable: downing unreachable %s", u.Address)
+		m.downFn(u.Address)
+	}
+	// Down all reachable members (except self — handled by leaveFn below).
+	self := memberAddressFromUA(m.cm.LocalAddress)
+	for _, r := range reachable {
+		if r.Address == self {
+			continue
+		}
+		log.Printf("SBR: down-all-when-unstable: downing reachable %s", r.Address)
+		m.downFn(r.Address)
+	}
+	// Down self last.
+	log.Printf("SBR: down-all-when-unstable: downing self (%s)", self)
+	if err := m.leaveFn(); err != nil {
+		log.Printf("SBR: down-all-when-unstable: LeaveCluster error: %v", err)
 	}
 }
 

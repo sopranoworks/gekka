@@ -11,6 +11,7 @@ package actor_test
 import (
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/sopranoworks/gekka/actor"
@@ -193,5 +194,48 @@ func TestEventStream_PublishNilIsNoOp(t *testing.T) {
 	es.Publish(nil) // must not panic
 	if n := len(sub.received()); n != 0 {
 		t.Errorf("nil publish should deliver nothing, got %d", n)
+	}
+}
+
+func TestDeadLetterLogger_CountsDown(t *testing.T) {
+	es := actor.NewEventStream()
+	var shutDown int32
+	_ = actor.NewDeadLetterLogger(es, 2, false, &shutDown)
+
+	es.Publish(actor.DeadLetter{Message: "msg1", Cause: "not-found"})
+	es.Publish(actor.DeadLetter{Message: "msg2", Cause: "not-found"})
+	// Third should be suppressed (no crash, no log)
+	es.Publish(actor.DeadLetter{Message: "msg3", Cause: "not-found"})
+}
+
+func TestDeadLetterLogger_Off(t *testing.T) {
+	es := actor.NewEventStream()
+	var shutDown int32
+	dl := actor.NewDeadLetterLogger(es, 0, false, &shutDown)
+	if dl.Subscribed() {
+		t.Error("expected no subscription when limit=0")
+	}
+}
+
+func TestDeadLetterLogger_SuppressDuringShutdown(t *testing.T) {
+	es := actor.NewEventStream()
+	var shutDown int32
+	_ = actor.NewDeadLetterLogger(es, -1, true, &shutDown)
+
+	atomic.StoreInt32(&shutDown, 1)
+	// Should not panic or log
+	es.Publish(actor.DeadLetter{Message: "msg", Cause: "mailbox-closed"})
+}
+
+func TestSubscribeFunc(t *testing.T) {
+	es := actor.NewEventStream()
+	var count int
+	es.SubscribeFunc(reflect.TypeOf(ConcreteEvent{}), func(event any) {
+		count++
+	})
+	es.Publish(ConcreteEvent{Value: "test"})
+	es.Publish(ConcreteEvent{Value: "test2"})
+	if count != 2 {
+		t.Errorf("SubscribeFunc callback count = %d, want 2", count)
 	}
 }

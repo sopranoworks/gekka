@@ -1415,3 +1415,108 @@ pekko {
 		t.Errorf("RoleMinNrOfMembers should be nil when not configured, got %v", cfg.RoleMinNrOfMembers)
 	}
 }
+
+func TestHOCON_LogDeadLetters(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery.canonical { hostname = "127.0.0.1", port = 2552 }
+  cluster.seed-nodes = []
+  log-dead-letters = 5
+  log-dead-letters-during-shutdown = on
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.LogDeadLetters != 5 {
+		t.Errorf("LogDeadLetters = %d, want 5", cfg.LogDeadLetters)
+	}
+	if !cfg.LogDeadLettersDuringShutdown {
+		t.Error("LogDeadLettersDuringShutdown = false, want true")
+	}
+}
+
+func TestHOCON_LogDeadLetters_Off(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery.canonical { hostname = "127.0.0.1", port = 2552 }
+  cluster.seed-nodes = []
+  log-dead-letters = off
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.LogDeadLetters != 0 {
+		t.Errorf("LogDeadLetters = %d, want 0", cfg.LogDeadLetters)
+	}
+}
+
+func TestHOCON_LogDeadLetters_Default(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery.canonical { hostname = "127.0.0.1", port = 2552 }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.LogDeadLetters != 10 {
+		t.Errorf("LogDeadLetters = %d, want 10 (default)", cfg.LogDeadLetters)
+	}
+	if cfg.LogDeadLettersDuringShutdown {
+		t.Error("LogDeadLettersDuringShutdown = true, want false (default)")
+	}
+}
+
+func TestHOCON_AcceptProtocolNames(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote {
+    artery.canonical { hostname = "127.0.0.1", port = 2552 }
+    accept-protocol-names = ["pekko"]
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if len(cfg.AcceptProtocolNames) != 1 || cfg.AcceptProtocolNames[0] != "pekko" {
+		t.Errorf("AcceptProtocolNames = %v, want [pekko]", cfg.AcceptProtocolNames)
+	}
+}
+
+func TestHOCON_AcceptProtocolNames_Default(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery.canonical { hostname = "127.0.0.1", port = 2552 }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if len(cfg.AcceptProtocolNames) != 2 {
+		t.Errorf("AcceptProtocolNames = %v, want [pekko, akka]", cfg.AcceptProtocolNames)
+	}
+}
+
+func TestHOCON_CrossDCConnections(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery.canonical { hostname = "127.0.0.1", port = 2552 }
+  cluster {
+    seed-nodes = []
+    multi-data-center.cross-data-center-connections = 3
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.CrossDataCenterConnections != 3 {
+		t.Errorf("CrossDataCenterConnections = %d, want 3", cfg.CrossDataCenterConnections)
+	}
+}

@@ -93,6 +93,10 @@ type ClusterManager struct {
 	// Defaults to 0.1 when zero.
 	CrossDataCenterGossipProbability float64
 
+	// CrossDataCenterConnections limits the number of distinct foreign-DC nodes
+	// used as gossip targets per round. Defaults to 5 when zero.
+	CrossDataCenterConnections int
+
 	// SBRStrategy is an optional static-quorum strategy from the internal SBR
 	// primitives.  When set, CheckReachability invokes it after the partition
 	// has been unreachable for SBRStableAfter and calls LeaveCluster on Down.
@@ -2911,7 +2915,8 @@ func (cm *ClusterManager) gossipTick(runLeaderActions bool) {
 	}
 
 	// Cross-DC gossip throttling: skip foreign-DC targets according to
-	// CrossDataCenterGossipProbability (default 0.1).
+	// CrossDataCenterGossipProbability (default 0.1) and cap the number of
+	// foreign-DC nodes used as gossip targets (CrossDataCenterConnections, default 5).
 	{
 		localDC := cm.LocalDataCenter
 		if localDC == "" {
@@ -2925,6 +2930,25 @@ func (cm *ClusterManager) gossipTick(runLeaderActions bool) {
 				prob = 0.1
 			}
 			if rand.Float64() >= prob {
+				return
+			}
+
+			// Cap: only target the first N foreign-DC members (deterministic)
+			maxCrossDC := cm.CrossDataCenterConnections
+			if maxCrossDC <= 0 {
+				maxCrossDC = 5 // Pekko default
+			}
+			foreignIdx := 0
+			for i, m := range members {
+				mDC := DataCenterForMember(tmpGossip, m)
+				if mDC != localDC {
+					if int32(i) == int32(targetIdx) {
+						break
+					}
+					foreignIdx++
+				}
+			}
+			if foreignIdx >= maxCrossDC {
 				return
 			}
 		}

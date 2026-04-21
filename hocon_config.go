@@ -150,6 +150,43 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		}
 	}
 
+	// Dead letter logging: pekko.log-dead-letters (default: 10)
+	nodeCfg.LogDeadLetters = 10 // default
+	if v, err := cfg.GetString(prefix + ".log-dead-letters"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		switch v {
+		case "off", "false":
+			nodeCfg.LogDeadLetters = 0
+		case "on", "true":
+			nodeCfg.LogDeadLetters = -1 // unlimited
+		default:
+			if n, parseErr := strconv.Atoi(v); parseErr == nil {
+				nodeCfg.LogDeadLetters = n
+			}
+		}
+	}
+
+	// Dead letter logging during shutdown: pekko.log-dead-letters-during-shutdown (default: off)
+	if v, err := cfg.GetString(prefix + ".log-dead-letters-during-shutdown"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		nodeCfg.LogDeadLettersDuringShutdown = v == "on" || v == "true"
+	}
+
+	// Accept protocol names: pekko.remote.accept-protocol-names (default: ["pekko", "akka"])
+	nodeCfg.AcceptProtocolNames = []string{"pekko", "akka"} // gekka default for compat
+	{
+		var apnTmp struct {
+			PekkoNames []string `hocon:"pekko.remote.accept-protocol-names"`
+			AkkaNames  []string `hocon:"akka.remote.accept-protocol-names"`
+		}
+		_ = cfg.Unmarshal(&apnTmp)
+		if prefix == "pekko" && len(apnTmp.PekkoNames) > 0 {
+			nodeCfg.AcceptProtocolNames = apnTmp.PekkoNames
+		} else if prefix == "akka" && len(apnTmp.AkkaNames) > 0 {
+			nodeCfg.AcceptProtocolNames = apnTmp.AkkaNames
+		}
+	}
+
 	// Provider
 	if proto == "akka" {
 		nodeCfg.Provider = ProviderAkka
@@ -283,6 +320,9 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		if f, parseErr := strconv.ParseFloat(strings.TrimSpace(v), 64); parseErr == nil {
 			nodeCfg.CrossDataCenterGossipProbability = f
 		}
+	}
+	if v, err := cfg.GetInt(prefix + ".cluster.multi-data-center.cross-data-center-connections"); err == nil {
+		nodeCfg.CrossDataCenterConnections = v
 	}
 
 	// ── Cluster Sharding ────────────────────────────────────────────────────

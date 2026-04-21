@@ -154,6 +154,21 @@ type ClusterConfig struct {
 	// Fallback: gekka.logging.level (deprecated).
 	LogLevel string `hocon:"pekko.loglevel"`
 
+	// LogDeadLetters controls how many dead letters are logged.
+	// 0 = off, positive N = log first N then suppress, negative = unlimited.
+	// Corresponds to pekko.log-dead-letters. Default: 10.
+	LogDeadLetters int
+
+	// LogDeadLettersDuringShutdown controls whether dead letters are logged
+	// during system shutdown.
+	// Corresponds to pekko.log-dead-letters-during-shutdown. Default: false.
+	LogDeadLettersDuringShutdown bool
+
+	// AcceptProtocolNames lists protocol names accepted during Artery handshake.
+	// Corresponds to pekko.remote.accept-protocol-names.
+	// Default: ["pekko", "akka"].
+	AcceptProtocolNames []string
+
 	// MaxFrameSize is the maximum Artery frame payload size in bytes.
 	// Frames larger than this are rejected by the read loop.
 	// Corresponds to pekko.remote.artery.advanced.maximum-frame-size.
@@ -396,6 +411,12 @@ type ClusterConfig struct {
 	// Corresponds to pekko.cluster.multi-data-center.cross-data-center-gossip-probability.
 	// Default: 0.1.
 	CrossDataCenterGossipProbability float64
+
+	// CrossDataCenterConnections limits the number of distinct foreign-DC nodes
+	// used as gossip targets per round. Corresponds to
+	// pekko.cluster.multi-data-center.cross-data-center-connections.
+	// Default: 5.
+	CrossDataCenterConnections int
 
 	// Roles is the list of cluster roles this node advertises to the rest of the
 	// cluster.  These are merged with the automatic "dc-<DataCenter>" role before
@@ -812,6 +833,9 @@ type Cluster struct {
 	// Managed by cluster_persistence.go.
 	ps persistenceState
 
+	// shuttingDown is set to 1 atomically during shutdown; used by DeadLetterLogger.
+	shuttingDown int32
+
 	// eventStream is the system-wide publish/subscribe bus.
 	eventStream *actor.EventStream
 
@@ -869,6 +893,9 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	if cfg.MaxFrameSize > 0 {
 		nm.MaxFrameSize = cfg.MaxFrameSize
 	}
+	if len(cfg.AcceptProtocolNames) > 0 {
+		nm.AcceptProtocolNames = cfg.AcceptProtocolNames
+	}
 	// Apply flight recorder config from HOCON (defaults: enabled=true, level=lifecycle).
 	frEnabled := cfg.FlightRecorder.Enabled
 	// When neither LoadConfig nor explicit struct init has been called,
@@ -891,6 +918,9 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	cm.SetLocalDataCenter(cfg.DataCenter)
 	if cfg.CrossDataCenterGossipProbability > 0 {
 		cm.CrossDataCenterGossipProbability = cfg.CrossDataCenterGossipProbability
+	}
+	if cfg.CrossDataCenterConnections > 0 {
+		cm.CrossDataCenterConnections = cfg.CrossDataCenterConnections
 	}
 	if len(cfg.Roles) > 0 {
 		cm.SetLocalRoles(cfg.Roles)
@@ -1103,6 +1133,10 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	cluster.cm.Sys = AsActorContext(cluster, "")
 	actor.SetMailboxLengthProvider(cluster)
 	actor.SetClusterMetricsProvider(cluster)
+
+	// Wire dead letter logger from config.
+	actor.NewDeadLetterLogger(cluster.eventStream, cfg.LogDeadLetters,
+		cfg.LogDeadLettersDuringShutdown, &cluster.shuttingDown)
 
 	// Set default Artery message dispatcher to handle registered actors.
 	nm.UserMessageCallback = cluster.handleArteryMessage
@@ -2314,6 +2348,7 @@ func (c *Cluster) GracefulShutdown(ctx context.Context) error {
 // For a graceful exit that drives the node through the cluster leave/exiting/
 // removed lifecycle, call GracefulShutdown instead.
 func (c *Cluster) Shutdown() error {
+	atomic.StoreInt32(&c.shuttingDown, 1)
 	if c.cancel != nil {
 		c.cancel()
 	}

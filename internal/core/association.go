@@ -134,6 +134,10 @@ type NodeManager struct {
 	// Default: DefaultMaxFrameSize (256 KiB).  Zero means use the default.
 	MaxFrameSize int
 
+	// AcceptProtocolNames lists protocol names accepted during Artery handshake.
+	// Default: ["pekko", "akka"].
+	AcceptProtocolNames []string
+
 	// UDPHandler is set when the Aeron-UDP transport is active.  When non-nil,
 	// DialRemote switches to the UDP path automatically.
 	UDPHandler *UdpArteryHandler
@@ -588,6 +592,20 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 			streamId = int32(next[1])
 			protocol = "akka"
 			slog.Info("artery: INBOUND Akka preamble read", "streamId", streamId)
+		}
+
+		// Validate protocol against accepted list
+		if len(nm.AcceptProtocolNames) > 0 {
+			accepted := false
+			for _, name := range nm.AcceptProtocolNames {
+				if name == protocol {
+					accepted = true
+					break
+				}
+			}
+			if !accepted {
+				return fmt.Errorf("artery: protocol %q not in accept-protocol-names %v", protocol, nm.AcceptProtocolNames)
+			}
 		}
 	}
 

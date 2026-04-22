@@ -1479,6 +1479,53 @@ pekko {
 	}
 }
 
+func TestHOCON_PubSubFullConfig(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery.canonical {
+    hostname = "127.0.0.1"
+    port = 2552
+  }
+  cluster {
+    seed-nodes = []
+    pub-sub {
+      name = "myMediator"
+      role = "frontend"
+      routing-logic = "round-robin"
+      gossip-interval = 2s
+      removed-time-to-live = 60s
+      max-delta-elements = 500
+      send-to-dead-letters-when-no-subscribers = off
+    }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.PubSub.Name != "myMediator" {
+		t.Errorf("PubSub.Name = %q, want %q", cfg.PubSub.Name, "myMediator")
+	}
+	if cfg.PubSub.Role != "frontend" {
+		t.Errorf("PubSub.Role = %q, want %q", cfg.PubSub.Role, "frontend")
+	}
+	if cfg.PubSub.RoutingLogic != "round-robin" {
+		t.Errorf("PubSub.RoutingLogic = %q, want %q", cfg.PubSub.RoutingLogic, "round-robin")
+	}
+	if cfg.PubSub.GossipInterval != 2*time.Second {
+		t.Errorf("PubSub.GossipInterval = %v, want 2s", cfg.PubSub.GossipInterval)
+	}
+	if cfg.PubSub.RemovedTimeToLive != 60*time.Second {
+		t.Errorf("PubSub.RemovedTimeToLive = %v, want 60s", cfg.PubSub.RemovedTimeToLive)
+	}
+	if cfg.PubSub.MaxDeltaElements != 500 {
+		t.Errorf("PubSub.MaxDeltaElements = %d, want 500", cfg.PubSub.MaxDeltaElements)
+	}
+	if cfg.PubSub.SendToDeadLettersWhenNoSubscribers {
+		t.Errorf("PubSub.SendToDeadLettersWhenNoSubscribers = true, want false")
+	}
+}
+
 func TestHOCON_MaxConcurrentRecoveries(t *testing.T) {
 	cfg, err := parseHOCONString(`
 pekko {

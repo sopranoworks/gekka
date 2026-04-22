@@ -641,10 +641,32 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 	}
 
 	// ── Pub-Sub ────────────────────────────────────────────────────────────
-	if v, err := cfg.GetString(prefix + ".cluster.pub-sub.gossip-interval"); err == nil {
+	pubSubPrefix := prefix + ".cluster.pub-sub"
+	if v, err := cfg.GetString(pubSubPrefix + ".gossip-interval"); err == nil {
 		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
 			nodeCfg.PubSub.GossipInterval = d
 		}
+	}
+	if v, err := cfg.GetString(pubSubPrefix + ".name"); err == nil {
+		nodeCfg.PubSub.Name = strings.TrimSpace(v)
+	}
+	if v, err := cfg.GetString(pubSubPrefix + ".role"); err == nil {
+		nodeCfg.PubSub.Role = strings.TrimSpace(v)
+	}
+	if v, err := cfg.GetString(pubSubPrefix + ".routing-logic"); err == nil {
+		nodeCfg.PubSub.RoutingLogic = strings.TrimSpace(v)
+	}
+	if v, err := cfg.GetString(pubSubPrefix + ".removed-time-to-live"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.PubSub.RemovedTimeToLive = d
+		}
+	}
+	if v, err := cfg.GetInt(pubSubPrefix + ".max-delta-elements"); err == nil {
+		nodeCfg.PubSub.MaxDeltaElements = v
+	}
+	if v, err := cfg.GetString(pubSubPrefix + ".send-to-dead-letters-when-no-subscribers"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		nodeCfg.PubSub.SendToDeadLettersWhenNoSubscribers = v != "off" && v != "false"
 	}
 
 	// ��─ Per-Role Min Nr Of Members ──────────────────────────────────────────

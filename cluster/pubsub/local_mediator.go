@@ -10,6 +10,7 @@ package pubsub
 
 import (
 	"context"
+	"math/rand"
 	"sync"
 )
 
@@ -34,6 +35,7 @@ type LocalMediator struct {
 	mu        sync.RWMutex
 	subs      map[string][]subEntry   // topic → subscriptions
 	receivers map[string]func(msg any) // receiverPath → delivery function
+	rrIndex   map[string]int           // per-topic round-robin index for SendOne
 }
 
 // NewLocalMediator returns an initialised LocalMediator.
@@ -117,6 +119,55 @@ func (m *LocalMediator) Unsubscribe(_ context.Context, topic, group, receiverPat
 		}
 	}
 	return nil
+}
+
+// SendOne delivers msg to one subscriber per group using the given routing logic.
+// Returns true if at least one delivery was made.
+func (m *LocalMediator) SendOne(_ context.Context, topic string, msg any, routingLogic string) bool {
+	m.mu.RLock()
+	entries := make([]subEntry, len(m.subs[topic]))
+	copy(entries, m.subs[topic])
+	m.mu.RUnlock()
+
+	if len(entries) == 0 {
+		return false
+	}
+
+	// Group subscribers by group (empty group = default group).
+	groups := make(map[string][]subEntry)
+	for _, e := range entries {
+		groups[e.group] = append(groups[e.group], e)
+	}
+
+	delivered := false
+	for grp, members := range groups {
+		if len(members) == 0 {
+			continue
+		}
+		var chosen subEntry
+		switch routingLogic {
+		case "round-robin":
+			m.mu.Lock()
+			if m.rrIndex == nil {
+				m.rrIndex = make(map[string]int)
+			}
+			key := topic + "\x00" + grp
+			idx := m.rrIndex[key] % len(members)
+			m.rrIndex[key] = idx + 1
+			m.mu.Unlock()
+			chosen = members[idx]
+		default: // "random"
+			chosen = members[rand.Intn(len(members))]
+		}
+		m.mu.RLock()
+		fn, ok := m.receivers[chosen.path]
+		m.mu.RUnlock()
+		if ok {
+			fn(msg)
+			delivered = true
+		}
+	}
+	return delivered
 }
 
 // Subscribers returns the current subscriber paths for a topic (for testing/inspection).

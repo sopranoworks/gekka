@@ -535,6 +535,39 @@ type PubSubConfig struct {
 	// Corresponds to pekko.cluster.pub-sub.gossip-interval.
 	// Default: 1s.
 	GossipInterval time.Duration
+
+	// Name is the actor name for the mediator.
+	// Corresponds to pekko.cluster.pub-sub.name.
+	// Default: "distributedPubSubMediator".
+	Name string
+
+	// Role restricts pub-sub participation to nodes with this role.
+	// Corresponds to pekko.cluster.pub-sub.role.
+	// Default: "" (all nodes).
+	Role string
+
+	// RoutingLogic selects the strategy for Send (point-to-point):
+	// "random" or "round-robin".
+	// Corresponds to pekko.cluster.pub-sub.routing-logic.
+	// Default: "random".
+	RoutingLogic string
+
+	// RemovedTimeToLive is how long tombstones for removed subscriptions
+	// are retained before being reaped.
+	// Corresponds to pekko.cluster.pub-sub.removed-time-to-live.
+	// Default: 120s.
+	RemovedTimeToLive time.Duration
+
+	// MaxDeltaElements caps the number of entries in a single delta message.
+	// Corresponds to pekko.cluster.pub-sub.max-delta-elements.
+	// Default: 3000.
+	MaxDeltaElements int
+
+	// SendToDeadLettersWhenNoSubscribers controls whether a DeadLetter event
+	// is published when a Publish or Send finds no matching subscribers.
+	// Corresponds to pekko.cluster.pub-sub.send-to-dead-letters-when-no-subscribers.
+	// Default: true.
+	SendToDeadLettersWhenNoSubscribers bool
 }
 
 // DistributedDataConfig holds settings for the CRDT replicator.

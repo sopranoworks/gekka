@@ -117,6 +117,14 @@ type SendToOneSubscriber struct {
 	Msg any
 }
 
+// DeadLetterPubSub is published to the EventStream when a Publish or Send
+// finds no matching subscribers and SendToDeadLettersWhenNoSubscribers is true.
+type DeadLetterPubSub struct {
+	Message any    // the original message
+	Topic   string // the topic that had no subscribers
+	Cause   string // "no-subscribers"
+}
+
 // Subscribe registers a receiver at the given actor path for a topic.
 // Group is optional; when non-empty messages are load-balanced across group members.
 type Subscribe struct {

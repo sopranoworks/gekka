@@ -95,6 +95,11 @@ type SBRConfig struct {
 	// static-quorum. Required when ActiveStrategy == "static-quorum".
 	QuorumSize int
 
+	// StaticQuorumRole restricts quorum counting to members with this role.
+	// Corresponds to pekko.cluster.split-brain-resolver.static-quorum.role.
+	// When non-empty, overrides Role for the static-quorum strategy.
+	StaticQuorumRole string
+
 	// Lease is the distributed lease used by lease-majority.
 	// Required when ActiveStrategy == "lease-majority".
 	Lease LeaseChecker
@@ -152,7 +157,11 @@ func NewStrategy(cfg SBRConfig) (Strategy, error) {
 		if cfg.QuorumSize <= 0 {
 			return nil, fmt.Errorf("sbr: static-quorum requires quorum-size > 0")
 		}
-		return &StaticQuorum{QuorumSize: cfg.QuorumSize, Role: cfg.Role}, nil
+		role := cfg.StaticQuorumRole
+		if role == "" {
+			role = cfg.Role
+		}
+		return &StaticQuorum{QuorumSize: cfg.QuorumSize, Role: role}, nil
 	case "lease-majority":
 		if cfg.Lease == nil {
 			return nil, fmt.Errorf("sbr: lease-majority requires a Lease implementation")

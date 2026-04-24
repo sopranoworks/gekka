@@ -253,6 +253,47 @@ func TestStaticQuorum_BelowQuorum(t *testing.T) {
 	}
 }
 
+func TestStaticQuorum_RoleFilter(t *testing.T) {
+	strategy := &StaticQuorum{QuorumSize: 2, Role: "backend"}
+	self := addr("10.0.0.1", 2551)
+
+	// 3 reachable: 2 with "backend" role, 1 without
+	reachable := []Member{
+		mbrRole("10.0.0.1", 2551, 1, true, "backend"),
+		mbrRole("10.0.0.2", 2551, 2, true, "backend"),
+		mbrRole("10.0.0.3", 2551, 3, true, "frontend"),
+	}
+	unreachable := []Member{mbrRole("10.0.0.4", 2551, 4, false, "backend")}
+
+	d := strategy.Decide(self, reachable, unreachable)
+	// 2 backend reachable >= quorum 2 → down unreachable
+	if d.DownSelf {
+		t.Error("expected DownSelf=false, got true")
+	}
+	if len(d.DownMembers) != 1 {
+		t.Errorf("DownMembers = %d, want 1", len(d.DownMembers))
+	}
+}
+
+func TestStaticQuorum_RoleFilter_BelowQuorum(t *testing.T) {
+	strategy := &StaticQuorum{QuorumSize: 3, Role: "backend"}
+	self := addr("10.0.0.1", 2551)
+
+	// 3 reachable but only 1 with "backend" role
+	reachable := []Member{
+		mbrRole("10.0.0.1", 2551, 1, true, "backend"),
+		mbrRole("10.0.0.2", 2551, 2, true, "frontend"),
+		mbrRole("10.0.0.3", 2551, 3, true, "frontend"),
+	}
+	unreachable := []Member{mbrRole("10.0.0.4", 2551, 4, false, "backend")}
+
+	d := strategy.Decide(self, reachable, unreachable)
+	// 1 backend reachable < quorum 3 → DownSelf
+	if !d.DownSelf {
+		t.Error("expected DownSelf=true, got false")
+	}
+}
+
 // ── NewStrategy tests ─────────────────────────────────────────────────────────
 
 func TestNewStrategy_Disabled(t *testing.T) {
@@ -283,6 +324,39 @@ func TestNewStrategy_StaticQuorumRequiresSize(t *testing.T) {
 	_, err := NewStrategy(SBRConfig{ActiveStrategy: "static-quorum", QuorumSize: 0})
 	if err == nil {
 		t.Fatal("expected error when QuorumSize is 0")
+	}
+}
+
+func TestNewStrategy_StaticQuorumRole(t *testing.T) {
+	// StaticQuorumRole should override Role for static-quorum
+	strat, err := NewStrategy(SBRConfig{
+		ActiveStrategy:   "static-quorum",
+		QuorumSize:       2,
+		Role:             "general",
+		StaticQuorumRole: "backend",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sq := strat.(*StaticQuorum)
+	if sq.Role != "backend" {
+		t.Errorf("StaticQuorum.Role = %q, want %q", sq.Role, "backend")
+	}
+}
+
+func TestNewStrategy_StaticQuorumRoleFallback(t *testing.T) {
+	// When StaticQuorumRole is empty, falls back to Role
+	strat, err := NewStrategy(SBRConfig{
+		ActiveStrategy: "static-quorum",
+		QuorumSize:     2,
+		Role:           "general",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sq := strat.(*StaticQuorum)
+	if sq.Role != "general" {
+		t.Errorf("StaticQuorum.Role = %q, want %q", sq.Role, "general")
 	}
 }
 

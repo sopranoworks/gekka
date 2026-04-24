@@ -362,3 +362,70 @@ func TestSingletonManager_PostStopStopsSingleton(t *testing.T) {
 		t.Fatalf("expected 1 stop on PostStop, got %d", ctx.stopCount())
 	}
 }
+
+// TestSingletonManager_CustomName verifies that WithSingletonName changes the
+// child actor name used by the manager.
+func TestSingletonManager_CustomName(t *testing.T) {
+	cm := newSingletonTestCM("127.0.0.1", 2552, 0)
+	props := actor.Props{New: func() actor.Actor { return &noopSingletonActor{} }}
+
+	mgr := NewClusterSingletonManager(cm, props, "")
+	if mgr.SingletonName() != "singleton" {
+		t.Errorf("default SingletonName() = %q, want %q", mgr.SingletonName(), "singleton")
+	}
+
+	mgr.WithSingletonName("mySingleton")
+	if mgr.SingletonName() != "mySingleton" {
+		t.Errorf("SingletonName() = %q, want %q", mgr.SingletonName(), "mySingleton")
+	}
+
+	// Empty string is ignored (keeps previous value).
+	mgr.WithSingletonName("")
+	if mgr.SingletonName() != "mySingleton" {
+		t.Errorf("SingletonName() after empty = %q, want %q (unchanged)", mgr.SingletonName(), "mySingleton")
+	}
+}
+
+// TestSingletonManager_MinHandOverRetries verifies the default and configured
+// min-number-of-hand-over-retries.
+func TestSingletonManager_MinHandOverRetries(t *testing.T) {
+	cm := newSingletonTestCM("127.0.0.1", 2552, 0)
+	props := actor.Props{New: func() actor.Actor { return &noopSingletonActor{} }}
+
+	mgr := NewClusterSingletonManager(cm, props, "")
+	if mgr.MinHandOverRetries() != 15 {
+		t.Errorf("default MinHandOverRetries() = %d, want 15", mgr.MinHandOverRetries())
+	}
+
+	mgr.WithMinHandOverRetries(20)
+	if mgr.MinHandOverRetries() != 20 {
+		t.Errorf("MinHandOverRetries() = %d, want 20", mgr.MinHandOverRetries())
+	}
+
+	// Zero is ignored (keeps previous value).
+	mgr.WithMinHandOverRetries(0)
+	if mgr.MinHandOverRetries() != 20 {
+		t.Errorf("MinHandOverRetries() after zero = %d, want 20 (unchanged)", mgr.MinHandOverRetries())
+	}
+}
+
+// TestSingletonManager_CustomNameUsedInSpawn verifies that the manager spawns
+// the singleton actor with the configured name instead of hardcoded "singleton".
+func TestSingletonManager_CustomNameUsedInSpawn(t *testing.T) {
+	cm := newSingletonTestCM("127.0.0.1", 2552, 0)
+	ctx := &singletonTestContext{}
+	mgr := newWiredManager(cm, ctx)
+	mgr.WithSingletonName("myCustomSingleton")
+
+	mgr.PreStart()
+
+	if ctx.spawnCount() != 1 {
+		t.Fatalf("expected 1 spawn, got %d", ctx.spawnCount())
+	}
+	ctx.mu.Lock()
+	spawnedPath := ctx.spawned[0].path
+	ctx.mu.Unlock()
+	if spawnedPath != "/user/myCustomSingleton" {
+		t.Errorf("spawned actor path = %q, want %q", spawnedPath, "/user/myCustomSingleton")
+	}
+}

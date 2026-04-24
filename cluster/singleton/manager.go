@@ -42,11 +42,16 @@ type ClusterSingletonManager struct {
 	role           string      // optional role filter; empty = any node
 	dataCenter     string      // optional DC filter; empty = any DC
 	singletonProps actor.Props // factory for the singleton actor
-	singletonRef   actor.Ref   // non-nil when the singleton is running on this node
+	singletonRef   actor.Ref  // non-nil when the singleton is running on this node
+	singletonName  string     // child actor name, default "singleton"
 
 	// HandOverRetryInterval is how often the manager retries handover
 	// coordination during leadership transfer. Default: 1s.
 	handOverRetryInterval time.Duration
+
+	// minHandOverRetries is the minimum number of hand-over retries before
+	// the manager gives up. Default: 15.
+	minHandOverRetries int
 
 	// Lease-based coordination (optional). When set, the manager must acquire
 	// the lease before starting the singleton and releases it on handoff/stop.
@@ -67,7 +72,9 @@ func NewClusterSingletonManager(cm *cluster.ClusterManager, singletonProps actor
 		cm:                    cm,
 		role:                  role,
 		singletonProps:        singletonProps,
+		singletonName:         "singleton",
 		handOverRetryInterval: 1 * time.Second,
+		minHandOverRetries:    15,
 	}
 }
 
@@ -80,8 +87,31 @@ func (m *ClusterSingletonManager) WithHandOverRetryInterval(d time.Duration) *Cl
 	return m
 }
 
+// WithSingletonName sets the name of the child actor spawned by the manager.
+func (m *ClusterSingletonManager) WithSingletonName(name string) *ClusterSingletonManager {
+	if name != "" {
+		m.singletonName = name
+	}
+	return m
+}
+
+// WithMinHandOverRetries sets the minimum number of hand-over retries before
+// the manager gives up.
+func (m *ClusterSingletonManager) WithMinHandOverRetries(n int) *ClusterSingletonManager {
+	if n > 0 {
+		m.minHandOverRetries = n
+	}
+	return m
+}
+
 // Role returns the configured role filter.
 func (m *ClusterSingletonManager) Role() string { return m.role }
+
+// SingletonName returns the configured singleton child actor name.
+func (m *ClusterSingletonManager) SingletonName() string { return m.singletonName }
+
+// MinHandOverRetries returns the configured minimum hand-over retries.
+func (m *ClusterSingletonManager) MinHandOverRetries() int { return m.minHandOverRetries }
 
 // HandOverRetryInterval returns the configured hand-over retry interval.
 func (m *ClusterSingletonManager) HandOverRetryInterval() time.Duration { return m.handOverRetryInterval }
@@ -170,7 +200,7 @@ func (m *ClusterSingletonManager) maybeSpawnOrStop() {
 			if !m.acquireLease() {
 				return
 			}
-			ref, err := m.System().ActorOf(m.singletonProps, "singleton")
+			ref, err := m.System().ActorOf(m.singletonProps, m.singletonName)
 			if err != nil {
 				log.Printf("ClusterSingletonManager: failed to spawn singleton: %v", err)
 				m.releaseLease()

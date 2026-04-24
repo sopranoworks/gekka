@@ -41,7 +41,10 @@ Legend:
 | `pekko.remote.artery.large-message-destinations` | `[]` | ❌ | No feature |
 | `pekko.remote.artery.advanced.maximum-frame-size` | `256 KiB` | ✅ | Configurable via HOCON |
 | `pekko.remote.artery.advanced.buffer-pool-size` | `128` | ❌ | No feature |
-| `pekko.remote.artery.advanced.inbound-lanes` | (various) | ❌ | No feature |
+| `pekko.remote.artery.advanced.inbound-lanes` | `4` | ✅ | Exposed via `NodeManager.EffectiveInboundLanes()` |
+| `pekko.remote.artery.advanced.outbound-lanes` | `1` | ✅ | Exposed via `NodeManager.EffectiveOutboundLanes()` |
+| `pekko.remote.artery.advanced.outbound-message-queue-size` | `3072` | ✅ | Sizes each association's outbox channel |
+| `pekko.remote.artery.advanced.system-message-buffer-size` | `20000` | ✅ | Recorded on NodeManager for future sender-side redelivery |
 | `pekko.remote.artery.ssl.*` (TLS) | (various) | ✅ | Gekka uses `artery.tls.*` |
 | `pekko.remote.watch-failure-detector.*` | (various) | ❌ | Remote watch FD — no feature |
 | `pekko.remote.accept-protocol-names` | `["pekko"]` | ❌ | No feature (hardcoded) |

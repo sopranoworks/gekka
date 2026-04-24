@@ -1796,3 +1796,118 @@ pekko {
 		t.Errorf("MaxPruningDissemination default = %v, want 300s", d.MaxPruningDissemination)
 	}
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Artery advanced: lanes + queue sizes (round2 session 01)
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestHOCON_ArteryAdvanced_InboundLanes(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery {
+    canonical {
+      hostname = "127.0.0.1"
+      port = 2552
+    }
+    advanced {
+      inbound-lanes = 8
+    }
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.ArteryAdvanced.InboundLanes != 8 {
+		t.Errorf("ArteryAdvanced.InboundLanes = %d, want 8", cfg.ArteryAdvanced.InboundLanes)
+	}
+}
+
+func TestHOCON_ArteryAdvanced_OutboundLanes(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery {
+    canonical {
+      hostname = "127.0.0.1"
+      port = 2552
+    }
+    advanced {
+      outbound-lanes = 3
+    }
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.ArteryAdvanced.OutboundLanes != 3 {
+		t.Errorf("ArteryAdvanced.OutboundLanes = %d, want 3", cfg.ArteryAdvanced.OutboundLanes)
+	}
+}
+
+func TestHOCON_ArteryAdvanced_OutboundMessageQueueSize(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery {
+    canonical {
+      hostname = "127.0.0.1"
+      port = 2552
+    }
+    advanced {
+      outbound-message-queue-size = 8192
+    }
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.ArteryAdvanced.OutboundMessageQueueSize != 8192 {
+		t.Errorf("ArteryAdvanced.OutboundMessageQueueSize = %d, want 8192", cfg.ArteryAdvanced.OutboundMessageQueueSize)
+	}
+}
+
+func TestHOCON_ArteryAdvanced_SystemMessageBufferSize(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery {
+    canonical {
+      hostname = "127.0.0.1"
+      port = 2552
+    }
+    advanced {
+      system-message-buffer-size = 40000
+    }
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.ArteryAdvanced.SystemMessageBufferSize != 40000 {
+		t.Errorf("ArteryAdvanced.SystemMessageBufferSize = %d, want 40000", cfg.ArteryAdvanced.SystemMessageBufferSize)
+	}
+}
+
+func TestHOCON_ArteryAdvanced_Defaults(t *testing.T) {
+	// Without any advanced overrides, ClusterConfig fields should be zero-valued
+	// (defaults applied when threaded into NodeManager).
+	cfg, err := parseHOCONString(`
+pekko.remote.artery.canonical.hostname = "127.0.0.1"
+pekko.remote.artery.canonical.port = 2552
+pekko.cluster.seed-nodes = []
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.ArteryAdvanced.InboundLanes != 0 ||
+		cfg.ArteryAdvanced.OutboundLanes != 0 ||
+		cfg.ArteryAdvanced.OutboundMessageQueueSize != 0 ||
+		cfg.ArteryAdvanced.SystemMessageBufferSize != 0 {
+		t.Errorf("ArteryAdvanced = %+v, want zero-valued (defaults)", cfg.ArteryAdvanced)
+	}
+}

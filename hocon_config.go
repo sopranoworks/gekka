@@ -503,6 +503,20 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		}
 	}
 
+	// ── Artery Advanced: lanes + queue sizes ──────────────────────────────
+	if v, err := cfg.GetInt(arteryPrefix + ".advanced.inbound-lanes"); err == nil {
+		nodeCfg.ArteryAdvanced.InboundLanes = v
+	}
+	if v, err := cfg.GetInt(arteryPrefix + ".advanced.outbound-lanes"); err == nil {
+		nodeCfg.ArteryAdvanced.OutboundLanes = v
+	}
+	if v, err := cfg.GetInt(arteryPrefix + ".advanced.outbound-message-queue-size"); err == nil {
+		nodeCfg.ArteryAdvanced.OutboundMessageQueueSize = v
+	}
+	if v, err := cfg.GetInt(arteryPrefix + ".advanced.system-message-buffer-size"); err == nil {
+		nodeCfg.ArteryAdvanced.SystemMessageBufferSize = v
+	}
+
 	// ── Bind Address (NAT/Docker support) ──────────────────────────────────
 	if v, err := cfg.GetString(arteryPrefix + ".bind.hostname"); err == nil {
 		nodeCfg.BindHostname = strings.TrimSpace(v)

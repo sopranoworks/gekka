@@ -25,6 +25,15 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// Pekko defaults for pekko.remote.artery.advanced.* knobs. Used when a
+// NodeManager field is left zero-valued.
+const (
+	DefaultInboundLanes             = 4
+	DefaultOutboundLanes            = 1
+	DefaultOutboundMessageQueueSize = 3072
+	DefaultSystemMessageBufferSize  = 20000
+)
+
 // AssociationState represents the state of a connection to a remote node.
 type AssociationState = actor.AssociationState
 
@@ -134,6 +143,27 @@ type NodeManager struct {
 	// Default: DefaultMaxFrameSize (256 KiB).  Zero means use the default.
 	MaxFrameSize int
 
+	// InboundLanes is the number of parallel inbound dispatch lanes per
+	// association (pekko.remote.artery.advanced.inbound-lanes).
+	// Zero means use DefaultInboundLanes (4).
+	InboundLanes int
+
+	// OutboundLanes is the number of parallel outbound lanes per association
+	// (pekko.remote.artery.advanced.outbound-lanes).
+	// Zero means use DefaultOutboundLanes (1).
+	OutboundLanes int
+
+	// OutboundMessageQueueSize is the capacity of each association's
+	// outbound message queue (pekko.remote.artery.advanced.outbound-message-queue-size).
+	// Zero means use DefaultOutboundMessageQueueSize (3072).
+	OutboundMessageQueueSize int
+
+	// SystemMessageBufferSize is the capacity of the sender-side buffer of
+	// unacknowledged system messages per association
+	// (pekko.remote.artery.advanced.system-message-buffer-size).
+	// Zero means use DefaultSystemMessageBufferSize (20000).
+	SystemMessageBufferSize int
+
 	// AcceptProtocolNames lists protocol names accepted during Artery handshake.
 	// Default: ["pekko", "akka"].
 	AcceptProtocolNames []string
@@ -163,6 +193,38 @@ func NewNodeManager(local *gproto_remote.Address, uid uint64) *NodeManager {
 		quarantinedUIDs:    make(map[uint64]*gproto_remote.UniqueAddress),
 		FlightRec:          NewFlightRecorder(true, LevelLifecycle),
 	}
+}
+
+// EffectiveInboundLanes returns the configured inbound-lanes or the Pekko default.
+func (nm *NodeManager) EffectiveInboundLanes() int {
+	if nm.InboundLanes > 0 {
+		return nm.InboundLanes
+	}
+	return DefaultInboundLanes
+}
+
+// EffectiveOutboundLanes returns the configured outbound-lanes or the Pekko default.
+func (nm *NodeManager) EffectiveOutboundLanes() int {
+	if nm.OutboundLanes > 0 {
+		return nm.OutboundLanes
+	}
+	return DefaultOutboundLanes
+}
+
+// EffectiveOutboundMessageQueueSize returns the configured outbox capacity or the Pekko default.
+func (nm *NodeManager) EffectiveOutboundMessageQueueSize() int {
+	if nm.OutboundMessageQueueSize > 0 {
+		return nm.OutboundMessageQueueSize
+	}
+	return DefaultOutboundMessageQueueSize
+}
+
+// EffectiveSystemMessageBufferSize returns the configured system-message-buffer or the Pekko default.
+func (nm *NodeManager) EffectiveSystemMessageBufferSize() int {
+	if nm.SystemMessageBufferSize > 0 {
+		return nm.SystemMessageBufferSize
+	}
+	return DefaultSystemMessageBufferSize
 }
 
 // IsQuarantined returns true when uid has been permanently quarantined.
@@ -617,7 +679,7 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 		lastSeen:  time.Now(),
 		Handshake: make(chan struct{}),
 		localUid:  nm.localUid,
-		outbox:    make(chan []byte, 100),
+		outbox:    make(chan []byte, nm.EffectiveOutboundMessageQueueSize()),
 		remote:    &gproto_remote.UniqueAddress{Address: remote, Uid: proto.Uint64(0)},
 		streamId:  streamId,
 	}
@@ -1753,7 +1815,7 @@ func (nm *NodeManager) GetOrCreateUDPAssociation(src *net.UDPAddr, udpH *UdpArte
 		lastSeen:   time.Now(),
 		Handshake:  make(chan struct{}),
 		localUid:   nm.localUid,
-		outbox:     make(chan []byte, 512),
+		outbox:     make(chan []byte, nm.EffectiveOutboundMessageQueueSize()),
 		streamId:   AeronStreamControl,
 		udpHandler: udpH,
 		udpDst:     src,

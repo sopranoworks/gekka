@@ -175,6 +175,11 @@ type ClusterConfig struct {
 	// Default: 256 KiB (Pekko default). Set to 0 to use the default.
 	MaxFrameSize int
 
+	// ArteryAdvanced holds pekko.remote.artery.advanced.* knobs that control
+	// lane counts, outbox capacities, and system-message buffering.
+	// Zero-valued fields fall back to Pekko defaults when NewCluster runs.
+	ArteryAdvanced ArteryAdvancedConfig
+
 	// Transport selects the Artery transport: "tcp" (default) or "tls-tcp".
 	// When "tls-tcp", the TLS field must be populated with valid PEM paths.
 	Transport string `hocon:"pekko.remote.artery.transport"`
@@ -694,6 +699,43 @@ type FlightRecorderConfig struct {
 	Level   string // "lifecycle" (default), "sampled", "full"
 }
 
+// ArteryAdvancedConfig maps pekko.remote.artery.advanced.* knobs that control
+// lane counts, outbox capacities, and system-message buffering.
+//
+// Zero-valued fields are treated as "not configured" and are replaced by
+// the Pekko defaults below when threaded into NodeManager.
+type ArteryAdvancedConfig struct {
+	// InboundLanes is the number of parallel inbound dispatch lanes per
+	// association. Lane selection is consistent-hash on recipient path to
+	// preserve message order per receiver.
+	// Corresponds to pekko.remote.artery.advanced.inbound-lanes.
+	// Pekko default: 4. Zero means use the default.
+	InboundLanes int
+
+	// OutboundLanes is the number of parallel outbound lanes per outbound
+	// association. gekka currently serializes outbound writes on a single
+	// TCP connection, so this value is recorded for Pekko-config parity and
+	// consumed by the per-association lane accounting.
+	// Corresponds to pekko.remote.artery.advanced.outbound-lanes.
+	// Pekko default: 1. Zero means use the default.
+	OutboundLanes int
+
+	// OutboundMessageQueueSize is the capacity of each association's
+	// outbound (ordinary) message queue. Frames are dropped when the queue
+	// is full.
+	// Corresponds to pekko.remote.artery.advanced.outbound-message-queue-size.
+	// Pekko default: 3072. Zero means use the default.
+	OutboundMessageQueueSize int
+
+	// SystemMessageBufferSize is the capacity of the sender-side buffer of
+	// unacknowledged system messages per association. gekka does not yet
+	// implement Pekko's system-message resend protocol; the value is
+	// recorded on NodeManager for later consumers.
+	// Corresponds to pekko.remote.artery.advanced.system-message-buffer-size.
+	// Pekko default: 20000. Zero means use the default.
+	SystemMessageBufferSize int
+}
+
 // TelemetryConfig controls the built-in OTEL instrumentation hooks.
 type TelemetryConfig struct {
 	// TracingEnabled enables automatic span creation in actor Receive loops
@@ -1014,6 +1056,19 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	nm.NodeMetrics = metrics
 	if cfg.MaxFrameSize > 0 {
 		nm.MaxFrameSize = cfg.MaxFrameSize
+	}
+	// Artery advanced knobs (pekko.remote.artery.advanced.*).
+	if cfg.ArteryAdvanced.InboundLanes > 0 {
+		nm.InboundLanes = cfg.ArteryAdvanced.InboundLanes
+	}
+	if cfg.ArteryAdvanced.OutboundLanes > 0 {
+		nm.OutboundLanes = cfg.ArteryAdvanced.OutboundLanes
+	}
+	if cfg.ArteryAdvanced.OutboundMessageQueueSize > 0 {
+		nm.OutboundMessageQueueSize = cfg.ArteryAdvanced.OutboundMessageQueueSize
+	}
+	if cfg.ArteryAdvanced.SystemMessageBufferSize > 0 {
+		nm.SystemMessageBufferSize = cfg.ArteryAdvanced.SystemMessageBufferSize
 	}
 	if len(cfg.AcceptProtocolNames) > 0 {
 		nm.AcceptProtocolNames = cfg.AcceptProtocolNames

@@ -768,6 +768,82 @@ type ArteryAdvancedConfig struct {
 	// Corresponds to pekko.remote.artery.advanced.outbound-control-queue-size.
 	// Pekko default: 20000. Zero means use the default.
 	OutboundControlQueueSize int
+
+	// StopIdleOutboundAfter is the idle duration after which an outbound
+	// association that has not been used is stopped. Recorded on NodeManager
+	// for the idle-sweep consumer.
+	// Corresponds to pekko.remote.artery.advanced.stop-idle-outbound-after.
+	// Pekko default: 5m. Zero means use the default.
+	StopIdleOutboundAfter time.Duration
+
+	// QuarantineIdleOutboundAfter is the idle duration after which an unused
+	// outbound association is quarantined. Consumed by the NodeManager idle
+	// sweeper (SweepIdleOutboundQuarantine).
+	// Corresponds to pekko.remote.artery.advanced.quarantine-idle-outbound-after.
+	// Pekko default: 6h. Zero means use the default.
+	QuarantineIdleOutboundAfter time.Duration
+
+	// StopQuarantinedAfterIdle is the idle duration after which the outbound
+	// stream of a quarantined association is stopped. Recorded on NodeManager
+	// for the idle-sweep consumer.
+	// Corresponds to pekko.remote.artery.advanced.stop-quarantined-after-idle.
+	// Pekko default: 3s. Zero means use the default.
+	StopQuarantinedAfterIdle time.Duration
+
+	// RemoveQuarantinedAssociationAfter is the duration after which a
+	// quarantined association is removed from the registry. Recorded on
+	// NodeManager for the idle-sweep consumer.
+	// Corresponds to pekko.remote.artery.advanced.remove-quarantined-association-after.
+	// Pekko default: 1h. Zero means use the default.
+	RemoveQuarantinedAssociationAfter time.Duration
+
+	// ShutdownFlushTimeout is how long ActorSystem termination waits for
+	// pending outbound messages to flush. Recorded on NodeManager for the
+	// coordinated-shutdown consumer.
+	// Corresponds to pekko.remote.artery.advanced.shutdown-flush-timeout.
+	// Pekko default: 1s. Zero means use the default.
+	ShutdownFlushTimeout time.Duration
+
+	// DeathWatchNotificationFlushTimeout is how long the remote layer waits
+	// before sending a DeathWatchNotification, to let prior messages flush.
+	// Recorded on NodeManager for the death-watch consumer.
+	// Corresponds to pekko.remote.artery.advanced.death-watch-notification-flush-timeout.
+	// Pekko default: 3s. Zero means use the default.
+	DeathWatchNotificationFlushTimeout time.Duration
+
+	// InboundRestartTimeout is the rolling window in which InboundMaxRestarts
+	// caps inbound-stream restarts. Consumed by the NodeManager RestartTracker.
+	// Corresponds to pekko.remote.artery.advanced.inbound-restart-timeout.
+	// Pekko default: 5s. Zero means use the default.
+	InboundRestartTimeout time.Duration
+
+	// InboundMaxRestarts is the maximum number of inbound-stream restarts
+	// permitted inside InboundRestartTimeout. Consumed by the NodeManager
+	// RestartTracker — exceeding the cap returns false from
+	// TryRecordInboundRestart.
+	// Corresponds to pekko.remote.artery.advanced.inbound-max-restarts.
+	// Pekko default: 5. Zero means use the default.
+	InboundMaxRestarts int
+
+	// OutboundRestartBackoff is the backoff applied before retrying an
+	// outbound TCP connection. Recorded on NodeManager for the dialer consumer.
+	// Corresponds to pekko.remote.artery.advanced.outbound-restart-backoff.
+	// Pekko default: 1s. Zero means use the default.
+	OutboundRestartBackoff time.Duration
+
+	// OutboundRestartTimeout is the rolling window in which OutboundMaxRestarts
+	// caps outbound-stream restarts. Consumed by the NodeManager RestartTracker.
+	// Corresponds to pekko.remote.artery.advanced.outbound-restart-timeout.
+	// Pekko default: 5s. Zero means use the default.
+	OutboundRestartTimeout time.Duration
+
+	// OutboundMaxRestarts is the maximum number of outbound-stream restarts
+	// permitted inside OutboundRestartTimeout. Consumed by the NodeManager
+	// RestartTracker — exceeding the cap returns false from
+	// TryRecordOutboundRestart.
+	// Corresponds to pekko.remote.artery.advanced.outbound-max-restarts.
+	// Pekko default: 5. Zero means use the default.
+	OutboundMaxRestarts int
 }
 
 // TelemetryConfig controls the built-in OTEL instrumentation hooks.
@@ -1118,6 +1194,39 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	}
 	if cfg.ArteryAdvanced.OutboundControlQueueSize > 0 {
 		nm.OutboundControlQueueSize = cfg.ArteryAdvanced.OutboundControlQueueSize
+	}
+	if cfg.ArteryAdvanced.StopIdleOutboundAfter > 0 {
+		nm.StopIdleOutboundAfter = cfg.ArteryAdvanced.StopIdleOutboundAfter
+	}
+	if cfg.ArteryAdvanced.QuarantineIdleOutboundAfter > 0 {
+		nm.QuarantineIdleOutboundAfter = cfg.ArteryAdvanced.QuarantineIdleOutboundAfter
+	}
+	if cfg.ArteryAdvanced.StopQuarantinedAfterIdle > 0 {
+		nm.StopQuarantinedAfterIdle = cfg.ArteryAdvanced.StopQuarantinedAfterIdle
+	}
+	if cfg.ArteryAdvanced.RemoveQuarantinedAssociationAfter > 0 {
+		nm.RemoveQuarantinedAssociationAfter = cfg.ArteryAdvanced.RemoveQuarantinedAssociationAfter
+	}
+	if cfg.ArteryAdvanced.ShutdownFlushTimeout > 0 {
+		nm.ShutdownFlushTimeout = cfg.ArteryAdvanced.ShutdownFlushTimeout
+	}
+	if cfg.ArteryAdvanced.DeathWatchNotificationFlushTimeout > 0 {
+		nm.DeathWatchNotificationFlushTimeout = cfg.ArteryAdvanced.DeathWatchNotificationFlushTimeout
+	}
+	if cfg.ArteryAdvanced.InboundRestartTimeout > 0 {
+		nm.InboundRestartTimeout = cfg.ArteryAdvanced.InboundRestartTimeout
+	}
+	if cfg.ArteryAdvanced.InboundMaxRestarts > 0 {
+		nm.InboundMaxRestarts = cfg.ArteryAdvanced.InboundMaxRestarts
+	}
+	if cfg.ArteryAdvanced.OutboundRestartBackoff > 0 {
+		nm.OutboundRestartBackoff = cfg.ArteryAdvanced.OutboundRestartBackoff
+	}
+	if cfg.ArteryAdvanced.OutboundRestartTimeout > 0 {
+		nm.OutboundRestartTimeout = cfg.ArteryAdvanced.OutboundRestartTimeout
+	}
+	if cfg.ArteryAdvanced.OutboundMaxRestarts > 0 {
+		nm.OutboundMaxRestarts = cfg.ArteryAdvanced.OutboundMaxRestarts
 	}
 	if len(cfg.AcceptProtocolNames) > 0 {
 		nm.AcceptProtocolNames = cfg.AcceptProtocolNames

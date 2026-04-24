@@ -50,6 +50,17 @@ Legend:
 | `pekko.remote.artery.advanced.handshake-retry-interval` | `1s` | ✅ | Re-sends HandshakeReq at this cadence until ASSOCIATED |
 | `pekko.remote.artery.advanced.system-message-resend-interval` | `1s` | ✅ | Recorded on NodeManager for future sender-side redelivery |
 | `pekko.remote.artery.advanced.give-up-system-message-after` | `6h` | ✅ | Recorded on NodeManager for future sender-side redelivery |
+| `pekko.remote.artery.advanced.stop-idle-outbound-after` | `5m` | ✅ | Recorded on NodeManager (`EffectiveStopIdleOutboundAfter`) for the idle-sweep consumer |
+| `pekko.remote.artery.advanced.quarantine-idle-outbound-after` | `6h` | ✅ | Drives `NodeManager.SweepIdleOutboundQuarantine` — idle outbound associations are quarantined and removed |
+| `pekko.remote.artery.advanced.stop-quarantined-after-idle` | `3s` | ✅ | Recorded on NodeManager (`EffectiveStopQuarantinedAfterIdle`) for the idle-sweep consumer |
+| `pekko.remote.artery.advanced.remove-quarantined-association-after` | `1h` | ✅ | Recorded on NodeManager (`EffectiveRemoveQuarantinedAssociationAfter`) for the idle-sweep consumer |
+| `pekko.remote.artery.advanced.shutdown-flush-timeout` | `1s` | ✅ | Recorded on NodeManager (`EffectiveShutdownFlushTimeout`) for the coordinated-shutdown consumer |
+| `pekko.remote.artery.advanced.death-watch-notification-flush-timeout` | `3s` | ✅ | Recorded on NodeManager (`EffectiveDeathWatchNotificationFlushTimeout`) for the death-watch consumer |
+| `pekko.remote.artery.advanced.inbound-restart-timeout` | `5s` | ✅ | Drives `NodeManager.TryRecordInboundRestart` rolling window |
+| `pekko.remote.artery.advanced.inbound-max-restarts` | `5` | ✅ | Cap enforced by `NodeManager.TryRecordInboundRestart` |
+| `pekko.remote.artery.advanced.outbound-restart-backoff` | `1s` | ✅ | Recorded on NodeManager (`EffectiveOutboundRestartBackoff`) for the dialer consumer |
+| `pekko.remote.artery.advanced.outbound-restart-timeout` | `5s` | ✅ | Drives `NodeManager.TryRecordOutboundRestart` rolling window |
+| `pekko.remote.artery.advanced.outbound-max-restarts` | `5` | ✅ | Cap enforced by `NodeManager.TryRecordOutboundRestart` |
 | `pekko.remote.artery.ssl.*` (TLS) | (various) | ✅ | Gekka uses `artery.tls.*` |
 | `pekko.remote.watch-failure-detector.*` | (various) | ❌ | Remote watch FD — no feature |
 | `pekko.remote.accept-protocol-names` | `["pekko"]` | ❌ | No feature (hardcoded) |

@@ -33,14 +33,25 @@ const (
 	DefaultOutboundMessageQueueSize = 3072
 	DefaultSystemMessageBufferSize  = 20000
 	DefaultOutboundControlQueueSize = 20000
+	DefaultInboundMaxRestarts       = 5
+	DefaultOutboundMaxRestarts      = 5
 )
 
 // Pekko defaults for pekko.remote.artery.advanced.* duration knobs.
 var (
-	DefaultHandshakeTimeout            = 20 * time.Second
-	DefaultHandshakeRetryInterval      = 1 * time.Second
-	DefaultSystemMessageResendInterval = 1 * time.Second
-	DefaultGiveUpSystemMessageAfter    = 6 * time.Hour
+	DefaultHandshakeTimeout                   = 20 * time.Second
+	DefaultHandshakeRetryInterval             = 1 * time.Second
+	DefaultSystemMessageResendInterval        = 1 * time.Second
+	DefaultGiveUpSystemMessageAfter           = 6 * time.Hour
+	DefaultStopIdleOutboundAfter              = 5 * time.Minute
+	DefaultQuarantineIdleOutboundAfter        = 6 * time.Hour
+	DefaultStopQuarantinedAfterIdle           = 3 * time.Second
+	DefaultRemoveQuarantinedAssociationAfter  = 1 * time.Hour
+	DefaultShutdownFlushTimeout               = 1 * time.Second
+	DefaultDeathWatchNotificationFlushTimeout = 3 * time.Second
+	DefaultInboundRestartTimeout              = 5 * time.Second
+	DefaultOutboundRestartBackoff             = 1 * time.Second
+	DefaultOutboundRestartTimeout             = 5 * time.Second
 )
 
 // AssociationState represents the state of a connection to a remote node.
@@ -208,6 +219,80 @@ type NodeManager struct {
 	// Zero means use DefaultOutboundControlQueueSize (20000).
 	OutboundControlQueueSize int
 
+	// StopIdleOutboundAfter is the idle duration after which an outbound
+	// association that has not been used is stopped.
+	// (pekko.remote.artery.advanced.stop-idle-outbound-after).
+	// Zero means use DefaultStopIdleOutboundAfter (5m).
+	StopIdleOutboundAfter time.Duration
+
+	// QuarantineIdleOutboundAfter is the idle duration after which an unused
+	// outbound association is quarantined.  Consumed by
+	// SweepIdleOutboundQuarantine.
+	// (pekko.remote.artery.advanced.quarantine-idle-outbound-after).
+	// Zero means use DefaultQuarantineIdleOutboundAfter (6h).
+	QuarantineIdleOutboundAfter time.Duration
+
+	// StopQuarantinedAfterIdle is the idle duration after which the outbound
+	// stream of a quarantined association is stopped.
+	// (pekko.remote.artery.advanced.stop-quarantined-after-idle).
+	// Zero means use DefaultStopQuarantinedAfterIdle (3s).
+	StopQuarantinedAfterIdle time.Duration
+
+	// RemoveQuarantinedAssociationAfter is the duration after which a
+	// quarantined association is removed from the registry.
+	// (pekko.remote.artery.advanced.remove-quarantined-association-after).
+	// Zero means use DefaultRemoveQuarantinedAssociationAfter (1h).
+	RemoveQuarantinedAssociationAfter time.Duration
+
+	// ShutdownFlushTimeout is how long ActorSystem termination waits for
+	// pending outbound messages to flush before closing the transport.
+	// (pekko.remote.artery.advanced.shutdown-flush-timeout).
+	// Zero means use DefaultShutdownFlushTimeout (1s).
+	ShutdownFlushTimeout time.Duration
+
+	// DeathWatchNotificationFlushTimeout is how long the remote layer waits
+	// before sending a DeathWatchNotification, to let prior messages flush.
+	// (pekko.remote.artery.advanced.death-watch-notification-flush-timeout).
+	// Zero means use DefaultDeathWatchNotificationFlushTimeout (3s).
+	DeathWatchNotificationFlushTimeout time.Duration
+
+	// InboundRestartTimeout is the rolling window in which InboundMaxRestarts
+	// caps inbound-stream restarts. Consumed by the RestartTracker.
+	// (pekko.remote.artery.advanced.inbound-restart-timeout).
+	// Zero means use DefaultInboundRestartTimeout (5s).
+	InboundRestartTimeout time.Duration
+
+	// InboundMaxRestarts is the maximum number of inbound-stream restarts
+	// permitted inside InboundRestartTimeout. Consumed by the RestartTracker
+	// (TryRecordInboundRestart returns false when the cap is exceeded).
+	// (pekko.remote.artery.advanced.inbound-max-restarts).
+	// Zero means use DefaultInboundMaxRestarts (5).
+	InboundMaxRestarts int
+
+	// OutboundRestartBackoff is the backoff applied before retrying an
+	// outbound TCP connection.  Recorded for the dialer consumer.
+	// (pekko.remote.artery.advanced.outbound-restart-backoff).
+	// Zero means use DefaultOutboundRestartBackoff (1s).
+	OutboundRestartBackoff time.Duration
+
+	// OutboundRestartTimeout is the rolling window in which OutboundMaxRestarts
+	// caps outbound-stream restarts. Consumed by the RestartTracker.
+	// (pekko.remote.artery.advanced.outbound-restart-timeout).
+	// Zero means use DefaultOutboundRestartTimeout (5s).
+	OutboundRestartTimeout time.Duration
+
+	// OutboundMaxRestarts is the maximum number of outbound-stream restarts
+	// permitted inside OutboundRestartTimeout. Consumed by the RestartTracker
+	// (TryRecordOutboundRestart returns false when the cap is exceeded).
+	// (pekko.remote.artery.advanced.outbound-max-restarts).
+	// Zero means use DefaultOutboundMaxRestarts (5).
+	OutboundMaxRestarts int
+
+	// restartMu guards inboundRestarts and outboundRestarts.
+	restartMu        sync.Mutex
+	inboundRestarts  []time.Time
+	outboundRestarts []time.Time
+
 	// AcceptProtocolNames lists protocol names accepted during Artery handshake.
 	// Default: ["pekko", "akka"].
 	AcceptProtocolNames []string
@@ -309,6 +394,202 @@ func (nm *NodeManager) EffectiveOutboundControlQueueSize() int {
 		return nm.OutboundControlQueueSize
 	}
 	return DefaultOutboundControlQueueSize
+}
+
+// EffectiveStopIdleOutboundAfter returns the configured stop-idle-outbound-after or the Pekko default.
+func (nm *NodeManager) EffectiveStopIdleOutboundAfter() time.Duration {
+	if nm.StopIdleOutboundAfter > 0 {
+		return nm.StopIdleOutboundAfter
+	}
+	return DefaultStopIdleOutboundAfter
+}
+
+// EffectiveQuarantineIdleOutboundAfter returns the configured quarantine-idle-outbound-after or the Pekko default.
+func (nm *NodeManager) EffectiveQuarantineIdleOutboundAfter() time.Duration {
+	if nm.QuarantineIdleOutboundAfter > 0 {
+		return nm.QuarantineIdleOutboundAfter
+	}
+	return DefaultQuarantineIdleOutboundAfter
+}
+
+// EffectiveStopQuarantinedAfterIdle returns the configured stop-quarantined-after-idle or the Pekko default.
+func (nm *NodeManager) EffectiveStopQuarantinedAfterIdle() time.Duration {
+	if nm.StopQuarantinedAfterIdle > 0 {
+		return nm.StopQuarantinedAfterIdle
+	}
+	return DefaultStopQuarantinedAfterIdle
+}
+
+// EffectiveRemoveQuarantinedAssociationAfter returns the configured remove-quarantined-association-after or the Pekko default.
+func (nm *NodeManager) EffectiveRemoveQuarantinedAssociationAfter() time.Duration {
+	if nm.RemoveQuarantinedAssociationAfter > 0 {
+		return nm.RemoveQuarantinedAssociationAfter
+	}
+	return DefaultRemoveQuarantinedAssociationAfter
+}
+
+// EffectiveShutdownFlushTimeout returns the configured shutdown-flush-timeout or the Pekko default.
+func (nm *NodeManager) EffectiveShutdownFlushTimeout() time.Duration {
+	if nm.ShutdownFlushTimeout > 0 {
+		return nm.ShutdownFlushTimeout
+	}
+	return DefaultShutdownFlushTimeout
+}
+
+// EffectiveDeathWatchNotificationFlushTimeout returns the configured death-watch-notification-flush-timeout or the Pekko default.
+func (nm *NodeManager) EffectiveDeathWatchNotificationFlushTimeout() time.Duration {
+	if nm.DeathWatchNotificationFlushTimeout > 0 {
+		return nm.DeathWatchNotificationFlushTimeout
+	}
+	return DefaultDeathWatchNotificationFlushTimeout
+}
+
+// EffectiveInboundRestartTimeout returns the configured inbound-restart-timeout or the Pekko default.
+func (nm *NodeManager) EffectiveInboundRestartTimeout() time.Duration {
+	if nm.InboundRestartTimeout > 0 {
+		return nm.InboundRestartTimeout
+	}
+	return DefaultInboundRestartTimeout
+}
+
+// EffectiveInboundMaxRestarts returns the configured inbound-max-restarts or the Pekko default.
+func (nm *NodeManager) EffectiveInboundMaxRestarts() int {
+	if nm.InboundMaxRestarts > 0 {
+		return nm.InboundMaxRestarts
+	}
+	return DefaultInboundMaxRestarts
+}
+
+// EffectiveOutboundRestartBackoff returns the configured outbound-restart-backoff or the Pekko default.
+func (nm *NodeManager) EffectiveOutboundRestartBackoff() time.Duration {
+	if nm.OutboundRestartBackoff > 0 {
+		return nm.OutboundRestartBackoff
+	}
+	return DefaultOutboundRestartBackoff
+}
+
+// EffectiveOutboundRestartTimeout returns the configured outbound-restart-timeout or the Pekko default.
+func (nm *NodeManager) EffectiveOutboundRestartTimeout() time.Duration {
+	if nm.OutboundRestartTimeout > 0 {
+		return nm.OutboundRestartTimeout
+	}
+	return DefaultOutboundRestartTimeout
+}
+
+// EffectiveOutboundMaxRestarts returns the configured outbound-max-restarts or the Pekko default.
+func (nm *NodeManager) EffectiveOutboundMaxRestarts() int {
+	if nm.OutboundMaxRestarts > 0 {
+		return nm.OutboundMaxRestarts
+	}
+	return DefaultOutboundMaxRestarts
+}
+
+// pruneRestartTimestamps drops timestamps older than now-window from stamps
+// and returns the remaining slice.  Caller must hold restartMu.
+func pruneRestartTimestamps(stamps []time.Time, now time.Time, window time.Duration) []time.Time {
+	cutoff := now.Add(-window)
+	i := 0
+	for ; i < len(stamps); i++ {
+		if stamps[i].After(cutoff) {
+			break
+		}
+	}
+	if i == 0 {
+		return stamps
+	}
+	pruned := make([]time.Time, len(stamps)-i)
+	copy(pruned, stamps[i:])
+	return pruned
+}
+
+// TryRecordInboundRestart records an inbound-stream restart and returns true
+// when the count within the rolling inbound-restart-timeout window is still
+// at or below inbound-max-restarts.  When the cap is exceeded the method
+// returns false and the caller is expected to treat the restart as fatal
+// (matches Pekko's "ActorSystem terminated on exceeded restarts" behaviour).
+func (nm *NodeManager) TryRecordInboundRestart() bool {
+	window := nm.EffectiveInboundRestartTimeout()
+	max := nm.EffectiveInboundMaxRestarts()
+	now := time.Now()
+	nm.restartMu.Lock()
+	defer nm.restartMu.Unlock()
+	nm.inboundRestarts = pruneRestartTimestamps(nm.inboundRestarts, now, window)
+	nm.inboundRestarts = append(nm.inboundRestarts, now)
+	return len(nm.inboundRestarts) <= max
+}
+
+// TryRecordOutboundRestart records an outbound-stream restart and returns true
+// when the count within the rolling outbound-restart-timeout window is still
+// at or below outbound-max-restarts.  When the cap is exceeded the method
+// returns false and the caller is expected to stop attempting further
+// reconnects (matches Pekko's outbound-max-restarts behaviour).
+func (nm *NodeManager) TryRecordOutboundRestart() bool {
+	window := nm.EffectiveOutboundRestartTimeout()
+	max := nm.EffectiveOutboundMaxRestarts()
+	now := time.Now()
+	nm.restartMu.Lock()
+	defer nm.restartMu.Unlock()
+	nm.outboundRestarts = pruneRestartTimestamps(nm.outboundRestarts, now, window)
+	nm.outboundRestarts = append(nm.outboundRestarts, now)
+	return len(nm.outboundRestarts) <= max
+}
+
+// ResetRestartCounters clears both inbound and outbound restart windows.
+// Used by tests to isolate restart-cap scenarios.
+func (nm *NodeManager) ResetRestartCounters() {
+	nm.restartMu.Lock()
+	nm.inboundRestarts = nil
+	nm.outboundRestarts = nil
+	nm.restartMu.Unlock()
+}
+
+// SweepIdleOutboundQuarantine quarantines any OUTBOUND associations whose
+// lastSeen timestamp is older than quarantine-idle-outbound-after.  The
+// association is transitioned to QUARANTINED state, its connection is closed,
+// and its UID is recorded in the permanent quarantine registry so the remote
+// cannot re-associate with the same UID.  Returns the number of associations
+// quarantined by this sweep (callers use it to drive metrics/flight events).
+func (nm *NodeManager) SweepIdleOutboundQuarantine() int {
+	threshold := nm.EffectiveQuarantineIdleOutboundAfter()
+	cutoff := time.Now().Add(-threshold)
+	nm.mu.Lock()
+	defer nm.mu.Unlock()
+
+	quarantined := 0
+	for key, assoc := range nm.associations {
+		assoc.mu.Lock()
+		role := assoc.role
+		state := assoc.state
+		lastSeen := assoc.lastSeen
+		remote := assoc.remote
+		conn := assoc.conn
+		if role != OUTBOUND || state == QUARANTINED {
+			assoc.mu.Unlock()
+			continue
+		}
+		if !lastSeen.Before(cutoff) {
+			assoc.mu.Unlock()
+			continue
+		}
+		assoc.state = QUARANTINED
+		if conn != nil {
+			_ = conn.Close()
+		}
+		assoc.mu.Unlock()
+
+		assoc.emitFlight(SeverityWarn, CatQuarantine, "idle_outbound_quarantined", map[string]any{
+			"remote":    assoc.remoteKey(),
+			"threshold": threshold.String(),
+		})
+		if remote != nil {
+			nm.quarantinedMu.Lock()
+			nm.quarantinedUIDs[remote.GetUid()] = remote
+			nm.quarantinedMu.Unlock()
+		}
+		delete(nm.associations, key)
+		quarantined++
+	}
+	return quarantined
 }
 
 // IsQuarantined returns true when uid has been permanently quarantined.

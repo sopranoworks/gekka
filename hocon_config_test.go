@@ -2025,3 +2025,205 @@ pekko {
 		t.Errorf("ArteryAdvanced.OutboundControlQueueSize = %d, want 4096", cfg.ArteryAdvanced.OutboundControlQueueSize)
 	}
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Artery advanced: quarantine + lifecycle timers (round2 session 03)
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestHOCON_ArteryAdvanced_StopIdleOutboundAfter(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery {
+    canonical { hostname = "127.0.0.1", port = 2552 }
+    advanced { stop-idle-outbound-after = 10m }
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.ArteryAdvanced.StopIdleOutboundAfter != 10*time.Minute {
+		t.Errorf("StopIdleOutboundAfter = %v, want 10m", cfg.ArteryAdvanced.StopIdleOutboundAfter)
+	}
+}
+
+func TestHOCON_ArteryAdvanced_QuarantineIdleOutboundAfter(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery {
+    canonical { hostname = "127.0.0.1", port = 2552 }
+    advanced { quarantine-idle-outbound-after = 2h }
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.ArteryAdvanced.QuarantineIdleOutboundAfter != 2*time.Hour {
+		t.Errorf("QuarantineIdleOutboundAfter = %v, want 2h", cfg.ArteryAdvanced.QuarantineIdleOutboundAfter)
+	}
+}
+
+func TestHOCON_ArteryAdvanced_StopQuarantinedAfterIdle(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery {
+    canonical { hostname = "127.0.0.1", port = 2552 }
+    advanced { stop-quarantined-after-idle = 7s }
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.ArteryAdvanced.StopQuarantinedAfterIdle != 7*time.Second {
+		t.Errorf("StopQuarantinedAfterIdle = %v, want 7s", cfg.ArteryAdvanced.StopQuarantinedAfterIdle)
+	}
+}
+
+func TestHOCON_ArteryAdvanced_RemoveQuarantinedAssociationAfter(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery {
+    canonical { hostname = "127.0.0.1", port = 2552 }
+    advanced { remove-quarantined-association-after = 30m }
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.ArteryAdvanced.RemoveQuarantinedAssociationAfter != 30*time.Minute {
+		t.Errorf("RemoveQuarantinedAssociationAfter = %v, want 30m", cfg.ArteryAdvanced.RemoveQuarantinedAssociationAfter)
+	}
+}
+
+func TestHOCON_ArteryAdvanced_ShutdownFlushTimeout(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery {
+    canonical { hostname = "127.0.0.1", port = 2552 }
+    advanced { shutdown-flush-timeout = 4s }
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.ArteryAdvanced.ShutdownFlushTimeout != 4*time.Second {
+		t.Errorf("ShutdownFlushTimeout = %v, want 4s", cfg.ArteryAdvanced.ShutdownFlushTimeout)
+	}
+}
+
+func TestHOCON_ArteryAdvanced_DeathWatchNotificationFlushTimeout(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery {
+    canonical { hostname = "127.0.0.1", port = 2552 }
+    advanced { death-watch-notification-flush-timeout = 9s }
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.ArteryAdvanced.DeathWatchNotificationFlushTimeout != 9*time.Second {
+		t.Errorf("DeathWatchNotificationFlushTimeout = %v, want 9s", cfg.ArteryAdvanced.DeathWatchNotificationFlushTimeout)
+	}
+}
+
+func TestHOCON_ArteryAdvanced_InboundRestartTimeout(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery {
+    canonical { hostname = "127.0.0.1", port = 2552 }
+    advanced { inbound-restart-timeout = 12s }
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.ArteryAdvanced.InboundRestartTimeout != 12*time.Second {
+		t.Errorf("InboundRestartTimeout = %v, want 12s", cfg.ArteryAdvanced.InboundRestartTimeout)
+	}
+}
+
+func TestHOCON_ArteryAdvanced_InboundMaxRestarts(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery {
+    canonical { hostname = "127.0.0.1", port = 2552 }
+    advanced { inbound-max-restarts = 9 }
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.ArteryAdvanced.InboundMaxRestarts != 9 {
+		t.Errorf("InboundMaxRestarts = %d, want 9", cfg.ArteryAdvanced.InboundMaxRestarts)
+	}
+}
+
+func TestHOCON_ArteryAdvanced_OutboundRestartBackoff(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery {
+    canonical { hostname = "127.0.0.1", port = 2552 }
+    advanced { outbound-restart-backoff = 2500ms }
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.ArteryAdvanced.OutboundRestartBackoff != 2500*time.Millisecond {
+		t.Errorf("OutboundRestartBackoff = %v, want 2500ms", cfg.ArteryAdvanced.OutboundRestartBackoff)
+	}
+}
+
+func TestHOCON_ArteryAdvanced_OutboundRestartTimeout(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery {
+    canonical { hostname = "127.0.0.1", port = 2552 }
+    advanced { outbound-restart-timeout = 15s }
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.ArteryAdvanced.OutboundRestartTimeout != 15*time.Second {
+		t.Errorf("OutboundRestartTimeout = %v, want 15s", cfg.ArteryAdvanced.OutboundRestartTimeout)
+	}
+}
+
+func TestHOCON_ArteryAdvanced_OutboundMaxRestarts(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery {
+    canonical { hostname = "127.0.0.1", port = 2552 }
+    advanced { outbound-max-restarts = 11 }
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.ArteryAdvanced.OutboundMaxRestarts != 11 {
+		t.Errorf("OutboundMaxRestarts = %d, want 11", cfg.ArteryAdvanced.OutboundMaxRestarts)
+	}
+}

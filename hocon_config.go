@@ -539,6 +539,58 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 			nodeCfg.ArteryAdvanced.GiveUpSystemMessageAfter = d
 		}
 	}
+	// ── Artery Advanced: quarantine + lifecycle timers ───────────────────
+	if v, err := cfg.GetString(arteryPrefix + ".advanced.stop-idle-outbound-after"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.ArteryAdvanced.StopIdleOutboundAfter = d
+		}
+	}
+	if v, err := cfg.GetString(arteryPrefix + ".advanced.quarantine-idle-outbound-after"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.ArteryAdvanced.QuarantineIdleOutboundAfter = d
+		}
+	}
+	if v, err := cfg.GetString(arteryPrefix + ".advanced.stop-quarantined-after-idle"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.ArteryAdvanced.StopQuarantinedAfterIdle = d
+		}
+	}
+	if v, err := cfg.GetString(arteryPrefix + ".advanced.remove-quarantined-association-after"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.ArteryAdvanced.RemoveQuarantinedAssociationAfter = d
+		}
+	}
+	if v, err := cfg.GetString(arteryPrefix + ".advanced.shutdown-flush-timeout"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.ArteryAdvanced.ShutdownFlushTimeout = d
+		}
+	}
+	if v, err := cfg.GetString(arteryPrefix + ".advanced.death-watch-notification-flush-timeout"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.ArteryAdvanced.DeathWatchNotificationFlushTimeout = d
+		}
+	}
+	if v, err := cfg.GetString(arteryPrefix + ".advanced.inbound-restart-timeout"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.ArteryAdvanced.InboundRestartTimeout = d
+		}
+	}
+	if v, err := cfg.GetInt(arteryPrefix + ".advanced.inbound-max-restarts"); err == nil {
+		nodeCfg.ArteryAdvanced.InboundMaxRestarts = v
+	}
+	if v, err := cfg.GetString(arteryPrefix + ".advanced.outbound-restart-backoff"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.ArteryAdvanced.OutboundRestartBackoff = d
+		}
+	}
+	if v, err := cfg.GetString(arteryPrefix + ".advanced.outbound-restart-timeout"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.ArteryAdvanced.OutboundRestartTimeout = d
+		}
+	}
+	if v, err := cfg.GetInt(arteryPrefix + ".advanced.outbound-max-restarts"); err == nil {
+		nodeCfg.ArteryAdvanced.OutboundMaxRestarts = v
+	}
 
 	// ── Bind Address (NAT/Docker support) ──────────────────────────────────
 	if v, err := cfg.GetString(arteryPrefix + ".bind.hostname"); err == nil {

@@ -1907,7 +1907,121 @@ pekko.cluster.seed-nodes = []
 	if cfg.ArteryAdvanced.InboundLanes != 0 ||
 		cfg.ArteryAdvanced.OutboundLanes != 0 ||
 		cfg.ArteryAdvanced.OutboundMessageQueueSize != 0 ||
-		cfg.ArteryAdvanced.SystemMessageBufferSize != 0 {
+		cfg.ArteryAdvanced.SystemMessageBufferSize != 0 ||
+		cfg.ArteryAdvanced.OutboundControlQueueSize != 0 ||
+		cfg.ArteryAdvanced.HandshakeTimeout != 0 ||
+		cfg.ArteryAdvanced.HandshakeRetryInterval != 0 ||
+		cfg.ArteryAdvanced.SystemMessageResendInterval != 0 ||
+		cfg.ArteryAdvanced.GiveUpSystemMessageAfter != 0 {
 		t.Errorf("ArteryAdvanced = %+v, want zero-valued (defaults)", cfg.ArteryAdvanced)
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Artery advanced: handshake + timers (round2 session 02)
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestHOCON_ArteryAdvanced_HandshakeTimeout(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery {
+    canonical {
+      hostname = "127.0.0.1"
+      port = 2552
+    }
+    advanced { handshake-timeout = 45s }
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.ArteryAdvanced.HandshakeTimeout != 45*time.Second {
+		t.Errorf("ArteryAdvanced.HandshakeTimeout = %v, want 45s", cfg.ArteryAdvanced.HandshakeTimeout)
+	}
+}
+
+func TestHOCON_ArteryAdvanced_HandshakeRetryInterval(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery {
+    canonical {
+      hostname = "127.0.0.1"
+      port = 2552
+    }
+    advanced { handshake-retry-interval = 250ms }
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.ArteryAdvanced.HandshakeRetryInterval != 250*time.Millisecond {
+		t.Errorf("ArteryAdvanced.HandshakeRetryInterval = %v, want 250ms", cfg.ArteryAdvanced.HandshakeRetryInterval)
+	}
+}
+
+func TestHOCON_ArteryAdvanced_SystemMessageResendInterval(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery {
+    canonical {
+      hostname = "127.0.0.1"
+      port = 2552
+    }
+    advanced { system-message-resend-interval = 3s }
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.ArteryAdvanced.SystemMessageResendInterval != 3*time.Second {
+		t.Errorf("ArteryAdvanced.SystemMessageResendInterval = %v, want 3s", cfg.ArteryAdvanced.SystemMessageResendInterval)
+	}
+}
+
+func TestHOCON_ArteryAdvanced_GiveUpSystemMessageAfter(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery {
+    canonical {
+      hostname = "127.0.0.1"
+      port = 2552
+    }
+    advanced { give-up-system-message-after = 2h }
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.ArteryAdvanced.GiveUpSystemMessageAfter != 2*time.Hour {
+		t.Errorf("ArteryAdvanced.GiveUpSystemMessageAfter = %v, want 2h", cfg.ArteryAdvanced.GiveUpSystemMessageAfter)
+	}
+}
+
+func TestHOCON_ArteryAdvanced_OutboundControlQueueSize(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery {
+    canonical {
+      hostname = "127.0.0.1"
+      port = 2552
+    }
+    advanced { outbound-control-queue-size = 4096 }
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.ArteryAdvanced.OutboundControlQueueSize != 4096 {
+		t.Errorf("ArteryAdvanced.OutboundControlQueueSize = %d, want 4096", cfg.ArteryAdvanced.OutboundControlQueueSize)
 	}
 }

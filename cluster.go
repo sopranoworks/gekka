@@ -734,6 +734,40 @@ type ArteryAdvancedConfig struct {
 	// Corresponds to pekko.remote.artery.advanced.system-message-buffer-size.
 	// Pekko default: 20000. Zero means use the default.
 	SystemMessageBufferSize int
+
+	// HandshakeTimeout is the maximum time an outbound association waits for
+	// a successful handshake before giving up. On timeout the association
+	// is abandoned; the next user message will trigger a fresh dial.
+	// Corresponds to pekko.remote.artery.advanced.handshake-timeout.
+	// Pekko default: 20s. Zero means use the default.
+	HandshakeTimeout time.Duration
+
+	// HandshakeRetryInterval is the cadence at which an outbound association
+	// re-sends HandshakeReq while waiting for HandshakeRsp.
+	// Corresponds to pekko.remote.artery.advanced.handshake-retry-interval.
+	// Pekko default: 1s. Zero means use the default.
+	HandshakeRetryInterval time.Duration
+
+	// SystemMessageResendInterval is the cadence at which unacknowledged
+	// system messages are retransmitted. Recorded on NodeManager for the
+	// sender-side redelivery consumer.
+	// Corresponds to pekko.remote.artery.advanced.system-message-resend-interval.
+	// Pekko default: 1s. Zero means use the default.
+	SystemMessageResendInterval time.Duration
+
+	// GiveUpSystemMessageAfter is the ultimatum after which an unacknowledged
+	// system message triggers association quarantine. Recorded on NodeManager
+	// for the sender-side redelivery consumer.
+	// Corresponds to pekko.remote.artery.advanced.give-up-system-message-after.
+	// Pekko default: 6h. Zero means use the default.
+	GiveUpSystemMessageAfter time.Duration
+
+	// OutboundControlQueueSize is the capacity of each outbound control-stream
+	// association's outbox (streamId=1 — handshake, heartbeat, system
+	// messages). Separate from OutboundMessageQueueSize (ordinary stream).
+	// Corresponds to pekko.remote.artery.advanced.outbound-control-queue-size.
+	// Pekko default: 20000. Zero means use the default.
+	OutboundControlQueueSize int
 }
 
 // TelemetryConfig controls the built-in OTEL instrumentation hooks.
@@ -1069,6 +1103,21 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	}
 	if cfg.ArteryAdvanced.SystemMessageBufferSize > 0 {
 		nm.SystemMessageBufferSize = cfg.ArteryAdvanced.SystemMessageBufferSize
+	}
+	if cfg.ArteryAdvanced.HandshakeTimeout > 0 {
+		nm.HandshakeTimeout = cfg.ArteryAdvanced.HandshakeTimeout
+	}
+	if cfg.ArteryAdvanced.HandshakeRetryInterval > 0 {
+		nm.HandshakeRetryInterval = cfg.ArteryAdvanced.HandshakeRetryInterval
+	}
+	if cfg.ArteryAdvanced.SystemMessageResendInterval > 0 {
+		nm.SystemMessageResendInterval = cfg.ArteryAdvanced.SystemMessageResendInterval
+	}
+	if cfg.ArteryAdvanced.GiveUpSystemMessageAfter > 0 {
+		nm.GiveUpSystemMessageAfter = cfg.ArteryAdvanced.GiveUpSystemMessageAfter
+	}
+	if cfg.ArteryAdvanced.OutboundControlQueueSize > 0 {
+		nm.OutboundControlQueueSize = cfg.ArteryAdvanced.OutboundControlQueueSize
 	}
 	if len(cfg.AcceptProtocolNames) > 0 {
 		nm.AcceptProtocolNames = cfg.AcceptProtocolNames

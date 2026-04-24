@@ -32,6 +32,15 @@ const (
 	DefaultOutboundLanes            = 1
 	DefaultOutboundMessageQueueSize = 3072
 	DefaultSystemMessageBufferSize  = 20000
+	DefaultOutboundControlQueueSize = 20000
+)
+
+// Pekko defaults for pekko.remote.artery.advanced.* duration knobs.
+var (
+	DefaultHandshakeTimeout            = 20 * time.Second
+	DefaultHandshakeRetryInterval      = 1 * time.Second
+	DefaultSystemMessageResendInterval = 1 * time.Second
+	DefaultGiveUpSystemMessageAfter    = 6 * time.Hour
 )
 
 // AssociationState represents the state of a connection to a remote node.
@@ -164,6 +173,41 @@ type NodeManager struct {
 	// Zero means use DefaultSystemMessageBufferSize (20000).
 	SystemMessageBufferSize int
 
+	// HandshakeTimeout is the hard deadline for an outbound association to
+	// reach the ASSOCIATED state before the handshake loop gives up.
+	// (pekko.remote.artery.advanced.handshake-timeout).
+	// Zero means use DefaultHandshakeTimeout (20s).
+	HandshakeTimeout time.Duration
+
+	// HandshakeRetryInterval is the cadence at which HandshakeReq is
+	// re-transmitted while the outbound association is waiting for a
+	// HandshakeRsp.
+	// (pekko.remote.artery.advanced.handshake-retry-interval).
+	// Zero means use DefaultHandshakeRetryInterval (1s).
+	HandshakeRetryInterval time.Duration
+
+	// SystemMessageResendInterval is the cadence at which unacknowledged
+	// system messages are re-sent. Recorded for the sender-side redelivery
+	// consumer.
+	// (pekko.remote.artery.advanced.system-message-resend-interval).
+	// Zero means use DefaultSystemMessageResendInterval (1s).
+	SystemMessageResendInterval time.Duration
+
+	// GiveUpSystemMessageAfter is the ultimatum after which an unacknowledged
+	// system message triggers association quarantine. Recorded for the
+	// sender-side redelivery consumer.
+	// (pekko.remote.artery.advanced.give-up-system-message-after).
+	// Zero means use DefaultGiveUpSystemMessageAfter (6h).
+	GiveUpSystemMessageAfter time.Duration
+
+	// OutboundControlQueueSize is the capacity of each outbound control-stream
+	// (streamId=1) association's outbox (handshake, heartbeat, system
+	// messages). Separate knob from OutboundMessageQueueSize so control
+	// traffic never starves when ordinary traffic saturates.
+	// (pekko.remote.artery.advanced.outbound-control-queue-size).
+	// Zero means use DefaultOutboundControlQueueSize (20000).
+	OutboundControlQueueSize int
+
 	// AcceptProtocolNames lists protocol names accepted during Artery handshake.
 	// Default: ["pekko", "akka"].
 	AcceptProtocolNames []string
@@ -225,6 +269,46 @@ func (nm *NodeManager) EffectiveSystemMessageBufferSize() int {
 		return nm.SystemMessageBufferSize
 	}
 	return DefaultSystemMessageBufferSize
+}
+
+// EffectiveHandshakeTimeout returns the configured handshake-timeout or the Pekko default.
+func (nm *NodeManager) EffectiveHandshakeTimeout() time.Duration {
+	if nm.HandshakeTimeout > 0 {
+		return nm.HandshakeTimeout
+	}
+	return DefaultHandshakeTimeout
+}
+
+// EffectiveHandshakeRetryInterval returns the configured handshake-retry-interval or the Pekko default.
+func (nm *NodeManager) EffectiveHandshakeRetryInterval() time.Duration {
+	if nm.HandshakeRetryInterval > 0 {
+		return nm.HandshakeRetryInterval
+	}
+	return DefaultHandshakeRetryInterval
+}
+
+// EffectiveSystemMessageResendInterval returns the configured system-message-resend-interval or the Pekko default.
+func (nm *NodeManager) EffectiveSystemMessageResendInterval() time.Duration {
+	if nm.SystemMessageResendInterval > 0 {
+		return nm.SystemMessageResendInterval
+	}
+	return DefaultSystemMessageResendInterval
+}
+
+// EffectiveGiveUpSystemMessageAfter returns the configured give-up-system-message-after or the Pekko default.
+func (nm *NodeManager) EffectiveGiveUpSystemMessageAfter() time.Duration {
+	if nm.GiveUpSystemMessageAfter > 0 {
+		return nm.GiveUpSystemMessageAfter
+	}
+	return DefaultGiveUpSystemMessageAfter
+}
+
+// EffectiveOutboundControlQueueSize returns the configured outbound-control-queue-size or the Pekko default.
+func (nm *NodeManager) EffectiveOutboundControlQueueSize() int {
+	if nm.OutboundControlQueueSize > 0 {
+		return nm.OutboundControlQueueSize
+	}
+	return DefaultOutboundControlQueueSize
 }
 
 // IsQuarantined returns true when uid has been permanently quarantined.
@@ -671,6 +755,12 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 		}
 	}
 
+	// Control stream (streamId=1) gets the dedicated control-queue capacity;
+	// ordinary streams use the user-message queue capacity.
+	outboxCap := nm.EffectiveOutboundMessageQueueSize()
+	if streamId == 1 {
+		outboxCap = nm.EffectiveOutboundControlQueueSize()
+	}
 	assoc := &GekkaAssociation{
 		state:     INITIATED,
 		role:      role,
@@ -679,7 +769,7 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 		lastSeen:  time.Now(),
 		Handshake: make(chan struct{}),
 		localUid:  nm.localUid,
-		outbox:    make(chan []byte, nm.EffectiveOutboundMessageQueueSize()),
+		outbox:    make(chan []byte, outboxCap),
 		remote:    &gproto_remote.UniqueAddress{Address: remote, Uid: proto.Uint64(0)},
 		streamId:  streamId,
 	}
@@ -762,6 +852,44 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 			if err := assoc.initiateHandshake(remote); err != nil {
 				slog.Error("artery: initiateHandshake error", "error", err)
 			}
+
+			// Retry loop: re-send HandshakeReq at handshake-retry-interval
+			// until the association reaches ASSOCIATED or handshake-timeout
+			// expires. Pekko parity: advanced.handshake-timeout /
+			// advanced.handshake-retry-interval.
+			retryInterval := nm.EffectiveHandshakeRetryInterval()
+			deadline := time.Now().Add(nm.EffectiveHandshakeTimeout())
+			retryTicker := time.NewTicker(retryInterval)
+		retryLoop:
+			for {
+				select {
+				case <-assocCtx.Done():
+					retryTicker.Stop()
+					return
+				case <-retryTicker.C:
+					assoc.mu.RLock()
+					state := assoc.state
+					assoc.mu.RUnlock()
+					if state == ASSOCIATED {
+						break retryLoop
+					}
+					if time.Now().After(deadline) {
+						slog.Warn("artery: handshake timed out",
+							"remote", assoc.remoteKey(),
+							"timeout", nm.EffectiveHandshakeTimeout())
+						assoc.emitFlight(SeverityWarn, CatHandshake, "TIMEOUT", map[string]any{
+							"remote":  assoc.remoteKey(),
+							"timeout": nm.EffectiveHandshakeTimeout().String(),
+						})
+						retryTicker.Stop()
+						return
+					}
+					if err := assoc.initiateHandshake(remote); err != nil {
+						slog.Debug("artery: handshake retry error", "error", err)
+					}
+				}
+			}
+			retryTicker.Stop()
 
 			// Start heartbeat loop.
 			// Guard: only send heartbeats after the handshake is fully complete

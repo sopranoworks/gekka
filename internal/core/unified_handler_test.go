@@ -19,17 +19,20 @@ import (
 )
 
 func TestUnifiedHandler_FullDuplexHandshake(t *testing.T) {
+	// Use non-standard ports so handleHandshakeReq's reverse-dial attempt
+	// cannot collide with an external scala-server on the canonical
+	// 2552/2553 artery ports (which breaks the net.Pipe()-only test).
 	nodeAAddr := &gproto_remote.Address{
 		Protocol: proto.String("pekko"),
 		System:   proto.String("nodeA"),
 		Hostname: proto.String("127.0.0.1"),
-		Port:     proto.Uint32(2552),
+		Port:     proto.Uint32(52551),
 	}
 	nodeBAddr := &gproto_remote.Address{
 		Protocol: proto.String("pekko"),
 		System:   proto.String("nodeB"),
 		Hostname: proto.String("127.0.0.1"),
-		Port:     proto.Uint32(2553),
+		Port:     proto.Uint32(52552),
 	}
 
 	nmA := NewNodeManager(nodeAAddr, 0)

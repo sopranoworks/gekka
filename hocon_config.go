@@ -516,6 +516,29 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 	if v, err := cfg.GetInt(arteryPrefix + ".advanced.system-message-buffer-size"); err == nil {
 		nodeCfg.ArteryAdvanced.SystemMessageBufferSize = v
 	}
+	if v, err := cfg.GetInt(arteryPrefix + ".advanced.outbound-control-queue-size"); err == nil {
+		nodeCfg.ArteryAdvanced.OutboundControlQueueSize = v
+	}
+	if v, err := cfg.GetString(arteryPrefix + ".advanced.handshake-timeout"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.ArteryAdvanced.HandshakeTimeout = d
+		}
+	}
+	if v, err := cfg.GetString(arteryPrefix + ".advanced.handshake-retry-interval"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.ArteryAdvanced.HandshakeRetryInterval = d
+		}
+	}
+	if v, err := cfg.GetString(arteryPrefix + ".advanced.system-message-resend-interval"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.ArteryAdvanced.SystemMessageResendInterval = d
+		}
+	}
+	if v, err := cfg.GetString(arteryPrefix + ".advanced.give-up-system-message-after"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.ArteryAdvanced.GiveUpSystemMessageAfter = d
+		}
+	}
 
 	// ── Bind Address (NAT/Docker support) ──────────────────────────────────
 	if v, err := cfg.GetString(arteryPrefix + ".bind.hostname"); err == nil {

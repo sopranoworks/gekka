@@ -79,15 +79,17 @@ const (
 	WriteAll
 )
 
-// fullStateEvery controls how often a full-state gossip is sent.
-// Between full-state rounds, only deltas are sent (when available).
-const fullStateEvery = 10
+// defaultFullStateEvery is the baseline cadence of full-state gossip when
+// DeltaCRDT is enabled and no delta-size cap has fired. Full-state rounds
+// repair deltas that may have been dropped in transit.
+const defaultFullStateEvery = 10
 
 // Replicator manages a set of named CRDTs and gossips state to peers.
 //
 // Delta-aware CRDTs (GCounter, ORSet, LWWMap) are gossiped using compact delta
-// messages on most rounds, and a full-state message every fullStateEvery rounds
-// to repair any dropped deltas.
+// messages on most rounds, with a full-state fallback either on a fixed
+// cadence (every defaultFullStateEvery rounds) or when the accumulated delta
+// size exceeds MaxDeltaElements.
 type Replicator struct {
 	mu         sync.RWMutex
 	nodeID     string
@@ -106,13 +108,56 @@ type Replicator struct {
 	stopCh         chan struct{}
 	wg             sync.WaitGroup
 
+	// ── Config knobs (wired from DistributedDataConfig) ──
+	// NotifySubscribersInterval — when > 0, subscriber callbacks are batched
+	// and flushed on this interval instead of firing synchronously inside
+	// HandleIncoming. Zero disables batching (fire immediately).
+	NotifySubscribersInterval time.Duration
+
+	// MaxDeltaElements caps the total number of delta entries accumulated
+	// across all CRDTs in a single gossip round. When exceeded, the
+	// replicator sends full state for remaining CRDTs instead.
+	MaxDeltaElements int
+
+	// DeltaCRDTEnabled toggles delta-based gossip for delta-aware CRDTs.
+	// When false, every round sends full state.
+	DeltaCRDTEnabled bool
+
+	// DeltaCRDTMaxDeltaSize caps the number of operations per single delta
+	// message before the replicator falls back to full state for that CRDT.
+	DeltaCRDTMaxDeltaSize int
+
+	// PreferOldest, when true, instructs the peer-selection layer to order
+	// peers by ascending upNumber. The Replicator itself gossips to all
+	// peers each round; this flag is exposed for the membership-integration
+	// layer to sort AddPeer calls.
+	PreferOldest bool
+
+	// Role restricts gossip participation to peers with this role. Empty =
+	// all peers. Enforced by the membership layer before AddPeer is called.
+	Role string
+
+	// Name is the service key / actor name used for discovery. Exposed for
+	// the registering code (cluster.go) — the Replicator itself does not
+	// consume it at runtime.
+	Name string
+
 	// Callback invoked when a gossip message arrives for a key we don't know about.
 	OnUnknownKey func(key string, msg ReplicatorMsg)
 
 	// Subscription support.
-	subsMu  sync.RWMutex
-	subs    map[string][]subEntry
-	subSeq  atomic.Uint64
+	subsMu sync.RWMutex
+	subs   map[string][]subEntry
+	subSeq atomic.Uint64
+
+	// Batched subscriber notification state.
+	dirtyMu   sync.Mutex
+	dirtyKeys map[string]any // key -> latest CRDT value since last flush
+
+	// Pruning: optional — when non-nil, pruningManager.Tick fires on its own
+	// goroutine started by Start(ctx).
+	pruningManager  *PruningManager
+	PruningInterval time.Duration
 }
 
 type peerInfo struct {
@@ -122,16 +167,23 @@ type peerInfo struct {
 // NewReplicator creates a Replicator for the given nodeID.
 func NewReplicator(nodeID string, router *actor.Router) *Replicator {
 	return &Replicator{
-		nodeID:         nodeID,
-		counters:       make(map[string]*GCounter),
-		sets:           make(map[string]*ORSet),
-		maps:           make(map[string]*LWWMap),
-		pnCounters:     make(map[string]*PNCounter),
-		orFlags:        make(map[string]*ORFlag),
-		registers:      make(map[string]*LWWRegister),
-		router:         router,
-		GossipInterval: 2 * time.Second,
-		stopCh:         make(chan struct{}),
+		nodeID:                    nodeID,
+		counters:                  make(map[string]*GCounter),
+		sets:                      make(map[string]*ORSet),
+		maps:                      make(map[string]*LWWMap),
+		pnCounters:                make(map[string]*PNCounter),
+		orFlags:                   make(map[string]*ORFlag),
+		registers:                 make(map[string]*LWWRegister),
+		router:                    router,
+		GossipInterval:            2 * time.Second,
+		NotifySubscribersInterval: 0, // default: fire immediately
+		MaxDeltaElements:          500,
+		DeltaCRDTEnabled:          true,
+		DeltaCRDTMaxDeltaSize:     50,
+		PruningInterval:           0, // default: disabled unless wired
+		Name:                      "ddataReplicator",
+		stopCh:                    make(chan struct{}),
+		dirtyKeys:                 make(map[string]any),
 	}
 }
 
@@ -140,6 +192,12 @@ func (r *Replicator) AddPeer(actorPath string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.peers = append(r.peers, peerInfo{path: actorPath})
+}
+
+// NodeID returns the identifier this Replicator uses when recording
+// per-node dots in CRDTs. Typically "host:port".
+func (r *Replicator) NodeID() string {
+	return r.nodeID
 }
 
 // GCounter returns (or creates) the named GCounter.
@@ -336,7 +394,9 @@ func (r *Replicator) PutInMap(key, itemKey string, value any, consistency WriteC
 	}
 }
 
-// Start begins the periodic gossip loop.
+// Start begins the periodic gossip loop, along with the optional
+// batched-notification loop and pruning-tick loop when those features are
+// enabled via configuration.
 func (r *Replicator) Start(ctx context.Context) {
 	r.wg.Add(1)
 	go func() {
@@ -354,6 +414,120 @@ func (r *Replicator) Start(ctx context.Context) {
 			}
 		}
 	}()
+
+	if r.NotifySubscribersInterval > 0 {
+		r.wg.Add(1)
+		go func() {
+			defer r.wg.Done()
+			t := time.NewTicker(r.NotifySubscribersInterval)
+			defer t.Stop()
+			for {
+				select {
+				case <-r.stopCh:
+					return
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					r.flushNotifications()
+				}
+			}
+		}()
+	}
+
+	if r.pruningManager != nil && r.PruningInterval > 0 {
+		r.wg.Add(1)
+		go func() {
+			defer r.wg.Done()
+			t := time.NewTicker(r.PruningInterval)
+			defer t.Stop()
+			for {
+				select {
+				case <-r.stopCh:
+					return
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					r.pruneTick()
+				}
+			}
+		}()
+	}
+}
+
+// flushNotifications delivers any accumulated subscriber notifications.
+func (r *Replicator) flushNotifications() {
+	r.dirtyMu.Lock()
+	if len(r.dirtyKeys) == 0 {
+		r.dirtyMu.Unlock()
+		return
+	}
+	pending := r.dirtyKeys
+	r.dirtyKeys = make(map[string]any)
+	r.dirtyMu.Unlock()
+
+	for key, value := range pending {
+		r.fireSubscribers(key, value)
+	}
+}
+
+// fireSubscribers calls every registered callback for key with the latest value.
+func (r *Replicator) fireSubscribers(key string, value any) {
+	r.subsMu.RLock()
+	entries := append([]subEntry(nil), r.subs[key]...)
+	r.subsMu.RUnlock()
+	for _, e := range entries {
+		e.fn(key, value)
+	}
+}
+
+// SetPruningManager attaches a PruningManager and starts the pruning loop on
+// the next call to Start. Must be called before Start to take effect. Passing
+// nil clears the manager. When a manager is attached, PruningInterval must be
+// > 0 for the pruning loop to run.
+func (r *Replicator) SetPruningManager(pm *PruningManager) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pruningManager = pm
+}
+
+// NotifyNodeRemoved forwards a cluster node-removal event to the pruning
+// manager (if attached). Safe to call when no manager is configured.
+func (r *Replicator) NotifyNodeRemoved(nodeID string) {
+	r.mu.RLock()
+	pm := r.pruningManager
+	r.mu.RUnlock()
+	if pm != nil {
+		pm.NodeRemoved(nodeID)
+	}
+}
+
+// snapshotPrunables returns every CRDT that implements Prunable, keyed by
+// "<type>/<name>" for debugging. Safe under the replicator's read lock.
+func (r *Replicator) snapshotPrunables() map[string]Prunable {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make(map[string]Prunable, len(r.counters)+len(r.sets)+len(r.pnCounters))
+	for k, c := range r.counters {
+		out["gcounter/"+k] = c
+	}
+	for k, s := range r.sets {
+		out["orset/"+k] = s
+	}
+	for k, p := range r.pnCounters {
+		out["pncounter/"+k] = p
+	}
+	return out
+}
+
+// pruneTick drives one round of the attached pruning manager, if any.
+func (r *Replicator) pruneTick() {
+	r.mu.RLock()
+	pm := r.pruningManager
+	r.mu.RUnlock()
+	if pm == nil {
+		return
+	}
+	pm.Tick(r.snapshotPrunables())
 }
 
 // AllSetsSnapshot returns a point-in-time copy of all ORSets currently known
@@ -406,14 +580,20 @@ func (r *Replicator) unsubscribeKey(key string, id SubscriptionID) {
 	r.subsMu.Unlock()
 }
 
-// notifySubscribers fans out to all registered callbacks for key.
+// notifySubscribers fans out to all registered callbacks for key. When
+// NotifySubscribersInterval > 0, the change is accumulated and flushed on
+// the next notify tick; otherwise it fires synchronously.
 func (r *Replicator) notifySubscribers(key string, value any) {
-	r.subsMu.RLock()
-	entries := append([]subEntry(nil), r.subs[key]...)
-	r.subsMu.RUnlock()
-	for _, e := range entries {
-		e.fn(key, value)
+	if r.NotifySubscribersInterval > 0 {
+		r.dirtyMu.Lock()
+		if r.dirtyKeys == nil {
+			r.dirtyKeys = make(map[string]any)
+		}
+		r.dirtyKeys[key] = value // coalesce: latest value wins
+		r.dirtyMu.Unlock()
+		return
 	}
+	r.fireSubscribers(key, value)
 }
 
 // HandleIncoming processes a raw JSON message from a peer.
@@ -528,7 +708,18 @@ func (r *Replicator) gossipAll(ctx context.Context) {
 	r.mu.Lock()
 	r.gossipRound++
 	round := r.gossipRound
-	fullState := round%fullStateEvery == 0
+	// deltaEnabled == false → every round is a full-state round.
+	// Otherwise, full state on a fixed cadence to repair dropped deltas.
+	deltaEnabled := r.DeltaCRDTEnabled
+	fullStateRound := !deltaEnabled || round%defaultFullStateEvery == 0
+	maxDelta := r.MaxDeltaElements
+	if maxDelta <= 0 {
+		maxDelta = 500
+	}
+	maxDeltaSize := r.DeltaCRDTMaxDeltaSize
+	if maxDeltaSize <= 0 {
+		maxDeltaSize = 50
+	}
 
 	counters := make(map[string]*GCounter, len(r.counters))
 	for k, v := range r.counters {
@@ -556,44 +747,83 @@ func (r *Replicator) gossipAll(ctx context.Context) {
 	}
 	r.mu.Unlock()
 
-	// Delta-aware CRDTs: send delta unless it's a full-state round.
-	for key, c := range counters {
-		if !fullState {
-			if payload, ok := c.DeltaPayload(); ok {
-				r.gossipDelta(ctx, "gcounter-delta", key, payload)
-				c.ResetDelta()
-				continue
-			}
-			// No delta — skip (peer already has the current state from a
-			// previous full-state round, or this node hasn't changed).
-			continue
+	// Track cumulative delta elements emitted this round. When we exceed
+	// MaxDeltaElements we fall back to full-state for the remaining CRDTs.
+	deltaBudget := maxDelta
+
+	gossipCounterDelta := func(key string, c *GCounter) {
+		if fullStateRound || deltaBudget <= 0 {
+			c.ResetDelta()
+			r.gossipCounter(ctx, key, c)
+			return
 		}
+		payload, ok := c.DeltaPayload()
+		if !ok {
+			return
+		}
+		d, _ := payload.(GCounterDelta)
+		if len(d.Delta) > maxDeltaSize {
+			c.ResetDelta()
+			r.gossipCounter(ctx, key, c)
+			return
+		}
+		r.gossipDelta(ctx, "gcounter-delta", key, payload)
 		c.ResetDelta()
-		r.gossipCounter(ctx, key, c)
+		deltaBudget -= len(d.Delta)
+	}
+
+	gossipSetDelta := func(key string, s *ORSet) {
+		if fullStateRound || deltaBudget <= 0 {
+			s.ResetDelta()
+			r.gossipSet(ctx, key, s)
+			return
+		}
+		payload, ok := s.DeltaPayload()
+		if !ok {
+			return
+		}
+		d, _ := payload.(ORSetDelta)
+		size := len(d.AddedDots) + len(d.RemovedElements)
+		if size > maxDeltaSize {
+			s.ResetDelta()
+			r.gossipSet(ctx, key, s)
+			return
+		}
+		r.gossipDelta(ctx, "orset-delta", key, payload)
+		s.ResetDelta()
+		deltaBudget -= size
+	}
+
+	gossipMapDelta := func(key string, m *LWWMap) {
+		if fullStateRound || deltaBudget <= 0 {
+			m.ResetDelta()
+			r.gossipMap(ctx, key, m)
+			return
+		}
+		payload, ok := m.DeltaPayload()
+		if !ok {
+			return
+		}
+		d, _ := payload.(LWWMapDelta)
+		size := len(d.Changed)
+		if size > maxDeltaSize {
+			m.ResetDelta()
+			r.gossipMap(ctx, key, m)
+			return
+		}
+		r.gossipDelta(ctx, "lwwmap-delta", key, payload)
+		m.ResetDelta()
+		deltaBudget -= size
+	}
+
+	for key, c := range counters {
+		gossipCounterDelta(key, c)
 	}
 	for key, s := range sets {
-		if !fullState {
-			if payload, ok := s.DeltaPayload(); ok {
-				r.gossipDelta(ctx, "orset-delta", key, payload)
-				s.ResetDelta()
-				continue
-			}
-			continue
-		}
-		s.ResetDelta()
-		r.gossipSet(ctx, key, s)
+		gossipSetDelta(key, s)
 	}
 	for key, m := range lwwMaps {
-		if !fullState {
-			if payload, ok := m.DeltaPayload(); ok {
-				r.gossipDelta(ctx, "lwwmap-delta", key, payload)
-				m.ResetDelta()
-				continue
-			}
-			continue
-		}
-		m.ResetDelta()
-		r.gossipMap(ctx, key, m)
+		gossipMapDelta(key, m)
 	}
 
 	// Non-delta CRDTs: always send full state.

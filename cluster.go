@@ -581,6 +581,56 @@ type DistributedDataConfig struct {
 	// Corresponds to HOCON: pekko.cluster.distributed-data.gossip-interval
 	// Fallback: gekka.cluster.distributed-data.gossip-interval
 	GossipInterval time.Duration
+
+	// Name is the actor name used for the replicator and the receptionist
+	// service key. Corresponds to pekko.cluster.distributed-data.name.
+	// Default: "ddataReplicator".
+	Name string
+
+	// Role restricts replicator participation to cluster members with this role.
+	// Empty string means any member. Corresponds to
+	// pekko.cluster.distributed-data.role. Default: "".
+	Role string
+
+	// NotifySubscribersInterval is how often changed keys are flushed to
+	// subscribers. Changes are accumulated and delivered in batches.
+	// Corresponds to pekko.cluster.distributed-data.notify-subscribers-interval.
+	// Default: 500ms.
+	NotifySubscribersInterval time.Duration
+
+	// MaxDeltaElements caps the number of delta entries accumulated per peer
+	// before a full-state gossip is sent instead.
+	// Corresponds to pekko.cluster.distributed-data.max-delta-elements.
+	// Default: 500.
+	MaxDeltaElements int
+
+	// DeltaCRDTEnabled enables delta-based gossip for CRDTs that support it.
+	// When false, only full-state gossip is used.
+	// Corresponds to pekko.cluster.distributed-data.delta-crdt.enabled.
+	// Default: true.
+	DeltaCRDTEnabled bool
+
+	// DeltaCRDTMaxDeltaSize caps the number of operations per delta message.
+	// Corresponds to pekko.cluster.distributed-data.delta-crdt.max-delta-size.
+	// Default: 50.
+	DeltaCRDTMaxDeltaSize int
+
+	// PreferOldest selects gossip peers in ascending upNumber order
+	// (older members first). Corresponds to
+	// pekko.cluster.distributed-data.prefer-oldest. Default: false.
+	PreferOldest bool
+
+	// PruningInterval is the cadence of the pruning tick that rewrites
+	// CRDT state after a node has been removed from the cluster.
+	// Corresponds to pekko.cluster.distributed-data.pruning-interval.
+	// Default: 120s.
+	PruningInterval time.Duration
+
+	// MaxPruningDissemination is the window allowed for pruning state to
+	// propagate to all nodes before the tombstone is collected.
+	// Corresponds to pekko.cluster.distributed-data.max-pruning-dissemination.
+	// Default: 300s.
+	MaxPruningDissemination time.Duration
 }
 
 // PersistenceConfig holds persistence-plugin settings parsed from HOCON.
@@ -1284,18 +1334,60 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 		if cfg.DistributedData.GossipInterval > 0 {
 			repl.GossipInterval = cfg.DistributedData.GossipInterval
 		}
+		if cfg.DistributedData.Name != "" {
+			repl.Name = cfg.DistributedData.Name
+		}
+		repl.Role = cfg.DistributedData.Role
+		repl.NotifySubscribersInterval = cfg.DistributedData.NotifySubscribersInterval
+		if cfg.DistributedData.MaxDeltaElements > 0 {
+			repl.MaxDeltaElements = cfg.DistributedData.MaxDeltaElements
+		}
+		repl.DeltaCRDTEnabled = cfg.DistributedData.DeltaCRDTEnabled
+		if cfg.DistributedData.DeltaCRDTMaxDeltaSize > 0 {
+			repl.DeltaCRDTMaxDeltaSize = cfg.DistributedData.DeltaCRDTMaxDeltaSize
+		}
+		repl.PreferOldest = cfg.DistributedData.PreferOldest
+		repl.PruningInterval = cfg.DistributedData.PruningInterval
+
+		// Wire pruning manager. Use the DData-configured role (falls back to
+		// cluster role if DData-role is empty) to decide oldness.
+		pruningRole := cfg.DistributedData.Role
+		selfID := repl.NodeID()
+		pruningMgr := ddata.NewPruningManager(
+			cfg.DistributedData.PruningInterval,
+			cfg.DistributedData.MaxPruningDissemination,
+			func() bool {
+				ua := cm.OldestNode(pruningRole)
+				if ua == nil {
+					return false
+				}
+				a := ua.GetAddress()
+				return fmt.Sprintf("%s:%d", a.GetHostname(), a.GetPort()) == selfID
+			},
+			func() string {
+				ua := cm.OldestNode(pruningRole)
+				if ua == nil {
+					return ""
+				}
+				a := ua.GetAddress()
+				return fmt.Sprintf("%s:%d", a.GetHostname(), a.GetPort())
+			},
+		)
+		repl.SetPruningManager(pruningMgr)
+
 		repl.Start(cluster.ctx)
 
 		// Spawn typed replicator and register with receptionist
 		typedRepl := ddata_typed.Replicator{}
-		ref, err := Spawn(cluster, typedRepl.Behavior(repl), "ddataReplicator")
+		ref, err := Spawn(cluster, typedRepl.Behavior(repl), repl.Name)
 		if err == nil {
 			cluster.Receptionist().Tell(Register[any]{Key: ddata_typed.ReplicatorServiceKey, Service: ref})
 		} else {
 			log.Printf("gekka: failed to spawn typed ddata replicator: %v", err)
 		}
 
-		// Automatically manage replicator peers based on cluster membership.
+		// Automatically manage replicator peers and feed member-removal events
+		// into the pruning manager.
 		go func() {
 			sub := cm.SubscribeChannel()
 			defer sub.Cancel()
@@ -1307,17 +1399,24 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 					if !ok {
 						return
 					}
-					if up, ok := evt.(gcluster.MemberUp); ok {
+					switch e := evt.(type) {
+					case gcluster.MemberUp:
 						la := cluster.localAddr
 						laStr := fmt.Sprintf("%s://%s@%s:%d", la.GetProtocol(), la.GetSystem(), la.GetHostname(), la.GetPort())
-						if up.Member.String() != laStr {
-							// Convert MemberAddress string to actor.Address
-							addr, err := actor.ParseAddress(up.Member.String())
-							if err == nil {
-								peerPath := addr.WithRoot("user").Child("ddataReplicator")
-								fmt.Printf("Cluster: adding replicator peer: %s\n", peerPath.String())
-								repl.AddPeer(peerPath.String())
-							}
+						if e.Member.String() == laStr {
+							continue
+						}
+						addr, perr := actor.ParseAddress(e.Member.String())
+						if perr == nil {
+							peerPath := addr.WithRoot("user").Child(repl.Name)
+							fmt.Printf("Cluster: adding replicator peer: %s\n", peerPath.String())
+							repl.AddPeer(peerPath.String())
+						}
+					case gcluster.MemberRemoved:
+						addr, perr := actor.ParseAddress(e.Member.String())
+						if perr == nil {
+							nodeID := fmt.Sprintf("%s:%d", addr.Host, addr.Port)
+							repl.NotifyNodeRemoved(nodeID)
 						}
 					}
 				}

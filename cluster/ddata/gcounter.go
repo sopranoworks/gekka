@@ -134,5 +134,36 @@ func (g *GCounter) ResetDelta() {
 	g.delta = make(map[string]uint64)
 }
 
-// Ensure GCounter implements DeltaReplicatedData at compile time.
-var _ DeltaReplicatedData = (*GCounter)(nil)
+// NeedsPruning implements Prunable. Returns true when the counter still
+// holds a slot for removedNode.
+func (g *GCounter) NeedsPruning(removedNode string) bool {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	_, exists := g.state[removedNode]
+	return exists
+}
+
+// Prune transfers the removedNode's slot onto collapseInto. The delta
+// accumulator is also rewritten so any in-flight delta message won't
+// re-announce the removed node.
+func (g *GCounter) Prune(removedNode, collapseInto string) {
+	if removedNode == "" || collapseInto == "" || removedNode == collapseInto {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if val, exists := g.state[removedNode]; exists {
+		g.state[collapseInto] += val
+		delete(g.state, removedNode)
+	}
+	if val, exists := g.delta[removedNode]; exists {
+		g.delta[collapseInto] += val
+		delete(g.delta, removedNode)
+	}
+}
+
+// Ensure GCounter implements DeltaReplicatedData and Prunable at compile time.
+var (
+	_ DeltaReplicatedData = (*GCounter)(nil)
+	_ Prunable            = (*GCounter)(nil)
+)

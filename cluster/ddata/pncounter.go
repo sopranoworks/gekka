@@ -72,3 +72,19 @@ func (p *PNCounter) MergeSnapshot(snap PNCounterSnapshot) {
 	p.pos.MergeState(snap.Pos)
 	p.neg.MergeState(snap.Neg)
 }
+
+// NeedsPruning implements Prunable. Returns true if either the positive or
+// negative sub-counter still holds data for removedNode.
+func (p *PNCounter) NeedsPruning(removedNode string) bool {
+	return p.pos.NeedsPruning(removedNode) || p.neg.NeedsPruning(removedNode)
+}
+
+// Prune transfers removedNode's increments and decrements onto collapseInto.
+// The observable Value() is preserved (pos - neg is unchanged).
+func (p *PNCounter) Prune(removedNode, collapseInto string) {
+	p.pos.Prune(removedNode, collapseInto)
+	p.neg.Prune(removedNode, collapseInto)
+}
+
+// Ensure PNCounter implements Prunable at compile time.
+var _ Prunable = (*PNCounter)(nil)

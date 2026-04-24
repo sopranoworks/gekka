@@ -899,6 +899,13 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 	// ── Distributed Data ─────────────────────────────────────────────────────
 	// Primary: pekko.cluster.distributed-data (Pekko-compatible)
 	// Fallback: gekka.cluster.distributed-data (deprecated)
+	nodeCfg.DistributedData.Name = "ddataReplicator"
+	nodeCfg.DistributedData.NotifySubscribersInterval = 500 * time.Millisecond
+	nodeCfg.DistributedData.MaxDeltaElements = 500
+	nodeCfg.DistributedData.DeltaCRDTEnabled = true
+	nodeCfg.DistributedData.DeltaCRDTMaxDeltaSize = 50
+	nodeCfg.DistributedData.PruningInterval = 120 * time.Second
+	nodeCfg.DistributedData.MaxPruningDissemination = 300 * time.Second
 	ddataPrefixes := []string{prefix + ".cluster.distributed-data", "gekka.cluster.distributed-data"}
 	for _, ddataPrefix := range ddataPrefixes {
 		if v, err := cfg.GetString(ddataPrefix + ".enabled"); err == nil {
@@ -908,6 +915,43 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		if v, err := cfg.GetString(ddataPrefix + ".gossip-interval"); err == nil {
 			if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
 				nodeCfg.DistributedData.GossipInterval = d
+			}
+		}
+		if v, err := cfg.GetString(ddataPrefix + ".name"); err == nil {
+			if trimmed := strings.TrimSpace(v); trimmed != "" {
+				nodeCfg.DistributedData.Name = trimmed
+			}
+		}
+		if v, err := cfg.GetString(ddataPrefix + ".role"); err == nil {
+			nodeCfg.DistributedData.Role = strings.TrimSpace(v)
+		}
+		if v, err := cfg.GetString(ddataPrefix + ".notify-subscribers-interval"); err == nil {
+			if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+				nodeCfg.DistributedData.NotifySubscribersInterval = d
+			}
+		}
+		if v, err := cfg.GetInt(ddataPrefix + ".max-delta-elements"); err == nil {
+			nodeCfg.DistributedData.MaxDeltaElements = v
+		}
+		if v, err := cfg.GetString(ddataPrefix + ".delta-crdt.enabled"); err == nil {
+			v = strings.ToLower(strings.TrimSpace(v))
+			nodeCfg.DistributedData.DeltaCRDTEnabled = !(v == "off" || v == "false")
+		}
+		if v, err := cfg.GetInt(ddataPrefix + ".delta-crdt.max-delta-size"); err == nil {
+			nodeCfg.DistributedData.DeltaCRDTMaxDeltaSize = v
+		}
+		if v, err := cfg.GetString(ddataPrefix + ".prefer-oldest"); err == nil {
+			v = strings.ToLower(strings.TrimSpace(v))
+			nodeCfg.DistributedData.PreferOldest = v == "on" || v == "true"
+		}
+		if v, err := cfg.GetString(ddataPrefix + ".pruning-interval"); err == nil {
+			if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+				nodeCfg.DistributedData.PruningInterval = d
+			}
+		}
+		if v, err := cfg.GetString(ddataPrefix + ".max-pruning-dissemination"); err == nil {
+			if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+				nodeCfg.DistributedData.MaxPruningDissemination = d
 			}
 		}
 	}

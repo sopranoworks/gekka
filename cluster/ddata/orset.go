@@ -236,5 +236,85 @@ func (s *ORSet) ResetDelta() {
 	s.deltaVV = make(map[string]uint64)
 }
 
-// Ensure ORSet implements DeltaReplicatedData at compile time.
-var _ DeltaReplicatedData = (*ORSet)(nil)
+// NeedsPruning implements Prunable. Returns true when any element still has
+// a dot attributed to removedNode, or removedNode appears in the version
+// vector.
+func (s *ORSet) NeedsPruning(removedNode string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, dots := range s.dots {
+		for dot := range dots {
+			if dot.NodeID == removedNode {
+				return true
+			}
+		}
+	}
+	if _, exists := s.vv[removedNode]; exists {
+		return true
+	}
+	return false
+}
+
+// Prune rewrites every dot owned by removedNode onto collapseInto, and
+// collapses the removed node's version-vector slot into the surviving one
+// (max). The delta accumulator is rewritten in the same way so that an
+// in-flight delta message cannot re-introduce the removed node.
+func (s *ORSet) Prune(removedNode, collapseInto string) {
+	if removedNode == "" || collapseInto == "" || removedNode == collapseInto {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	rewriteDots := func(m map[string]map[Dot]struct{}) {
+		for elem, dots := range m {
+			changed := false
+			for dot := range dots {
+				if dot.NodeID != removedNode {
+					continue
+				}
+				delete(dots, dot)
+				dots[Dot{NodeID: collapseInto, Counter: dot.Counter}] = struct{}{}
+				changed = true
+			}
+			if changed {
+				m[elem] = dots
+			}
+		}
+	}
+	rewriteDots(s.dots)
+
+	if val, exists := s.vv[removedNode]; exists {
+		if val > s.vv[collapseInto] {
+			s.vv[collapseInto] = val
+		}
+		delete(s.vv, removedNode)
+	}
+
+	// Rewrite delta accumulator (addedDots slice form).
+	for elem, dots := range s.deltaAdded {
+		changed := false
+		for i, d := range dots {
+			if d.NodeID != removedNode {
+				continue
+			}
+			dots[i] = Dot{NodeID: collapseInto, Counter: d.Counter}
+			changed = true
+		}
+		if changed {
+			s.deltaAdded[elem] = dots
+		}
+	}
+	if val, exists := s.deltaVV[removedNode]; exists {
+		if val > s.deltaVV[collapseInto] {
+			s.deltaVV[collapseInto] = val
+		}
+		delete(s.deltaVV, removedNode)
+	}
+}
+
+// Ensure ORSet implements DeltaReplicatedData and Prunable at compile time.
+var (
+	_ DeltaReplicatedData = (*ORSet)(nil)
+	_ Prunable            = (*ORSet)(nil)
+)

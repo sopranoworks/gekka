@@ -1703,3 +1703,96 @@ pekko {
 		t.Errorf("CrossDataCenterConnections = %d, want 3", cfg.CrossDataCenterConnections)
 	}
 }
+
+func TestHOCON_DistributedData_AllFields(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery.canonical { hostname = "127.0.0.1", port = 2552 }
+  cluster {
+    seed-nodes = []
+    distributed-data {
+      name = "myReplicator"
+      role = "backend"
+      gossip-interval = 3s
+      notify-subscribers-interval = 1s
+      max-delta-elements = 1000
+      delta-crdt {
+        enabled = off
+        max-delta-size = 100
+      }
+      prefer-oldest = on
+      pruning-interval = 60s
+      max-pruning-dissemination = 120s
+    }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	d := cfg.DistributedData
+	if d.Name != "myReplicator" {
+		t.Errorf("Name = %q, want %q", d.Name, "myReplicator")
+	}
+	if d.Role != "backend" {
+		t.Errorf("Role = %q, want %q", d.Role, "backend")
+	}
+	if d.GossipInterval != 3*time.Second {
+		t.Errorf("GossipInterval = %v, want 3s", d.GossipInterval)
+	}
+	if d.NotifySubscribersInterval != 1*time.Second {
+		t.Errorf("NotifySubscribersInterval = %v, want 1s", d.NotifySubscribersInterval)
+	}
+	if d.MaxDeltaElements != 1000 {
+		t.Errorf("MaxDeltaElements = %d, want 1000", d.MaxDeltaElements)
+	}
+	if d.DeltaCRDTEnabled {
+		t.Error("DeltaCRDTEnabled = true, want false")
+	}
+	if d.DeltaCRDTMaxDeltaSize != 100 {
+		t.Errorf("DeltaCRDTMaxDeltaSize = %d, want 100", d.DeltaCRDTMaxDeltaSize)
+	}
+	if !d.PreferOldest {
+		t.Error("PreferOldest = false, want true")
+	}
+	if d.PruningInterval != 60*time.Second {
+		t.Errorf("PruningInterval = %v, want 60s", d.PruningInterval)
+	}
+	if d.MaxPruningDissemination != 120*time.Second {
+		t.Errorf("MaxPruningDissemination = %v, want 120s", d.MaxPruningDissemination)
+	}
+}
+
+func TestHOCON_DistributedData_Defaults(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery.canonical { hostname = "127.0.0.1", port = 2552 }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	d := cfg.DistributedData
+	if d.Name != "ddataReplicator" {
+		t.Errorf("Name default = %q, want ddataReplicator", d.Name)
+	}
+	if d.NotifySubscribersInterval != 500*time.Millisecond {
+		t.Errorf("NotifySubscribersInterval default = %v, want 500ms", d.NotifySubscribersInterval)
+	}
+	if d.MaxDeltaElements != 500 {
+		t.Errorf("MaxDeltaElements default = %d, want 500", d.MaxDeltaElements)
+	}
+	if !d.DeltaCRDTEnabled {
+		t.Error("DeltaCRDTEnabled default = false, want true")
+	}
+	if d.DeltaCRDTMaxDeltaSize != 50 {
+		t.Errorf("DeltaCRDTMaxDeltaSize default = %d, want 50", d.DeltaCRDTMaxDeltaSize)
+	}
+	if d.PruningInterval != 120*time.Second {
+		t.Errorf("PruningInterval default = %v, want 120s", d.PruningInterval)
+	}
+	if d.MaxPruningDissemination != 300*time.Second {
+		t.Errorf("MaxPruningDissemination default = %v, want 300s", d.MaxPruningDissemination)
+	}
+}

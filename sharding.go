@@ -252,6 +252,13 @@ func StartSharding[Command any, Event any, State any](
 		}
 	}
 
+	// Wire a DData-backed ShardStore when the operator has selected the
+	// "ddata" remember-entities backend. When RememberEntities is false the
+	// Store is still plumbed through but will be ignored by the Shard.
+	if cluster != nil && settings.RememberEntitiesStore == "ddata" && cluster.repl != nil {
+		shardSettings.Store = sharding.NewDDataEntityStore(cluster.repl, typeName)
+	}
+
 	region, err := sys.ActorOf(actor.Props{
 		New: func() actor.Actor {
 			return sharding.NewShardRegion(typeName, entityCreator, unmarshaler, extract, coordinatorRef, shardSettings)

@@ -592,6 +592,46 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		nodeCfg.ArteryAdvanced.OutboundMaxRestarts = v
 	}
 
+	// ── Artery Advanced: compression + TCP + buffers (round2 session 04) ──
+	if v, err := cfg.GetInt(arteryPrefix + ".advanced.compression.actor-refs.max"); err == nil {
+		nodeCfg.ArteryAdvanced.CompressionActorRefsMax = v
+	}
+	if v, err := cfg.GetString(arteryPrefix + ".advanced.compression.actor-refs.advertisement-interval"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.ArteryAdvanced.CompressionActorRefsAdvertisementInterval = d
+		}
+	}
+	if v, err := cfg.GetInt(arteryPrefix + ".advanced.compression.manifests.max"); err == nil {
+		nodeCfg.ArteryAdvanced.CompressionManifestsMax = v
+	}
+	if v, err := cfg.GetString(arteryPrefix + ".advanced.compression.manifests.advertisement-interval"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.ArteryAdvanced.CompressionManifestsAdvertisementInterval = d
+		}
+	}
+	if v, err := cfg.GetString(arteryPrefix + ".advanced.tcp.connection-timeout"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.ArteryAdvanced.TcpConnectionTimeout = d
+		}
+	}
+	if v, err := cfg.GetString(arteryPrefix + ".advanced.tcp.outbound-client-hostname"); err == nil {
+		nodeCfg.ArteryAdvanced.TcpOutboundClientHostname = strings.TrimSpace(v)
+	}
+	if v, err := cfg.GetInt(arteryPrefix + ".advanced.buffer-pool-size"); err == nil {
+		nodeCfg.ArteryAdvanced.BufferPoolSize = v
+	}
+	if v, err := cfg.GetString(arteryPrefix + ".advanced.maximum-large-frame-size"); err == nil {
+		if size, parseErr := parseHOCONByteSize(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.ArteryAdvanced.MaximumLargeFrameSize = size
+		}
+	}
+	if v, err := cfg.GetInt(arteryPrefix + ".advanced.large-buffer-pool-size"); err == nil {
+		nodeCfg.ArteryAdvanced.LargeBufferPoolSize = v
+	}
+	if v, err := cfg.GetInt(arteryPrefix + ".advanced.outbound-large-message-queue-size"); err == nil {
+		nodeCfg.ArteryAdvanced.OutboundLargeMessageQueueSize = v
+	}
+
 	// ── Bind Address (NAT/Docker support) ──────────────────────────────────
 	if v, err := cfg.GetString(arteryPrefix + ".bind.hostname"); err == nil {
 		nodeCfg.BindHostname = strings.TrimSpace(v)

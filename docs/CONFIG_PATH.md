@@ -40,7 +40,16 @@ Legend:
 | `pekko.remote.artery.bind.port` | `""` | ✅ | NAT/Docker bind support |
 | `pekko.remote.artery.large-message-destinations` | `[]` | ❌ | No feature |
 | `pekko.remote.artery.advanced.maximum-frame-size` | `256 KiB` | ✅ | Configurable via HOCON |
-| `pekko.remote.artery.advanced.buffer-pool-size` | `128` | ❌ | No feature |
+| `pekko.remote.artery.advanced.buffer-pool-size` | `128` | ✅ | Recorded on NodeManager (`EffectiveBufferPoolSize`) for future receive-buffer-pool consumer |
+| `pekko.remote.artery.advanced.maximum-large-frame-size` | `2 MiB` | ✅ | Recorded on NodeManager (`EffectiveMaximumLargeFrameSize`) for the large-message stream |
+| `pekko.remote.artery.advanced.large-buffer-pool-size` | `32` | ✅ | Recorded on NodeManager (`EffectiveLargeBufferPoolSize`) for future large-stream buffer-pool consumer |
+| `pekko.remote.artery.advanced.outbound-large-message-queue-size` | `256` | ✅ | Recorded on NodeManager (`EffectiveOutboundLargeMessageQueueSize`) for the large-stream outbox |
+| `pekko.remote.artery.advanced.compression.actor-refs.max` | `256` | ✅ | Cap enforced by `CompressionTableManager.UpdateActorRefTable` — oversize advertisements are rejected |
+| `pekko.remote.artery.advanced.compression.actor-refs.advertisement-interval` | `1m` | ✅ | Drives `CompressionTableManager.StartAdvertisementScheduler` actor-ref ticker |
+| `pekko.remote.artery.advanced.compression.manifests.max` | `256` | ✅ | Cap enforced by `CompressionTableManager.UpdateManifestTable` — oversize advertisements are rejected |
+| `pekko.remote.artery.advanced.compression.manifests.advertisement-interval` | `1m` | ✅ | Drives `CompressionTableManager.StartAdvertisementScheduler` manifest ticker |
+| `pekko.remote.artery.advanced.tcp.connection-timeout` | `5s` | ✅ | Threaded into `TcpClient.DialTimeout` and `DialRemote`'s association poll |
+| `pekko.remote.artery.advanced.tcp.outbound-client-hostname` | `""` | ✅ | Sets the local source address for outbound dials (`net.Dialer.LocalAddr`) |
 | `pekko.remote.artery.advanced.inbound-lanes` | `4` | ✅ | Exposed via `NodeManager.EffectiveInboundLanes()` |
 | `pekko.remote.artery.advanced.outbound-lanes` | `1` | ✅ | Exposed via `NodeManager.EffectiveOutboundLanes()` |
 | `pekko.remote.artery.advanced.outbound-message-queue-size` | `3072` | ✅ | Sizes each association's outbox channel |

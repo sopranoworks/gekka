@@ -28,30 +28,39 @@ import (
 // Pekko defaults for pekko.remote.artery.advanced.* knobs. Used when a
 // NodeManager field is left zero-valued.
 const (
-	DefaultInboundLanes             = 4
-	DefaultOutboundLanes            = 1
-	DefaultOutboundMessageQueueSize = 3072
-	DefaultSystemMessageBufferSize  = 20000
-	DefaultOutboundControlQueueSize = 20000
-	DefaultInboundMaxRestarts       = 5
-	DefaultOutboundMaxRestarts      = 5
+	DefaultInboundLanes                  = 4
+	DefaultOutboundLanes                 = 1
+	DefaultOutboundMessageQueueSize      = 3072
+	DefaultSystemMessageBufferSize       = 20000
+	DefaultOutboundControlQueueSize      = 20000
+	DefaultInboundMaxRestarts            = 5
+	DefaultOutboundMaxRestarts           = 5
+	DefaultCompressionActorRefsMax       = 256
+	DefaultCompressionManifestsMax       = 256
+	DefaultBufferPoolSize                = 128
+	DefaultMaximumLargeFrameSize         = 2 * 1024 * 1024
+	DefaultLargeBufferPoolSize           = 32
+	DefaultOutboundLargeMessageQueueSize = 256
 )
 
 // Pekko defaults for pekko.remote.artery.advanced.* duration knobs.
 var (
-	DefaultHandshakeTimeout                   = 20 * time.Second
-	DefaultHandshakeRetryInterval             = 1 * time.Second
-	DefaultSystemMessageResendInterval        = 1 * time.Second
-	DefaultGiveUpSystemMessageAfter           = 6 * time.Hour
-	DefaultStopIdleOutboundAfter              = 5 * time.Minute
-	DefaultQuarantineIdleOutboundAfter        = 6 * time.Hour
-	DefaultStopQuarantinedAfterIdle           = 3 * time.Second
-	DefaultRemoveQuarantinedAssociationAfter  = 1 * time.Hour
-	DefaultShutdownFlushTimeout               = 1 * time.Second
-	DefaultDeathWatchNotificationFlushTimeout = 3 * time.Second
-	DefaultInboundRestartTimeout              = 5 * time.Second
-	DefaultOutboundRestartBackoff             = 1 * time.Second
-	DefaultOutboundRestartTimeout             = 5 * time.Second
+	DefaultHandshakeTimeout                          = 20 * time.Second
+	DefaultHandshakeRetryInterval                    = 1 * time.Second
+	DefaultSystemMessageResendInterval               = 1 * time.Second
+	DefaultGiveUpSystemMessageAfter                  = 6 * time.Hour
+	DefaultStopIdleOutboundAfter                     = 5 * time.Minute
+	DefaultQuarantineIdleOutboundAfter               = 6 * time.Hour
+	DefaultStopQuarantinedAfterIdle                  = 3 * time.Second
+	DefaultRemoveQuarantinedAssociationAfter         = 1 * time.Hour
+	DefaultShutdownFlushTimeout                      = 1 * time.Second
+	DefaultDeathWatchNotificationFlushTimeout        = 3 * time.Second
+	DefaultInboundRestartTimeout                     = 5 * time.Second
+	DefaultOutboundRestartBackoff                    = 1 * time.Second
+	DefaultOutboundRestartTimeout                    = 5 * time.Second
+	DefaultCompressionActorRefsAdvertisementInterval = 1 * time.Minute
+	DefaultCompressionManifestsAdvertisementInterval = 1 * time.Minute
+	DefaultTcpConnectionTimeout                      = 5 * time.Second
 )
 
 // AssociationState represents the state of a connection to a remote node.
@@ -288,6 +297,71 @@ type NodeManager struct {
 	// Zero means use DefaultOutboundMaxRestarts (5).
 	OutboundMaxRestarts int
 
+	// CompressionActorRefsMax is the maximum number of compressed actor-ref
+	// entries per received advertisement. Updates whose key count exceeds
+	// the cap are rejected by the CompressionTableManager.
+	// (pekko.remote.artery.advanced.compression.actor-refs.max).
+	// Zero means use DefaultCompressionActorRefsMax (256).
+	CompressionActorRefsMax int
+
+	// CompressionActorRefsAdvertisementInterval is the cadence at which the
+	// local actor-ref compression table is advertised to remote peers.
+	// Consumed by CompressionTableManager.StartAdvertisementScheduler.
+	// (pekko.remote.artery.advanced.compression.actor-refs.advertisement-interval).
+	// Zero means use DefaultCompressionActorRefsAdvertisementInterval (1m).
+	CompressionActorRefsAdvertisementInterval time.Duration
+
+	// CompressionManifestsMax is the maximum number of compressed manifest
+	// entries per received advertisement. Updates whose key count exceeds
+	// the cap are rejected by the CompressionTableManager.
+	// (pekko.remote.artery.advanced.compression.manifests.max).
+	// Zero means use DefaultCompressionManifestsMax (256).
+	CompressionManifestsMax int
+
+	// CompressionManifestsAdvertisementInterval is the cadence at which the
+	// local manifest compression table is advertised to remote peers.
+	// Consumed by CompressionTableManager.StartAdvertisementScheduler.
+	// (pekko.remote.artery.advanced.compression.manifests.advertisement-interval).
+	// Zero means use DefaultCompressionManifestsAdvertisementInterval (1m).
+	CompressionManifestsAdvertisementInterval time.Duration
+
+	// TcpConnectionTimeout is the TCP dial timeout used by DialRemote. Also
+	// applied to the "wait for association to appear" poll loop.
+	// (pekko.remote.artery.advanced.tcp.connection-timeout).
+	// Zero means use DefaultTcpConnectionTimeout (5s).
+	TcpConnectionTimeout time.Duration
+
+	// TcpOutboundClientHostname, when non-empty, is used as the local source
+	// hostname for outbound Artery TCP connections (net.Dialer.LocalAddr).
+	// Empty means the OS picks the local address.
+	// (pekko.remote.artery.advanced.tcp.outbound-client-hostname).
+	TcpOutboundClientHostname string
+
+	// BufferPoolSize is the size of the shared receive buffer pool per stream.
+	// Recorded on NodeManager for future buffer-pool consumers.
+	// (pekko.remote.artery.advanced.buffer-pool-size).
+	// Zero means use DefaultBufferPoolSize (128).
+	BufferPoolSize int
+
+	// MaximumLargeFrameSize is the max frame payload for the large-message
+	// stream (streamId=3). Consumed by the large-stream read/write paths.
+	// (pekko.remote.artery.advanced.maximum-large-frame-size).
+	// Zero means use DefaultMaximumLargeFrameSize (2 MiB).
+	MaximumLargeFrameSize int
+
+	// LargeBufferPoolSize is the size of the shared receive buffer pool for
+	// the large-message stream. Recorded on NodeManager for future consumers.
+	// (pekko.remote.artery.advanced.large-buffer-pool-size).
+	// Zero means use DefaultLargeBufferPoolSize (32).
+	LargeBufferPoolSize int
+
+	// OutboundLargeMessageQueueSize is the outbox capacity for the
+	// large-message stream (streamId=3). Sizes the per-association outbox
+	// channel when the large stream is opened.
+	// (pekko.remote.artery.advanced.outbound-large-message-queue-size).
+	// Zero means use DefaultOutboundLargeMessageQueueSize (256).
+	OutboundLargeMessageQueueSize int
+
 	// restartMu guards inboundRestarts and outboundRestarts.
 	restartMu        sync.Mutex
 	inboundRestarts  []time.Time
@@ -482,6 +556,84 @@ func (nm *NodeManager) EffectiveOutboundMaxRestarts() int {
 		return nm.OutboundMaxRestarts
 	}
 	return DefaultOutboundMaxRestarts
+}
+
+// EffectiveCompressionActorRefsMax returns the configured compression.actor-refs.max or the Pekko default.
+func (nm *NodeManager) EffectiveCompressionActorRefsMax() int {
+	if nm.CompressionActorRefsMax > 0 {
+		return nm.CompressionActorRefsMax
+	}
+	return DefaultCompressionActorRefsMax
+}
+
+// EffectiveCompressionActorRefsAdvertisementInterval returns the configured compression.actor-refs.advertisement-interval or the Pekko default.
+func (nm *NodeManager) EffectiveCompressionActorRefsAdvertisementInterval() time.Duration {
+	if nm.CompressionActorRefsAdvertisementInterval > 0 {
+		return nm.CompressionActorRefsAdvertisementInterval
+	}
+	return DefaultCompressionActorRefsAdvertisementInterval
+}
+
+// EffectiveCompressionManifestsMax returns the configured compression.manifests.max or the Pekko default.
+func (nm *NodeManager) EffectiveCompressionManifestsMax() int {
+	if nm.CompressionManifestsMax > 0 {
+		return nm.CompressionManifestsMax
+	}
+	return DefaultCompressionManifestsMax
+}
+
+// EffectiveCompressionManifestsAdvertisementInterval returns the configured compression.manifests.advertisement-interval or the Pekko default.
+func (nm *NodeManager) EffectiveCompressionManifestsAdvertisementInterval() time.Duration {
+	if nm.CompressionManifestsAdvertisementInterval > 0 {
+		return nm.CompressionManifestsAdvertisementInterval
+	}
+	return DefaultCompressionManifestsAdvertisementInterval
+}
+
+// EffectiveTcpConnectionTimeout returns the configured tcp.connection-timeout or the Pekko default.
+func (nm *NodeManager) EffectiveTcpConnectionTimeout() time.Duration {
+	if nm.TcpConnectionTimeout > 0 {
+		return nm.TcpConnectionTimeout
+	}
+	return DefaultTcpConnectionTimeout
+}
+
+// EffectiveTcpOutboundClientHostname returns the configured tcp.outbound-client-hostname.
+// Empty means the OS picks the local source address.
+func (nm *NodeManager) EffectiveTcpOutboundClientHostname() string {
+	return nm.TcpOutboundClientHostname
+}
+
+// EffectiveBufferPoolSize returns the configured buffer-pool-size or the Pekko default.
+func (nm *NodeManager) EffectiveBufferPoolSize() int {
+	if nm.BufferPoolSize > 0 {
+		return nm.BufferPoolSize
+	}
+	return DefaultBufferPoolSize
+}
+
+// EffectiveMaximumLargeFrameSize returns the configured maximum-large-frame-size or the Pekko default.
+func (nm *NodeManager) EffectiveMaximumLargeFrameSize() int {
+	if nm.MaximumLargeFrameSize > 0 {
+		return nm.MaximumLargeFrameSize
+	}
+	return DefaultMaximumLargeFrameSize
+}
+
+// EffectiveLargeBufferPoolSize returns the configured large-buffer-pool-size or the Pekko default.
+func (nm *NodeManager) EffectiveLargeBufferPoolSize() int {
+	if nm.LargeBufferPoolSize > 0 {
+		return nm.LargeBufferPoolSize
+	}
+	return DefaultLargeBufferPoolSize
+}
+
+// EffectiveOutboundLargeMessageQueueSize returns the configured outbound-large-message-queue-size or the Pekko default.
+func (nm *NodeManager) EffectiveOutboundLargeMessageQueueSize() int {
+	if nm.OutboundLargeMessageQueueSize > 0 {
+		return nm.OutboundLargeMessageQueueSize
+	}
+	return DefaultOutboundLargeMessageQueueSize
 }
 
 // pruneRestartTimestamps drops timestamps older than now-window from stamps
@@ -796,12 +948,28 @@ func (nm *NodeManager) DialRemote(ctx context.Context, target *gproto_remote.Add
 
 	addrStr := fmt.Sprintf("%s:%d", target.GetHostname(), target.GetPort())
 
+	connectTimeout := nm.EffectiveTcpConnectionTimeout()
+
+	// Optional outbound-client-hostname: bind the dialer's source address.
+	var localAddr *net.TCPAddr
+	if src := nm.EffectiveTcpOutboundClientHostname(); src != "" {
+		if ip := net.ParseIP(src); ip != nil {
+			localAddr = &net.TCPAddr{IP: ip}
+		} else if addrs, resolveErr := net.LookupIP(src); resolveErr == nil && len(addrs) > 0 {
+			localAddr = &net.TCPAddr{IP: addrs[0]}
+		} else {
+			slog.Warn("artery: tcp.outbound-client-hostname unresolved", "hostname", src, "error", resolveErr)
+		}
+	}
+
 	client, err := NewTcpClient(TcpClientConfig{
 		Addr: addrStr,
 		Handler: func(ctx context.Context, conn net.Conn) error {
 			return nm.ProcessConnection(ctx, conn, OUTBOUND, target, 1) // Default to Control stream for outbound
 		},
-		TLSConfig: nm.TLSConfig,
+		TLSConfig:   nm.TLSConfig,
+		DialTimeout: connectTimeout,
+		LocalAddr:   localAddr,
 	})
 	if err != nil {
 		return nil, err
@@ -814,7 +982,7 @@ func (nm *NodeManager) DialRemote(ctx context.Context, target *gproto_remote.Add
 	}()
 
 	// Wait for the association to appear or for an error.
-	timeout := time.After(5 * time.Second)
+	timeout := time.After(connectTimeout)
 	for {
 		select {
 		case err := <-errChan:
@@ -823,7 +991,7 @@ func (nm *NodeManager) DialRemote(ctx context.Context, target *gproto_remote.Add
 			if assoc, ok := nm.GetAssociationByHost(target.GetHostname(), target.GetPort()); ok {
 				return assoc, nil
 			}
-			return nil, fmt.Errorf("dial timeout")
+			return nil, fmt.Errorf("dial timeout after %s", connectTimeout)
 		case <-time.After(100 * time.Millisecond):
 			if assoc, ok := nm.GetAssociationByHost(target.GetHostname(), target.GetPort()); ok {
 				return assoc, nil

@@ -11,7 +11,9 @@ package core
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/sopranoworks/gekka/actor"
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
@@ -138,5 +140,120 @@ func TestHandleAdvertisement(t *testing.T) {
 	res, err := ctm.LookupActorRef(originUid, 42)
 	if err != nil || res != "ActorX" {
 		t.Errorf("expected HandleAdvertisement to update table, got %v err %v", res, err)
+	}
+}
+
+// TestCompressionTableManager_ActorRefsMax_RejectsOversize verifies that an
+// advertisement whose key count exceeds compression.actor-refs.max is
+// rejected (the table is not updated).
+func TestCompressionTableManager_ActorRefsMax_RejectsOversize(t *testing.T) {
+	nm := NewNodeManager(&gproto_remote.Address{Hostname: proto.String("local")}, 0)
+	router := actor.NewRouter(nm)
+	ctm := NewCompressionTableManager(router)
+	ctm.SetActorRefsMax(2)
+
+	originUid := uint64(1)
+	// Three keys > cap of 2 → must be rejected, table stays empty.
+	ctm.UpdateActorRefTable(originUid, 1,
+		[]string{"a", "b", "c"},
+		[]uint32{1, 2, 3},
+	)
+	if _, err := ctm.LookupActorRef(originUid, 1); err == nil {
+		t.Error("over-cap advertisement must be rejected; table should remain empty")
+	}
+
+	// At-cap update must succeed.
+	ctm.UpdateActorRefTable(originUid, 2,
+		[]string{"x", "y"},
+		[]uint32{10, 20},
+	)
+	got, err := ctm.LookupActorRef(originUid, 10)
+	if err != nil || got != "x" {
+		t.Errorf("at-cap update should succeed; got %q err %v", got, err)
+	}
+}
+
+// TestCompressionTableManager_ManifestsMax_RejectsOversize verifies the same
+// cap enforcement on the manifest dictionary.
+func TestCompressionTableManager_ManifestsMax_RejectsOversize(t *testing.T) {
+	nm := NewNodeManager(&gproto_remote.Address{Hostname: proto.String("local")}, 0)
+	router := actor.NewRouter(nm)
+	ctm := NewCompressionTableManager(router)
+	ctm.SetManifestsMax(1)
+
+	originUid := uint64(2)
+	ctm.UpdateManifestTable(originUid, 1,
+		[]string{"m1", "m2"},
+		[]uint32{1, 2},
+	)
+	if _, err := ctm.LookupManifest(originUid, 1); err == nil {
+		t.Error("over-cap manifest advertisement must be rejected")
+	}
+
+	ctm.UpdateManifestTable(originUid, 2,
+		[]string{"m1"},
+		[]uint32{7},
+	)
+	got, err := ctm.LookupManifest(originUid, 7)
+	if err != nil || got != "m1" {
+		t.Errorf("at-cap manifest update should succeed; got %q err %v", got, err)
+	}
+}
+
+// TestCompressionTableManager_AdvertisementScheduler_Fires verifies that the
+// advertisement scheduler invokes the registered callback at the configured
+// cadence for both actor-refs and manifests.
+func TestCompressionTableManager_AdvertisementScheduler_Fires(t *testing.T) {
+	nm := NewNodeManager(&gproto_remote.Address{Hostname: proto.String("local")}, 0)
+	router := actor.NewRouter(nm)
+	ctm := NewCompressionTableManager(router)
+
+	ctm.SetAdvertisementIntervals(15*time.Millisecond, 25*time.Millisecond)
+
+	var refTicks, manifestTicks atomic.Int32
+	ctm.SetAdvertiseCallback(func(isActorRef bool) {
+		if isActorRef {
+			refTicks.Add(1)
+		} else {
+			manifestTicks.Add(1)
+		}
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctm.StartAdvertisementScheduler(ctx)
+
+	// Run long enough to see multiple ticks of each.
+	time.Sleep(120 * time.Millisecond)
+	cancel()
+	time.Sleep(20 * time.Millisecond) // let goroutines exit
+
+	if r := refTicks.Load(); r < 3 {
+		t.Errorf("actor-ref scheduler fired %d times, want at least 3", r)
+	}
+	if m := manifestTicks.Load(); m < 2 {
+		t.Errorf("manifest scheduler fired %d times, want at least 2", m)
+	}
+}
+
+// TestCompressionTableManager_AdvertisementScheduler_ZeroIntervalSkipped
+// verifies a zero interval keeps that ticker dormant (no callback invocations).
+func TestCompressionTableManager_AdvertisementScheduler_ZeroIntervalSkipped(t *testing.T) {
+	nm := NewNodeManager(&gproto_remote.Address{Hostname: proto.String("local")}, 0)
+	router := actor.NewRouter(nm)
+	ctm := NewCompressionTableManager(router)
+
+	ctm.SetAdvertisementIntervals(0, 0)
+
+	var ticks atomic.Int32
+	ctm.SetAdvertiseCallback(func(bool) { ticks.Add(1) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctm.StartAdvertisementScheduler(ctx)
+
+	time.Sleep(40 * time.Millisecond)
+	if got := ticks.Load(); got != 0 {
+		t.Errorf("scheduler with zero intervals fired %d times, want 0", got)
 	}
 }

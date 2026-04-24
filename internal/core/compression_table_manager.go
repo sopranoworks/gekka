@@ -27,6 +27,25 @@ type CompressionTableManager struct {
 	manifestTable map[uint64]*CompressionTable
 	router        *actor.Router // needed to send acks back
 	flightRec     *FlightRecorder
+
+	// Configured caps (pekko.remote.artery.advanced.compression.*.max).
+	// Zero means "no cap". Updates whose key count exceeds these caps are
+	// rejected by UpdateActorRefTable / UpdateManifestTable.
+	actorRefsMax int
+	manifestsMax int
+
+	// Advertisement intervals
+	// (pekko.remote.artery.advanced.compression.*.advertisement-interval).
+	// Consumed by StartAdvertisementScheduler to drive the periodic
+	// advertisement ticker. Zero leaves the scheduler dormant.
+	actorRefsAdvInterval time.Duration
+	manifestsAdvInterval time.Duration
+
+	// advertiseCallback is invoked each tick of the advertisement scheduler
+	// with isActorRef=true for actor-ref ticks and false for manifest ticks.
+	// Tests set it to observe cadence; production sets it to the real sender
+	// once outbound advertisement is implemented.
+	advertiseCallback func(isActorRef bool)
 }
 
 // CompressionTable represents a single versioned dictionary of string -> uint32 mapping.
@@ -59,10 +78,89 @@ func newCompressionTable(version uint32, keys []string, values []uint32) *Compre
 	return ct
 }
 
+// SetActorRefsMax sets the cap on actor-ref compression table entries.
+// Zero disables the cap. Corresponds to
+// pekko.remote.artery.advanced.compression.actor-refs.max.
+func (ctm *CompressionTableManager) SetActorRefsMax(max int) {
+	ctm.mu.Lock()
+	ctm.actorRefsMax = max
+	ctm.mu.Unlock()
+}
+
+// SetManifestsMax sets the cap on manifest compression table entries.
+// Zero disables the cap. Corresponds to
+// pekko.remote.artery.advanced.compression.manifests.max.
+func (ctm *CompressionTableManager) SetManifestsMax(max int) {
+	ctm.mu.Lock()
+	ctm.manifestsMax = max
+	ctm.mu.Unlock()
+}
+
+// SetAdvertisementIntervals sets the cadences at which the advertisement
+// scheduler fires for actor-refs and manifests respectively. Corresponds to
+// pekko.remote.artery.advanced.compression.{actor-refs,manifests}.advertisement-interval.
+func (ctm *CompressionTableManager) SetAdvertisementIntervals(actorRefs, manifests time.Duration) {
+	ctm.mu.Lock()
+	ctm.actorRefsAdvInterval = actorRefs
+	ctm.manifestsAdvInterval = manifests
+	ctm.mu.Unlock()
+}
+
+// SetAdvertiseCallback registers the function invoked each advertisement
+// tick. isActorRef distinguishes actor-ref ticks (true) from manifest ticks
+// (false). Tests use this to observe scheduler cadence.
+func (ctm *CompressionTableManager) SetAdvertiseCallback(fn func(isActorRef bool)) {
+	ctm.mu.Lock()
+	ctm.advertiseCallback = fn
+	ctm.mu.Unlock()
+}
+
+// StartAdvertisementScheduler spawns two goroutines that invoke the
+// registered advertise callback at the configured actor-ref and manifest
+// advertisement intervals. A zero interval skips that ticker. The scheduler
+// stops when ctx is cancelled.
+func (ctm *CompressionTableManager) StartAdvertisementScheduler(ctx context.Context) {
+	ctm.mu.RLock()
+	actorRefs := ctm.actorRefsAdvInterval
+	manifests := ctm.manifestsAdvInterval
+	ctm.mu.RUnlock()
+
+	if actorRefs > 0 {
+		go ctm.runAdvertisementTicker(ctx, actorRefs, true)
+	}
+	if manifests > 0 {
+		go ctm.runAdvertisementTicker(ctx, manifests, false)
+	}
+}
+
+func (ctm *CompressionTableManager) runAdvertisementTicker(ctx context.Context, interval time.Duration, isActorRef bool) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			ctm.mu.RLock()
+			fn := ctm.advertiseCallback
+			ctm.mu.RUnlock()
+			if fn != nil {
+				fn(isActorRef)
+			}
+		}
+	}
+}
+
 // UpdateActorRefTable updates the actor ref dictionary for a specific originUid.
+// Updates whose key count exceeds ActorRefsMax are rejected.
 func (ctm *CompressionTableManager) UpdateActorRefTable(originUid uint64, version uint32, keys []string, values []uint32) {
 	ctm.mu.Lock()
 	defer ctm.mu.Unlock()
+
+	if ctm.actorRefsMax > 0 && len(keys) > ctm.actorRefsMax {
+		log.Printf("CompressionTableManager: rejected ActorRef table update for originUid %d — %d keys exceeds cap %d", originUid, len(keys), ctm.actorRefsMax)
+		return
+	}
 
 	existing, ok := ctm.actorRefTable[originUid]
 	if !ok || version > existing.Version {
@@ -74,9 +172,15 @@ func (ctm *CompressionTableManager) UpdateActorRefTable(originUid uint64, versio
 }
 
 // UpdateManifestTable updates the manifest dictionary for a specific originUid.
+// Updates whose key count exceeds ManifestsMax are rejected.
 func (ctm *CompressionTableManager) UpdateManifestTable(originUid uint64, version uint32, keys []string, values []uint32) {
 	ctm.mu.Lock()
 	defer ctm.mu.Unlock()
+
+	if ctm.manifestsMax > 0 && len(keys) > ctm.manifestsMax {
+		log.Printf("CompressionTableManager: rejected Manifest table update for originUid %d — %d keys exceeds cap %d", originUid, len(keys), ctm.manifestsMax)
+		return
+	}
 
 	existing, ok := ctm.manifestTable[originUid]
 	if !ok || version > existing.Version {

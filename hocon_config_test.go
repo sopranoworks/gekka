@@ -2227,3 +2227,192 @@ pekko {
 		t.Errorf("OutboundMaxRestarts = %d, want 11", cfg.ArteryAdvanced.OutboundMaxRestarts)
 	}
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Artery advanced: compression + TCP + buffers (round2 session 04)
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestHOCON_ArteryAdvanced_CompressionActorRefsMax(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery {
+    canonical { hostname = "127.0.0.1", port = 2552 }
+    advanced { compression.actor-refs.max = 512 }
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.ArteryAdvanced.CompressionActorRefsMax != 512 {
+		t.Errorf("CompressionActorRefsMax = %d, want 512", cfg.ArteryAdvanced.CompressionActorRefsMax)
+	}
+}
+
+func TestHOCON_ArteryAdvanced_CompressionActorRefsAdvertisementInterval(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery {
+    canonical { hostname = "127.0.0.1", port = 2552 }
+    advanced { compression.actor-refs.advertisement-interval = 30s }
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.ArteryAdvanced.CompressionActorRefsAdvertisementInterval != 30*time.Second {
+		t.Errorf("CompressionActorRefsAdvertisementInterval = %v, want 30s",
+			cfg.ArteryAdvanced.CompressionActorRefsAdvertisementInterval)
+	}
+}
+
+func TestHOCON_ArteryAdvanced_CompressionManifestsMax(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery {
+    canonical { hostname = "127.0.0.1", port = 2552 }
+    advanced { compression.manifests.max = 1024 }
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.ArteryAdvanced.CompressionManifestsMax != 1024 {
+		t.Errorf("CompressionManifestsMax = %d, want 1024", cfg.ArteryAdvanced.CompressionManifestsMax)
+	}
+}
+
+func TestHOCON_ArteryAdvanced_CompressionManifestsAdvertisementInterval(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery {
+    canonical { hostname = "127.0.0.1", port = 2552 }
+    advanced { compression.manifests.advertisement-interval = 90s }
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.ArteryAdvanced.CompressionManifestsAdvertisementInterval != 90*time.Second {
+		t.Errorf("CompressionManifestsAdvertisementInterval = %v, want 90s",
+			cfg.ArteryAdvanced.CompressionManifestsAdvertisementInterval)
+	}
+}
+
+func TestHOCON_ArteryAdvanced_TcpConnectionTimeout(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery {
+    canonical { hostname = "127.0.0.1", port = 2552 }
+    advanced { tcp.connection-timeout = 12s }
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.ArteryAdvanced.TcpConnectionTimeout != 12*time.Second {
+		t.Errorf("TcpConnectionTimeout = %v, want 12s", cfg.ArteryAdvanced.TcpConnectionTimeout)
+	}
+}
+
+func TestHOCON_ArteryAdvanced_TcpOutboundClientHostname(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery {
+    canonical { hostname = "127.0.0.1", port = 2552 }
+    advanced { tcp.outbound-client-hostname = "10.1.2.3" }
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.ArteryAdvanced.TcpOutboundClientHostname != "10.1.2.3" {
+		t.Errorf("TcpOutboundClientHostname = %q, want 10.1.2.3",
+			cfg.ArteryAdvanced.TcpOutboundClientHostname)
+	}
+}
+
+func TestHOCON_ArteryAdvanced_BufferPoolSize(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery {
+    canonical { hostname = "127.0.0.1", port = 2552 }
+    advanced { buffer-pool-size = 64 }
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.ArteryAdvanced.BufferPoolSize != 64 {
+		t.Errorf("BufferPoolSize = %d, want 64", cfg.ArteryAdvanced.BufferPoolSize)
+	}
+}
+
+func TestHOCON_ArteryAdvanced_MaximumLargeFrameSize(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery {
+    canonical { hostname = "127.0.0.1", port = 2552 }
+    advanced { maximum-large-frame-size = "4 MiB" }
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.ArteryAdvanced.MaximumLargeFrameSize != 4*1024*1024 {
+		t.Errorf("MaximumLargeFrameSize = %d, want 4 MiB (%d)",
+			cfg.ArteryAdvanced.MaximumLargeFrameSize, 4*1024*1024)
+	}
+}
+
+func TestHOCON_ArteryAdvanced_LargeBufferPoolSize(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery {
+    canonical { hostname = "127.0.0.1", port = 2552 }
+    advanced { large-buffer-pool-size = 64 }
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.ArteryAdvanced.LargeBufferPoolSize != 64 {
+		t.Errorf("LargeBufferPoolSize = %d, want 64", cfg.ArteryAdvanced.LargeBufferPoolSize)
+	}
+}
+
+func TestHOCON_ArteryAdvanced_OutboundLargeMessageQueueSize(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery {
+    canonical { hostname = "127.0.0.1", port = 2552 }
+    advanced { outbound-large-message-queue-size = 1024 }
+  }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.ArteryAdvanced.OutboundLargeMessageQueueSize != 1024 {
+		t.Errorf("OutboundLargeMessageQueueSize = %d, want 1024",
+			cfg.ArteryAdvanced.OutboundLargeMessageQueueSize)
+	}
+}

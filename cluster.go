@@ -844,6 +844,73 @@ type ArteryAdvancedConfig struct {
 	// Corresponds to pekko.remote.artery.advanced.outbound-max-restarts.
 	// Pekko default: 5. Zero means use the default.
 	OutboundMaxRestarts int
+
+	// CompressionActorRefsMax is the maximum number of compressed actor-ref
+	// entries per received advertisement. Rejected by the
+	// CompressionTableManager when the incoming key count exceeds the cap.
+	// Corresponds to pekko.remote.artery.advanced.compression.actor-refs.max.
+	// Pekko default: 256. Zero means use the default.
+	CompressionActorRefsMax int
+
+	// CompressionActorRefsAdvertisementInterval is the cadence at which the
+	// local actor-ref compression table is advertised to remote peers.
+	// Consumed by CompressionTableManager.StartAdvertisementScheduler.
+	// Corresponds to pekko.remote.artery.advanced.compression.actor-refs.advertisement-interval.
+	// Pekko default: 1m. Zero means use the default.
+	CompressionActorRefsAdvertisementInterval time.Duration
+
+	// CompressionManifestsMax is the maximum number of compressed manifest
+	// entries per received advertisement. Rejected by the
+	// CompressionTableManager when the incoming key count exceeds the cap.
+	// Corresponds to pekko.remote.artery.advanced.compression.manifests.max.
+	// Pekko default: 256. Zero means use the default.
+	CompressionManifestsMax int
+
+	// CompressionManifestsAdvertisementInterval is the cadence at which the
+	// local manifest compression table is advertised to remote peers.
+	// Consumed by CompressionTableManager.StartAdvertisementScheduler.
+	// Corresponds to pekko.remote.artery.advanced.compression.manifests.advertisement-interval.
+	// Pekko default: 1m. Zero means use the default.
+	CompressionManifestsAdvertisementInterval time.Duration
+
+	// TcpConnectionTimeout is the TCP dial timeout for outbound Artery
+	// connections (threaded into the TcpClient dialer and the DialRemote
+	// "wait for association" poll).
+	// Corresponds to pekko.remote.artery.advanced.tcp.connection-timeout.
+	// Pekko default: 5s. Zero means use the default.
+	TcpConnectionTimeout time.Duration
+
+	// TcpOutboundClientHostname, when non-empty, binds outbound TCP
+	// connections to this local source hostname (net.Dialer.LocalAddr).
+	// Empty means the OS chooses the local address.
+	// Corresponds to pekko.remote.artery.advanced.tcp.outbound-client-hostname.
+	// Pekko default: "" (unset).
+	TcpOutboundClientHostname string
+
+	// BufferPoolSize is the size of the shared receive buffer pool per
+	// stream. Recorded on NodeManager for future buffer-pool consumers.
+	// Corresponds to pekko.remote.artery.advanced.buffer-pool-size.
+	// Pekko default: 128. Zero means use the default.
+	BufferPoolSize int
+
+	// MaximumLargeFrameSize is the max frame payload for the large-message
+	// stream (streamId=3). Consumed by the large-stream read/write paths.
+	// Corresponds to pekko.remote.artery.advanced.maximum-large-frame-size.
+	// Pekko default: 2 MiB. Zero means use the default.
+	MaximumLargeFrameSize int
+
+	// LargeBufferPoolSize is the size of the shared receive buffer pool for
+	// the large-message stream. Recorded on NodeManager for future consumers.
+	// Corresponds to pekko.remote.artery.advanced.large-buffer-pool-size.
+	// Pekko default: 32. Zero means use the default.
+	LargeBufferPoolSize int
+
+	// OutboundLargeMessageQueueSize is the outbox capacity for the
+	// large-message stream (streamId=3). Sizes the per-association outbox
+	// channel when the large stream is opened.
+	// Corresponds to pekko.remote.artery.advanced.outbound-large-message-queue-size.
+	// Pekko default: 256. Zero means use the default.
+	OutboundLargeMessageQueueSize int
 }
 
 // TelemetryConfig controls the built-in OTEL instrumentation hooks.
@@ -1227,6 +1294,36 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	}
 	if cfg.ArteryAdvanced.OutboundMaxRestarts > 0 {
 		nm.OutboundMaxRestarts = cfg.ArteryAdvanced.OutboundMaxRestarts
+	}
+	if cfg.ArteryAdvanced.CompressionActorRefsMax > 0 {
+		nm.CompressionActorRefsMax = cfg.ArteryAdvanced.CompressionActorRefsMax
+	}
+	if cfg.ArteryAdvanced.CompressionActorRefsAdvertisementInterval > 0 {
+		nm.CompressionActorRefsAdvertisementInterval = cfg.ArteryAdvanced.CompressionActorRefsAdvertisementInterval
+	}
+	if cfg.ArteryAdvanced.CompressionManifestsMax > 0 {
+		nm.CompressionManifestsMax = cfg.ArteryAdvanced.CompressionManifestsMax
+	}
+	if cfg.ArteryAdvanced.CompressionManifestsAdvertisementInterval > 0 {
+		nm.CompressionManifestsAdvertisementInterval = cfg.ArteryAdvanced.CompressionManifestsAdvertisementInterval
+	}
+	if cfg.ArteryAdvanced.TcpConnectionTimeout > 0 {
+		nm.TcpConnectionTimeout = cfg.ArteryAdvanced.TcpConnectionTimeout
+	}
+	if cfg.ArteryAdvanced.TcpOutboundClientHostname != "" {
+		nm.TcpOutboundClientHostname = cfg.ArteryAdvanced.TcpOutboundClientHostname
+	}
+	if cfg.ArteryAdvanced.BufferPoolSize > 0 {
+		nm.BufferPoolSize = cfg.ArteryAdvanced.BufferPoolSize
+	}
+	if cfg.ArteryAdvanced.MaximumLargeFrameSize > 0 {
+		nm.MaximumLargeFrameSize = cfg.ArteryAdvanced.MaximumLargeFrameSize
+	}
+	if cfg.ArteryAdvanced.LargeBufferPoolSize > 0 {
+		nm.LargeBufferPoolSize = cfg.ArteryAdvanced.LargeBufferPoolSize
+	}
+	if cfg.ArteryAdvanced.OutboundLargeMessageQueueSize > 0 {
+		nm.OutboundLargeMessageQueueSize = cfg.ArteryAdvanced.OutboundLargeMessageQueueSize
 	}
 	if len(cfg.AcceptProtocolNames) > 0 {
 		nm.AcceptProtocolNames = cfg.AcceptProtocolNames

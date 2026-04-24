@@ -39,6 +39,11 @@ type TcpClientConfig struct {
 	IdleTimeout     time.Duration
 	KeepAlive       bool
 	KeepAlivePeriod time.Duration // 0 => OS default
+
+	// LocalAddr, when non-nil, sets the local source address used by the
+	// dialer (net.Dialer.LocalAddr). Corresponds to
+	// pekko.remote.artery.advanced.tcp.outbound-client-hostname.
+	LocalAddr *net.TCPAddr
 }
 
 type TcpClient struct {
@@ -68,6 +73,9 @@ func (c *TcpClient) Connect(ctx context.Context) error {
 	}
 	d := net.Dialer{
 		Timeout: c.cfg.DialTimeout,
+	}
+	if c.cfg.LocalAddr != nil {
+		d.LocalAddr = c.cfg.LocalAddr
 	}
 
 	if c.cfg.KeepAlive {

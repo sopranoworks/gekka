@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/cluster/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -195,6 +196,62 @@ func TestReceptionistConfigDefaults(t *testing.T) {
 		cfg.Name = defaults.Name
 	}
 	assert.Equal(t, "receptionist", cfg.Name)
+}
+
+// fakeSelf is a synchronous actor.Ref used to drive a ClusterClient without a
+// real mailbox.  Tell delegates straight back into Receive so heartbeatTick
+// messages are processed inline.
+type fakeSelf struct {
+	cc   *client.ClusterClient
+	path string
+}
+
+func (s *fakeSelf) Tell(msg any, _ ...actor.Ref) { s.cc.Receive(msg) }
+func (s *fakeSelf) Path() string                 { return s.path }
+
+// countHeartbeats returns how many Heartbeat messages the router has received.
+func (r *fakeRouter) countHeartbeats() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, m := range r.msgs {
+		if _, ok := m.msg.(client.Heartbeat); ok {
+			n++
+		}
+	}
+	return n
+}
+
+// TestClusterClient_HeartbeatIntervalGovernsCadence verifies that
+// cfg.HeartbeatInterval actually drives the cadence of Heartbeat messages
+// dispatched through the router.  This is the round-2 session 06 behavior
+// test: HOCON heartbeat-interval reaches the timer and observable HB cadence.
+func TestClusterClient_HeartbeatIntervalGovernsCadence(t *testing.T) {
+	router := &fakeRouter{}
+	cfg := client.DefaultConfig()
+	cfg.InitialContacts = []string{"pekko://Sys@host:2552/system/receptionist"}
+	cfg.HeartbeatInterval = 25 * time.Millisecond
+	// Generous pause so the deadline check does not rotate the contact while
+	// we are counting heartbeats.
+	cfg.AcceptableHeartbeatPause = 5 * time.Second
+	cfg.RefreshContactsInterval = 5 * time.Second
+
+	cc := client.NewClusterClient(cfg, router)
+	self := &fakeSelf{cc: cc, path: "pekko://Sys@host:9999/user/cc"}
+	cc.SetSelf(self)
+
+	cc.PreStart()
+	defer cc.PostStop()
+
+	// Mark connection established so sendHeartbeat actually fires.
+	cc.Receive(client.Contacts{Paths: []string{"pekko://Sys@host:2552/system/receptionist"}})
+
+	// Five intervals (~125ms) — expect at least 3 heartbeats given a 25ms tick.
+	time.Sleep(150 * time.Millisecond)
+
+	got := router.countHeartbeats()
+	require.GreaterOrEqual(t, got, 3,
+		"with HeartbeatInterval=25ms over 150ms expected ≥3 heartbeats, got %d", got)
 }
 
 // TestClusterClientContactFailover exercises the failover logic: the first

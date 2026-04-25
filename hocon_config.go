@@ -860,6 +860,70 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		nodeCfg.PubSub.SendToDeadLettersWhenNoSubscribers = v != "off" && v != "false"
 	}
 
+	// ── Cluster Client ─────────────────────────────────────────────────────
+	// pekko.cluster.client.* — parsed into ClusterConfig.ClusterClient (re-export
+	// of cluster/client.Config). Defaults match Pekko reference.conf.
+	nodeCfg.ClusterClient.EstablishingGetContactsInterval = 3 * time.Second
+	nodeCfg.ClusterClient.RefreshContactsInterval = 60 * time.Second
+	nodeCfg.ClusterClient.HeartbeatInterval = 2 * time.Second
+	nodeCfg.ClusterClient.AcceptableHeartbeatPause = 13 * time.Second
+	nodeCfg.ClusterClient.BufferSize = 1000
+	{
+		var clientTmp struct {
+			Pekko []string `hocon:"pekko.cluster.client.initial-contacts"`
+			Akka  []string `hocon:"akka.cluster.client.initial-contacts"`
+		}
+		_ = cfg.Unmarshal(&clientTmp)
+		var contacts []string
+		if prefix == "pekko" && len(clientTmp.Pekko) > 0 {
+			contacts = clientTmp.Pekko
+		} else if prefix == "akka" && len(clientTmp.Akka) > 0 {
+			contacts = clientTmp.Akka
+		}
+		if len(contacts) > 0 {
+			cleaned := make([]string, 0, len(contacts))
+			for _, c := range contacts {
+				cleaned = append(cleaned, strings.Trim(strings.TrimSpace(c), `"`))
+			}
+			nodeCfg.ClusterClient.InitialContacts = cleaned
+		}
+	}
+	clientPrefix := prefix + ".cluster.client"
+	if v, err := cfg.GetString(clientPrefix + ".establishing-get-contacts-interval"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.ClusterClient.EstablishingGetContactsInterval = d
+		}
+	}
+	if v, err := cfg.GetString(clientPrefix + ".refresh-contacts-interval"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.ClusterClient.RefreshContactsInterval = d
+		}
+	}
+	if v, err := cfg.GetString(clientPrefix + ".heartbeat-interval"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.ClusterClient.HeartbeatInterval = d
+		}
+	}
+	if v, err := cfg.GetString(clientPrefix + ".acceptable-heartbeat-pause"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.ClusterClient.AcceptableHeartbeatPause = d
+		}
+	}
+	if v, err := cfg.GetInt(clientPrefix + ".buffer-size"); err == nil {
+		nodeCfg.ClusterClient.BufferSize = v
+	}
+	if v, err := cfg.GetString(clientPrefix + ".reconnect-timeout"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		switch v {
+		case "off", "false", "":
+			nodeCfg.ClusterClient.ReconnectTimeout = 0
+		default:
+			if d, parseErr := parseHOCONDuration(v); parseErr == nil {
+				nodeCfg.ClusterClient.ReconnectTimeout = d
+			}
+		}
+	}
+
 	// ��─ Per-Role Min Nr Of Members ──────────────────────────────────────────
 	// Parse pekko.cluster.role.{name}.min-nr-of-members for each role.
 	rolePrefix := prefix + ".cluster.role"

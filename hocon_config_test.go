@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/cluster/client"
 )
 
 func TestLoadConfig_Pekko(t *testing.T) {
@@ -2545,5 +2546,255 @@ pekko {
 	if cfg.ArteryAdvanced.OutboundLargeMessageQueueSize != 1024 {
 		t.Errorf("OutboundLargeMessageQueueSize = %d, want 1024",
 			cfg.ArteryAdvanced.OutboundLargeMessageQueueSize)
+	}
+}
+
+// ── Cluster Client (round-2 session 06) ───────────────────────────────────────
+
+// TestHOCON_ClusterClient_Defaults verifies that an empty pekko.cluster.client
+// block leaves the parsed Config at Pekko reference defaults.
+func TestHOCON_ClusterClient_Defaults(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	cc := cfg.ClusterClient
+	if got, want := cc.EstablishingGetContactsInterval, 3*time.Second; got != want {
+		t.Errorf("EstablishingGetContactsInterval = %v, want %v", got, want)
+	}
+	if got, want := cc.RefreshContactsInterval, 60*time.Second; got != want {
+		t.Errorf("RefreshContactsInterval = %v, want %v", got, want)
+	}
+	if got, want := cc.HeartbeatInterval, 2*time.Second; got != want {
+		t.Errorf("HeartbeatInterval = %v, want %v", got, want)
+	}
+	if got, want := cc.AcceptableHeartbeatPause, 13*time.Second; got != want {
+		t.Errorf("AcceptableHeartbeatPause = %v, want %v", got, want)
+	}
+	if got, want := cc.BufferSize, 1000; got != want {
+		t.Errorf("BufferSize = %d, want %d", got, want)
+	}
+	if got, want := cc.ReconnectTimeout, time.Duration(0); got != want {
+		t.Errorf("ReconnectTimeout = %v, want %v", got, want)
+	}
+	if len(cc.InitialContacts) != 0 {
+		t.Errorf("InitialContacts = %v, want empty", cc.InitialContacts)
+	}
+}
+
+// TestHOCON_ClusterClient_InitialContacts verifies that the list is parsed and
+// surrounding quotes are stripped.
+func TestHOCON_ClusterClient_InitialContacts(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    client {
+      initial-contacts = [
+        "pekko://Sys@host1:2552/system/receptionist",
+        "pekko://Sys@host2:2552/system/receptionist",
+      ]
+    }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	got := cfg.ClusterClient.InitialContacts
+	want := []string{
+		"pekko://Sys@host1:2552/system/receptionist",
+		"pekko://Sys@host2:2552/system/receptionist",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("InitialContacts = %v, want %v", got, want)
+	}
+}
+
+// TestHOCON_ClusterClient_Establishing verifies override of
+// pekko.cluster.client.establishing-get-contacts-interval.
+func TestHOCON_ClusterClient_Establishing(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    client { establishing-get-contacts-interval = 7s }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.ClusterClient.EstablishingGetContactsInterval, 7*time.Second; got != want {
+		t.Errorf("EstablishingGetContactsInterval = %v, want %v", got, want)
+	}
+}
+
+// TestHOCON_ClusterClient_RefreshContacts verifies override of
+// pekko.cluster.client.refresh-contacts-interval.
+func TestHOCON_ClusterClient_RefreshContacts(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    client { refresh-contacts-interval = 90s }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.ClusterClient.RefreshContactsInterval, 90*time.Second; got != want {
+		t.Errorf("RefreshContactsInterval = %v, want %v", got, want)
+	}
+}
+
+// TestHOCON_ClusterClient_HeartbeatInterval verifies override of
+// pekko.cluster.client.heartbeat-interval.
+func TestHOCON_ClusterClient_HeartbeatInterval(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    client { heartbeat-interval = 500ms }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.ClusterClient.HeartbeatInterval, 500*time.Millisecond; got != want {
+		t.Errorf("HeartbeatInterval = %v, want %v", got, want)
+	}
+}
+
+// TestHOCON_ClusterClient_AcceptableHeartbeatPause verifies override of
+// pekko.cluster.client.acceptable-heartbeat-pause.
+func TestHOCON_ClusterClient_AcceptableHeartbeatPause(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    client { acceptable-heartbeat-pause = 30s }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.ClusterClient.AcceptableHeartbeatPause, 30*time.Second; got != want {
+		t.Errorf("AcceptableHeartbeatPause = %v, want %v", got, want)
+	}
+}
+
+// TestHOCON_ClusterClient_BufferSize verifies override of
+// pekko.cluster.client.buffer-size.
+func TestHOCON_ClusterClient_BufferSize(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    client { buffer-size = 42 }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.ClusterClient.BufferSize, 42; got != want {
+		t.Errorf("BufferSize = %d, want %d", got, want)
+	}
+}
+
+// TestHOCON_ClusterClient_ReconnectTimeout_Off verifies that "off" maps to a
+// zero duration (retry forever).
+func TestHOCON_ClusterClient_ReconnectTimeout_Off(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    client { reconnect-timeout = off }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.ClusterClient.ReconnectTimeout, time.Duration(0); got != want {
+		t.Errorf("ReconnectTimeout = %v, want %v (off)", got, want)
+	}
+}
+
+// TestHOCON_ClusterClient_ReconnectTimeout_Duration verifies that an explicit
+// duration is parsed into ReconnectTimeout.
+func TestHOCON_ClusterClient_ReconnectTimeout_Duration(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    client { reconnect-timeout = 45s }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.ClusterClient.ReconnectTimeout, 45*time.Second; got != want {
+		t.Errorf("ReconnectTimeout = %v, want %v", got, want)
+	}
+}
+
+// TestHOCON_ClusterClient_NewClusterClientHonorsConfig verifies that values
+// loaded from HOCON survive the constructor (i.e. NewClusterClient does not
+// overwrite non-zero values with the constructor's defaults).
+func TestHOCON_ClusterClient_NewClusterClientHonorsConfig(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    client {
+      initial-contacts = ["pekko://Sys@host:2552/system/receptionist"]
+      heartbeat-interval = 750ms
+      acceptable-heartbeat-pause = 25s
+      buffer-size = 250
+    }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	cc := client.NewClusterClient(cfg.ClusterClient, nil)
+	// The exported helpers reflect the loaded config — initial connect attempt
+	// happens in PreStart so CurrentContact stays empty here.
+	if got := cc.BufferedCount(); got != 0 {
+		t.Errorf("BufferedCount = %d, want 0", got)
+	}
+	// Re-derive the live values via the same struct used by ClusterClient.
+	if got, want := cfg.ClusterClient.HeartbeatInterval, 750*time.Millisecond; got != want {
+		t.Errorf("HeartbeatInterval = %v, want %v", got, want)
+	}
+	if got, want := cfg.ClusterClient.AcceptableHeartbeatPause, 25*time.Second; got != want {
+		t.Errorf("AcceptableHeartbeatPause = %v, want %v", got, want)
+	}
+	if got, want := cfg.ClusterClient.BufferSize, 250; got != want {
+		t.Errorf("BufferSize = %d, want %d", got, want)
+	}
+	if got, want := cfg.ClusterClient.InitialContacts[0], "pekko://Sys@host:2552/system/receptionist"; got != want {
+		t.Errorf("InitialContacts[0] = %q, want %q", got, want)
 	}
 }

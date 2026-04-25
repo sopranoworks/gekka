@@ -227,13 +227,13 @@ Legend:
 
 | Path | Pekko Default | Gekka? | Notes |
 |---|---|---|---|
-| `initial-contacts` | `[]` | ✅ | Via cluster/client/ |
-| `establishing-get-contacts-interval` | `3s` | ✅ | |
-| `refresh-contacts-interval` | `60s` | ✅ | |
-| `heartbeat-interval` | `2s` | ✅ | |
-| `acceptable-heartbeat-pause` | `13s` | ✅ | |
-| `buffer-size` | `1000` | ✅ | |
-| `reconnect-timeout` | `off` | ✅ | |
+| `initial-contacts` | `[]` | ✅ | Loaded into `ClusterConfig.ClusterClient.InitialContacts` (hocon_config.go) |
+| `establishing-get-contacts-interval` | `3s` | ✅ | `ClusterConfig.ClusterClient.EstablishingGetContactsInterval` |
+| `refresh-contacts-interval` | `60s` | ✅ | `ClusterConfig.ClusterClient.RefreshContactsInterval` |
+| `heartbeat-interval` | `2s` | ✅ | `ClusterConfig.ClusterClient.HeartbeatInterval` (drives ticker cadence) |
+| `acceptable-heartbeat-pause` | `13s` | ✅ | `ClusterConfig.ClusterClient.AcceptableHeartbeatPause` |
+| `buffer-size` | `1000` | ✅ | `ClusterConfig.ClusterClient.BufferSize` |
+| `reconnect-timeout` | `off` | ✅ | `ClusterConfig.ClusterClient.ReconnectTimeout` (`off`=0=retry forever) |
 
 ### pekko.cluster.client.receptionist
 

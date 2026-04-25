@@ -29,6 +29,7 @@ import (
 	"github.com/sopranoworks/gekka/actor/typed"
 	"github.com/sopranoworks/gekka/actor/typed/receptionist"
 	gcluster "github.com/sopranoworks/gekka/cluster"
+	"github.com/sopranoworks/gekka/cluster/client"
 	"github.com/sopranoworks/gekka/cluster/ddata"
 	ddata_typed "github.com/sopranoworks/gekka/cluster/ddata/typed"
 	"github.com/sopranoworks/gekka/cluster/singleton"
@@ -510,6 +511,14 @@ type ClusterConfig struct {
 	// Corresponds to pekko.cluster.pub-sub.*
 	PubSub PubSubConfig
 
+	// ClusterClient holds the cluster-client extension settings parsed from
+	// HOCON.  Corresponds to pekko.cluster.client.* — used when constructing
+	// a client.NewClusterClient for an external (non-cluster-member) process:
+	//
+	//	cfg, _ := gekka.LoadConfig("client.conf")
+	//	cc := client.NewClusterClient(cfg.ClusterClient, router)
+	ClusterClient ClusterClientConfig
+
 	// DistributedData configures the Distributed Data Replicator (v0.10.0).
 	DistributedData DistributedDataConfig
 
@@ -666,6 +675,11 @@ type PersistenceConfig struct {
 // SBRConfig is a re-export of cluster.SBRConfig for use in ClusterConfig.
 // Import gekka directly — you do not need to import the cluster sub-package.
 type SBRConfig = gcluster.SBRConfig
+
+// ClusterClientConfig is a re-export of cluster/client.Config for use in
+// ClusterConfig.  Import gekka directly — you do not need to import the
+// cluster/client sub-package to read the values populated by LoadConfig.
+type ClusterClientConfig = client.Config
 
 // FailureDetectorConfig is a re-export of cluster.FailureDetectorConfig.
 // It tunes the Phi Accrual Failure Detector parameters.

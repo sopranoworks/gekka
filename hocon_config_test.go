@@ -1382,6 +1382,127 @@ pekko {
 	}
 }
 
+// TestParseHOCON_ArteryDebugObservability verifies HOCON parsing for the 5
+// Round-2 Session 09 Artery debug/observability paths.
+func TestParseHOCON_ArteryDebugObservability(t *testing.T) {
+	hocon := `
+pekko {
+  remote.artery {
+    canonical {
+      hostname = "127.0.0.1"
+      port = 2552
+    }
+    bind {
+      bind-timeout = 250ms
+    }
+    log-received-messages = on
+    log-sent-messages = on
+    log-frame-size-exceeding = "4 KiB"
+    propagate-harmless-quarantine-events = on
+  }
+  cluster.seed-nodes = []
+}
+`
+	cfg, err := ParseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("ParseHOCONString: %v", err)
+	}
+	if cfg.BindTimeout != 250*time.Millisecond {
+		t.Errorf("BindTimeout = %v, want 250ms", cfg.BindTimeout)
+	}
+	if !cfg.LogReceivedMessages {
+		t.Error("LogReceivedMessages = false, want true")
+	}
+	if !cfg.LogSentMessages {
+		t.Error("LogSentMessages = false, want true")
+	}
+	if cfg.LogFrameSizeExceeding != 4096 {
+		t.Errorf("LogFrameSizeExceeding = %d, want 4096 (4 KiB)", cfg.LogFrameSizeExceeding)
+	}
+	if !cfg.PropagateHarmlessQuarantineEvents {
+		t.Error("PropagateHarmlessQuarantineEvents = false, want true")
+	}
+}
+
+// TestParseHOCON_ArteryDebugObservability_Defaults verifies the parsed values
+// stay at zero when the HOCON omits the new keys (matches Pekko defaults).
+func TestParseHOCON_ArteryDebugObservability_Defaults(t *testing.T) {
+	hocon := `
+pekko {
+  remote.artery.canonical {
+    hostname = "127.0.0.1"
+    port = 2552
+  }
+  cluster.seed-nodes = []
+}
+`
+	cfg, err := ParseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("ParseHOCONString: %v", err)
+	}
+	if cfg.BindTimeout != 0 {
+		t.Errorf("BindTimeout default = %v, want 0", cfg.BindTimeout)
+	}
+	if cfg.LogReceivedMessages {
+		t.Error("LogReceivedMessages default = true, want false")
+	}
+	if cfg.LogSentMessages {
+		t.Error("LogSentMessages default = true, want false")
+	}
+	if cfg.LogFrameSizeExceeding != 0 {
+		t.Errorf("LogFrameSizeExceeding default = %d, want 0", cfg.LogFrameSizeExceeding)
+	}
+	if cfg.PropagateHarmlessQuarantineEvents {
+		t.Error("PropagateHarmlessQuarantineEvents default = true, want false")
+	}
+}
+
+// TestParseHOCON_LogFrameSizeExceedingOff verifies that "off" maps to 0.
+func TestParseHOCON_LogFrameSizeExceedingOff(t *testing.T) {
+	hocon := `
+pekko {
+  remote.artery {
+    canonical {
+      hostname = "127.0.0.1"
+      port = 2552
+    }
+    log-frame-size-exceeding = off
+  }
+  cluster.seed-nodes = []
+}
+`
+	cfg, err := ParseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("ParseHOCONString: %v", err)
+	}
+	if cfg.LogFrameSizeExceeding != 0 {
+		t.Errorf("LogFrameSizeExceeding = %d, want 0 (off)", cfg.LogFrameSizeExceeding)
+	}
+}
+
+// TestParseHOCON_LogFrameSizeExceedingPlainInt verifies plain-int form.
+func TestParseHOCON_LogFrameSizeExceedingPlainInt(t *testing.T) {
+	hocon := `
+pekko {
+  remote.artery {
+    canonical {
+      hostname = "127.0.0.1"
+      port = 2552
+    }
+    log-frame-size-exceeding = 8192
+  }
+  cluster.seed-nodes = []
+}
+`
+	cfg, err := ParseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("ParseHOCONString: %v", err)
+	}
+	if cfg.LogFrameSizeExceeding != 8192 {
+		t.Errorf("LogFrameSizeExceeding = %d, want 8192", cfg.LogFrameSizeExceeding)
+	}
+}
+
 func TestHOCON_SingletonConfig(t *testing.T) {
 	cfg, err := parseHOCONString(`
 pekko {

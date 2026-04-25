@@ -707,6 +707,40 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 			}
 		}
 	}
+	if v, err := cfg.GetString(arteryPrefix + ".bind.bind-timeout"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.BindTimeout = d
+		}
+	}
+
+	// ── Artery debug/observability ─────────────────────────────────────────
+	if v, err := cfg.GetString(arteryPrefix + ".log-received-messages"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		nodeCfg.LogReceivedMessages = v == "on" || v == "true"
+	}
+	if v, err := cfg.GetString(arteryPrefix + ".log-sent-messages"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		nodeCfg.LogSentMessages = v == "on" || v == "true"
+	}
+	if v, err := cfg.GetString(arteryPrefix + ".log-frame-size-exceeding"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		switch v {
+		case "", "off", "false":
+			nodeCfg.LogFrameSizeExceeding = 0
+		default:
+			// Quoted string like "4 KiB" or "4KiB" — parse via byte-size helper.
+			if n, parseErr := parseHOCONByteSize(v); parseErr == nil {
+				nodeCfg.LogFrameSizeExceeding = int64(n)
+			}
+		}
+	} else if n, err := cfg.GetInt(arteryPrefix + ".log-frame-size-exceeding"); err == nil {
+		// Plain integer (e.g. `log-frame-size-exceeding = 4096`).
+		nodeCfg.LogFrameSizeExceeding = int64(n)
+	}
+	if v, err := cfg.GetString(arteryPrefix + ".propagate-harmless-quarantine-events"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		nodeCfg.PropagateHarmlessQuarantineEvents = v == "on" || v == "true"
+	}
 
 	// ── App Version ─────────────────────────────────────────────────────────
 	if v, err := cfg.GetString(prefix + ".cluster.app-version"); err == nil {

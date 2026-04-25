@@ -371,6 +371,31 @@ type NodeManager struct {
 	// Default: ["pekko", "akka"].
 	AcceptProtocolNames []string
 
+	// LogReceivedMessages enables DEBUG-level logging of inbound user messages.
+	// Corresponds to pekko.remote.artery.log-received-messages.
+	LogReceivedMessages bool
+
+	// LogSentMessages enables DEBUG-level logging of outbound user messages.
+	// Corresponds to pekko.remote.artery.log-sent-messages.
+	LogSentMessages bool
+
+	// LogFrameSizeExceeding emits a warning when an outbound payload exceeds
+	// this many bytes (0 = off).
+	// Corresponds to pekko.remote.artery.log-frame-size-exceeding.
+	LogFrameSizeExceeding int64
+
+	// PropagateHarmlessQuarantineEvents propagates harmless quarantine events
+	// (legacy Pekko 1.x behavior). Default off.
+	// Corresponds to pekko.remote.artery.propagate-harmless-quarantine-events.
+	PropagateHarmlessQuarantineEvents bool
+
+	// frameSizeMu guards frameSizeMaxByType.
+	frameSizeMu sync.Mutex
+	// frameSizeMaxByType tracks the largest payload seen per (serializerId,
+	// manifest) tuple to honor Pekko's "log once, then only on +10% growth"
+	// rule for log-frame-size-exceeding.
+	frameSizeMaxByType map[string]int64
+
 	// UDPHandler is set when the Aeron-UDP transport is active.  When non-nil,
 	// DialRemote switches to the UDP path automatically.
 	UDPHandler *UdpArteryHandler
@@ -404,6 +429,48 @@ func (nm *NodeManager) EffectiveInboundLanes() int {
 		return nm.InboundLanes
 	}
 	return DefaultInboundLanes
+}
+
+// EmitHarmlessQuarantineEvent logs a quarantine event whose severity is
+// controlled by pekko.remote.artery.propagate-harmless-quarantine-events.
+// When the flag is on, the event is logged at WARN (legacy Pekko 1.x
+// behavior); otherwise it is downgraded to DEBUG so the cluster does not
+// emit noisy warnings for already-handled quarantine cases.
+func (nm *NodeManager) EmitHarmlessQuarantineEvent(msg string, attrs ...any) {
+	if nm.PropagateHarmlessQuarantineEvents {
+		slog.Warn(msg, attrs...)
+		return
+	}
+	slog.Debug(msg, attrs...)
+}
+
+// recordOversizedFrame logs a warning when an outbound payload exceeds
+// LogFrameSizeExceeding. To match Pekko semantics, the maximum size is logged
+// once per (serializerId, manifest) and only re-logged if the new size grows
+// at least 10% beyond the previous high-water mark.
+func (nm *NodeManager) recordOversizedFrame(serializerId int32, manifest string, size int64) {
+	if nm.LogFrameSizeExceeding <= 0 || size <= nm.LogFrameSizeExceeding {
+		return
+	}
+	key := fmt.Sprintf("%d|%s", serializerId, manifest)
+	nm.frameSizeMu.Lock()
+	if nm.frameSizeMaxByType == nil {
+		nm.frameSizeMaxByType = make(map[string]int64)
+	}
+	prev := nm.frameSizeMaxByType[key]
+	threshold := prev + prev/10 // +10%
+	if size <= prev || (prev > 0 && size <= threshold) {
+		nm.frameSizeMu.Unlock()
+		return
+	}
+	nm.frameSizeMaxByType[key] = size
+	nm.frameSizeMu.Unlock()
+	slog.Warn("artery: frame size exceeds threshold",
+		"serializerId", serializerId,
+		"manifest", manifest,
+		"payload_bytes", size,
+		"threshold_bytes", nm.LogFrameSizeExceeding,
+		"previous_max", prev)
 }
 
 // EffectiveOutboundLanes returns the configured outbound-lanes or the Pekko default.
@@ -1616,6 +1683,23 @@ func (assoc *GekkaAssociation) handleUserMessage(meta *ArteryMetadata) error {
 		assoc.nodeMgr.NodeMetrics.BytesReceived.Add(int64(len(meta.Payload)))
 	}
 
+	// pekko.remote.artery.log-received-messages — DEBUG inbound logging.
+	if assoc.nodeMgr.LogReceivedMessages {
+		var recipient, sender string
+		if meta.Recipient != nil {
+			recipient = meta.Recipient.GetPath()
+		}
+		if meta.Sender != nil {
+			sender = meta.Sender.GetPath()
+		}
+		slog.Debug("artery: received user message",
+			"recipient", recipient,
+			"sender", sender,
+			"serializerId", meta.SerializerId,
+			"manifest", string(meta.MessageManifest),
+			"payload_bytes", len(meta.Payload))
+	}
+
 	if assoc.nodeMgr.SerializerRegistry != nil {
 		obj, err := assoc.nodeMgr.SerializerRegistry.DeserializePayload(meta.SerializerId, string(meta.MessageManifest), meta.Payload)
 		if err == nil {
@@ -1816,6 +1900,22 @@ func (assoc *GekkaAssociation) Send(recipient string, payload []byte, serializer
 		return err
 	}
 	slog.Debug("artery: sending frame", "total_bytes", len(frame), "remote_uid", assoc.remote.GetUid(), "serializerId", serializerId, "manifest", manifest)
+
+	// pekko.remote.artery.log-sent-messages — DEBUG outbound logging.
+	if assoc.nodeMgr != nil && assoc.nodeMgr.LogSentMessages {
+		slog.Debug("artery: sending user message",
+			"recipient", recipient,
+			"sender", sender,
+			"serializerId", serializerId,
+			"manifest", manifest,
+			"payload_bytes", len(payload))
+	}
+
+	// pekko.remote.artery.log-frame-size-exceeding — warn on oversized payloads.
+	if assoc.nodeMgr != nil && assoc.nodeMgr.LogFrameSizeExceeding > 0 &&
+		int64(len(payload)) > assoc.nodeMgr.LogFrameSizeExceeding {
+		assoc.nodeMgr.recordOversizedFrame(serializerId, manifest, int64(len(payload)))
+	}
 
 	assoc.mu.Lock()
 	defer assoc.mu.Unlock()
@@ -2063,7 +2163,8 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 
 	// Quarantine guard: reject reconnection from a permanently quarantined UID.
 	if uid := req.GetFrom().GetUid(); uid != 0 && assoc.nodeMgr.IsQuarantined(uid) {
-		slog.Warn("artery: rejecting HandshakeReq from quarantined UID", "uid", uid)
+		// Severity gated by pekko.remote.artery.propagate-harmless-quarantine-events.
+		assoc.nodeMgr.EmitHarmlessQuarantineEvent("artery: rejecting HandshakeReq from quarantined UID", "uid", uid)
 		assoc.emitFlight(SeverityWarn, CatQuarantine, "uid_rejected", map[string]any{
 			"remote": assoc.remoteKey(),
 			"uid":    uid,

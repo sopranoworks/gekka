@@ -38,6 +38,11 @@ Legend:
 | `pekko.remote.artery.transport` | `tcp` | ✅ | |
 | `pekko.remote.artery.bind.hostname` | `""` | ✅ | NAT/Docker bind support |
 | `pekko.remote.artery.bind.port` | `""` | ✅ | NAT/Docker bind support |
+| `pekko.remote.artery.bind.bind-timeout` | `3s` | ✅ | Plumbed into `TcpServerConfig.BindTimeout`; wraps `net.Listen` with a context deadline |
+| `pekko.remote.artery.log-received-messages` | `off` | ✅ | DEBUG-level inbound logging in `handleUserMessage` |
+| `pekko.remote.artery.log-sent-messages` | `off` | ✅ | DEBUG-level outbound logging in `Send` |
+| `pekko.remote.artery.log-frame-size-exceeding` | `off` | ✅ | Warns once per (serializerId, manifest) when payload exceeds threshold; +10% growth re-logs |
+| `pekko.remote.artery.propagate-harmless-quarantine-events` | `off` | ✅ | Toggles severity (DEBUG vs WARN) of `EmitHarmlessQuarantineEvent` (legacy Pekko 1.x WARN behavior) |
 | `pekko.remote.artery.large-message-destinations` | `[]` | ❌ | No feature |
 | `pekko.remote.artery.advanced.maximum-frame-size` | `256 KiB` | ✅ | Configurable via HOCON |
 | `pekko.remote.artery.advanced.buffer-pool-size` | `128` | ✅ | Recorded on NodeManager (`EffectiveBufferPoolSize`) for future receive-buffer-pool consumer |

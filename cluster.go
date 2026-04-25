@@ -112,6 +112,34 @@ type ClusterConfig struct {
 	// Default: 0 (use canonical port).
 	BindPort uint32
 
+	// BindTimeout is the maximum time the TCP listener may block while binding
+	// to BindHostname:BindPort. Consumed by TcpServer.Start.
+	// Corresponds to pekko.remote.artery.bind.bind-timeout.
+	// Default: 3s. Zero means use the default.
+	BindTimeout time.Duration
+
+	// LogReceivedMessages enables DEBUG-level logging of inbound user messages.
+	// Corresponds to pekko.remote.artery.log-received-messages.
+	// Default: false (off).
+	LogReceivedMessages bool
+
+	// LogSentMessages enables DEBUG-level logging of outbound user messages.
+	// Corresponds to pekko.remote.artery.log-sent-messages.
+	// Default: false (off).
+	LogSentMessages bool
+
+	// LogFrameSizeExceeding logs a warning when an outbound payload exceeds
+	// this many bytes. Zero (or "off" in HOCON) disables the check.
+	// Corresponds to pekko.remote.artery.log-frame-size-exceeding.
+	// Default: 0 (off).
+	LogFrameSizeExceeding int64
+
+	// PropagateHarmlessQuarantineEvents controls whether InboundQuarantineCheck
+	// propagates harmless quarantine events. This is the legacy Pekko 1.x
+	// behavior; defaults to off.
+	// Corresponds to pekko.remote.artery.propagate-harmless-quarantine-events.
+	PropagateHarmlessQuarantineEvents bool
+
 	// Provider selects the actor-path protocol prefix.
 	// Ignored when Address is set. Defaults to ProviderPekko.
 	Provider Provider
@@ -1458,6 +1486,11 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	if len(cfg.AcceptProtocolNames) > 0 {
 		nm.AcceptProtocolNames = cfg.AcceptProtocolNames
 	}
+	// Artery debug/observability flags (Round-2 session 09).
+	nm.LogReceivedMessages = cfg.LogReceivedMessages
+	nm.LogSentMessages = cfg.LogSentMessages
+	nm.LogFrameSizeExceeding = cfg.LogFrameSizeExceeding
+	nm.PropagateHarmlessQuarantineEvents = cfg.PropagateHarmlessQuarantineEvents
 	// Apply flight recorder config from HOCON (defaults: enabled=true, level=lifecycle).
 	frEnabled := cfg.FlightRecorder.Enabled
 	// When neither LoadConfig nor explicit struct init has been called,
@@ -1604,7 +1637,8 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 		Handler: func(c context.Context, conn net.Conn) error {
 			return nm.ProcessConnection(c, conn, core.INBOUND, nil, 0)
 		},
-		TLSConfig: tlsCfg,
+		TLSConfig:   tlsCfg,
+		BindTimeout: cfg.BindTimeout,
 	})
 	if err != nil {
 		cancel()

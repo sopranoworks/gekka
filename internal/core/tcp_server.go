@@ -49,6 +49,12 @@ type TcpServerConfig struct {
 	KeepAlive       bool
 	KeepAlivePeriod time.Duration // 0 => OS default
 
+	// BindTimeout caps how long the listener may block while binding to Addr.
+	// Zero => no timeout (plain net.Listen). When non-zero, net.ListenConfig
+	// is used with a context cancelled after BindTimeout.
+	// Corresponds to pekko.remote.artery.bind.bind-timeout.
+	BindTimeout time.Duration
+
 	// Listener can be injected for tests; if nil, net.Listen("tcp", Addr) is used.
 	Listener net.Listener
 }
@@ -95,7 +101,9 @@ func (s *TcpServer) Start(ctx context.Context) error {
 	ln := s.cfg.Listener
 	if ln == nil {
 		var err error
-		if s.cfg.TLSConfig != nil {
+		if s.cfg.BindTimeout > 0 {
+			ln, err = listenWithBindTimeout(ctx, s.cfg.Addr, s.cfg.BindTimeout, s.cfg.TLSConfig)
+		} else if s.cfg.TLSConfig != nil {
 			ln, err = tls.Listen("tcp", s.cfg.Addr, s.cfg.TLSConfig)
 		} else {
 			ln, err = net.Listen("tcp", s.cfg.Addr)
@@ -111,6 +119,29 @@ func (s *TcpServer) Start(ctx context.Context) error {
 
 	go s.acceptLoop(ctx)
 	return nil
+}
+
+// listenWithBindTimeout binds to addr using net.ListenConfig with a context
+// that cancels after timeout. When tlsCfg is non-nil the returned listener
+// wraps the raw TCP listener with tls.NewListener.
+//
+// This honors pekko.remote.artery.bind.bind-timeout. A bind that exceeds the
+// timeout returns context.DeadlineExceeded wrapped in a listen error.
+func listenWithBindTimeout(parent context.Context, addr string, timeout time.Duration, tlsCfg *tls.Config) (net.Listener, error) {
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+	var lc net.ListenConfig
+	ln, err := lc.Listen(ctx, "tcp", addr)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, fmt.Errorf("gekka: bind to %q timed out after %s: %w", addr, timeout, err)
+		}
+		return nil, err
+	}
+	if tlsCfg != nil {
+		ln = tls.NewListener(ln, tlsCfg)
+	}
+	return ln, nil
 }
 
 // Shutdown stops accepting new connections and closes all active connections.

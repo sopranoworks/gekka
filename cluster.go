@@ -986,6 +986,69 @@ type ShardingConfig struct {
 	// AdaptiveRebalancing, when enabled, rebalances shards based on real-time
 	// node metrics (CPU, Memory, Mailbox size).
 	AdaptiveRebalancing AdaptiveRebalancingConfig
+
+	// RebalanceInterval is how often the ShardCoordinator runs its periodic
+	// rebalance check. Corresponds to pekko.cluster.sharding.rebalance-interval.
+	// Default: 10s (applied by the coordinator when zero).
+	RebalanceInterval time.Duration
+
+	// LeastShardAllocation holds knobs for the default
+	// LeastShardAllocationStrategy. Used when AdaptiveRebalancing is disabled
+	// and no explicit allocation strategy is supplied via ShardingSettings.
+	LeastShardAllocation LeastShardAllocationConfig
+
+	// DistributedData holds sharding-specific overrides for the DData
+	// replicator that backs coordinator state and remember-entities.
+	// Corresponds to pekko.cluster.sharding.distributed-data.*.
+	DistributedData ShardingDistributedDataConfig
+
+	// CoordinatorSingleton holds singleton-manager settings for the shard
+	// coordinator singleton. Mirrors pekko.cluster.singleton layout — when
+	// CoordinatorSingletonRoleOverride is true (the Pekko default), the
+	// effective Role is replaced with ShardingConfig.Role at use time.
+	// Corresponds to pekko.cluster.sharding.coordinator-singleton.*.
+	CoordinatorSingleton SingletonConfig
+
+	// CoordinatorSingletonRoleOverride, when true, replaces
+	// CoordinatorSingleton.Role with the sharding role. Corresponds to
+	// pekko.cluster.sharding.coordinator-singleton-role-override. Default: true.
+	CoordinatorSingletonRoleOverride bool
+}
+
+// LeastShardAllocationConfig holds knobs for the default sharding allocation
+// strategy. Corresponds to pekko.cluster.sharding.least-shard-allocation-strategy.*.
+type LeastShardAllocationConfig struct {
+	// RebalanceThreshold is the minimum spread between most- and least-loaded
+	// regions required to trigger a rebalance.
+	// Corresponds to least-shard-allocation-strategy.rebalance-threshold.
+	// Pekko default: 1.
+	RebalanceThreshold int
+
+	// MaxSimultaneousRebalance caps the number of in-flight rebalance moves.
+	// Corresponds to least-shard-allocation-strategy.max-simultaneous-rebalance.
+	// Pekko default: 3.
+	MaxSimultaneousRebalance int
+}
+
+// ShardingDistributedDataConfig holds sharding-specific overrides for the
+// DData replicator. Corresponds to pekko.cluster.sharding.distributed-data.*.
+type ShardingDistributedDataConfig struct {
+	// MajorityMinCap is the minimum quorum size for sharding-state
+	// MajorityWrite / MajorityRead operations.
+	// Corresponds to majority-min-cap. Pekko default: 5.
+	MajorityMinCap int
+
+	// MaxDeltaElements caps delta-message size for the sharding replicator.
+	// Corresponds to max-delta-elements. Pekko default: 5.
+	MaxDeltaElements int
+
+	// PreferOldest selects oldest-first peer ordering for gossip.
+	// Corresponds to prefer-oldest. Pekko default: true (on).
+	PreferOldest bool
+
+	// DurableKeys are the key globs persisted to durable DData storage.
+	// Corresponds to durable.keys. Pekko default: ["shard-*"].
+	DurableKeys []string
 }
 
 // AdaptiveRebalancingConfig holds settings for the adaptive rebalancing strategy.

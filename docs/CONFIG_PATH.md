@@ -174,6 +174,18 @@ Legend:
 | `pekko.cluster.sharding.remember-entities-store` | `"ddata"` | ❌ | No feature |
 | `pekko.cluster.sharding.passivate-idle-entity-after` | `null` | ❌ | Deprecated in Pekko |
 | `pekko.cluster.sharding.number-of-shards` | `1000` | ✅ | Wired to coordinator/region |
+| `pekko.cluster.sharding.rebalance-interval` | `10s` | ✅ | Applied to ShardCoordinator.RebalanceInterval |
+| `pekko.cluster.sharding.least-shard-allocation-strategy.rebalance-threshold` | `1` | ✅ | Applied to NewLeastShardAllocationStrategy(threshold) |
+| `pekko.cluster.sharding.least-shard-allocation-strategy.max-simultaneous-rebalance` | `3` | ✅ | Applied to NewLeastShardAllocationStrategy(maxSimultaneous) |
+| `pekko.cluster.sharding.distributed-data.majority-min-cap` | `5` | ⚠️ | Parsed; gekka uses shared replicator (not yet routed) |
+| `pekko.cluster.sharding.distributed-data.max-delta-elements` | `5` | ⚠️ | Parsed; gekka uses shared replicator (not yet routed) |
+| `pekko.cluster.sharding.distributed-data.prefer-oldest` | `on` | ⚠️ | Parsed; gekka uses shared replicator (not yet routed) |
+| `pekko.cluster.sharding.distributed-data.durable.keys` | `["shard-*"]` | ⚠️ | Parsed; durable storage is roadmap F2 (sessions 21-23) |
+| `pekko.cluster.sharding.coordinator-singleton.role` | `""` | ✅ | Applied to coordinator singleton-proxy when override = off |
+| `pekko.cluster.sharding.coordinator-singleton.singleton-name` | `"singleton"` | ✅ | Parsed (gekka uses fixed `<typeName>Coordinator` path) |
+| `pekko.cluster.sharding.coordinator-singleton.hand-over-retry-interval` | `1s` | ✅ | Parsed; routed via SingletonConfig |
+| `pekko.cluster.sharding.coordinator-singleton.min-number-of-hand-over-retries` | `15` | ✅ | Parsed; routed via SingletonConfig |
+| `pekko.cluster.sharding.coordinator-singleton-role-override` | `on` | ✅ | When `on`, sharding.role wins over coordinator-singleton.role |
 
 ---
 

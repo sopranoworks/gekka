@@ -360,6 +360,68 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 	if v, err := cfg.GetInt(shardingPrefix + ".passivation.custom-lru-strategy.active-entity-limit"); err == nil {
 		nodeCfg.Sharding.PassivationActiveEntityLimit = v
 	}
+	if v, err := cfg.GetString(shardingPrefix + ".rebalance-interval"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.Sharding.RebalanceInterval = d
+		}
+	}
+	leastPrefix := shardingPrefix + ".least-shard-allocation-strategy"
+	if v, err := cfg.GetInt(leastPrefix + ".rebalance-threshold"); err == nil {
+		nodeCfg.Sharding.LeastShardAllocation.RebalanceThreshold = v
+	}
+	if v, err := cfg.GetInt(leastPrefix + ".max-simultaneous-rebalance"); err == nil {
+		nodeCfg.Sharding.LeastShardAllocation.MaxSimultaneousRebalance = v
+	}
+
+	// pekko.cluster.sharding.distributed-data.* — sharding-specific replicator overrides.
+	shardingDDataPrefix := shardingPrefix + ".distributed-data"
+	if v, err := cfg.GetInt(shardingDDataPrefix + ".majority-min-cap"); err == nil {
+		nodeCfg.Sharding.DistributedData.MajorityMinCap = v
+	}
+	if v, err := cfg.GetInt(shardingDDataPrefix + ".max-delta-elements"); err == nil {
+		nodeCfg.Sharding.DistributedData.MaxDeltaElements = v
+	}
+	if v, err := cfg.GetString(shardingDDataPrefix + ".prefer-oldest"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		nodeCfg.Sharding.DistributedData.PreferOldest = v == "on" || v == "true"
+	}
+	var shardingDDataKeys struct {
+		PekkoKeys []string `hocon:"pekko.cluster.sharding.distributed-data.durable.keys"`
+		AkkaKeys  []string `hocon:"akka.cluster.sharding.distributed-data.durable.keys"`
+	}
+	_ = cfg.Unmarshal(&shardingDDataKeys)
+	if prefix == "pekko" && len(shardingDDataKeys.PekkoKeys) > 0 {
+		nodeCfg.Sharding.DistributedData.DurableKeys = shardingDDataKeys.PekkoKeys
+	} else if prefix == "akka" && len(shardingDDataKeys.AkkaKeys) > 0 {
+		nodeCfg.Sharding.DistributedData.DurableKeys = shardingDDataKeys.AkkaKeys
+	}
+
+	// pekko.cluster.sharding.coordinator-singleton.* — singleton-manager
+	// settings for the coordinator. Mirrors pekko.cluster.singleton layout.
+	csPrefix := shardingPrefix + ".coordinator-singleton"
+	if v, err := cfg.GetString(csPrefix + ".role"); err == nil {
+		nodeCfg.Sharding.CoordinatorSingleton.Role = strings.TrimSpace(v)
+	}
+	if v, err := cfg.GetString(csPrefix + ".hand-over-retry-interval"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.Sharding.CoordinatorSingleton.HandOverRetryInterval = d
+		}
+	}
+	if v, err := cfg.GetString(csPrefix + ".singleton-name"); err == nil {
+		nodeCfg.Sharding.CoordinatorSingleton.SingletonName = strings.TrimSpace(v)
+	}
+	if v, err := cfg.GetInt(csPrefix + ".min-number-of-hand-over-retries"); err == nil {
+		nodeCfg.Sharding.CoordinatorSingleton.MinNumberOfHandOverRetries = v
+	}
+
+	// coordinator-singleton-role-override defaults to true (Pekko default: on).
+	nodeCfg.Sharding.CoordinatorSingletonRoleOverride = true
+	if v, err := cfg.GetString(shardingPrefix + ".coordinator-singleton-role-override"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		if v == "off" || v == "false" {
+			nodeCfg.Sharding.CoordinatorSingletonRoleOverride = false
+		}
+	}
 
 	// ── Sharding Adaptive Rebalancing (gekka-native) ────────────────────────
 	adaptivePrefix := "gekka.cluster.sharding.adaptive-rebalancing"

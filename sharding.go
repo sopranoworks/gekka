@@ -156,13 +156,35 @@ func StartSharding[Command any, Event any, State any](
 				cfg.MaxSimultaneousRebalance,
 			)
 		} else {
-			strategy = sharding.NewLeastShardAllocationStrategy(3, 1)
+			// Default LeastShardAllocationStrategy parameters: prefer HOCON-
+			// configured values, fall back to gekka legacy defaults (3, 1).
+			threshold := 3
+			maxSimul := 1
+			if ok {
+				if v := cluster.cfg.Sharding.LeastShardAllocation.RebalanceThreshold; v > 0 {
+					threshold = v
+				}
+				if v := cluster.cfg.Sharding.LeastShardAllocation.MaxSimultaneousRebalance; v > 0 {
+					maxSimul = v
+				}
+			}
+			strategy = sharding.NewLeastShardAllocationStrategy(threshold, maxSimul)
 		}
+	}
+
+	// Resolve the per-coordinator rebalance interval. Zero leaves the
+	// coordinator's built-in 10s default in place.
+	var rebalanceInterval time.Duration
+	if cluster, ok := sys.(*Cluster); ok {
+		rebalanceInterval = cluster.cfg.Sharding.RebalanceInterval
 	}
 
 	coordinatorProps := actor.Props{
 		New: func() actor.Actor {
 			c := sharding.NewShardCoordinator(strategy)
+			if rebalanceInterval > 0 {
+				c.RebalanceInterval = rebalanceInterval
+			}
 			sharding.RegisterCoordinator(typeName, c)
 			return c
 		},
@@ -188,8 +210,19 @@ func StartSharding[Command any, Event any, State any](
 			fmt.Printf("Sharding: NOT spawning coordinator (ua=%v, localUA=%v)\n", ua, localUA)
 		}
 
+		// Resolve the role under which the coordinator-singleton runs.
+		// Pekko semantics: coordinator-singleton-role-override = on (default)
+		// means sharding's role wins over coordinator-singleton.role; off
+		// means coordinator-singleton.role takes effect (when set).
+		coordRole := cluster.cfg.Sharding.CoordinatorSingleton.Role
+		if cluster.cfg.Sharding.CoordinatorSingletonRoleOverride {
+			coordRole = settings.Role
+		} else if coordRole == "" {
+			coordRole = settings.Role
+		}
+
 		// Always use a proxy to reach the coordinator
-		proxy := cluster.SingletonProxy("/user/"+typeName+"Coordinator", settings.Role).WithSingletonName("")
+		proxy := cluster.SingletonProxy("/user/"+typeName+"Coordinator", coordRole).WithSingletonName("")
 		ref, err := sys.ActorOf(actor.Props{
 			New: func() actor.Actor {
 				return sharding.NewShardCoordinatorProxy(proxy)

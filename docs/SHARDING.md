@@ -356,6 +356,43 @@ pekko.cluster.sharding {
     # When "on", entity lifecycle events are persisted so entities are
     # re-spawned after a Shard restart.  Requires a Journal.
     remember-entities = off
+
+    # How often the ShardCoordinator runs its periodic rebalance check.
+    # Default: 10s.
+    rebalance-interval = 10s
+
+    # Default ShardAllocationStrategy knobs (used when adaptive rebalancing
+    # is disabled). rebalance-threshold is the minimum imbalance count
+    # that triggers a hand-off; max-simultaneous-rebalance caps the number
+    # of concurrent shard moves per tick.
+    least-shard-allocation-strategy {
+        rebalance-threshold = 1
+        max-simultaneous-rebalance = 3
+    }
+
+    # Sharding-specific overrides for the DData replicator that backs
+    # shard-state replication. gekka currently uses the shared cluster
+    # replicator; these values are parsed for forward compatibility.
+    distributed-data {
+        majority-min-cap = 5
+        max-delta-elements = 5
+        prefer-oldest = on
+        # Keys whose state must survive a full cluster restart. Durable
+        # storage (LMDB/RocksDB) lands as roadmap item F2.
+        durable.keys = ["shard-*"]
+    }
+
+    # The ShardCoordinator runs as a cluster singleton. By default
+    # (coordinator-singleton-role-override = on) the singleton inherits
+    # the sharding role; set the override off to honor the explicit
+    # coordinator-singleton.role here instead.
+    coordinator-singleton {
+        role = ""
+        singleton-name = "singleton"
+        hand-over-retry-interval = 1s
+        min-number-of-hand-over-retries = 15
+    }
+    coordinator-singleton-role-override = on
 }
 ```
 

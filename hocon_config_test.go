@@ -11,6 +11,7 @@ package gekka
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -503,6 +504,136 @@ pekko.cluster.seed-nodes = []
 	}
 	if cfg.Sharding.RememberEntities {
 		t.Error("expected RememberEntities=false by default")
+	}
+	// coordinator-singleton-role-override defaults to true (Pekko default: on).
+	if !cfg.Sharding.CoordinatorSingletonRoleOverride {
+		t.Error("expected CoordinatorSingletonRoleOverride=true by default")
+	}
+}
+
+func TestHOCON_ShardingConfig_RebalanceInterval(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko.remote.artery.canonical.hostname = "127.0.0.1"
+pekko.remote.artery.canonical.port = 2552
+pekko.cluster.seed-nodes = []
+pekko.cluster.sharding.rebalance-interval = 25s
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.Sharding.RebalanceInterval, 25*time.Second; got != want {
+		t.Errorf("RebalanceInterval = %v, want %v", got, want)
+	}
+}
+
+func TestHOCON_ShardingConfig_LeastShardAllocationStrategy(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko.remote.artery.canonical.hostname = "127.0.0.1"
+pekko.remote.artery.canonical.port = 2552
+pekko.cluster.seed-nodes = []
+pekko.cluster.sharding.least-shard-allocation-strategy {
+  rebalance-threshold = 7
+  max-simultaneous-rebalance = 11
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got := cfg.Sharding.LeastShardAllocation.RebalanceThreshold; got != 7 {
+		t.Errorf("RebalanceThreshold = %d, want 7", got)
+	}
+	if got := cfg.Sharding.LeastShardAllocation.MaxSimultaneousRebalance; got != 11 {
+		t.Errorf("MaxSimultaneousRebalance = %d, want 11", got)
+	}
+}
+
+func TestHOCON_ShardingConfig_DistributedData(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko.remote.artery.canonical.hostname = "127.0.0.1"
+pekko.remote.artery.canonical.port = 2552
+pekko.cluster.seed-nodes = []
+pekko.cluster.sharding.distributed-data {
+  majority-min-cap = 9
+  max-delta-elements = 17
+  prefer-oldest = off
+  durable.keys = ["shard-foo-*", "shard-bar-*"]
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	dd := cfg.Sharding.DistributedData
+	if dd.MajorityMinCap != 9 {
+		t.Errorf("MajorityMinCap = %d, want 9", dd.MajorityMinCap)
+	}
+	if dd.MaxDeltaElements != 17 {
+		t.Errorf("MaxDeltaElements = %d, want 17", dd.MaxDeltaElements)
+	}
+	if dd.PreferOldest {
+		t.Error("PreferOldest = true, want false")
+	}
+	if got, want := dd.DurableKeys, []string{"shard-foo-*", "shard-bar-*"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("DurableKeys = %v, want %v", got, want)
+	}
+}
+
+func TestHOCON_ShardingConfig_DistributedData_PreferOldestOn(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko.remote.artery.canonical.hostname = "127.0.0.1"
+pekko.remote.artery.canonical.port = 2552
+pekko.cluster.seed-nodes = []
+pekko.cluster.sharding.distributed-data.prefer-oldest = on
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if !cfg.Sharding.DistributedData.PreferOldest {
+		t.Error("PreferOldest = false, want true (prefer-oldest = on)")
+	}
+}
+
+func TestHOCON_ShardingConfig_CoordinatorSingleton(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko.remote.artery.canonical.hostname = "127.0.0.1"
+pekko.remote.artery.canonical.port = 2552
+pekko.cluster.seed-nodes = []
+pekko.cluster.sharding.coordinator-singleton {
+  role = "shard"
+  singleton-name = "coordinator"
+  hand-over-retry-interval = 750ms
+  min-number-of-hand-over-retries = 25
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	cs := cfg.Sharding.CoordinatorSingleton
+	if cs.Role != "shard" {
+		t.Errorf("Role = %q, want %q", cs.Role, "shard")
+	}
+	if cs.SingletonName != "coordinator" {
+		t.Errorf("SingletonName = %q, want %q", cs.SingletonName, "coordinator")
+	}
+	if cs.HandOverRetryInterval != 750*time.Millisecond {
+		t.Errorf("HandOverRetryInterval = %v, want 750ms", cs.HandOverRetryInterval)
+	}
+	if cs.MinNumberOfHandOverRetries != 25 {
+		t.Errorf("MinNumberOfHandOverRetries = %d, want 25", cs.MinNumberOfHandOverRetries)
+	}
+}
+
+func TestHOCON_ShardingConfig_CoordinatorSingletonRoleOverride_Off(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko.remote.artery.canonical.hostname = "127.0.0.1"
+pekko.remote.artery.canonical.port = 2552
+pekko.cluster.seed-nodes = []
+pekko.cluster.sharding.coordinator-singleton-role-override = off
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.Sharding.CoordinatorSingletonRoleOverride {
+		t.Error("CoordinatorSingletonRoleOverride = true, want false (override = off)")
 	}
 }
 

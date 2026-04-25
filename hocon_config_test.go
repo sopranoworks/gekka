@@ -1265,6 +1265,123 @@ pekko {
 	}
 }
 
+// TestSensitiveConfigPaths_BuiltInDefaults verifies that the built-in
+// allowlist (DefaultSensitiveConfigPaths) covers the Pekko reference defaults
+// and is matched by IsSensitiveConfigPath even with no HOCON override.
+func TestSensitiveConfigPaths_BuiltInDefaults(t *testing.T) {
+	var c ConfigCompatCheckConfig
+	for _, path := range []string{
+		"pekko.remote.secure-cookie",
+		"pekko.remote.netty.ssl.security",
+		"pekko.remote.classic.netty.ssl.security",
+		"pekko.remote.artery.ssl",
+		"pekko.remote.artery.ssl.config-ssl-engine.key-store",
+		"user.home",
+		"user.name",
+		"user.dir",
+		"socksNonProxyHosts",
+	} {
+		if !c.IsSensitiveConfigPath(path) {
+			t.Errorf("IsSensitiveConfigPath(%q) = false; want true (built-in default)", path)
+		}
+	}
+	if c.IsSensitiveConfigPath("pekko.cluster.seed-nodes") {
+		t.Error("IsSensitiveConfigPath(\"pekko.cluster.seed-nodes\") = true; want false (not sensitive)")
+	}
+}
+
+// TestParseHOCON_SensitiveConfigPathsAppend verifies that user-supplied
+// sensitive-config-paths groups are appended to the built-in allowlist.
+func TestParseHOCON_SensitiveConfigPathsAppend(t *testing.T) {
+	hocon := `
+pekko {
+  remote.artery.canonical.hostname = "127.0.0.1"
+  remote.artery.canonical.port = 2552
+  cluster {
+    seed-nodes = []
+    configuration-compatibility-check {
+      sensitive-config-paths {
+        my-app = ["my.app.api-key", "my.app.db-password"]
+        third-party = ["lib.token"]
+      }
+    }
+  }
+}
+`
+	cfg, err := ParseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("ParseHOCONString: %v", err)
+	}
+	got := cfg.ConfigCompatCheck.SensitiveConfigPaths
+	wantUser := []string{"my.app.api-key", "my.app.db-password", "lib.token"}
+	for _, w := range wantUser {
+		found := false
+		for _, g := range got {
+			if g == w {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("SensitiveConfigPaths missing user-defined %q; got %v", w, got)
+		}
+	}
+
+	// User extras are matched by IsSensitiveConfigPath
+	for _, path := range []string{
+		"my.app.api-key",
+		"my.app.db-password.value",   // prefix match
+		"lib.token",
+	} {
+		if !cfg.ConfigCompatCheck.IsSensitiveConfigPath(path) {
+			t.Errorf("IsSensitiveConfigPath(%q) = false; want true (user extension)", path)
+		}
+	}
+
+	// Built-in defaults must remain effective even when user adds groups.
+	if !cfg.ConfigCompatCheck.IsSensitiveConfigPath("pekko.remote.artery.ssl.private-key") {
+		t.Error("IsSensitiveConfigPath built-in default lost after user override")
+	}
+
+	// Non-sensitive paths still report false.
+	if cfg.ConfigCompatCheck.IsSensitiveConfigPath("pekko.cluster.gossip-interval") {
+		t.Error("IsSensitiveConfigPath(\"pekko.cluster.gossip-interval\") = true; want false")
+	}
+}
+
+// TestParseHOCON_SensitiveConfigPathsDedup verifies duplicate entries across
+// groups are de-duplicated.
+func TestParseHOCON_SensitiveConfigPathsDedup(t *testing.T) {
+	hocon := `
+pekko {
+  remote.artery.canonical.hostname = "127.0.0.1"
+  remote.artery.canonical.port = 2552
+  cluster {
+    seed-nodes = []
+    configuration-compatibility-check {
+      sensitive-config-paths {
+        a = ["dup.path", "uniq.a"]
+        b = ["dup.path", "uniq.b"]
+      }
+    }
+  }
+}
+`
+	cfg, err := ParseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("ParseHOCONString: %v", err)
+	}
+	count := 0
+	for _, p := range cfg.ConfigCompatCheck.SensitiveConfigPaths {
+		if p == "dup.path" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("sensitive-config-paths duplicate %q appears %d times; want 1", "dup.path", count)
+	}
+}
+
 func TestHOCON_SingletonConfig(t *testing.T) {
 	cfg, err := parseHOCONString(`
 pekko {

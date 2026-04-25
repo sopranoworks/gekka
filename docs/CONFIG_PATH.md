@@ -105,6 +105,7 @@ Legend:
 | `pekko.cluster.reduce-gossip-different-view-probability` | `400` | ✅ | Halves probability at scale |
 | `pekko.cluster.prune-gossip-tombstones-after` | `24h` | ✅ | Prunes removed-member tombstones |
 | `pekko.cluster.configuration-compatibility-check.enforce-on-join` | `on` | ✅ | Validates incoming InitJoin config |
+| `pekko.cluster.configuration-compatibility-check.sensitive-config-paths.<group>` | (built-in) | ✅ | User groups append (deduped) to `DefaultSensitiveConfigPaths`; matched by prefix in `IsSensitiveConfigPath` |
 
 ### pekko.cluster.failure-detector
 

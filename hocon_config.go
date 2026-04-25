@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -741,6 +742,38 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		v = strings.ToLower(strings.TrimSpace(v))
 		b := v == "on" || v == "true"
 		nodeCfg.ConfigCompatCheck.EnforceOnJoin = &b
+	}
+
+	// ── Sensitive Config Paths (user extension to built-in allowlist) ──────
+	// Mirrors Pekko's pekko.cluster.configuration-compatibility-check
+	// .sensitive-config-paths.<group> = [...] map. All groups are unioned and
+	// appended to the built-in defaults (DefaultSensitiveConfigPaths).
+	{
+		sensPath := prefix + ".cluster.configuration-compatibility-check.sensitive-config-paths"
+		if obj, err := cfg.GetConfig(sensPath); err == nil {
+			var groups map[string][]string
+			if err := obj.Unmarshal(&groups); err == nil && len(groups) > 0 {
+				keys := make([]string, 0, len(groups))
+				for k := range groups {
+					keys = append(keys, k)
+				}
+				sort.Strings(keys)
+				seen := make(map[string]bool, len(nodeCfg.ConfigCompatCheck.SensitiveConfigPaths))
+				for _, p := range nodeCfg.ConfigCompatCheck.SensitiveConfigPaths {
+					seen[p] = true
+				}
+				for _, k := range keys {
+					for _, p := range groups[k] {
+						p = strings.TrimSpace(p)
+						if p == "" || seen[p] {
+							continue
+						}
+						seen[p] = true
+						nodeCfg.ConfigCompatCheck.SensitiveConfigPaths = append(nodeCfg.ConfigCompatCheck.SensitiveConfigPaths, p)
+					}
+				}
+			}
+		}
 	}
 
 	// ── Quarantine Removed Node After ───────────────────────────────────────

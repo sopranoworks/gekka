@@ -718,6 +718,46 @@ type ConfigCompatCheckConfig struct {
 	// Corresponds to pekko.cluster.configuration-compatibility-check.enforce-on-join.
 	// Default: true (nil means on).
 	EnforceOnJoin *bool
+
+	// SensitiveConfigPaths is the user-provided list of config-path prefixes
+	// appended to the built-in allowlist (DefaultSensitiveConfigPaths). These
+	// prefixes are excluded from the configuration-compatibility-check payload
+	// to avoid leaking secrets across nodes.
+	// Corresponds to pekko.cluster.configuration-compatibility-check.sensitive-config-paths.<group>.
+	SensitiveConfigPaths []string
+}
+
+// DefaultSensitiveConfigPaths returns the built-in allowlist of sensitive
+// config-path prefixes. Mirrors Pekko's
+// pekko.cluster.configuration-compatibility-check.sensitive-config-paths.pekko
+// reference list.
+func DefaultSensitiveConfigPaths() []string {
+	return []string{
+		"user.home", "user.name", "user.dir",
+		"socksNonProxyHosts", "http.nonProxyHosts", "ftp.nonProxyHosts",
+		"pekko.remote.secure-cookie",
+		"pekko.remote.classic.netty.ssl.security",
+		"pekko.remote.netty.ssl.security",
+		"pekko.remote.artery.ssl",
+	}
+}
+
+// IsSensitiveConfigPath reports whether path matches (by prefix) any entry in
+// the effective sensitive-config-paths allowlist (built-in defaults union
+// user-provided extras). Mirrors Pekko's
+// JoinConfigCompatChecker.removeSensitiveKeys filter.
+func (c ConfigCompatCheckConfig) IsSensitiveConfigPath(path string) bool {
+	for _, prefix := range DefaultSensitiveConfigPaths() {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	for _, prefix := range c.SensitiveConfigPaths {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // FlightRecorderConfig controls the Artery flight recorder verbosity.

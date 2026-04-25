@@ -924,6 +924,37 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		}
 	}
 
+	// ── Cluster Client Receptionist ────────────────────────────────────────
+	// pekko.cluster.client.receptionist.* — parsed into
+	// ClusterConfig.ClusterReceptionist (re-export of cluster/client.ReceptionistConfig).
+	nodeCfg.ClusterReceptionist.Name = "receptionist"
+	nodeCfg.ClusterReceptionist.NumberOfContacts = 3
+	nodeCfg.ClusterReceptionist.HeartbeatInterval = 2 * time.Second
+	nodeCfg.ClusterReceptionist.AcceptableHeartbeatPause = 13 * time.Second
+	receptionistPrefix := clientPrefix + ".receptionist"
+	if v, err := cfg.GetString(receptionistPrefix + ".name"); err == nil {
+		v = strings.Trim(strings.TrimSpace(v), `"`)
+		if v != "" {
+			nodeCfg.ClusterReceptionist.Name = v
+		}
+	}
+	if v, err := cfg.GetString(receptionistPrefix + ".role"); err == nil {
+		nodeCfg.ClusterReceptionist.Role = strings.Trim(strings.TrimSpace(v), `"`)
+	}
+	if v, err := cfg.GetInt(receptionistPrefix + ".number-of-contacts"); err == nil && v > 0 {
+		nodeCfg.ClusterReceptionist.NumberOfContacts = v
+	}
+	if v, err := cfg.GetString(receptionistPrefix + ".heartbeat-interval"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.ClusterReceptionist.HeartbeatInterval = d
+		}
+	}
+	if v, err := cfg.GetString(receptionistPrefix + ".acceptable-heartbeat-pause"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.ClusterReceptionist.AcceptableHeartbeatPause = d
+		}
+	}
+
 	// ��─ Per-Role Min Nr Of Members ──────────────────────────────────────────
 	// Parse pekko.cluster.role.{name}.min-nr-of-members for each role.
 	rolePrefix := prefix + ".cluster.role"

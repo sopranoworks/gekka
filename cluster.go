@@ -519,6 +519,14 @@ type ClusterConfig struct {
 	//	cc := client.NewClusterClient(cfg.ClusterClient, router)
 	ClusterClient ClusterClientConfig
 
+	// ClusterReceptionist holds settings for the receptionist actor that runs
+	// on cluster member nodes and serves external ClusterClient connections.
+	// Corresponds to pekko.cluster.client.receptionist.* — passed to
+	// client.NewClusterReceptionist when spawning the actor:
+	//
+	//	rec := client.NewClusterReceptionist(cm, cfg.ClusterReceptionist, router)
+	ClusterReceptionist ClusterReceptionistConfig
+
 	// DistributedData configures the Distributed Data Replicator (v0.10.0).
 	DistributedData DistributedDataConfig
 
@@ -680,6 +688,11 @@ type SBRConfig = gcluster.SBRConfig
 // ClusterConfig.  Import gekka directly — you do not need to import the
 // cluster/client sub-package to read the values populated by LoadConfig.
 type ClusterClientConfig = client.Config
+
+// ClusterReceptionistConfig is a re-export of cluster/client.ReceptionistConfig
+// for use in ClusterConfig.  Import gekka directly — you do not need to import
+// the cluster/client sub-package to read the values populated by LoadConfig.
+type ClusterReceptionistConfig = client.ReceptionistConfig
 
 // FailureDetectorConfig is a re-export of cluster.FailureDetectorConfig.
 // It tunes the Phi Accrual Failure Detector parameters.

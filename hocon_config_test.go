@@ -2798,3 +2798,176 @@ pekko {
 		t.Errorf("InitialContacts[0] = %q, want %q", got, want)
 	}
 }
+
+// ── Cluster Client Receptionist (round-2 session 07) ──────────────────────────
+
+// TestHOCON_ClusterReceptionist_Defaults verifies that an empty
+// pekko.cluster.client.receptionist block leaves the parsed Config at Pekko
+// reference defaults.
+func TestHOCON_ClusterReceptionist_Defaults(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	rc := cfg.ClusterReceptionist
+	if got, want := rc.Name, "receptionist"; got != want {
+		t.Errorf("Name = %q, want %q", got, want)
+	}
+	if got, want := rc.Role, ""; got != want {
+		t.Errorf("Role = %q, want %q", got, want)
+	}
+	if got, want := rc.NumberOfContacts, 3; got != want {
+		t.Errorf("NumberOfContacts = %d, want %d", got, want)
+	}
+	if got, want := rc.HeartbeatInterval, 2*time.Second; got != want {
+		t.Errorf("HeartbeatInterval = %v, want %v", got, want)
+	}
+	if got, want := rc.AcceptableHeartbeatPause, 13*time.Second; got != want {
+		t.Errorf("AcceptableHeartbeatPause = %v, want %v", got, want)
+	}
+}
+
+// TestHOCON_ClusterReceptionist_Name verifies override of
+// pekko.cluster.client.receptionist.name.
+func TestHOCON_ClusterReceptionist_Name(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    client.receptionist.name = "frontDesk"
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.ClusterReceptionist.Name, "frontDesk"; got != want {
+		t.Errorf("Name = %q, want %q", got, want)
+	}
+}
+
+// TestHOCON_ClusterReceptionist_Role verifies override of
+// pekko.cluster.client.receptionist.role.
+func TestHOCON_ClusterReceptionist_Role(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    client.receptionist.role = "edge"
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.ClusterReceptionist.Role, "edge"; got != want {
+		t.Errorf("Role = %q, want %q", got, want)
+	}
+}
+
+// TestHOCON_ClusterReceptionist_NumberOfContacts verifies override of
+// pekko.cluster.client.receptionist.number-of-contacts.
+func TestHOCON_ClusterReceptionist_NumberOfContacts(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    client.receptionist.number-of-contacts = 7
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.ClusterReceptionist.NumberOfContacts, 7; got != want {
+		t.Errorf("NumberOfContacts = %d, want %d", got, want)
+	}
+}
+
+// TestHOCON_ClusterReceptionist_HeartbeatInterval verifies override of
+// pekko.cluster.client.receptionist.heartbeat-interval.
+func TestHOCON_ClusterReceptionist_HeartbeatInterval(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    client.receptionist.heartbeat-interval = 750ms
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.ClusterReceptionist.HeartbeatInterval, 750*time.Millisecond; got != want {
+		t.Errorf("HeartbeatInterval = %v, want %v", got, want)
+	}
+}
+
+// TestHOCON_ClusterReceptionist_AcceptableHeartbeatPause verifies override of
+// pekko.cluster.client.receptionist.acceptable-heartbeat-pause.
+func TestHOCON_ClusterReceptionist_AcceptableHeartbeatPause(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    client.receptionist.acceptable-heartbeat-pause = 45s
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.ClusterReceptionist.AcceptableHeartbeatPause, 45*time.Second; got != want {
+		t.Errorf("AcceptableHeartbeatPause = %v, want %v", got, want)
+	}
+}
+
+// TestHOCON_ClusterReceptionist_AkkaPrefix verifies that values under the
+// akka.cluster.client.receptionist prefix are honored when the active prefix
+// is akka (i.e. when remote.artery is absent and akka.* is loaded).
+func TestHOCON_ClusterReceptionist_AkkaPrefix(t *testing.T) {
+	cfg, err := parseHOCONString(`
+akka {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    client.receptionist {
+      name = "akkaDesk"
+      number-of-contacts = 9
+      heartbeat-interval = 1500ms
+      acceptable-heartbeat-pause = 21s
+      role = "frontend"
+    }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	rc := cfg.ClusterReceptionist
+	if got, want := rc.Name, "akkaDesk"; got != want {
+		t.Errorf("Name = %q, want %q", got, want)
+	}
+	if got, want := rc.Role, "frontend"; got != want {
+		t.Errorf("Role = %q, want %q", got, want)
+	}
+	if got, want := rc.NumberOfContacts, 9; got != want {
+		t.Errorf("NumberOfContacts = %d, want %d", got, want)
+	}
+	if got, want := rc.HeartbeatInterval, 1500*time.Millisecond; got != want {
+		t.Errorf("HeartbeatInterval = %v, want %v", got, want)
+	}
+	if got, want := rc.AcceptableHeartbeatPause, 21*time.Second; got != want {
+		t.Errorf("AcceptableHeartbeatPause = %v, want %v", got, want)
+	}
+}

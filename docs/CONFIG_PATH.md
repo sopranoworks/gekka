@@ -239,11 +239,11 @@ Legend:
 
 | Path | Pekko Default | Gekka? | Notes |
 |---|---|---|---|
-| `name` | `receptionist` | ✅ | |
-| `role` | `""` | ✅ | |
-| `number-of-contacts` | `3` | ✅ | |
-| `heartbeat-interval` | `2s` | ✅ | |
-| `acceptable-heartbeat-pause` | `13s` | ✅ | |
+| `name` | `receptionist` | ✅ | `ClusterConfig.ClusterReceptionist.Name` (hocon_config.go) — surfaces in receptionist contact paths |
+| `role` | `""` | ✅ | `ClusterConfig.ClusterReceptionist.Role` |
+| `number-of-contacts` | `3` | ✅ | `ClusterConfig.ClusterReceptionist.NumberOfContacts` — caps `Contacts.Paths` length (cluster/client/receptionist.go) |
+| `heartbeat-interval` | `2s` | ✅ | `ClusterConfig.ClusterReceptionist.HeartbeatInterval` — drives stale-client checker cadence |
+| `acceptable-heartbeat-pause` | `13s` | ✅ | `ClusterConfig.ClusterReceptionist.AcceptableHeartbeatPause` |
 | `failure-detection-interval` | `2s` | ❌ | No feature |
 
 ---

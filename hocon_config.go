@@ -742,6 +742,24 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		nodeCfg.PropagateHarmlessQuarantineEvents = v == "on" || v == "true"
 	}
 
+	// ── pekko.actor.debug.* logging toggles (Round-2 session 10) ───────────
+	parseBoolFlag := func(path string, dst *bool) {
+		if v, err := cfg.GetString(path); err == nil {
+			v = strings.ToLower(strings.TrimSpace(v))
+			*dst = v == "on" || v == "true"
+		}
+	}
+	parseBoolFlag(prefix+".actor.debug.receive", &nodeCfg.ActorDebug.Receive)
+	parseBoolFlag(prefix+".actor.debug.autoreceive", &nodeCfg.ActorDebug.Autoreceive)
+	parseBoolFlag(prefix+".actor.debug.lifecycle", &nodeCfg.ActorDebug.Lifecycle)
+	parseBoolFlag(prefix+".actor.debug.fsm", &nodeCfg.ActorDebug.FSM)
+	parseBoolFlag(prefix+".actor.debug.event-stream", &nodeCfg.ActorDebug.EventStream)
+	parseBoolFlag(prefix+".actor.debug.unhandled", &nodeCfg.ActorDebug.Unhandled)
+	parseBoolFlag(prefix+".actor.debug.router-misconfiguration", &nodeCfg.ActorDebug.RouterMisconfiguration)
+
+	// ── pekko.log-config-on-start ──────────────────────────────────────────
+	parseBoolFlag(prefix+".log-config-on-start", &nodeCfg.LogConfigOnStart)
+
 	// ── App Version ─────────────────────────────────────────────────────────
 	if v, err := cfg.GetString(prefix + ".cluster.app-version"); err == nil {
 		nodeCfg.AppVersion = strings.TrimSpace(v)

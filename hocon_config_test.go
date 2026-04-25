@@ -1503,6 +1503,83 @@ pekko {
 	}
 }
 
+// TestParseHOCON_ActorDebugFlags verifies HOCON parsing for the 7
+// pekko.actor.debug.* flags + pekko.log-config-on-start (Round-2 session 10).
+func TestParseHOCON_ActorDebugFlags(t *testing.T) {
+	hocon := `
+pekko {
+  remote.artery.canonical {
+    hostname = "127.0.0.1"
+    port = 2552
+  }
+  cluster.seed-nodes = []
+  log-config-on-start = on
+  actor.debug {
+    receive = on
+    autoreceive = on
+    lifecycle = on
+    fsm = on
+    event-stream = on
+    unhandled = on
+    router-misconfiguration = on
+  }
+}
+`
+	cfg, err := ParseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("ParseHOCONString: %v", err)
+	}
+	if !cfg.LogConfigOnStart {
+		t.Error("LogConfigOnStart = false, want true")
+	}
+	if !cfg.ActorDebug.Receive {
+		t.Error("ActorDebug.Receive = false, want true")
+	}
+	if !cfg.ActorDebug.Autoreceive {
+		t.Error("ActorDebug.Autoreceive = false, want true")
+	}
+	if !cfg.ActorDebug.Lifecycle {
+		t.Error("ActorDebug.Lifecycle = false, want true")
+	}
+	if !cfg.ActorDebug.FSM {
+		t.Error("ActorDebug.FSM = false, want true")
+	}
+	if !cfg.ActorDebug.EventStream {
+		t.Error("ActorDebug.EventStream = false, want true")
+	}
+	if !cfg.ActorDebug.Unhandled {
+		t.Error("ActorDebug.Unhandled = false, want true")
+	}
+	if !cfg.ActorDebug.RouterMisconfiguration {
+		t.Error("ActorDebug.RouterMisconfiguration = false, want true")
+	}
+}
+
+// TestParseHOCON_ActorDebugFlags_Defaults verifies that all 8 flags default
+// to false when omitted from HOCON (matches Pekko reference defaults).
+func TestParseHOCON_ActorDebugFlags_Defaults(t *testing.T) {
+	hocon := `
+pekko {
+  remote.artery.canonical {
+    hostname = "127.0.0.1"
+    port = 2552
+  }
+  cluster.seed-nodes = []
+}
+`
+	cfg, err := ParseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("ParseHOCONString: %v", err)
+	}
+	if cfg.LogConfigOnStart {
+		t.Error("LogConfigOnStart default = true, want false")
+	}
+	zero := ActorDebugConfig{}
+	if cfg.ActorDebug != zero {
+		t.Errorf("ActorDebug default = %+v, want all-false", cfg.ActorDebug)
+	}
+}
+
 func TestHOCON_SingletonConfig(t *testing.T) {
 	cfg, err := parseHOCONString(`
 pekko {

@@ -140,6 +140,18 @@ type ClusterConfig struct {
 	// Corresponds to pekko.remote.artery.propagate-harmless-quarantine-events.
 	PropagateHarmlessQuarantineEvents bool
 
+	// ActorDebug bundles the pekko.actor.debug.* logging toggles.
+	// All flags default to false (off). When true, the corresponding
+	// actor-framework event is emitted at slog.Debug.
+	ActorDebug ActorDebugConfig
+
+	// LogConfigOnStart, when true, dumps the resolved configuration at INFO
+	// level during cluster spawn. Useful when uncertain which config layer
+	// is active (e.g., reference.conf vs. application.conf merge order).
+	// Corresponds to pekko.log-config-on-start.
+	// Default: false.
+	LogConfigOnStart bool
+
 	// Provider selects the actor-path protocol prefix.
 	// Ignored when Address is set. Defaults to ProviderPekko.
 	Provider Provider
@@ -788,6 +800,130 @@ func (c ConfigCompatCheckConfig) IsSensitiveConfigPath(path string) bool {
 	return false
 }
 
+// ActorDebugConfig bundles the pekko.actor.debug.* logging toggles. Each
+// field is a Pekko-parity boolean: when true, the corresponding actor-
+// framework event is logged at slog.Debug (or slog.Warn for
+// RouterMisconfiguration, matching Pekko semantics).
+//
+// gekka exposes these via helper methods (LogActorReceive, LogActorLifecycle,
+// etc.) so framework internals can opt into logging without leaking the
+// pointer-to-config dependency to the lower layers.
+type ActorDebugConfig struct {
+	// Receive enables DEBUG logging of every message delivered to a
+	// loggable actor's Receive function.
+	// Corresponds to pekko.actor.debug.receive.
+	Receive bool
+
+	// Autoreceive enables DEBUG logging of all auto-received system
+	// messages (Kill, PoisonPill, Terminate).
+	// Corresponds to pekko.actor.debug.autoreceive.
+	Autoreceive bool
+
+	// Lifecycle enables DEBUG logging of actor lifecycle transitions
+	// (started, stopped, restarted).
+	// Corresponds to pekko.actor.debug.lifecycle.
+	Lifecycle bool
+
+	// FSM enables DEBUG logging of FSM events, transitions, and timers.
+	// Corresponds to pekko.actor.debug.fsm.
+	FSM bool
+
+	// EventStream enables DEBUG logging of subscribe/unsubscribe events on
+	// the actor system's event stream.
+	// Corresponds to pekko.actor.debug.event-stream.
+	EventStream bool
+
+	// Unhandled enables DEBUG logging of messages that fall through an
+	// actor's Receive without a matching case.
+	// Corresponds to pekko.actor.debug.unhandled.
+	Unhandled bool
+
+	// RouterMisconfiguration enables WARN logging when a router's HOCON
+	// definition is missing or invalid (legacy Pekko name kept for parity).
+	// Corresponds to pekko.actor.debug.router-misconfiguration.
+	RouterMisconfiguration bool
+}
+
+// LogActorReceive emits a DEBUG message for an inbound actor message when
+// pekko.actor.debug.receive is enabled. Safe to call when disabled
+// (no-op).
+func (c ActorDebugConfig) LogActorReceive(actorPath string, msg any) {
+	if !c.Receive {
+		return
+	}
+	slog.Debug("actor: received message",
+		"actor", actorPath,
+		"message_type", fmt.Sprintf("%T", msg))
+}
+
+// LogActorAutoreceive emits a DEBUG message for an auto-received system
+// message (Kill, PoisonPill, Terminate) when
+// pekko.actor.debug.autoreceive is enabled.
+func (c ActorDebugConfig) LogActorAutoreceive(actorPath, msgKind string) {
+	if !c.Autoreceive {
+		return
+	}
+	slog.Debug("actor: auto-received system message",
+		"actor", actorPath,
+		"kind", msgKind)
+}
+
+// LogActorLifecycle emits a DEBUG message for an actor lifecycle transition
+// (started, stopped, restarted) when pekko.actor.debug.lifecycle is
+// enabled.
+func (c ActorDebugConfig) LogActorLifecycle(actorPath, event string) {
+	if !c.Lifecycle {
+		return
+	}
+	slog.Debug("actor: lifecycle event",
+		"actor", actorPath,
+		"event", event)
+}
+
+// LogActorFSM emits a DEBUG message for an FSM transition or timer when
+// pekko.actor.debug.fsm is enabled.
+func (c ActorDebugConfig) LogActorFSM(actorPath string, attrs ...any) {
+	if !c.FSM {
+		return
+	}
+	all := append([]any{"actor", actorPath}, attrs...)
+	slog.Debug("actor: FSM event", all...)
+}
+
+// LogActorEventStream emits a DEBUG message for event-stream subscribe or
+// unsubscribe events when pekko.actor.debug.event-stream is enabled.
+func (c ActorDebugConfig) LogActorEventStream(action string, channel any) {
+	if !c.EventStream {
+		return
+	}
+	slog.Debug("actor: event-stream event",
+		"action", action,
+		"channel", fmt.Sprintf("%v", channel))
+}
+
+// LogActorUnhandled emits a DEBUG message for an unhandled actor message
+// when pekko.actor.debug.unhandled is enabled.
+func (c ActorDebugConfig) LogActorUnhandled(actorPath string, msg any) {
+	if !c.Unhandled {
+		return
+	}
+	slog.Debug("actor: unhandled message",
+		"actor", actorPath,
+		"message_type", fmt.Sprintf("%T", msg))
+}
+
+// LogRouterMisconfiguration emits a WARN message describing a router
+// misconfiguration when pekko.actor.debug.router-misconfiguration is
+// enabled. Pekko logs at WARN here; the helper preserves that severity.
+func (c ActorDebugConfig) LogRouterMisconfiguration(deploymentPath, reason string) {
+	if !c.RouterMisconfiguration {
+		return
+	}
+	slog.Warn("actor: router misconfigured",
+		"deployment_path", deploymentPath,
+		"reason", reason)
+}
+
 // FlightRecorderConfig controls the Artery flight recorder verbosity.
 type FlightRecorderConfig struct {
 	Enabled bool   // default: true
@@ -1352,6 +1488,13 @@ type Cluster struct {
 // immediately; call node.Addr() to discover the assigned port when ClusterConfig.Port == 0.
 func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	scheme, system, host, port := cfg.resolve()
+
+	// pekko.log-config-on-start — dump the resolved cluster configuration
+	// at INFO so operators can confirm which layer (reference vs.
+	// application) is active.
+	if cfg.LogConfigOnStart {
+		slog.Info("gekka: resolved cluster configuration", "config", fmt.Sprintf("%+v", cfg))
+	}
 
 	// Dynamic seed discovery (v0.9.0)
 	if cfg.Discovery.Enabled {

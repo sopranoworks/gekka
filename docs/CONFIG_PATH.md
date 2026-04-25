@@ -16,9 +16,16 @@ Legend:
 |---|---|---|---|
 | `pekko.loglevel` | `"INFO"` | ✅ | |
 | `pekko.stdout-loglevel` | `"WARNING"` | ❌ | No feature |
-| `pekko.log-config-on-start` | `off` | ❌ | No feature |
+| `pekko.log-config-on-start` | `off` | ✅ | When on, NewCluster emits the resolved ClusterConfig at INFO via slog |
 | `pekko.log-dead-letters` | `10` | ❌ | No feature |
 | `pekko.log-dead-letters-during-shutdown` | `off` | ❌ | No feature |
+| `pekko.actor.debug.receive` | `off` | ✅ | DEBUG slog via `ActorDebugConfig.LogActorReceive` |
+| `pekko.actor.debug.autoreceive` | `off` | ✅ | DEBUG slog via `ActorDebugConfig.LogActorAutoreceive` (PoisonPill/Kill/Terminate) |
+| `pekko.actor.debug.lifecycle` | `off` | ✅ | DEBUG slog via `ActorDebugConfig.LogActorLifecycle` (started/stopped/restarted) |
+| `pekko.actor.debug.fsm` | `off` | ✅ | DEBUG slog via `ActorDebugConfig.LogActorFSM` |
+| `pekko.actor.debug.event-stream` | `off` | ✅ | DEBUG slog via `ActorDebugConfig.LogActorEventStream` |
+| `pekko.actor.debug.unhandled` | `off` | ✅ | DEBUG slog via `ActorDebugConfig.LogActorUnhandled` |
+| `pekko.actor.debug.router-misconfiguration` | `off` | ✅ | WARN slog via `ActorDebugConfig.LogRouterMisconfiguration` (matches Pekko severity) |
 | `pekko.actor.provider` | `"local"` | ✅ | Used for protocol detection |
 | `pekko.actor.default-dispatcher.*` | (complex) | ❌ | Gekka uses `pekko.dispatchers.*` instead |
 | `pekko.actor.internal-dispatcher.*` | (complex) | ❌ | No feature |

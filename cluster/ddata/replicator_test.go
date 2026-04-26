@@ -9,7 +9,11 @@
 package ddata
 
 import (
+	"context"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestReplicator_Entries_Empty(t *testing.T) {
@@ -82,5 +86,112 @@ func TestReplicator_LookupORSet_HitAndMiss(t *testing.T) {
 	}
 	if _, exists := r.sets["missing"]; exists {
 		t.Error("Lookup on miss must not create the entry")
+	}
+}
+
+// TestReplicator_LogDataSizeExceeding_FiresAtThreshold verifies the round-2
+// session 16 acceptance behavior for
+// `pekko.cluster.distributed-data.log-data-size-exceeding`: when the
+// JSON-serialized gossip payload exceeds the configured threshold, the warn
+// hook fires with the offending key and observed size.
+func TestReplicator_LogDataSizeExceeding_FiresAtThreshold(t *testing.T) {
+	r := NewReplicator("node-1", nil)
+	r.LogDataSizeExceeding = 128
+
+	var (
+		mu    sync.Mutex
+		fires []struct {
+			Type string
+			Key  string
+			Size int
+		}
+	)
+	r.LogDataSizeExceedingHook = func(msgType, key string, size int) {
+		mu.Lock()
+		fires = append(fires, struct {
+			Type string
+			Key  string
+			Size int
+		}{msgType, key, size})
+		mu.Unlock()
+	}
+
+	// Below threshold: a tiny gossip envelope with no payload serializes to
+	// well under 128 bytes — hook must NOT fire.
+	r.sendToPeers(context.Background(), ReplicatorMsg{Type: "x", Key: "k"})
+	mu.Lock()
+	if got := len(fires); got != 0 {
+		mu.Unlock()
+		t.Fatalf("below threshold: hook fired %d time(s), want 0", got)
+	}
+	mu.Unlock()
+
+	// Above threshold: stuff Payload with valid JSON well over 128 bytes.
+	bigPayload := []byte(`{"data":"` + strings.Repeat("a", 200) + `"}`)
+	r.sendToPeers(context.Background(), ReplicatorMsg{
+		Type:    "gcounter-gossip",
+		Key:     "huge-counter",
+		Payload: bigPayload,
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(fires) != 1 {
+		t.Fatalf("above threshold: hook fired %d time(s), want 1", len(fires))
+	}
+	got := fires[0]
+	if got.Type != "gcounter-gossip" {
+		t.Errorf("Type = %q, want gcounter-gossip", got.Type)
+	}
+	if got.Key != "huge-counter" {
+		t.Errorf("Key = %q, want huge-counter", got.Key)
+	}
+	if got.Size <= r.LogDataSizeExceeding {
+		t.Errorf("Size = %d, want > %d (threshold)", got.Size, r.LogDataSizeExceeding)
+	}
+}
+
+// TestReplicator_LogDataSizeExceeding_DisabledByZero verifies that setting
+// the threshold to zero suppresses the warn hook entirely.
+func TestReplicator_LogDataSizeExceeding_DisabledByZero(t *testing.T) {
+	r := NewReplicator("node-1", nil)
+	r.LogDataSizeExceeding = 0
+
+	called := false
+	r.LogDataSizeExceedingHook = func(_, _ string, _ int) { called = true }
+
+	bigPayload := []byte(`"` + strings.Repeat("a", 4096) + `"`)
+	r.sendToPeers(context.Background(), ReplicatorMsg{
+		Type:    "gcounter-gossip",
+		Key:     "any",
+		Payload: bigPayload,
+	})
+	if called {
+		t.Error("hook fired with threshold=0; want suppressed")
+	}
+}
+
+// TestReplicator_WaitForRecovery_TimesOutWithoutPeers covers the round-2
+// session 16 wiring of `pekko.cluster.distributed-data.recovery-timeout`:
+// without any registered peers WaitForRecovery returns true (timed out).
+func TestReplicator_WaitForRecovery_TimesOutWithoutPeers(t *testing.T) {
+	r := NewReplicator("node-1", nil)
+	r.RecoveryTimeout = 30 * time.Millisecond
+	timedOut := r.WaitForRecovery(context.Background())
+	if !timedOut {
+		t.Fatal("WaitForRecovery() = false, want true (deadline elapsed)")
+	}
+}
+
+// TestReplicator_WaitForRecovery_ReturnsImmediatelyWithPeer verifies that
+// WaitForRecovery returns false (not timed out) when at least one peer is
+// already registered before Start.
+func TestReplicator_WaitForRecovery_ReturnsImmediatelyWithPeer(t *testing.T) {
+	r := NewReplicator("node-1", nil)
+	r.RecoveryTimeout = 5 * time.Second
+	r.AddPeer("pekko://Sys@127.0.0.1:2552/user/goReplicator")
+	timedOut := r.WaitForRecovery(context.Background())
+	if timedOut {
+		t.Error("WaitForRecovery() = true, want false when a peer is registered")
 	}
 }

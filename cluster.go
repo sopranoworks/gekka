@@ -713,6 +713,33 @@ type DistributedDataConfig struct {
 	// Corresponds to pekko.cluster.distributed-data.max-pruning-dissemination.
 	// Default: 300s.
 	MaxPruningDissemination time.Duration
+
+	// PruningMarkerTimeToLive bounds how long a pruning marker is retained
+	// after dissemination has finished. Once this much time has elapsed since
+	// pruning was initiated, the marker is forgotten.
+	// Corresponds to pekko.cluster.distributed-data.pruning-marker-time-to-live.
+	// Default: 6h. Zero falls back to the legacy "delete on dissemination
+	// complete" behavior used before this knob was wired.
+	PruningMarkerTimeToLive time.Duration
+
+	// LogDataSizeExceeding is the per-key serialized-size threshold that,
+	// when exceeded, causes the replicator to emit a slog.Warn during gossip.
+	// Corresponds to pekko.cluster.distributed-data.log-data-size-exceeding.
+	// Default: 10 KiB. Zero disables the warning.
+	LogDataSizeExceeding int
+
+	// RecoveryTimeout bounds how long Replicator.Start will wait for the
+	// initial reachable peer / durable backend recovery before giving up.
+	// Corresponds to pekko.cluster.distributed-data.recovery-timeout.
+	// Default: 10s.
+	RecoveryTimeout time.Duration
+
+	// SerializerCacheTimeToLive is the TTL applied to the in-memory cache
+	// the DData serializer uses to reuse already-serialized CRDT bytes
+	// across gossip rounds.
+	// Corresponds to pekko.cluster.distributed-data.serializer-cache-time-to-live.
+	// Default: 10s. Zero disables caching.
+	SerializerCacheTimeToLive time.Duration
 }
 
 // PersistenceConfig holds persistence-plugin settings parsed from HOCON.
@@ -2143,6 +2170,15 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 		}
 		repl.PreferOldest = cfg.DistributedData.PreferOldest
 		repl.PruningInterval = cfg.DistributedData.PruningInterval
+		if cfg.DistributedData.LogDataSizeExceeding > 0 {
+			repl.LogDataSizeExceeding = cfg.DistributedData.LogDataSizeExceeding
+		}
+		if cfg.DistributedData.RecoveryTimeout > 0 {
+			repl.RecoveryTimeout = cfg.DistributedData.RecoveryTimeout
+		}
+		if cfg.DistributedData.SerializerCacheTimeToLive > 0 {
+			repl.SerializerCacheTimeToLive = cfg.DistributedData.SerializerCacheTimeToLive
+		}
 
 		// Wire pruning manager. Use the DData-configured role (falls back to
 		// cluster role if DData-role is empty) to decide oldness.
@@ -2168,6 +2204,7 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 				return fmt.Sprintf("%s:%d", a.GetHostname(), a.GetPort())
 			},
 		)
+		pruningMgr.SetPruningMarkerTimeToLive(cfg.DistributedData.PruningMarkerTimeToLive)
 		repl.SetPruningManager(pruningMgr)
 
 		repl.Start(cluster.ctx)

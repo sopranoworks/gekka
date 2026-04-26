@@ -63,6 +63,11 @@ type PruningManager struct {
 
 	pruningInterval         time.Duration
 	maxPruningDissemination time.Duration
+	// pruningMarkerTimeToLive, when > 0, retains a tombstone in the
+	// PruningComplete phase for this long (measured from InitiatedAt) before
+	// the marker is forgotten. Zero preserves the legacy "delete on
+	// dissemination complete" behavior used by callers that don't set a TTL.
+	pruningMarkerTimeToLive time.Duration
 
 	isOldest     func() bool
 	oldestNodeID func() string
@@ -95,6 +100,15 @@ func NewPruningManager(
 		isOldest:                isOldest,
 		oldestNodeID:            oldestNodeID,
 	}
+}
+
+// SetPruningMarkerTimeToLive configures how long a tombstone is retained in
+// the PruningComplete phase before the marker is forgotten. Set to 0 to
+// preserve the legacy "delete immediately on dissemination complete" behavior.
+func (pm *PruningManager) SetPruningMarkerTimeToLive(ttl time.Duration) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	pm.pruningMarkerTimeToLive = ttl
 }
 
 // NodeRemoved records that nodeID has been removed from the cluster.
@@ -165,6 +179,18 @@ func (pm *PruningManager) Tick(prunables map[string]Prunable) {
 		if state.Phase == PruningDisseminating {
 			if now.Sub(state.InitiatedAt) >= pm.maxPruningDissemination {
 				state.Phase = PruningComplete
+				if pm.pruningMarkerTimeToLive <= 0 {
+					// Legacy path: forget the marker as soon as dissemination
+					// finishes. Preserved so existing tests / callers that
+					// never opt into pruning-marker-time-to-live keep their
+					// current semantics.
+					delete(pm.removedNodes, nodeID)
+					delete(pm.pruningStates, nodeID)
+				}
+			}
+		}
+		if state.Phase == PruningComplete && pm.pruningMarkerTimeToLive > 0 {
+			if now.Sub(state.InitiatedAt) >= pm.pruningMarkerTimeToLive {
 				delete(pm.removedNodes, nodeID)
 				delete(pm.pruningStates, nodeID)
 			}

@@ -1171,6 +1171,18 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 			nodeCfg.ClusterReceptionist.AcceptableHeartbeatPause = d
 		}
 	}
+	nodeCfg.ClusterReceptionist.ResponseTunnelReceiveTimeout = 30 * time.Second
+	nodeCfg.ClusterReceptionist.FailureDetectionInterval = 2 * time.Second
+	if v, err := cfg.GetString(receptionistPrefix + ".response-tunnel-receive-timeout"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.ClusterReceptionist.ResponseTunnelReceiveTimeout = d
+		}
+	}
+	if v, err := cfg.GetString(receptionistPrefix + ".failure-detection-interval"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.ClusterReceptionist.FailureDetectionInterval = d
+		}
+	}
 
 	// ��─ Per-Role Min Nr Of Members ──────────────────────────────────────────
 	// Parse pekko.cluster.role.{name}.min-nr-of-members for each role.
@@ -1409,6 +1421,10 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 	nodeCfg.DistributedData.DeltaCRDTMaxDeltaSize = 50
 	nodeCfg.DistributedData.PruningInterval = 120 * time.Second
 	nodeCfg.DistributedData.MaxPruningDissemination = 300 * time.Second
+	nodeCfg.DistributedData.PruningMarkerTimeToLive = 6 * time.Hour
+	nodeCfg.DistributedData.LogDataSizeExceeding = 10 * 1024
+	nodeCfg.DistributedData.RecoveryTimeout = 10 * time.Second
+	nodeCfg.DistributedData.SerializerCacheTimeToLive = 10 * time.Second
 	ddataPrefixes := []string{prefix + ".cluster.distributed-data", "gekka.cluster.distributed-data"}
 	for _, ddataPrefix := range ddataPrefixes {
 		if v, err := cfg.GetString(ddataPrefix + ".enabled"); err == nil {
@@ -1455,6 +1471,34 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		if v, err := cfg.GetString(ddataPrefix + ".max-pruning-dissemination"); err == nil {
 			if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
 				nodeCfg.DistributedData.MaxPruningDissemination = d
+			}
+		}
+		if v, err := cfg.GetString(ddataPrefix + ".pruning-marker-time-to-live"); err == nil {
+			if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+				nodeCfg.DistributedData.PruningMarkerTimeToLive = d
+			}
+		}
+		if v, err := cfg.GetString(ddataPrefix + ".log-data-size-exceeding"); err == nil {
+			trimmed := strings.TrimSpace(v)
+			switch trimmed {
+			case "off", "false":
+				nodeCfg.DistributedData.LogDataSizeExceeding = 0
+			default:
+				if size, parseErr := parseHOCONByteSize(trimmed); parseErr == nil {
+					nodeCfg.DistributedData.LogDataSizeExceeding = size
+				}
+			}
+		} else if v, err := cfg.GetInt(ddataPrefix + ".log-data-size-exceeding"); err == nil {
+			nodeCfg.DistributedData.LogDataSizeExceeding = v
+		}
+		if v, err := cfg.GetString(ddataPrefix + ".recovery-timeout"); err == nil {
+			if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+				nodeCfg.DistributedData.RecoveryTimeout = d
+			}
+		}
+		if v, err := cfg.GetString(ddataPrefix + ".serializer-cache-time-to-live"); err == nil {
+			if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+				nodeCfg.DistributedData.SerializerCacheTimeToLive = d
 			}
 		}
 	}

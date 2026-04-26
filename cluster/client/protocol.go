@@ -173,6 +173,22 @@ type ReceptionistConfig struct {
 	// HOCON: pekko.cluster.client.receptionist.acceptable-heartbeat-pause
 	// Default: 13s
 	AcceptableHeartbeatPause time.Duration
+
+	// ResponseTunnelReceiveTimeout bounds how long the receptionist waits for
+	// a Send/SendToAll forwarded delivery to complete before cancelling the
+	// outbound context. Pekko equivalent: the per-request response-tunnel
+	// actor's idle receive timeout.
+	// HOCON: pekko.cluster.client.receptionist.response-tunnel-receive-timeout
+	// Default: 30s
+	ResponseTunnelReceiveTimeout time.Duration
+
+	// FailureDetectionInterval governs the cadence of the receptionist's
+	// stale-client checker. Setting this independently of HeartbeatInterval
+	// lets operators run the failure-detection sweep faster (e.g. 250ms on a
+	// dense cluster) without altering client-side heartbeat traffic.
+	// HOCON: pekko.cluster.client.receptionist.failure-detection-interval
+	// Default: 2s
+	FailureDetectionInterval time.Duration
 }
 
 // DefaultConfig returns a Config with all fields set to Pekko-compatible
@@ -191,9 +207,11 @@ func DefaultConfig() Config {
 // to Pekko-compatible defaults.
 func DefaultReceptionistConfig() ReceptionistConfig {
 	return ReceptionistConfig{
-		Name:                     "receptionist",
-		NumberOfContacts:         3,
-		HeartbeatInterval:        2 * time.Second,
-		AcceptableHeartbeatPause: 13 * time.Second,
+		Name:                         "receptionist",
+		NumberOfContacts:             3,
+		HeartbeatInterval:            2 * time.Second,
+		AcceptableHeartbeatPause:     13 * time.Second,
+		ResponseTunnelReceiveTimeout: 30 * time.Second,
+		FailureDetectionInterval:     2 * time.Second,
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -158,6 +159,28 @@ type Replicator struct {
 	// goroutine started by Start(ctx).
 	pruningManager  *PruningManager
 	PruningInterval time.Duration
+
+	// LogDataSizeExceeding is the per-key serialized-size threshold that, when
+	// exceeded, causes sendToPeers to emit a slog.Warn for the offending key.
+	// Zero disables the warning.
+	// Wired from pekko.cluster.distributed-data.log-data-size-exceeding.
+	LogDataSizeExceeding int
+
+	// LogDataSizeExceedingHook is invoked from sendToPeers immediately before
+	// the warn log fires. Tests use it to deterministically observe oversize
+	// gossip events without scraping slog output.
+	LogDataSizeExceedingHook func(msgType, key string, size int)
+
+	// RecoveryTimeout caps how long Start waits for recovery (durable backend
+	// load + initial peer reachability) before proceeding without it. Zero
+	// disables the wait.
+	// Wired from pekko.cluster.distributed-data.recovery-timeout.
+	RecoveryTimeout time.Duration
+
+	// SerializerCacheTimeToLive is the TTL applied to per-CRDT serialized
+	// snapshots cached for reuse across gossip rounds. Zero disables caching.
+	// Wired from pekko.cluster.distributed-data.serializer-cache-time-to-live.
+	SerializerCacheTimeToLive time.Duration
 }
 
 type peerInfo struct {
@@ -181,6 +204,9 @@ func NewReplicator(nodeID string, router *actor.Router) *Replicator {
 		DeltaCRDTEnabled:          true,
 		DeltaCRDTMaxDeltaSize:     50,
 		PruningInterval:           0, // default: disabled unless wired
+		LogDataSizeExceeding:      10 * 1024,
+		RecoveryTimeout:           10 * time.Second,
+		SerializerCacheTimeToLive: 10 * time.Second,
 		Name:                      "ddataReplicator",
 		stopCh:                    make(chan struct{}),
 		dirtyKeys:                 make(map[string]any),
@@ -391,6 +417,41 @@ func (r *Replicator) PutInMap(key, itemKey string, value any, consistency WriteC
 	m.Put(itemKey, value)
 	if consistency == WriteAll {
 		r.gossipMap(context.Background(), key, m)
+	}
+}
+
+// WaitForRecovery blocks until at least one peer has been registered or the
+// configured RecoveryTimeout elapses. Without a durable backend the
+// replicator has nothing to load from disk, so the only thing the timeout
+// usefully gates is the initial-peer check used by tests / cluster bring-up.
+// Returns true if the deadline was hit before any peer was registered.
+func (r *Replicator) WaitForRecovery(ctx context.Context) bool {
+	timeout := r.RecoveryTimeout
+	if timeout <= 0 {
+		return false
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		r.mu.RLock()
+		hasPeer := len(r.peers) > 0
+		r.mu.RUnlock()
+		if hasPeer {
+			return false
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			slog.Warn("Replicator: recovery-timeout exceeded with no peers", "timeout", timeout)
+			return true
+		}
+		wait := 10 * time.Millisecond
+		if remaining < wait {
+			wait = remaining
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(wait):
+		}
 	}
 }
 
@@ -903,6 +964,13 @@ func (r *Replicator) sendToPeers(ctx context.Context, msg ReplicatorMsg) {
 	if err != nil {
 		log.Printf("Replicator: marshal error: %v", err)
 		return
+	}
+	if threshold := r.LogDataSizeExceeding; threshold > 0 && len(data) > threshold {
+		if hook := r.LogDataSizeExceedingHook; hook != nil {
+			hook(msg.Type, msg.Key, len(data))
+		}
+		slog.Warn("Replicator: serialized data size exceeds threshold",
+			"type", msg.Type, "key", msg.Key, "size", len(data), "threshold", threshold)
 	}
 	r.mu.RLock()
 	peers := append([]peerInfo(nil), r.peers...)

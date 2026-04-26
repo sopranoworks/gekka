@@ -165,3 +165,45 @@ func TestPruningManager_NodeRemovedIsIdempotent(t *testing.T) {
 		t.Errorf("tracked = %v, want exactly [a]", tracked)
 	}
 }
+
+// TestPruningManager_PruningMarkerTimeToLive verifies that when
+// pruning-marker-time-to-live is wired, a tombstone is retained in the
+// PruningComplete phase until the TTL elapses (measured from InitiatedAt).
+// This is the round-2 session 16 acceptance behavior for
+// `pekko.cluster.distributed-data.pruning-marker-time-to-live`.
+func TestPruningManager_PruningMarkerTimeToLive(t *testing.T) {
+	pm := NewPruningManager(
+		20*time.Millisecond, // pruningInterval (informational)
+		30*time.Millisecond, // maxPruningDissemination — short
+		func() bool { return true },
+		func() string { return "survivor" },
+	)
+	pm.SetPruningMarkerTimeToLive(120 * time.Millisecond)
+
+	gc := NewGCounter()
+	gc.Increment("removed-node", 4)
+	gc.Increment("survivor", 1)
+	pm.NodeRemoved("removed-node")
+
+	// First Tick initiates pruning (rewrites onto survivor).
+	prunables := map[string]Prunable{"counter": gc}
+	pm.Tick(prunables)
+	if gc.NeedsPruning("removed-node") {
+		t.Fatal("counter should have been pruned on first Tick")
+	}
+
+	// After dissemination expires, the marker MUST stay tracked because the
+	// per-marker TTL has not yet elapsed.
+	time.Sleep(45 * time.Millisecond)
+	pm.Tick(prunables)
+	if got := pm.TrackedRemovedNodes(); len(got) != 1 {
+		t.Errorf("after dissemination only: tracked = %v, want still tracked under TTL", got)
+	}
+
+	// After the TTL window measured from InitiatedAt, the marker is forgotten.
+	time.Sleep(120 * time.Millisecond)
+	pm.Tick(prunables)
+	if got := pm.TrackedRemovedNodes(); len(got) != 0 {
+		t.Errorf("after TTL: tracked = %v, want empty", got)
+	}
+}

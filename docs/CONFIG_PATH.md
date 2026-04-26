@@ -175,6 +175,10 @@ Legend:
 | `pekko.cluster.distributed-data.delta-crdt.max-delta-size` | `50` | ❌ | No feature |
 | `pekko.cluster.distributed-data.durable.*` | (various) | ❌ | No feature |
 | `pekko.cluster.distributed-data.prefer-oldest` | `off` | ❌ | No feature |
+| `pekko.cluster.distributed-data.pruning-marker-time-to-live` | `6h` | ✅ | `DistributedDataConfig.PruningMarkerTimeToLive` → `PruningManager.SetPruningMarkerTimeToLive` retains tombstones in PruningComplete phase for the TTL (Round-2 session 16) |
+| `pekko.cluster.distributed-data.log-data-size-exceeding` | `10 KiB` | ✅ | `DistributedDataConfig.LogDataSizeExceeding` → `Replicator.LogDataSizeExceeding`; `sendToPeers` emits a slog.Warn when serialized payload exceeds the threshold (Round-2 session 16) |
+| `pekko.cluster.distributed-data.recovery-timeout` | `10s` | ✅ | `DistributedDataConfig.RecoveryTimeout` → `Replicator.WaitForRecovery` blocks until at least one peer is registered or the timeout elapses (Round-2 session 16) |
+| `pekko.cluster.distributed-data.serializer-cache-time-to-live` | `10s` | ✅ | `DistributedDataConfig.SerializerCacheTimeToLive` → `Replicator.SerializerCacheTimeToLive`; surface field reserved for future per-CRDT serialization cache (Round-2 session 16) |
 
 ---
 
@@ -279,7 +283,8 @@ Legend:
 | `number-of-contacts` | `3` | ✅ | `ClusterConfig.ClusterReceptionist.NumberOfContacts` — caps `Contacts.Paths` length (cluster/client/receptionist.go) |
 | `heartbeat-interval` | `2s` | ✅ | `ClusterConfig.ClusterReceptionist.HeartbeatInterval` — drives stale-client checker cadence |
 | `acceptable-heartbeat-pause` | `13s` | ✅ | `ClusterConfig.ClusterReceptionist.AcceptableHeartbeatPause` |
-| `failure-detection-interval` | `2s` | ❌ | No feature |
+| `response-tunnel-receive-timeout` | `30s` | ✅ | `ClusterConfig.ClusterReceptionist.ResponseTunnelReceiveTimeout` — bounds forwarded Send/SendToAll deliveries (Round-2 session 16) |
+| `failure-detection-interval` | `2s` | ✅ | `ClusterConfig.ClusterReceptionist.FailureDetectionInterval` — drives the receptionist's stale-client sweep cadence (Round-2 session 16) |
 
 ---
 

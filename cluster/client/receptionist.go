@@ -92,6 +92,12 @@ func NewClusterReceptionist(cm *cluster.ClusterManager, cfg ReceptionistConfig, 
 	if cfg.AcceptableHeartbeatPause == 0 {
 		cfg.AcceptableHeartbeatPause = 13 * time.Second
 	}
+	if cfg.ResponseTunnelReceiveTimeout == 0 {
+		cfg.ResponseTunnelReceiveTimeout = 30 * time.Second
+	}
+	if cfg.FailureDetectionInterval == 0 {
+		cfg.FailureDetectionInterval = cfg.HeartbeatInterval
+	}
 	return &ClusterReceptionist{
 		BaseActor: actor.NewBaseActor(),
 		cm:        cm,
@@ -117,8 +123,15 @@ func (r *ClusterReceptionist) PostStop() {
 
 // heartbeatChecker runs in a background goroutine and periodically evicts
 // clients that have not sent a heartbeat within the acceptable pause window.
+// Cadence comes from cfg.FailureDetectionInterval (Pekko's
+// pekko.cluster.client.receptionist.failure-detection-interval); the receive
+// expectation cfg.HeartbeatInterval still drives the eviction deadline.
 func (r *ClusterReceptionist) heartbeatChecker() {
-	tick := time.NewTicker(r.cfg.HeartbeatInterval)
+	interval := r.cfg.FailureDetectionInterval
+	if interval <= 0 {
+		interval = r.cfg.HeartbeatInterval
+	}
+	tick := time.NewTicker(interval)
 	defer tick.Stop()
 	for {
 		select {
@@ -251,10 +264,23 @@ func (r *ClusterReceptionist) handleSend(m Send) {
 			localAddr.GetPort(),
 			m.Path,
 		)
-		if err := r.router.Send(context.TODO(), fullPath, m.Msg); err != nil {
+		ctx, cancel := r.tunnelContext()
+		defer cancel()
+		if err := r.router.Send(ctx, fullPath, m.Msg); err != nil {
 			slog.Warn("ClusterReceptionist: Send failed", "path", m.Path, "err", err)
 		}
 	}
+}
+
+// tunnelContext returns a context bounded by ResponseTunnelReceiveTimeout
+// (Pekko's pekko.cluster.client.receptionist.response-tunnel-receive-timeout).
+// When the timeout is non-positive a non-cancellable background context is
+// returned so callers may always defer the cancel.
+func (r *ClusterReceptionist) tunnelContext() (context.Context, context.CancelFunc) {
+	if r.cfg.ResponseTunnelReceiveTimeout > 0 {
+		return context.WithTimeout(context.Background(), r.cfg.ResponseTunnelReceiveTimeout)
+	}
+	return context.WithCancel(context.Background())
 }
 
 // handleSendToAll broadcasts a SendToAll message to every registered service
@@ -274,6 +300,8 @@ func (r *ClusterReceptionist) handleSendToAll(m SendToAll) {
 		localAddr := r.cm.GetLocalAddress().GetAddress()
 		proto := r.cm.Proto()
 
+		ctx, cancel := r.tunnelContext()
+		defer cancel()
 		for _, ua := range state.AllAddresses {
 			a := ua.GetAddress()
 			if a.GetHostname() == localAddr.GetHostname() && a.GetPort() == localAddr.GetPort() {
@@ -286,7 +314,7 @@ func (r *ClusterReceptionist) handleSendToAll(m SendToAll) {
 				a.GetPort(),
 				m.Path,
 			)
-			if err := r.router.Send(context.TODO(), fullPath, m.Msg); err != nil {
+			if err := r.router.Send(ctx, fullPath, m.Msg); err != nil {
 				slog.Debug("ClusterReceptionist: SendToAll node failed", "path", fullPath, "err", err)
 			}
 		}

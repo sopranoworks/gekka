@@ -3616,3 +3616,173 @@ pekko {
 		t.Errorf(`expected "all" to produce a positive sentinel, got %d`, cfg.Sharding.CoordinatorReadMajorityPlus)
 	}
 }
+
+// ── Session 16: receptionist behaviors + DData small features ─────────────
+
+// TestParseHOCON_S16_ClusterReceptionistDefaults verifies that an empty
+// pekko.cluster.client.receptionist block leaves the two new session-16
+// fields at their Pekko reference defaults (30s and 2s).
+func TestParseHOCON_S16_ClusterReceptionistDefaults(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.ClusterReceptionist.ResponseTunnelReceiveTimeout, 30*time.Second; got != want {
+		t.Errorf("ResponseTunnelReceiveTimeout = %v, want %v", got, want)
+	}
+	if got, want := cfg.ClusterReceptionist.FailureDetectionInterval, 2*time.Second; got != want {
+		t.Errorf("FailureDetectionInterval = %v, want %v", got, want)
+	}
+}
+
+// TestParseHOCON_S16_ResponseTunnelReceiveTimeoutOverride verifies override
+// of pekko.cluster.client.receptionist.response-tunnel-receive-timeout.
+func TestParseHOCON_S16_ResponseTunnelReceiveTimeoutOverride(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    client.receptionist.response-tunnel-receive-timeout = 7s
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.ClusterReceptionist.ResponseTunnelReceiveTimeout, 7*time.Second; got != want {
+		t.Errorf("ResponseTunnelReceiveTimeout = %v, want %v", got, want)
+	}
+}
+
+// TestParseHOCON_S16_FailureDetectionIntervalOverride verifies override of
+// pekko.cluster.client.receptionist.failure-detection-interval.
+func TestParseHOCON_S16_FailureDetectionIntervalOverride(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    client.receptionist.failure-detection-interval = 250ms
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.ClusterReceptionist.FailureDetectionInterval, 250*time.Millisecond; got != want {
+		t.Errorf("FailureDetectionInterval = %v, want %v", got, want)
+	}
+}
+
+// TestParseHOCON_S16_DDataDefaults verifies that an empty
+// pekko.cluster.distributed-data block leaves the four new session-16 fields
+// at their Pekko reference defaults.
+func TestParseHOCON_S16_DDataDefaults(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.DistributedData.PruningMarkerTimeToLive, 6*time.Hour; got != want {
+		t.Errorf("PruningMarkerTimeToLive = %v, want %v", got, want)
+	}
+	if got, want := cfg.DistributedData.LogDataSizeExceeding, 10*1024; got != want {
+		t.Errorf("LogDataSizeExceeding = %d, want %d", got, want)
+	}
+	if got, want := cfg.DistributedData.RecoveryTimeout, 10*time.Second; got != want {
+		t.Errorf("RecoveryTimeout = %v, want %v", got, want)
+	}
+	if got, want := cfg.DistributedData.SerializerCacheTimeToLive, 10*time.Second; got != want {
+		t.Errorf("SerializerCacheTimeToLive = %v, want %v", got, want)
+	}
+}
+
+// TestParseHOCON_S16_DDataPruningMarkerTTL verifies override of
+// pekko.cluster.distributed-data.pruning-marker-time-to-live.
+func TestParseHOCON_S16_DDataPruningMarkerTTL(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    distributed-data.pruning-marker-time-to-live = 90m
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.DistributedData.PruningMarkerTimeToLive, 90*time.Minute; got != want {
+		t.Errorf("PruningMarkerTimeToLive = %v, want %v", got, want)
+	}
+}
+
+// TestParseHOCON_S16_DDataLogDataSizeExceeding verifies override of
+// pekko.cluster.distributed-data.log-data-size-exceeding (byte size).
+func TestParseHOCON_S16_DDataLogDataSizeExceeding(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    distributed-data.log-data-size-exceeding = "256 KiB"
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.DistributedData.LogDataSizeExceeding, 256*1024; got != want {
+		t.Errorf("LogDataSizeExceeding = %d, want %d", got, want)
+	}
+}
+
+// TestParseHOCON_S16_DDataRecoveryTimeout verifies override of
+// pekko.cluster.distributed-data.recovery-timeout.
+func TestParseHOCON_S16_DDataRecoveryTimeout(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    distributed-data.recovery-timeout = 45s
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.DistributedData.RecoveryTimeout, 45*time.Second; got != want {
+		t.Errorf("RecoveryTimeout = %v, want %v", got, want)
+	}
+}
+
+// TestParseHOCON_S16_DDataSerializerCacheTTL verifies override of
+// pekko.cluster.distributed-data.serializer-cache-time-to-live.
+func TestParseHOCON_S16_DDataSerializerCacheTTL(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    distributed-data.serializer-cache-time-to-live = 3s
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.DistributedData.SerializerCacheTimeToLive, 3*time.Second; got != want {
+		t.Errorf("SerializerCacheTimeToLive = %v, want %v", got, want)
+	}
+}

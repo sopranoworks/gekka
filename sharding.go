@@ -82,6 +82,33 @@ type ShardingSettings struct {
 	// Corresponds to pekko.cluster.sharding.passivation.custom-lru-strategy.active-entity-limit.
 	// Default: 100000.
 	PassivationActiveEntityLimit int
+
+	// RetryInterval is the period between retries of GetShardHome requests
+	// for shards whose home is still unknown.
+	// Corresponds to pekko.cluster.sharding.retry-interval. Pekko default: 2s.
+	RetryInterval time.Duration
+
+	// BufferSize caps the per-shard pending-message queue while waiting
+	// for a ShardHome reply.
+	// Corresponds to pekko.cluster.sharding.buffer-size. Pekko default: 100000.
+	BufferSize int
+
+	// ShardStartTimeout is the maximum time a Shard waits during startup.
+	// Corresponds to pekko.cluster.sharding.shard-start-timeout. Pekko default: 10s.
+	ShardStartTimeout time.Duration
+
+	// ShardFailureBackoff is the delay before a terminated Shard is re-spawned.
+	// Corresponds to pekko.cluster.sharding.shard-failure-backoff. Pekko default: 10s.
+	ShardFailureBackoff time.Duration
+
+	// EntityRestartBackoff is the delay before a terminated entity is re-spawned.
+	// Corresponds to pekko.cluster.sharding.entity-restart-backoff. Pekko default: 10s.
+	EntityRestartBackoff time.Duration
+
+	// CoordinatorFailureBackoff is the delay before the coordinator proxy
+	// retries after a transient failure.
+	// Corresponds to pekko.cluster.sharding.coordinator-failure-backoff. Pekko default: 5s.
+	CoordinatorFailureBackoff time.Duration
 }
 
 // StartSharding starts cluster sharding for a given entity type.
@@ -134,6 +161,25 @@ func StartSharding[Command any, Event any, State any](
 		}
 		if settings.PassivationActiveEntityLimit == 0 && cluster.cfg.Sharding.PassivationActiveEntityLimit > 0 {
 			settings.PassivationActiveEntityLimit = cluster.cfg.Sharding.PassivationActiveEntityLimit
+		}
+		// Round-2 session 13 — retry/backoff (part 1).
+		if settings.RetryInterval == 0 && cluster.cfg.Sharding.RetryInterval > 0 {
+			settings.RetryInterval = cluster.cfg.Sharding.RetryInterval
+		}
+		if settings.BufferSize == 0 && cluster.cfg.Sharding.BufferSize > 0 {
+			settings.BufferSize = cluster.cfg.Sharding.BufferSize
+		}
+		if settings.ShardStartTimeout == 0 && cluster.cfg.Sharding.ShardStartTimeout > 0 {
+			settings.ShardStartTimeout = cluster.cfg.Sharding.ShardStartTimeout
+		}
+		if settings.ShardFailureBackoff == 0 && cluster.cfg.Sharding.ShardFailureBackoff > 0 {
+			settings.ShardFailureBackoff = cluster.cfg.Sharding.ShardFailureBackoff
+		}
+		if settings.EntityRestartBackoff == 0 && cluster.cfg.Sharding.EntityRestartBackoff > 0 {
+			settings.EntityRestartBackoff = cluster.cfg.Sharding.EntityRestartBackoff
+		}
+		if settings.CoordinatorFailureBackoff == 0 && cluster.cfg.Sharding.CoordinatorFailureBackoff > 0 {
+			settings.CoordinatorFailureBackoff = cluster.cfg.Sharding.CoordinatorFailureBackoff
 		}
 	}
 
@@ -266,15 +312,21 @@ func StartSharding[Command any, Event any, State any](
 	}
 
 	shardSettings := sharding.ShardSettings{
-		PassivationIdleTimeout:      settings.PassivationIdleTimeout,
-		RememberEntities:            settings.RememberEntities,
-		Journal:                     settings.Journal,
-		DataCenter:                  settings.DataCenter,
-		HandoffTimeout:              settings.HandoffTimeout,
-		NumberOfShards:              settings.NumberOfShards,
-		GuardianName:                settings.GuardianName,
-		PassivationStrategy:         settings.PassivationStrategy,
+		PassivationIdleTimeout:       settings.PassivationIdleTimeout,
+		RememberEntities:             settings.RememberEntities,
+		Journal:                      settings.Journal,
+		DataCenter:                   settings.DataCenter,
+		HandoffTimeout:               settings.HandoffTimeout,
+		NumberOfShards:               settings.NumberOfShards,
+		GuardianName:                 settings.GuardianName,
+		PassivationStrategy:          settings.PassivationStrategy,
 		PassivationActiveEntityLimit: settings.PassivationActiveEntityLimit,
+		RetryInterval:                settings.RetryInterval,
+		BufferSize:                   settings.BufferSize,
+		ShardStartTimeout:            settings.ShardStartTimeout,
+		ShardFailureBackoff:          settings.ShardFailureBackoff,
+		EntityRestartBackoff:         settings.EntityRestartBackoff,
+		CoordinatorFailureBackoff:    settings.CoordinatorFailureBackoff,
 	}
 
 	// Populate IsLocalDC when both the cluster and DataCenter are available.

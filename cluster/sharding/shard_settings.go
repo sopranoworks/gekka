@@ -98,4 +98,52 @@ type ShardSettings struct {
 	// Equivalent HOCON key:
 	//   pekko.cluster.sharding.passivation.custom-lru-strategy.active-entity-limit = 100000
 	PassivationActiveEntityLimit int
+
+	// RetryInterval is the period between retries of GetShardHome requests
+	// for shards whose home is still unknown. When zero, retries are
+	// disabled and the region waits for an unsolicited ShardHome push.
+	//
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.retry-interval = 2s
+	RetryInterval time.Duration
+
+	// BufferSize caps the per-shard pending-message queue used by
+	// ShardRegion while waiting for a ShardHome reply from the coordinator.
+	// Once the cap is reached, additional messages for that shard are
+	// dropped. Zero means unbounded (legacy behavior).
+	//
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.buffer-size = 100000
+	BufferSize int
+
+	// ShardStartTimeout is the maximum time a Shard waits during its own
+	// startup (e.g. recovering remember-entities state) before giving up.
+	// Zero falls back to 10 seconds.
+	//
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.shard-start-timeout = 10s
+	ShardStartTimeout time.Duration
+
+	// ShardFailureBackoff is the delay before a Shard actor that has
+	// terminated is allowed to be re-spawned by its ShardRegion.
+	//
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.shard-failure-backoff = 10s
+	ShardFailureBackoff time.Duration
+
+	// EntityRestartBackoff is the delay before a terminated entity actor
+	// inside a Shard is allowed to be re-spawned (typically when
+	// remember-entities is enabled and the entity exited unexpectedly).
+	//
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.entity-restart-backoff = 10s
+	EntityRestartBackoff time.Duration
+
+	// CoordinatorFailureBackoff is the delay before the
+	// ShardCoordinatorProxy retries reaching the coordinator singleton
+	// after a transient failure.
+	//
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.coordinator-failure-backoff = 5s
+	CoordinatorFailureBackoff time.Duration
 }

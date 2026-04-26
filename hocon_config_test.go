@@ -3395,3 +3395,72 @@ pekko {
 		t.Errorf("ExpectedResponseAfter = %v, want 0", cfg.MultiDCFailureDetector.ExpectedResponseAfter)
 	}
 }
+
+// ── Session 13: pekko.cluster.sharding retry/backoff (part 1) ──────────────
+
+// TestParseHOCON_ShardingRetryBackoff verifies all 6 retry/backoff keys reach
+// ShardingConfig.
+func TestParseHOCON_ShardingRetryBackoff(t *testing.T) {
+	hocon := `
+pekko {
+  remote.artery.canonical.hostname = "127.0.0.1"
+  remote.artery.canonical.port = 2552
+  cluster {
+    seed-nodes = []
+    sharding {
+      retry-interval              = 4s
+      buffer-size                 = 50000
+      shard-start-timeout         = 15s
+      shard-failure-backoff       = 12s
+      entity-restart-backoff      = 8s
+      coordinator-failure-backoff = 7s
+    }
+  }
+}
+`
+	cfg, err := ParseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("ParseHOCONString: %v", err)
+	}
+	if got, want := cfg.Sharding.RetryInterval, 4*time.Second; got != want {
+		t.Errorf("RetryInterval = %v, want %v", got, want)
+	}
+	if got, want := cfg.Sharding.BufferSize, 50000; got != want {
+		t.Errorf("BufferSize = %d, want %d", got, want)
+	}
+	if got, want := cfg.Sharding.ShardStartTimeout, 15*time.Second; got != want {
+		t.Errorf("ShardStartTimeout = %v, want %v", got, want)
+	}
+	if got, want := cfg.Sharding.ShardFailureBackoff, 12*time.Second; got != want {
+		t.Errorf("ShardFailureBackoff = %v, want %v", got, want)
+	}
+	if got, want := cfg.Sharding.EntityRestartBackoff, 8*time.Second; got != want {
+		t.Errorf("EntityRestartBackoff = %v, want %v", got, want)
+	}
+	if got, want := cfg.Sharding.CoordinatorFailureBackoff, 7*time.Second; got != want {
+		t.Errorf("CoordinatorFailureBackoff = %v, want %v", got, want)
+	}
+}
+
+// TestParseHOCON_ShardingRetryBackoff_AbsentDefaults verifies that absent
+// keys leave the fields zero (downstream defaults apply).
+func TestParseHOCON_ShardingRetryBackoff_AbsentDefaults(t *testing.T) {
+	hocon := `
+pekko {
+  remote.artery.canonical.hostname = "127.0.0.1"
+  remote.artery.canonical.port = 2552
+  cluster {
+    seed-nodes = []
+  }
+}
+`
+	cfg, err := ParseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("ParseHOCONString: %v", err)
+	}
+	if cfg.Sharding.RetryInterval != 0 || cfg.Sharding.BufferSize != 0 ||
+		cfg.Sharding.ShardStartTimeout != 0 || cfg.Sharding.ShardFailureBackoff != 0 ||
+		cfg.Sharding.EntityRestartBackoff != 0 || cfg.Sharding.CoordinatorFailureBackoff != 0 {
+		t.Errorf("expected all retry/backoff fields zero when absent, got %+v", cfg.Sharding)
+	}
+}

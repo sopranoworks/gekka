@@ -202,6 +202,12 @@ Legend:
 | `pekko.cluster.sharding.coordinator-singleton.hand-over-retry-interval` | `1s` | ✅ | Parsed; routed via SingletonConfig |
 | `pekko.cluster.sharding.coordinator-singleton.min-number-of-hand-over-retries` | `15` | ✅ | Parsed; routed via SingletonConfig |
 | `pekko.cluster.sharding.coordinator-singleton-role-override` | `on` | ✅ | When `on`, sharding.role wins over coordinator-singleton.role |
+| `pekko.cluster.sharding.retry-interval` | `2s` | ✅ | ShardRegion ticker re-tells GetShardHome for shards with unknown home (Round-2 session 13) |
+| `pekko.cluster.sharding.buffer-size` | `100000` | ✅ | Caps per-shard pendingMessages while awaiting ShardHome; further messages are dropped (Round-2 session 13) |
+| `pekko.cluster.sharding.shard-start-timeout` | `10s` | ✅ | Plumbed onto ShardSettings; Shard-startup consumer wires in part 2 (Round-2 session 13) |
+| `pekko.cluster.sharding.shard-failure-backoff` | `10s` | ✅ | Region delays clearing the cached home after a Shard terminates (Round-2 session 13) |
+| `pekko.cluster.sharding.entity-restart-backoff` | `10s` | ✅ | Plumbed onto ShardSettings; entity-restart consumer wires in part 2 (Round-2 session 13) |
+| `pekko.cluster.sharding.coordinator-failure-backoff` | `5s` | ✅ | Region delays re-registration with the coordinator after termination (Round-2 session 13) |
 
 ---
 

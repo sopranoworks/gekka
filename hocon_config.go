@@ -383,6 +383,35 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 			nodeCfg.Sharding.RebalanceInterval = d
 		}
 	}
+	// Round-2 session 13 — retry/backoff (part 1).
+	if v, err := cfg.GetString(shardingPrefix + ".retry-interval"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.Sharding.RetryInterval = d
+		}
+	}
+	if v, err := cfg.GetInt(shardingPrefix + ".buffer-size"); err == nil {
+		nodeCfg.Sharding.BufferSize = v
+	}
+	if v, err := cfg.GetString(shardingPrefix + ".shard-start-timeout"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.Sharding.ShardStartTimeout = d
+		}
+	}
+	if v, err := cfg.GetString(shardingPrefix + ".shard-failure-backoff"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.Sharding.ShardFailureBackoff = d
+		}
+	}
+	if v, err := cfg.GetString(shardingPrefix + ".entity-restart-backoff"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.Sharding.EntityRestartBackoff = d
+		}
+	}
+	if v, err := cfg.GetString(shardingPrefix + ".coordinator-failure-backoff"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.Sharding.CoordinatorFailureBackoff = d
+		}
+	}
 	leastPrefix := shardingPrefix + ".least-shard-allocation-strategy"
 	if v, err := cfg.GetInt(leastPrefix + ".rebalance-threshold"); err == nil {
 		nodeCfg.Sharding.LeastShardAllocation.RebalanceThreshold = v

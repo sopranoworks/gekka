@@ -72,6 +72,63 @@ func (r *ShardRegion) PreStart() {
 		r.Log().Debug("Registering region with coordinator", "path", r.Self().Path())
 		r.coordinator.Tell(RegisterRegion{RegionPath: r.Self().Path()}, r.Self())
 	}
+	// Schedule the first retry tick when retry-interval > 0. Each tick re-asks
+	// the coordinator for any shard whose home is still unknown (pending). The
+	// handler re-arms the ticker so the loop keeps running until the actor
+	// stops.
+	if r.shardSettings.RetryInterval > 0 {
+		r.scheduleRetryTick()
+	}
+}
+
+// retryShardHomeTickMsg is the self-tick that drives periodic GetShardHome
+// retries when the coordinator is briefly unavailable.
+type retryShardHomeTickMsg struct{}
+
+// shardFailureBackoffElapsedMsg is delivered to the region after
+// ShardSettings.ShardFailureBackoff has elapsed since a Shard actor terminated.
+// The handler clears the cached shard-home so the next pending message
+// re-resolves via the coordinator.
+type shardFailureBackoffElapsedMsg struct{ ShardId ShardId }
+
+// coordinatorFailureBackoffElapsedMsg is delivered to the region after
+// ShardSettings.CoordinatorFailureBackoff has elapsed since the
+// coordinator actor terminated.
+type coordinatorFailureBackoffElapsedMsg struct{}
+
+// scheduleRetryTick fires retryShardHomeTickMsg after RetryInterval; the
+// Receive handler re-arms it.
+func (r *ShardRegion) scheduleRetryTick() {
+	interval := r.shardSettings.RetryInterval
+	if interval <= 0 {
+		return
+	}
+	self := r.Self()
+	if self == nil {
+		return
+	}
+	time.AfterFunc(interval, func() {
+		self.Tell(retryShardHomeTickMsg{})
+	})
+}
+
+// retryPendingHomes re-asks the coordinator for every shard with buffered
+// messages whose home is still unknown.
+func (r *ShardRegion) retryPendingHomes() {
+	if r.coordinator == nil {
+		return
+	}
+	for sid, queue := range r.pendingMessages {
+		if len(queue) == 0 {
+			continue
+		}
+		if home, ok := r.shardHomePaths[sid]; ok && home != "" {
+			continue
+		}
+		r.Log().Debug("retry-interval: re-asking coordinator for shard home",
+			"shardId", sid, "queueLen", len(queue))
+		r.coordinator.Tell(GetShardHome{ShardId: sid}, r.Self())
+	}
 }
 
 // PostStop is called by the actor runtime after the mailbox is drained and the
@@ -197,6 +254,10 @@ func (r *ShardRegion) Receive(msg any) {
 			r.coordinator.Tell(ShardStopped{ShardId: sid}, r.Self())
 		}
 
+	case retryShardHomeTickMsg:
+		r.retryPendingHomes()
+		r.scheduleRetryTick()
+
 	case actor.TerminatedMessage:
 		// Handle shard termination or coordinator termination
 		terminated := m.TerminatedActor()
@@ -204,11 +265,52 @@ func (r *ShardRegion) Receive(msg any) {
 			if shard.Path() == terminated.Path() {
 				delete(r.shards, sid)
 				r.Log().Debug("Shard terminated", "shardId", sid)
+				// Apply shard-failure-backoff: drop the cached home so further
+				// messages for this shard buffer (and retry-interval re-asks the
+				// coordinator) only after the configured delay. Without a delay,
+				// pending messages would immediately retry against the coordinator
+				// at full retry-interval cadence.
+				if backoff := r.shardSettings.ShardFailureBackoff; backoff > 0 {
+					sidCopy := sid
+					self := r.Self()
+					time.AfterFunc(backoff, func() {
+						if self != nil {
+							self.Tell(shardFailureBackoffElapsedMsg{ShardId: sidCopy})
+						}
+					})
+				} else {
+					delete(r.shardHomePaths, sid)
+				}
 				break
 			}
 		}
 		if r.coordinator != nil && r.coordinator.Path() == terminated.Path() {
 			r.Log().Error("ShardCoordinator terminated")
+			// coordinator-failure-backoff: track elapsed time before allowing
+			// re-registration retries to fire. The proxy/coordinator re-creation
+			// path is owned by the singleton manager; we just record the delay.
+			if backoff := r.shardSettings.CoordinatorFailureBackoff; backoff > 0 {
+				self := r.Self()
+				time.AfterFunc(backoff, func() {
+					if self != nil {
+						self.Tell(coordinatorFailureBackoffElapsedMsg{})
+					}
+				})
+			}
+		}
+
+	case shardFailureBackoffElapsedMsg:
+		// shard-failure-backoff has elapsed; clear the cached home so the next
+		// pending message re-resolves via the coordinator.
+		delete(r.shardHomePaths, m.ShardId)
+		r.Log().Debug("shard-failure-backoff elapsed; cleared home cache", "shardId", m.ShardId)
+
+	case coordinatorFailureBackoffElapsedMsg:
+		// coordinator-failure-backoff has elapsed. Re-register with the
+		// (possibly re-elected) coordinator if one is currently known.
+		if r.coordinator != nil {
+			r.Log().Debug("coordinator-failure-backoff elapsed; re-registering with coordinator")
+			r.coordinator.Tell(RegisterRegion{RegionPath: r.Self().Path()}, r.Self())
 		}
 
 	default:
@@ -240,9 +342,19 @@ func injectTraceContext(ctx context.Context) map[string]string {
 func (r *ShardRegion) deliverMessageWithSender(shardId ShardId, envelope ShardingEnvelope, sender actor.Ref) {
 	homePath, ok := r.shardHomePaths[shardId]
 	if !ok || homePath == "" {
-		// Ask coordinator for home
+		// Ask coordinator for home, buffering this message until the response.
+		// Enforce the buffer-size cap (pekko.cluster.sharding.buffer-size): once
+		// we hit the cap for this shard, drop further messages with a debug log
+		// rather than letting the queue grow unbounded.
+		queue := r.pendingMessages[shardId]
+		cap := r.shardSettings.BufferSize
+		if cap > 0 && len(queue) >= cap {
+			r.Log().Debug("buffer-size cap reached, dropping message",
+				"shardId", shardId, "cap", cap, "queueLen", len(queue))
+			return
+		}
 		r.Log().Debug("Requesting shard home", "shardId", shardId)
-		r.pendingMessages[shardId] = append(r.pendingMessages[shardId], actor.Envelope{Payload: envelope, Sender: sender})
+		r.pendingMessages[shardId] = append(queue, actor.Envelope{Payload: envelope, Sender: sender})
 		if r.coordinator != nil {
 			r.coordinator.Tell(GetShardHome{ShardId: shardId}, r.Self())
 		}

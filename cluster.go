@@ -1295,6 +1295,36 @@ type ShardingConfig struct {
 	// CoordinatorSingleton.Role with the sharding role. Corresponds to
 	// pekko.cluster.sharding.coordinator-singleton-role-override. Default: true.
 	CoordinatorSingletonRoleOverride bool
+
+	// RetryInterval is the period between retries of GetShardHome requests
+	// for shards whose home is still unknown.
+	// Corresponds to pekko.cluster.sharding.retry-interval. Pekko default: 2s.
+	RetryInterval time.Duration
+
+	// BufferSize caps the per-shard pending-message queue used by
+	// ShardRegion while waiting for a ShardHome reply.
+	// Corresponds to pekko.cluster.sharding.buffer-size. Pekko default: 100000.
+	BufferSize int
+
+	// ShardStartTimeout is the maximum time a Shard waits during its own
+	// startup before giving up.
+	// Corresponds to pekko.cluster.sharding.shard-start-timeout. Pekko default: 10s.
+	ShardStartTimeout time.Duration
+
+	// ShardFailureBackoff is the delay before a terminated Shard actor is
+	// re-spawned by its ShardRegion.
+	// Corresponds to pekko.cluster.sharding.shard-failure-backoff. Pekko default: 10s.
+	ShardFailureBackoff time.Duration
+
+	// EntityRestartBackoff is the delay before a terminated entity inside a
+	// Shard is re-spawned (used with remember-entities).
+	// Corresponds to pekko.cluster.sharding.entity-restart-backoff. Pekko default: 10s.
+	EntityRestartBackoff time.Duration
+
+	// CoordinatorFailureBackoff is the delay before the ShardCoordinatorProxy
+	// retries reaching the coordinator singleton after a transient failure.
+	// Corresponds to pekko.cluster.sharding.coordinator-failure-backoff. Pekko default: 5s.
+	CoordinatorFailureBackoff time.Duration
 }
 
 // LeastShardAllocationConfig holds knobs for the default sharding allocation

@@ -9,6 +9,7 @@
 package gekka
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/cluster/client"
+	"github.com/sopranoworks/gekka/cluster/lease"
 )
 
 func TestLoadConfig_Pekko(t *testing.T) {
@@ -3881,5 +3883,106 @@ pekko {
 	}
 	if len(cfg.Persistence.AutoStartSnapshotStores) != 0 {
 		t.Errorf("default AutoStartSnapshotStores = %v, want empty", cfg.Persistence.AutoStartSnapshotStores)
+	}
+}
+
+// TestHOCON_CoordinationLease verifies that pekko.coordination.lease.*
+// keys are parsed into ClusterConfig.CoordinationLease.  Round-2 session 18.
+func TestHOCON_CoordinationLease(t *testing.T) {
+	const hoconConf = `
+pekko {
+  remote.artery.canonical {
+    hostname = "127.0.0.1"
+    port = 0
+  }
+  cluster.seed-nodes = ["pekko://Sys@127.0.0.1:0"]
+  coordination {
+    lease {
+      lease-class             = "memory"
+      heartbeat-timeout       = 90s
+      heartbeat-interval      = 6s
+      lease-operation-timeout = 1500ms
+    }
+  }
+}
+`
+	cfg, err := parseHOCONString(hoconConf)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.CoordinationLease.LeaseClass, "memory"; got != want {
+		t.Errorf("LeaseClass = %q, want %q", got, want)
+	}
+	if got, want := cfg.CoordinationLease.HeartbeatTimeout, 90*time.Second; got != want {
+		t.Errorf("HeartbeatTimeout = %v, want %v", got, want)
+	}
+	if got, want := cfg.CoordinationLease.HeartbeatInterval, 6*time.Second; got != want {
+		t.Errorf("HeartbeatInterval = %v, want %v", got, want)
+	}
+	if got, want := cfg.CoordinationLease.LeaseOperationTimeout, 1500*time.Millisecond; got != want {
+		t.Errorf("LeaseOperationTimeout = %v, want %v", got, want)
+	}
+}
+
+// TestHOCON_CoordinationLease_AkkaPrefix verifies the same parsing under
+// the akka.* prefix when the protocol is Akka.
+func TestHOCON_CoordinationLease_AkkaPrefix(t *testing.T) {
+	const hoconConf = `
+akka {
+  remote.artery.canonical {
+    hostname = "127.0.0.1"
+    port = 0
+  }
+  cluster.seed-nodes = ["akka://Sys@127.0.0.1:0"]
+  coordination {
+    lease {
+      heartbeat-timeout = 30s
+    }
+  }
+}
+`
+	cfg, err := parseHOCONString(hoconConf)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.CoordinationLease.HeartbeatTimeout, 30*time.Second; got != want {
+		t.Errorf("HeartbeatTimeout = %v, want %v", got, want)
+	}
+}
+
+// TestHOCON_CoordinationLease_ResolvesViaDefaultManager confirms the
+// parsed LeaseClass resolves to a working provider when fed into the
+// default LeaseManager.
+func TestHOCON_CoordinationLease_ResolvesViaDefaultManager(t *testing.T) {
+	const hoconConf = `
+pekko {
+  remote.artery.canonical {
+    hostname = "127.0.0.1"
+    port = 0
+  }
+  cluster.seed-nodes = ["pekko://Sys@127.0.0.1:0"]
+  coordination.lease.lease-class = "memory"
+}
+`
+	cfg, err := parseHOCONString(hoconConf)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	mgr := lease.NewDefaultManager()
+	settings := lease.LeaseSettings{
+		LeaseName:     "hocon-resolved",
+		OwnerName:     "node-1",
+		LeaseDuration: cfg.CoordinationLease.HeartbeatTimeout,
+	}
+	l, err := mgr.GetLease(cfg.CoordinationLease.LeaseClass, settings)
+	if err != nil {
+		t.Fatalf("GetLease: %v", err)
+	}
+	got, err := l.Acquire(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	if !got {
+		t.Fatal("Acquire should succeed via the resolved memory provider")
 	}
 }

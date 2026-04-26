@@ -1111,6 +1111,29 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		}
 	}
 
+	// ── Coordination Lease ─────────────────────────────────────────────────
+	// pekko.coordination.lease.* — Round-2 session 18.  Parses the four
+	// standard default keys; sessions 19/20 consume these via cluster/lease.
+	leasePrefix := prefix + ".coordination.lease"
+	if v, err := cfg.GetString(leasePrefix + ".lease-class"); err == nil {
+		nodeCfg.CoordinationLease.LeaseClass = strings.TrimSpace(v)
+	}
+	if v, err := cfg.GetString(leasePrefix + ".heartbeat-timeout"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.CoordinationLease.HeartbeatTimeout = d
+		}
+	}
+	if v, err := cfg.GetString(leasePrefix + ".heartbeat-interval"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.CoordinationLease.HeartbeatInterval = d
+		}
+	}
+	if v, err := cfg.GetString(leasePrefix + ".lease-operation-timeout"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.CoordinationLease.LeaseOperationTimeout = d
+		}
+	}
+
 	// ── Pub-Sub ────────────────────────────────────────────────────────────
 	pubSubPrefix := prefix + ".cluster.pub-sub"
 	if v, err := cfg.GetString(pubSubPrefix + ".gossip-interval"); err == nil {

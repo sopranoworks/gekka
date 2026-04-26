@@ -591,6 +591,13 @@ type ClusterConfig struct {
 	// DistributedData configures the Distributed Data Replicator (v0.10.0).
 	DistributedData DistributedDataConfig
 
+	// CoordinationLease holds defaults for the pekko.coordination.lease.*
+	// namespace, parsed from HOCON.  Round-2 session 18 ships the public
+	// surface (cluster/lease) and the in-memory reference provider; sessions
+	// 19/20 wire SBR lease-majority and Singleton/Sharding use-lease against
+	// these defaults.
+	CoordinationLease CoordinationLeaseConfig
+
 	// HOCON holds the raw parsed configuration. When non-nil, NewCluster calls
 	// SerializationRegistry.LoadFromConfig on it to register any user-defined
 	// serializers declared under pekko.actor.serializers and
@@ -741,6 +748,34 @@ type DistributedDataConfig struct {
 	// Corresponds to pekko.cluster.distributed-data.serializer-cache-time-to-live.
 	// Default: 10s. Zero disables caching.
 	SerializerCacheTimeToLive time.Duration
+}
+
+// CoordinationLeaseConfig holds defaults for the pekko.coordination.lease.*
+// namespace.  Sessions 19/20 read these values when wiring SBR
+// lease-majority and Singleton/Sharding use-lease.
+type CoordinationLeaseConfig struct {
+	// LeaseClass is the default lease implementation name (registered in
+	// the LeaseManager).  Empty falls back to "memory" — the in-memory
+	// reference provider shipped in cluster/lease.
+	// Corresponds to pekko.coordination.lease.lease-class.
+	LeaseClass string
+
+	// HeartbeatTimeout is how long a holder may go without renewing before
+	// the lease becomes available to other owners.
+	// Corresponds to pekko.coordination.lease.heartbeat-timeout.
+	// Default: 120s.
+	HeartbeatTimeout time.Duration
+
+	// HeartbeatInterval is the cadence at which holders should renew the
+	// lease with the underlying coordination service.
+	// Corresponds to pekko.coordination.lease.heartbeat-interval.
+	// Default: 12s.
+	HeartbeatInterval time.Duration
+
+	// LeaseOperationTimeout bounds individual Acquire/Release calls.
+	// Corresponds to pekko.coordination.lease.lease-operation-timeout.
+	// Default: 5s.
+	LeaseOperationTimeout time.Duration
 }
 
 // PersistenceConfig holds persistence-plugin settings parsed from HOCON.

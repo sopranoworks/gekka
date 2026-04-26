@@ -1325,6 +1325,57 @@ type ShardingConfig struct {
 	// retries reaching the coordinator singleton after a transient failure.
 	// Corresponds to pekko.cluster.sharding.coordinator-failure-backoff. Pekko default: 5s.
 	CoordinatorFailureBackoff time.Duration
+
+	// WaitingForStateTimeout caps how long the Shard waits for the initial
+	// distributed-state read during recovery (DData ReadMajority).
+	// Corresponds to pekko.cluster.sharding.waiting-for-state-timeout.
+	// Pekko default: 2s. Plumbed to ShardSettings.
+	WaitingForStateTimeout time.Duration
+
+	// UpdatingStateTimeout caps how long the Shard waits for a
+	// distributed-state update or remember-entities write to complete.
+	// Corresponds to pekko.cluster.sharding.updating-state-timeout.
+	// Pekko default: 5s. Plumbed to ShardSettings.
+	UpdatingStateTimeout time.Duration
+
+	// ShardRegionQueryTimeout caps how long the ShardRegion waits when
+	// answering a query that needs to reach every shard.
+	// Corresponds to pekko.cluster.sharding.shard-region-query-timeout.
+	// Pekko default: 3s. Plumbed to ShardSettings.
+	ShardRegionQueryTimeout time.Duration
+
+	// EntityRecoveryStrategy selects how a Shard re-spawns remembered
+	// entities. Allowed values: "all" (default) or "constant".
+	// Corresponds to pekko.cluster.sharding.entity-recovery-strategy.
+	EntityRecoveryStrategy string
+
+	// EntityRecoveryConstantRateFrequency is the delay between successive
+	// entity-spawn batches under the "constant" strategy.
+	// Corresponds to
+	// pekko.cluster.sharding.entity-recovery-constant-rate-strategy.frequency.
+	// Pekko default: 100ms.
+	EntityRecoveryConstantRateFrequency time.Duration
+
+	// EntityRecoveryConstantRateNumberOfEntities is the batch size for the
+	// "constant" entity-recovery strategy.
+	// Corresponds to
+	// pekko.cluster.sharding.entity-recovery-constant-rate-strategy.number-of-entities.
+	// Pekko default: 5.
+	EntityRecoveryConstantRateNumberOfEntities int
+
+	// CoordinatorWriteMajorityPlus is the additional number of nodes (above
+	// majority) DData writes must reach when persisting coordinator state.
+	// Corresponds to
+	// pekko.cluster.sharding.coordinator-state.write-majority-plus.
+	// Pekko default: 3. Plumbed to ShardSettings.
+	CoordinatorWriteMajorityPlus int
+
+	// CoordinatorReadMajorityPlus is the additional number of nodes (above
+	// majority) DData reads must reach when retrieving coordinator state.
+	// Corresponds to
+	// pekko.cluster.sharding.coordinator-state.read-majority-plus.
+	// Pekko default: 5. Plumbed to ShardSettings.
+	CoordinatorReadMajorityPlus int
 }
 
 // LeastShardAllocationConfig holds knobs for the default sharding allocation

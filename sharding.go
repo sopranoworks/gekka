@@ -109,6 +109,54 @@ type ShardingSettings struct {
 	// retries after a transient failure.
 	// Corresponds to pekko.cluster.sharding.coordinator-failure-backoff. Pekko default: 5s.
 	CoordinatorFailureBackoff time.Duration
+
+	// WaitingForStateTimeout caps how long the Shard waits for the initial
+	// distributed-state read during recovery.
+	// Corresponds to pekko.cluster.sharding.waiting-for-state-timeout. Pekko default: 2s.
+	WaitingForStateTimeout time.Duration
+
+	// UpdatingStateTimeout caps how long the Shard waits for a
+	// distributed-state update / remember-entities write to complete.
+	// Corresponds to pekko.cluster.sharding.updating-state-timeout. Pekko default: 5s.
+	UpdatingStateTimeout time.Duration
+
+	// ShardRegionQueryTimeout caps how long the ShardRegion waits when
+	// answering a query that needs to reach every shard.
+	// Corresponds to pekko.cluster.sharding.shard-region-query-timeout. Pekko default: 3s.
+	ShardRegionQueryTimeout time.Duration
+
+	// EntityRecoveryStrategy selects how a Shard re-spawns remembered
+	// entities. "all" (default) spawns every entity at once; "constant"
+	// spawns batches of EntityRecoveryConstantRateNumberOfEntities every
+	// EntityRecoveryConstantRateFrequency.
+	// Corresponds to pekko.cluster.sharding.entity-recovery-strategy.
+	EntityRecoveryStrategy string
+
+	// EntityRecoveryConstantRateFrequency is the delay between successive
+	// entity-spawn batches under the "constant" strategy.
+	// Corresponds to
+	// pekko.cluster.sharding.entity-recovery-constant-rate-strategy.frequency.
+	// Pekko default: 100ms.
+	EntityRecoveryConstantRateFrequency time.Duration
+
+	// EntityRecoveryConstantRateNumberOfEntities is the batch size for the
+	// "constant" entity-recovery strategy.
+	// Corresponds to
+	// pekko.cluster.sharding.entity-recovery-constant-rate-strategy.number-of-entities.
+	// Pekko default: 5.
+	EntityRecoveryConstantRateNumberOfEntities int
+
+	// CoordinatorWriteMajorityPlus is the additional number of nodes (above
+	// majority) DData writes for coordinator state must reach.
+	// Corresponds to pekko.cluster.sharding.coordinator-state.write-majority-plus.
+	// Pekko default: 3.
+	CoordinatorWriteMajorityPlus int
+
+	// CoordinatorReadMajorityPlus is the additional number of nodes (above
+	// majority) DData reads for coordinator state must reach.
+	// Corresponds to pekko.cluster.sharding.coordinator-state.read-majority-plus.
+	// Pekko default: 5.
+	CoordinatorReadMajorityPlus int
 }
 
 // StartSharding starts cluster sharding for a given entity type.
@@ -180,6 +228,31 @@ func StartSharding[Command any, Event any, State any](
 		}
 		if settings.CoordinatorFailureBackoff == 0 && cluster.cfg.Sharding.CoordinatorFailureBackoff > 0 {
 			settings.CoordinatorFailureBackoff = cluster.cfg.Sharding.CoordinatorFailureBackoff
+		}
+		// Round-2 session 14 — retry/backoff (part 2).
+		if settings.WaitingForStateTimeout == 0 && cluster.cfg.Sharding.WaitingForStateTimeout > 0 {
+			settings.WaitingForStateTimeout = cluster.cfg.Sharding.WaitingForStateTimeout
+		}
+		if settings.UpdatingStateTimeout == 0 && cluster.cfg.Sharding.UpdatingStateTimeout > 0 {
+			settings.UpdatingStateTimeout = cluster.cfg.Sharding.UpdatingStateTimeout
+		}
+		if settings.ShardRegionQueryTimeout == 0 && cluster.cfg.Sharding.ShardRegionQueryTimeout > 0 {
+			settings.ShardRegionQueryTimeout = cluster.cfg.Sharding.ShardRegionQueryTimeout
+		}
+		if settings.EntityRecoveryStrategy == "" && cluster.cfg.Sharding.EntityRecoveryStrategy != "" {
+			settings.EntityRecoveryStrategy = cluster.cfg.Sharding.EntityRecoveryStrategy
+		}
+		if settings.EntityRecoveryConstantRateFrequency == 0 && cluster.cfg.Sharding.EntityRecoveryConstantRateFrequency > 0 {
+			settings.EntityRecoveryConstantRateFrequency = cluster.cfg.Sharding.EntityRecoveryConstantRateFrequency
+		}
+		if settings.EntityRecoveryConstantRateNumberOfEntities == 0 && cluster.cfg.Sharding.EntityRecoveryConstantRateNumberOfEntities > 0 {
+			settings.EntityRecoveryConstantRateNumberOfEntities = cluster.cfg.Sharding.EntityRecoveryConstantRateNumberOfEntities
+		}
+		if settings.CoordinatorWriteMajorityPlus == 0 && cluster.cfg.Sharding.CoordinatorWriteMajorityPlus != 0 {
+			settings.CoordinatorWriteMajorityPlus = cluster.cfg.Sharding.CoordinatorWriteMajorityPlus
+		}
+		if settings.CoordinatorReadMajorityPlus == 0 && cluster.cfg.Sharding.CoordinatorReadMajorityPlus != 0 {
+			settings.CoordinatorReadMajorityPlus = cluster.cfg.Sharding.CoordinatorReadMajorityPlus
 		}
 	}
 
@@ -312,21 +385,29 @@ func StartSharding[Command any, Event any, State any](
 	}
 
 	shardSettings := sharding.ShardSettings{
-		PassivationIdleTimeout:       settings.PassivationIdleTimeout,
-		RememberEntities:             settings.RememberEntities,
-		Journal:                      settings.Journal,
-		DataCenter:                   settings.DataCenter,
-		HandoffTimeout:               settings.HandoffTimeout,
-		NumberOfShards:               settings.NumberOfShards,
-		GuardianName:                 settings.GuardianName,
-		PassivationStrategy:          settings.PassivationStrategy,
-		PassivationActiveEntityLimit: settings.PassivationActiveEntityLimit,
-		RetryInterval:                settings.RetryInterval,
-		BufferSize:                   settings.BufferSize,
-		ShardStartTimeout:            settings.ShardStartTimeout,
-		ShardFailureBackoff:          settings.ShardFailureBackoff,
-		EntityRestartBackoff:         settings.EntityRestartBackoff,
-		CoordinatorFailureBackoff:    settings.CoordinatorFailureBackoff,
+		PassivationIdleTimeout:                     settings.PassivationIdleTimeout,
+		RememberEntities:                           settings.RememberEntities,
+		Journal:                                    settings.Journal,
+		DataCenter:                                 settings.DataCenter,
+		HandoffTimeout:                             settings.HandoffTimeout,
+		NumberOfShards:                             settings.NumberOfShards,
+		GuardianName:                               settings.GuardianName,
+		PassivationStrategy:                        settings.PassivationStrategy,
+		PassivationActiveEntityLimit:               settings.PassivationActiveEntityLimit,
+		RetryInterval:                              settings.RetryInterval,
+		BufferSize:                                 settings.BufferSize,
+		ShardStartTimeout:                          settings.ShardStartTimeout,
+		ShardFailureBackoff:                        settings.ShardFailureBackoff,
+		EntityRestartBackoff:                       settings.EntityRestartBackoff,
+		CoordinatorFailureBackoff:                  settings.CoordinatorFailureBackoff,
+		WaitingForStateTimeout:                     settings.WaitingForStateTimeout,
+		UpdatingStateTimeout:                       settings.UpdatingStateTimeout,
+		ShardRegionQueryTimeout:                    settings.ShardRegionQueryTimeout,
+		EntityRecoveryStrategy:                     settings.EntityRecoveryStrategy,
+		EntityRecoveryConstantRateFrequency:        settings.EntityRecoveryConstantRateFrequency,
+		EntityRecoveryConstantRateNumberOfEntities: settings.EntityRecoveryConstantRateNumberOfEntities,
+		CoordinatorWriteMajorityPlus:               settings.CoordinatorWriteMajorityPlus,
+		CoordinatorReadMajorityPlus:                settings.CoordinatorReadMajorityPlus,
 	}
 
 	// Populate IsLocalDC when both the cluster and DataCenter are available.

@@ -146,4 +146,81 @@ type ShardSettings struct {
 	// Equivalent HOCON key:
 	//   pekko.cluster.sharding.coordinator-failure-backoff = 5s
 	CoordinatorFailureBackoff time.Duration
+
+	// WaitingForStateTimeout caps how long the Shard waits for the initial
+	// distributed state read to complete during recovery. Plumbed onto
+	// ShardSettings; consumed by the DData-backed coordinator state path
+	// when present.
+	//
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.waiting-for-state-timeout = 2s
+	WaitingForStateTimeout time.Duration
+
+	// UpdatingStateTimeout caps how long the Shard waits for a distributed
+	// state update (or a remember-entities write) to complete before retrying.
+	// Plumbed onto ShardSettings; consumed by the DData-backed update path
+	// when present.
+	//
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.updating-state-timeout = 5s
+	UpdatingStateTimeout time.Duration
+
+	// ShardRegionQueryTimeout caps how long the ShardRegion waits when
+	// answering a query that needs to reach every shard. Plumbed onto
+	// ShardSettings; consumed by region-level query handlers as they are
+	// added.
+	//
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.shard-region-query-timeout = 3s
+	ShardRegionQueryTimeout time.Duration
+
+	// EntityRecoveryStrategy selects how a Shard re-spawns remembered
+	// entities during recovery. "all" (the default) starts every entity at
+	// once. "constant" paces recovery: it spawns
+	// EntityRecoveryConstantRateNumberOfEntities entities, waits
+	// EntityRecoveryConstantRateFrequency, then repeats until all
+	// remembered entities are back.
+	//
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.entity-recovery-strategy = "all"
+	EntityRecoveryStrategy string
+
+	// EntityRecoveryConstantRateFrequency is the delay between successive
+	// entity-spawn batches when EntityRecoveryStrategy = "constant".
+	//
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.entity-recovery-constant-rate-strategy.frequency = 100ms
+	EntityRecoveryConstantRateFrequency time.Duration
+
+	// EntityRecoveryConstantRateNumberOfEntities is the batch size for
+	// constant-rate recovery. Zero falls back to 5 (Pekko default).
+	//
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.entity-recovery-constant-rate-strategy.number-of-entities = 5
+	EntityRecoveryConstantRateNumberOfEntities int
+
+	// CoordinatorWriteMajorityPlus is the additional number of nodes (above
+	// majority) that DData writes for coordinator state must reach. May be
+	// math.MaxInt to mean "all nodes" in keeping with Pekko's "all"
+	// special-value. Plumbed onto ShardSettings; consumed by the DData
+	// coordinator state path when present.
+	//
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.coordinator-state.write-majority-plus = 3
+	CoordinatorWriteMajorityPlus int
+
+	// CoordinatorReadMajorityPlus is the additional number of nodes (above
+	// majority) that DData reads for coordinator state must reach.
+	//
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.coordinator-state.read-majority-plus = 5
+	CoordinatorReadMajorityPlus int
 }
+
+// EntityRecoveryStrategyAll is the default entity-recovery strategy: every
+// remembered entity is re-spawned at once during shard recovery.
+const EntityRecoveryStrategyAll = "all"
+
+// EntityRecoveryStrategyConstant paces shard recovery by spawning a fixed
+// number of entities per tick of EntityRecoveryConstantRateFrequency.
+const EntityRecoveryStrategyConstant = "constant"

@@ -208,6 +208,14 @@ Legend:
 | `pekko.cluster.sharding.shard-failure-backoff` | `10s` | ✅ | Region delays clearing the cached home after a Shard terminates (Round-2 session 13) |
 | `pekko.cluster.sharding.entity-restart-backoff` | `10s` | ✅ | Plumbed onto ShardSettings; entity-restart consumer wires in part 2 (Round-2 session 13) |
 | `pekko.cluster.sharding.coordinator-failure-backoff` | `5s` | ✅ | Region delays re-registration with the coordinator after termination (Round-2 session 13) |
+| `pekko.cluster.sharding.waiting-for-state-timeout` | `2s` | ⚠️ | Plumbed onto ShardSettings; consumed by the DData coordinator-state path when present (Round-2 session 14) |
+| `pekko.cluster.sharding.updating-state-timeout` | `5s` | ⚠️ | Plumbed onto ShardSettings; consumed by DData updates / remember-entities writes when present (Round-2 session 14) |
+| `pekko.cluster.sharding.shard-region-query-timeout` | `3s` | ⚠️ | Plumbed onto ShardSettings; consumed by region-level query handlers as added (Round-2 session 14) |
+| `pekko.cluster.sharding.entity-recovery-strategy` | `"all"` | ✅ | `"all"` spawns all remembered entities at once; `"constant"` paces recovery in batches (Round-2 session 14) |
+| `pekko.cluster.sharding.entity-recovery-constant-rate-strategy.frequency` | `100ms` | ✅ | Delay between batches under the `"constant"` strategy (Round-2 session 14) |
+| `pekko.cluster.sharding.entity-recovery-constant-rate-strategy.number-of-entities` | `5` | ✅ | Batch size under the `"constant"` strategy (Round-2 session 14) |
+| `pekko.cluster.sharding.coordinator-state.write-majority-plus` | `3` | ⚠️ | Plumbed onto ShardSettings; `"all"` maps to math.MaxInt sentinel; consumer wires when DData write-majority lands (Round-2 session 14) |
+| `pekko.cluster.sharding.coordinator-state.read-majority-plus` | `5` | ⚠️ | Plumbed onto ShardSettings; `"all"` maps to math.MaxInt sentinel; consumer wires when DData read-majority lands (Round-2 session 14) |
 
 ---
 

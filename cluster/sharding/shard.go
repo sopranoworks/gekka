@@ -33,6 +33,10 @@ type entityStoppedEvent struct {
 // checkPassivationMsg is a periodic self-message that triggers the idle scan.
 type checkPassivationMsg struct{}
 
+// entityRecoveryTickMsg is a self-message used by the constant-rate entity
+// recovery strategy: each tick spawns the next batch of remembered entities.
+type entityRecoveryTickMsg struct{}
+
 // ── Shard ─────────────────────────────────────────────────────────────────────
 
 // Shard manages entities within a shard.
@@ -55,6 +59,12 @@ type Shard struct {
 
 	// remember-entities (store path): set-based; passivation keeps entities.
 	store ShardStore
+
+	// pendingRecovery is the queue of remembered entity IDs that have not
+	// yet been re-spawned. Populated by recoverFromStore /
+	// recoverFromJournal when EntityRecoveryStrategy = "constant"; drained
+	// in batches via entityRecoveryTickMsg.
+	pendingRecovery []EntityId
 
 	// handoff stash: when inHandoff is true, incoming ShardingEnvelope
 	// messages are buffered here rather than delivered to entities.  On
@@ -162,21 +172,11 @@ func (s *Shard) recoverFromJournal() {
 
 	s.seqNr = highest
 
-	// Re-spawn each previously active entity.
+	ids := make([]EntityId, 0, len(active))
 	for entityId := range active {
-		entity, spawnErr := s.entityCreator(s.System(), entityId)
-		if spawnErr != nil {
-			s.Log().Error("remember-entities: failed to re-spawn entity",
-				"entityId", entityId, "error", spawnErr)
-			continue
-		}
-		s.entities[entityId] = entity
-		if s.settings.PassivationIdleTimeout > 0 {
-			s.lastActivity[entityId] = time.Now()
-		}
-		s.Log().Info("remember-entities: recovered entity", "entityId", entityId,
-			"persistenceId", s.persistenceId)
+		ids = append(ids, entityId)
 	}
+	s.applyEntityRecoveryStrategy(ids, "journal")
 }
 
 // recoverFromStore replays the ShardStore's entity set and re-spawns every
@@ -190,19 +190,99 @@ func (s *Shard) recoverFromStore() {
 			"shardId", s.shardId, "error", err)
 		return
 	}
-	for _, entityId := range ids {
-		entity, spawnErr := s.entityCreator(s.System(), entityId)
-		if spawnErr != nil {
-			s.Log().Error("remember-entities: failed to re-spawn entity from store",
-				"entityId", entityId, "error", spawnErr)
-			continue
+	s.applyEntityRecoveryStrategy(ids, "store")
+}
+
+// applyEntityRecoveryStrategy spawns the recovered entity set according to
+// the configured EntityRecoveryStrategy. The default ("all") spawns every
+// entity inline; "constant" enqueues the slice for batched recovery driven by
+// entityRecoveryTickMsg.
+func (s *Shard) applyEntityRecoveryStrategy(ids []EntityId, source string) {
+	if len(ids) == 0 {
+		return
+	}
+	if s.settings.EntityRecoveryStrategy != EntityRecoveryStrategyConstant {
+		// Default "all" strategy: spawn every entity at once.
+		for _, entityId := range ids {
+			s.spawnRecoveredEntity(entityId, source)
 		}
-		s.entities[entityId] = entity
-		if s.settings.PassivationIdleTimeout > 0 {
-			s.lastActivity[entityId] = time.Now()
-		}
-		s.Log().Info("remember-entities: store-recovered entity",
-			"entityId", entityId, "shardId", s.shardId)
+		return
+	}
+
+	// Constant-rate strategy: spawn the first batch immediately, then drain
+	// the rest one batch per entityRecoveryTickMsg tick.
+	batchSize := s.settings.EntityRecoveryConstantRateNumberOfEntities
+	if batchSize <= 0 {
+		batchSize = 5
+	}
+
+	first := batchSize
+	if first > len(ids) {
+		first = len(ids)
+	}
+	for _, entityId := range ids[:first] {
+		s.spawnRecoveredEntity(entityId, source)
+	}
+	if first < len(ids) {
+		s.pendingRecovery = append(s.pendingRecovery, ids[first:]...)
+		s.scheduleEntityRecoveryTick()
+	}
+}
+
+// spawnRecoveredEntity creates one previously-remembered entity and registers
+// it with the local Shard. Failures are logged and do not abort recovery of
+// the remaining entities.
+func (s *Shard) spawnRecoveredEntity(entityId EntityId, source string) {
+	entity, spawnErr := s.entityCreator(s.System(), entityId)
+	if spawnErr != nil {
+		s.Log().Error("remember-entities: failed to re-spawn entity",
+			"source", source, "entityId", entityId, "error", spawnErr)
+		return
+	}
+	s.entities[entityId] = entity
+	if s.settings.PassivationIdleTimeout > 0 {
+		s.lastActivity[entityId] = time.Now()
+	}
+	s.Log().Info("remember-entities: recovered entity",
+		"source", source, "entityId", entityId, "shardId", s.shardId)
+}
+
+// scheduleEntityRecoveryTick arms a one-shot timer that delivers
+// entityRecoveryTickMsg after the configured frequency. The Receive handler
+// re-arms it while pendingRecovery still has entries.
+func (s *Shard) scheduleEntityRecoveryTick() {
+	freq := s.settings.EntityRecoveryConstantRateFrequency
+	if freq <= 0 {
+		freq = 100 * time.Millisecond
+	}
+	self := s.Self()
+	if self == nil {
+		return
+	}
+	time.AfterFunc(freq, func() { self.Tell(entityRecoveryTickMsg{}) })
+}
+
+// drainEntityRecoveryBatch spawns the next batch of pending recovered
+// entities (up to EntityRecoveryConstantRateNumberOfEntities) and re-arms the
+// tick when more remain.
+func (s *Shard) drainEntityRecoveryBatch() {
+	if len(s.pendingRecovery) == 0 {
+		return
+	}
+	batchSize := s.settings.EntityRecoveryConstantRateNumberOfEntities
+	if batchSize <= 0 {
+		batchSize = 5
+	}
+	if batchSize > len(s.pendingRecovery) {
+		batchSize = len(s.pendingRecovery)
+	}
+	batch := s.pendingRecovery[:batchSize]
+	s.pendingRecovery = s.pendingRecovery[batchSize:]
+	for _, entityId := range batch {
+		s.spawnRecoveredEntity(entityId, "constant")
+	}
+	if len(s.pendingRecovery) > 0 {
+		s.scheduleEntityRecoveryTick()
 	}
 }
 
@@ -255,6 +335,11 @@ func (s *Shard) Receive(msg any) {
 		s.checkIdleEntities()
 		// Re-arm the timer.
 		s.schedulePassivationCheck()
+
+	case entityRecoveryTickMsg:
+		// Constant-rate recovery: spawn the next batch and re-arm if more
+		// entities remain.
+		s.drainEntityRecoveryBatch()
 	}
 }
 

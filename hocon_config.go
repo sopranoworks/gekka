@@ -11,6 +11,7 @@ package gekka
 import (
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"sort"
 	"strconv"
@@ -410,6 +411,49 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 	if v, err := cfg.GetString(shardingPrefix + ".coordinator-failure-backoff"); err == nil {
 		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
 			nodeCfg.Sharding.CoordinatorFailureBackoff = d
+		}
+	}
+	// Round-2 session 14 — retry/backoff (part 2).
+	if v, err := cfg.GetString(shardingPrefix + ".waiting-for-state-timeout"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.Sharding.WaitingForStateTimeout = d
+		}
+	}
+	if v, err := cfg.GetString(shardingPrefix + ".updating-state-timeout"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.Sharding.UpdatingStateTimeout = d
+		}
+	}
+	if v, err := cfg.GetString(shardingPrefix + ".shard-region-query-timeout"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.Sharding.ShardRegionQueryTimeout = d
+		}
+	}
+	if v, err := cfg.GetString(shardingPrefix + ".entity-recovery-strategy"); err == nil {
+		nodeCfg.Sharding.EntityRecoveryStrategy = strings.TrimSpace(v)
+	}
+	ercPrefix := shardingPrefix + ".entity-recovery-constant-rate-strategy"
+	if v, err := cfg.GetString(ercPrefix + ".frequency"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.Sharding.EntityRecoveryConstantRateFrequency = d
+		}
+	}
+	if v, err := cfg.GetInt(ercPrefix + ".number-of-entities"); err == nil {
+		nodeCfg.Sharding.EntityRecoveryConstantRateNumberOfEntities = v
+	}
+	coordStatePrefix := shardingPrefix + ".coordinator-state"
+	if v, err := cfg.GetInt(coordStatePrefix + ".write-majority-plus"); err == nil {
+		nodeCfg.Sharding.CoordinatorWriteMajorityPlus = v
+	} else if s, sErr := cfg.GetString(coordStatePrefix + ".write-majority-plus"); sErr == nil {
+		if strings.TrimSpace(s) == "all" {
+			nodeCfg.Sharding.CoordinatorWriteMajorityPlus = math.MaxInt
+		}
+	}
+	if v, err := cfg.GetInt(coordStatePrefix + ".read-majority-plus"); err == nil {
+		nodeCfg.Sharding.CoordinatorReadMajorityPlus = v
+	} else if s, sErr := cfg.GetString(coordStatePrefix + ".read-majority-plus"); sErr == nil {
+		if strings.TrimSpace(s) == "all" {
+			nodeCfg.Sharding.CoordinatorReadMajorityPlus = math.MaxInt
 		}
 	}
 	leastPrefix := shardingPrefix + ".least-shard-allocation-strategy"

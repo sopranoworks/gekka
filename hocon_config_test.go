@@ -3464,3 +3464,87 @@ pekko {
 		t.Errorf("expected all retry/backoff fields zero when absent, got %+v", cfg.Sharding)
 	}
 }
+
+// TestParseHOCON_ShardingRetryBackoffPart2 verifies session 14 keys reach
+// ShardingConfig.
+func TestParseHOCON_ShardingRetryBackoffPart2(t *testing.T) {
+	hocon := `
+pekko {
+  remote.artery.canonical.hostname = "127.0.0.1"
+  remote.artery.canonical.port = 2552
+  cluster {
+    seed-nodes = []
+    sharding {
+      waiting-for-state-timeout  = 4s
+      updating-state-timeout     = 9s
+      shard-region-query-timeout = 6s
+      entity-recovery-strategy   = "constant"
+      entity-recovery-constant-rate-strategy {
+        frequency          = 250ms
+        number-of-entities = 11
+      }
+      coordinator-state {
+        write-majority-plus = 4
+        read-majority-plus  = 7
+      }
+    }
+  }
+}
+`
+	cfg, err := ParseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("ParseHOCONString: %v", err)
+	}
+	if got, want := cfg.Sharding.WaitingForStateTimeout, 4*time.Second; got != want {
+		t.Errorf("WaitingForStateTimeout = %v, want %v", got, want)
+	}
+	if got, want := cfg.Sharding.UpdatingStateTimeout, 9*time.Second; got != want {
+		t.Errorf("UpdatingStateTimeout = %v, want %v", got, want)
+	}
+	if got, want := cfg.Sharding.ShardRegionQueryTimeout, 6*time.Second; got != want {
+		t.Errorf("ShardRegionQueryTimeout = %v, want %v", got, want)
+	}
+	if got, want := cfg.Sharding.EntityRecoveryStrategy, "constant"; got != want {
+		t.Errorf("EntityRecoveryStrategy = %q, want %q", got, want)
+	}
+	if got, want := cfg.Sharding.EntityRecoveryConstantRateFrequency, 250*time.Millisecond; got != want {
+		t.Errorf("EntityRecoveryConstantRateFrequency = %v, want %v", got, want)
+	}
+	if got, want := cfg.Sharding.EntityRecoveryConstantRateNumberOfEntities, 11; got != want {
+		t.Errorf("EntityRecoveryConstantRateNumberOfEntities = %d, want %d", got, want)
+	}
+	if got, want := cfg.Sharding.CoordinatorWriteMajorityPlus, 4; got != want {
+		t.Errorf("CoordinatorWriteMajorityPlus = %d, want %d", got, want)
+	}
+	if got, want := cfg.Sharding.CoordinatorReadMajorityPlus, 7; got != want {
+		t.Errorf("CoordinatorReadMajorityPlus = %d, want %d", got, want)
+	}
+}
+
+// TestParseHOCON_ShardingCoordinatorStateAllSentinel verifies "all" maps to
+// math.MaxInt for both write- and read-majority-plus.
+func TestParseHOCON_ShardingCoordinatorStateAllSentinel(t *testing.T) {
+	hocon := `
+pekko {
+  remote.artery.canonical.hostname = "127.0.0.1"
+  remote.artery.canonical.port = 2552
+  cluster {
+    seed-nodes = []
+    sharding.coordinator-state {
+      write-majority-plus = "all"
+      read-majority-plus  = "all"
+    }
+  }
+}
+`
+	cfg, err := ParseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("ParseHOCONString: %v", err)
+	}
+	if cfg.Sharding.CoordinatorWriteMajorityPlus <= 0 {
+		t.Errorf(`expected "all" to produce a positive sentinel, got %d`, cfg.Sharding.CoordinatorWriteMajorityPlus)
+	}
+	if cfg.Sharding.CoordinatorReadMajorityPlus <= 0 {
+		t.Errorf(`expected "all" to produce a positive sentinel, got %d`, cfg.Sharding.CoordinatorReadMajorityPlus)
+	}
+}

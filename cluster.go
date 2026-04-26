@@ -1376,6 +1376,39 @@ type ShardingConfig struct {
 	// pekko.cluster.sharding.coordinator-state.read-majority-plus.
 	// Pekko default: 5. Plumbed to ShardSettings.
 	CoordinatorReadMajorityPlus int
+
+	// VerboseDebugLogging gates fine-grained per-message DEBUG logs in
+	// the sharding code path.
+	// Corresponds to pekko.cluster.sharding.verbose-debug-logging.
+	VerboseDebugLogging bool
+
+	// FailOnInvalidEntityStateTransition, when true, makes the Shard
+	// panic on an invalid internal state transition.
+	// Corresponds to
+	// pekko.cluster.sharding.fail-on-invalid-entity-state-transition.
+	FailOnInvalidEntityStateTransition bool
+
+	// IdleEntityCheckInterval overrides the cadence of the idle-entity
+	// passivation scan. When zero, defaults to PassivationIdleTimeout/2.
+	// Corresponds to
+	// pekko.cluster.sharding.passivation.default-idle-strategy.idle-entity.interval.
+	IdleEntityCheckInterval time.Duration
+
+	// HealthCheck holds settings for the sharding readiness probe.
+	// Corresponds to pekko.cluster.sharding.healthcheck.*.
+	HealthCheck ShardingHealthCheckConfig
+}
+
+// ShardingHealthCheckConfig captures pekko.cluster.sharding.healthcheck.*.
+type ShardingHealthCheckConfig struct {
+	// Names is the list of sharding type names that must have a
+	// registered coordinator for the health check to pass.
+	// Corresponds to pekko.cluster.sharding.healthcheck.names. Default: [].
+	Names []string
+
+	// Timeout caps how long the health check is allowed to run.
+	// Corresponds to pekko.cluster.sharding.healthcheck.timeout. Pekko default: 5s.
+	Timeout time.Duration
 }
 
 // LeastShardAllocationConfig holds knobs for the default sharding allocation

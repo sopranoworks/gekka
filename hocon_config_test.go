@@ -3521,6 +3521,74 @@ pekko {
 	}
 }
 
+// TestParseHOCON_ShardingMiscellaneous verifies session 15 keys reach
+// ShardingConfig.
+func TestParseHOCON_ShardingMiscellaneous(t *testing.T) {
+	hocon := `
+pekko {
+  remote.artery.canonical.hostname = "127.0.0.1"
+  remote.artery.canonical.port = 2552
+  cluster {
+    seed-nodes = []
+    sharding {
+      verbose-debug-logging                   = on
+      fail-on-invalid-entity-state-transition = on
+      passivation.default-idle-strategy.idle-entity.interval = 750ms
+      healthcheck {
+        names   = ["users", "orders"]
+        timeout = 8s
+      }
+    }
+  }
+}
+`
+	cfg, err := ParseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("ParseHOCONString: %v", err)
+	}
+	if !cfg.Sharding.VerboseDebugLogging {
+		t.Errorf("VerboseDebugLogging = %v, want true", cfg.Sharding.VerboseDebugLogging)
+	}
+	if !cfg.Sharding.FailOnInvalidEntityStateTransition {
+		t.Errorf("FailOnInvalidEntityStateTransition = %v, want true", cfg.Sharding.FailOnInvalidEntityStateTransition)
+	}
+	if got, want := cfg.Sharding.IdleEntityCheckInterval, 750*time.Millisecond; got != want {
+		t.Errorf("IdleEntityCheckInterval = %v, want %v", got, want)
+	}
+	if got, want := len(cfg.Sharding.HealthCheck.Names), 2; got != want {
+		t.Fatalf("HealthCheck.Names len = %d, want %d", got, want)
+	}
+	if cfg.Sharding.HealthCheck.Names[0] != "users" || cfg.Sharding.HealthCheck.Names[1] != "orders" {
+		t.Errorf("HealthCheck.Names = %v, want [users orders]", cfg.Sharding.HealthCheck.Names)
+	}
+	if got, want := cfg.Sharding.HealthCheck.Timeout, 8*time.Second; got != want {
+		t.Errorf("HealthCheck.Timeout = %v, want %v", got, want)
+	}
+}
+
+// TestParseHOCON_ShardingMiscellaneous_DefaultIntervalSentinel verifies
+// "default" leaves IdleEntityCheckInterval at zero so the runtime falls
+// back to PassivationIdleTimeout / 2.
+func TestParseHOCON_ShardingMiscellaneous_DefaultIntervalSentinel(t *testing.T) {
+	hocon := `
+pekko {
+  remote.artery.canonical.hostname = "127.0.0.1"
+  remote.artery.canonical.port = 2552
+  cluster {
+    seed-nodes = []
+    sharding.passivation.default-idle-strategy.idle-entity.interval = "default"
+  }
+}
+`
+	cfg, err := ParseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("ParseHOCONString: %v", err)
+	}
+	if cfg.Sharding.IdleEntityCheckInterval != 0 {
+		t.Errorf(`expected "default" sentinel to leave IdleEntityCheckInterval=0, got %v`, cfg.Sharding.IdleEntityCheckInterval)
+	}
+}
+
 // TestParseHOCON_ShardingCoordinatorStateAllSentinel verifies "all" maps to
 // math.MaxInt for both write- and read-majority-plus.
 func TestParseHOCON_ShardingCoordinatorStateAllSentinel(t *testing.T) {

@@ -456,6 +456,39 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 			nodeCfg.Sharding.CoordinatorReadMajorityPlus = math.MaxInt
 		}
 	}
+	// Round-2 session 15 — sharding miscellaneous.
+	if v, err := cfg.GetString(shardingPrefix + ".verbose-debug-logging"); err == nil {
+		v = strings.TrimSpace(v)
+		nodeCfg.Sharding.VerboseDebugLogging = v == "on" || v == "true"
+	}
+	if v, err := cfg.GetString(shardingPrefix + ".fail-on-invalid-entity-state-transition"); err == nil {
+		v = strings.TrimSpace(v)
+		nodeCfg.Sharding.FailOnInvalidEntityStateTransition = v == "on" || v == "true"
+	}
+	if v, err := cfg.GetString(shardingPrefix + ".passivation.default-idle-strategy.idle-entity.interval"); err == nil {
+		s := strings.TrimSpace(v)
+		if s != "" && s != "default" {
+			if d, parseErr := parseHOCONDuration(s); parseErr == nil {
+				nodeCfg.Sharding.IdleEntityCheckInterval = d
+			}
+		}
+	}
+	healthcheckPrefix := shardingPrefix + ".healthcheck"
+	var hcNames struct {
+		Pekko []string `hocon:"pekko.cluster.sharding.healthcheck.names"`
+		Akka  []string `hocon:"akka.cluster.sharding.healthcheck.names"`
+	}
+	_ = cfg.Unmarshal(&hcNames)
+	if prefix == "pekko" && len(hcNames.Pekko) > 0 {
+		nodeCfg.Sharding.HealthCheck.Names = hcNames.Pekko
+	} else if prefix == "akka" && len(hcNames.Akka) > 0 {
+		nodeCfg.Sharding.HealthCheck.Names = hcNames.Akka
+	}
+	if v, err := cfg.GetString(healthcheckPrefix + ".timeout"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.Sharding.HealthCheck.Timeout = d
+		}
+	}
 	leastPrefix := shardingPrefix + ".least-shard-allocation-strategy"
 	if v, err := cfg.GetInt(leastPrefix + ".rebalance-threshold"); err == nil {
 		nodeCfg.Sharding.LeastShardAllocation.RebalanceThreshold = v

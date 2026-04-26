@@ -157,6 +157,23 @@ type ShardingSettings struct {
 	// Corresponds to pekko.cluster.sharding.coordinator-state.read-majority-plus.
 	// Pekko default: 5.
 	CoordinatorReadMajorityPlus int
+
+	// VerboseDebugLogging gates fine-grained per-message DEBUG logs in
+	// the sharding code path.
+	// Corresponds to pekko.cluster.sharding.verbose-debug-logging. Default: off.
+	VerboseDebugLogging bool
+
+	// FailOnInvalidEntityStateTransition, when true, makes the Shard
+	// panic on an invalid internal state transition.
+	// Corresponds to
+	// pekko.cluster.sharding.fail-on-invalid-entity-state-transition. Default: off.
+	FailOnInvalidEntityStateTransition bool
+
+	// IdleEntityCheckInterval overrides the cadence of the idle-entity
+	// passivation scan. When zero, defaults to PassivationIdleTimeout/2.
+	// Corresponds to
+	// pekko.cluster.sharding.passivation.default-idle-strategy.idle-entity.interval.
+	IdleEntityCheckInterval time.Duration
 }
 
 // StartSharding starts cluster sharding for a given entity type.
@@ -253,6 +270,16 @@ func StartSharding[Command any, Event any, State any](
 		}
 		if settings.CoordinatorReadMajorityPlus == 0 && cluster.cfg.Sharding.CoordinatorReadMajorityPlus != 0 {
 			settings.CoordinatorReadMajorityPlus = cluster.cfg.Sharding.CoordinatorReadMajorityPlus
+		}
+		// Round-2 session 15 — miscellaneous flags.
+		if !settings.VerboseDebugLogging && cluster.cfg.Sharding.VerboseDebugLogging {
+			settings.VerboseDebugLogging = true
+		}
+		if !settings.FailOnInvalidEntityStateTransition && cluster.cfg.Sharding.FailOnInvalidEntityStateTransition {
+			settings.FailOnInvalidEntityStateTransition = true
+		}
+		if settings.IdleEntityCheckInterval == 0 && cluster.cfg.Sharding.IdleEntityCheckInterval > 0 {
+			settings.IdleEntityCheckInterval = cluster.cfg.Sharding.IdleEntityCheckInterval
 		}
 	}
 
@@ -408,6 +435,9 @@ func StartSharding[Command any, Event any, State any](
 		EntityRecoveryConstantRateNumberOfEntities: settings.EntityRecoveryConstantRateNumberOfEntities,
 		CoordinatorWriteMajorityPlus:               settings.CoordinatorWriteMajorityPlus,
 		CoordinatorReadMajorityPlus:                settings.CoordinatorReadMajorityPlus,
+		VerboseDebugLogging:                        settings.VerboseDebugLogging,
+		FailOnInvalidEntityStateTransition:         settings.FailOnInvalidEntityStateTransition,
+		IdleEntityCheckInterval:                    settings.IdleEntityCheckInterval,
 	}
 
 	// Populate IsLocalDC when both the cluster and DataCenter are available.

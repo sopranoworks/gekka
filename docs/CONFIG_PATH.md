@@ -216,6 +216,11 @@ Legend:
 | `pekko.cluster.sharding.entity-recovery-constant-rate-strategy.number-of-entities` | `5` | ✅ | Batch size under the `"constant"` strategy (Round-2 session 14) |
 | `pekko.cluster.sharding.coordinator-state.write-majority-plus` | `3` | ⚠️ | Plumbed onto ShardSettings; `"all"` maps to math.MaxInt sentinel; consumer wires when DData write-majority lands (Round-2 session 14) |
 | `pekko.cluster.sharding.coordinator-state.read-majority-plus` | `5` | ⚠️ | Plumbed onto ShardSettings; `"all"` maps to math.MaxInt sentinel; consumer wires when DData read-majority lands (Round-2 session 14) |
+| `pekko.cluster.sharding.verbose-debug-logging` | `off` | ✅ | Gates fine-grained per-message DEBUG log lines via Shard.vdebug (Round-2 session 15) |
+| `pekko.cluster.sharding.fail-on-invalid-entity-state-transition` | `off` | ✅ | When `on`, Shard panics on invalid handoff transitions; otherwise logs WARN (Round-2 session 15) |
+| `pekko.cluster.sharding.passivation.default-idle-strategy.idle-entity.interval` | `default` (= timeout/2) | ✅ | Overrides idle-entity scan cadence; `"default"` leaves the timeout/2 fallback (Round-2 session 15) |
+| `pekko.cluster.sharding.healthcheck.names` | `[]` | ✅ | List of sharding type names that ClusterShardingHealthCheck must find registered to pass (Round-2 session 15) |
+| `pekko.cluster.sharding.healthcheck.timeout` | `5s` | ✅ | Caps how long ClusterShardingHealthCheck is allowed to run before returning ErrHealthCheckTimeout (Round-2 session 15) |
 
 ---
 

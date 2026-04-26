@@ -286,11 +286,45 @@ func (s *Shard) drainEntityRecoveryBatch() {
 	}
 }
 
+// invalidStateTransition reports an invalid Shard state-machine transition.
+// When FailOnInvalidEntityStateTransition is true (Pekko-test parity) the
+// shard panics so the violation surfaces immediately; otherwise the event
+// is logged at WARN level and the Shard tries to continue.
+func (s *Shard) invalidStateTransition(reason string) {
+	if s.settings.FailOnInvalidEntityStateTransition {
+		panic(fmt.Sprintf("sharding: invalid entity state transition (shardId=%s): %s",
+			s.shardId, reason))
+	}
+	s.Log().Warn("invalid entity state transition",
+		"shardId", s.shardId, "reason", reason)
+}
+
+// vdebug emits a Log().Debug() line only when VerboseDebugLogging is on.
+// Used for the per-message debug lines that should not appear in production
+// log output by default.
+func (s *Shard) vdebug(msg string, args ...any) {
+	if !s.settings.VerboseDebugLogging {
+		return
+	}
+	s.Log().Debug(msg, args...)
+}
+
 // schedulePassivationCheck sends a checkPassivationMsg to self after one
-// check interval.  The check interval is PassivationIdleTimeout/4, minimum
-// 500 ms.
+// check interval. When IdleEntityCheckInterval is set, that value is used
+// directly; otherwise the cadence falls back to PassivationIdleTimeout / 2
+// (Pekko's "default" semantics for
+// passivation.default-idle-strategy.idle-entity.interval), with a minimum
+// of 500 ms in either case.
 func (s *Shard) schedulePassivationCheck() {
-	interval := max(s.settings.PassivationIdleTimeout/4, 500*time.Millisecond)
+	var interval time.Duration
+	if s.settings.IdleEntityCheckInterval > 0 {
+		interval = s.settings.IdleEntityCheckInterval
+	} else {
+		interval = s.settings.PassivationIdleTimeout / 2
+	}
+	if interval < 500*time.Millisecond {
+		interval = 500 * time.Millisecond
+	}
 	self := s.Self()
 	time.AfterFunc(interval, func() {
 		self.Tell(checkPassivationMsg{})
@@ -305,10 +339,20 @@ func (s *Shard) Receive(msg any) {
 
 	case ShardBeginHandoff:
 		// Region is being handed off: buffer subsequent messages.
+		// fail-on-invalid-entity-state-transition: entering handoff
+		// twice (without an intervening drain) is an invalid transition.
+		if s.inHandoff {
+			s.invalidStateTransition("ShardBeginHandoff while already in handoff")
+		}
 		s.inHandoff = true
 		s.Log().Info("Shard entering handoff mode", "shardId", s.shardId)
 
 	case ShardDrainRequest:
+		// Drain is only valid while we are in handoff. Otherwise the
+		// region's drain protocol has gone out of sync.
+		if !s.inHandoff {
+			s.invalidStateTransition("ShardDrainRequest without prior ShardBeginHandoff")
+		}
 		// Flush stash back to region so it can re-route messages to the new home.
 		for _, env := range s.handoffStash {
 			m.RegionRef.Tell(env)
@@ -348,10 +392,12 @@ func (s *Shard) handleEnvelope(m ShardingEnvelope) {
 	// During handoff, buffer messages for later replay rather than delivering.
 	if s.inHandoff {
 		s.handoffStash = append(s.handoffStash, m)
-		s.Log().Debug("Shard stashing message during handoff",
+		s.vdebug("Shard stashing message during handoff",
 			"shardId", s.shardId, "entityId", m.EntityId)
 		return
 	}
+	s.vdebug("Shard delivering envelope",
+		"shardId", s.shardId, "entityId", m.EntityId)
 
 	// Unmarshal the user message.
 	var userMsg any = m.Message

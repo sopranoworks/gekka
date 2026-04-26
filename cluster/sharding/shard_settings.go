@@ -215,6 +215,32 @@ type ShardSettings struct {
 	// Equivalent HOCON key:
 	//   pekko.cluster.sharding.coordinator-state.read-majority-plus = 5
 	CoordinatorReadMajorityPlus int
+
+	// VerboseDebugLogging gates fine-grained per-message DEBUG-level
+	// log lines emitted by the Shard / ShardRegion. When false, only
+	// coarse-grained debug lines (state transitions, errors) are logged.
+	// Be careful enabling in production.
+	//
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.verbose-debug-logging = off
+	VerboseDebugLogging bool
+
+	// FailOnInvalidEntityStateTransition, when true, panics the Shard on
+	// an invalid internal state-machine transition instead of logging a
+	// warning. Mostly used by the project's own test suite.
+	//
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.fail-on-invalid-entity-state-transition = off
+	FailOnInvalidEntityStateTransition bool
+
+	// IdleEntityCheckInterval overrides the cadence at which the Shard
+	// scans for idle entities to passivate. When zero, the cadence falls
+	// back to PassivationIdleTimeout / 2 (Pekko's "default") with a
+	// minimum of 500 ms.
+	//
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.passivation.default-idle-strategy.idle-entity.interval
+	IdleEntityCheckInterval time.Duration
 }
 
 // EntityRecoveryStrategyAll is the default entity-recovery strategy: every

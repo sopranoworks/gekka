@@ -375,6 +375,12 @@ type ClusterConfig struct {
 	// Default: 1s.
 	UnreachableNodesReaperInterval time.Duration
 
+	// PublishStatsInterval is how often a CurrentClusterStats event is
+	// published to event-stream subscribers. Zero ("off") disables it.
+	// Corresponds to pekko.cluster.publish-stats-interval.
+	// Default: 0 (off).
+	PublishStatsInterval time.Duration
+
 	// InternalSBR configures the lightweight internal SBR strategy
 	// (icluster.Strategy) that is evaluated inline by CheckReachability.
 	// This complements the richer event-driven SBRManager (driven by SBR field).
@@ -1720,6 +1726,9 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	if cfg.UnreachableNodesReaperInterval > 0 {
 		cm.UnreachableNodesReaperInterval = cfg.UnreachableNodesReaperInterval
 	}
+	if cfg.PublishStatsInterval > 0 {
+		cm.PublishStatsInterval = cfg.PublishStatsInterval
+	}
 	if cfg.DownRemovalMargin > 0 {
 		cm.DownRemovalMargin = cfg.DownRemovalMargin
 	}
@@ -1944,6 +1953,7 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	// Joining -> Up) happen as soon as possible.
 	go cluster.cm.StartGossipLoop(cluster.ctx)
 	cluster.cm.StartReaper(cluster.ctx)
+	cluster.cm.StartPublishStatsLoop(cluster.ctx)
 	cluster.mg.Start(cluster.ctx)
 
 	// ── Distributed Data ─────────────────────────────────────────────────────

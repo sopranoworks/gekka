@@ -153,6 +153,12 @@ type ClusterPoolRouter struct {
 	useRole           string
 	cm                *ClusterManager
 
+	// MaxNrOfInstancesPerNode caps the number of local routees this node may
+	// host, regardless of the symmetric-distribution target. Set from
+	// pekko.actor.deployment.<path>.cluster.max-nr-of-instances-per-node.
+	// Zero or negative means no cap (legacy behavior).
+	MaxNrOfInstancesPerNode int
+
 	// nodeAddr -> []Ref
 	remoteRoutees map[string][]actor.Ref
 	Mu            sync.RWMutex
@@ -230,6 +236,11 @@ func (r *ClusterPoolRouter) refreshRoutees() {
 	localTarget := r.totalInstances / n
 	// Remainder goes to the "first" nodes (alphabetical or upNumber)
 	// For simplicity, we just use totalInstances/n for everyone.
+
+	// Apply per-node cap (max-nr-of-instances-per-node) when configured.
+	if r.MaxNrOfInstancesPerNode > 0 && localTarget > r.MaxNrOfInstancesPerNode {
+		localTarget = r.MaxNrOfInstancesPerNode
+	}
 
 	currentLocal := r.PoolRouter.NrOfInstances()
 	if currentLocal < localTarget {

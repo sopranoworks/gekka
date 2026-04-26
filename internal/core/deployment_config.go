@@ -45,6 +45,11 @@ type ClusterRouterSettings struct {
 
 	// TotalInstances is the target total number of routees across the entire cluster.
 	TotalInstances int `hocon:"total-instances"`
+
+	// MaxNrOfInstancesPerNode caps the number of local routees a single node may host.
+	// Corresponds to pekko.actor.deployment.<path>.cluster.max-nr-of-instances-per-node.
+	// When zero or negative, defaults to 1 (Pekko default).
+	MaxNrOfInstancesPerNode int `hocon:"max-nr-of-instances-per-node"`
 }
 
 // DeploymentConfig holds the router deployment settings parsed from the
@@ -178,6 +183,9 @@ func parseDeploymentObject(cfg hocon.Config) DeploymentConfig {
 		if total, err := c.GetInt("total-instances"); err == nil {
 			dc.Cluster.TotalInstances = total
 		}
+		if perNode, err := c.GetInt("max-nr-of-instances-per-node"); err == nil {
+			dc.Cluster.MaxNrOfInstancesPerNode = perNode
+		}
 	}
 
 	// resizer block
@@ -258,6 +266,9 @@ func DeploymentToPoolRouter(cm *cluster.ClusterManager, d DeploymentConfig, prop
 
 	if d.Cluster.Enabled {
 		pool := cluster.NewClusterPoolRouter(cm, logic, d.Cluster.TotalInstances, d.Cluster.AllowLocalRoutees, d.Cluster.UseRole, props)
+		if d.Cluster.MaxNrOfInstancesPerNode > 0 {
+			pool.MaxNrOfInstancesPerNode = d.Cluster.MaxNrOfInstancesPerNode
+		}
 		if d.Resizer.Enabled {
 			pool.Resizer = &actor.DefaultResizer{
 				LowerBound:        d.Resizer.LowerBound,

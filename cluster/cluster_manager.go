@@ -272,6 +272,12 @@ type ClusterManager struct {
 	// Default: true.
 	EnforceConfigCompatOnJoin bool
 
+	// PublishStatsInterval is how often a CurrentClusterStats event is
+	// published to subscribers. Zero ("off") disables stats publication.
+	// Corresponds to pekko.cluster.publish-stats-interval.
+	// Default: 0 (off).
+	PublishStatsInterval time.Duration
+
 	// ShutdownCallback is invoked when the join timeout fires
 	// (shutdown-after-unsuccessful-join-seed-nodes). The Cluster layer wires
 	// this to CoordinatedShutdown.Run, matching Pekko's behavior of
@@ -3083,6 +3089,83 @@ func (cm *ClusterManager) StartReaper(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+// StartPublishStatsLoop begins a periodic goroutine that emits a
+// CurrentClusterStats event to subscribers at PublishStatsInterval cadence.
+// A zero (or negative) interval disables stats publication.
+// Corresponds to pekko.cluster.publish-stats-interval.
+func (cm *ClusterManager) StartPublishStatsLoop(ctx context.Context) {
+	interval := cm.PublishStatsInterval
+	if interval <= 0 {
+		return // disabled
+	}
+
+	go func() {
+		// Honor periodic-tasks initial delay.
+		if delay := cm.PeriodicTasksInitialDelay; delay > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(delay):
+			}
+		}
+
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				cm.publishEvent(cm.computeClusterStats())
+			}
+		}
+	}()
+}
+
+// computeClusterStats walks the current gossip state and returns the
+// per-status member counts plus unreachable count.
+func (cm *ClusterManager) computeClusterStats() CurrentClusterStats {
+	cm.Mu.RLock()
+	state := cm.State
+	cm.Mu.RUnlock()
+
+	stats := CurrentClusterStats{}
+	if state == nil {
+		return stats
+	}
+	for _, m := range state.Members {
+		switch m.GetStatus() {
+		case gproto_cluster.MemberStatus_Up:
+			stats.Up++
+		case gproto_cluster.MemberStatus_Joining, gproto_cluster.MemberStatus_WeaklyUp:
+			stats.Joining++
+		case gproto_cluster.MemberStatus_Leaving:
+			stats.Leaving++
+		case gproto_cluster.MemberStatus_Exiting:
+			stats.Exiting++
+		case gproto_cluster.MemberStatus_Down:
+			stats.Down++
+		}
+	}
+	stats.Members = len(state.Members)
+
+	// Unreachable count from the local failure detector (not gossip), so
+	// stats reflect this node's current view rather than convergence-delayed
+	// reachability.
+	if cm.Fd != nil {
+		for _, ua := range state.AllAddresses {
+			if ua == nil || ua.GetAddress() == nil {
+				continue
+			}
+			key := fmt.Sprintf("%s:%d-%d", ua.GetAddress().GetHostname(), ua.GetAddress().GetPort(), ua.GetUid())
+			if !cm.Fd.IsAvailable(key) {
+				stats.Unreachable++
+			}
+		}
+	}
+	return stats
 }
 
 // GetState returns the current gossip state.

@@ -30,6 +30,7 @@ Legend:
 | `pekko.actor.default-dispatcher.*` | (complex) | ❌ | Gekka uses `pekko.dispatchers.*` instead |
 | `pekko.actor.internal-dispatcher.*` | (complex) | ❌ | No feature |
 | `pekko.actor.deployment.{path}.*` | (various) | ✅ | Router deployment |
+| `pekko.actor.deployment.{path}.cluster.max-nr-of-instances-per-node` | `1` | ✅ | Caps local routees on a cluster pool router (Round-2 session 11) |
 | `pekko.actor.serializers.*` | (registry) | ✅ | Via LoadFromConfig |
 | `pekko.actor.serialization-bindings.*` | (registry) | ✅ | Via LoadFromConfig |
 | `pekko.actor.default-resizer.*` | (various) | ✅ | In reference.conf |
@@ -112,7 +113,7 @@ Legend:
 | `pekko.cluster.gossip-time-to-live` | `2s` | ✅ | Discards stale gossip |
 | `pekko.cluster.leader-actions-interval` | `1s` | ✅ | Independent leader ticker |
 | `pekko.cluster.unreachable-nodes-reaper-interval` | `1s` | ✅ | Periodic phi re-evaluation |
-| `pekko.cluster.publish-stats-interval` | `off` | ❌ | No feature |
+| `pekko.cluster.publish-stats-interval` | `off` | ✅ | `StartPublishStatsLoop` ticks at configured cadence and emits `CurrentClusterStats` to subscribers |
 | `pekko.cluster.gossip-different-view-probability` | `0.8` | ✅ | Prefers different-view targets |
 | `pekko.cluster.reduce-gossip-different-view-probability` | `400` | ✅ | Halves probability at scale |
 | `pekko.cluster.prune-gossip-tombstones-after` | `24h` | ✅ | Prunes removed-member tombstones |

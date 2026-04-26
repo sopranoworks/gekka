@@ -915,6 +915,15 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 			nodeCfg.UnreachableNodesReaperInterval = d
 		}
 	}
+	// pekko.cluster.publish-stats-interval — "off" disables; otherwise a duration.
+	if v, err := cfg.GetString(prefix + ".cluster.publish-stats-interval"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		if v != "off" && v != "" {
+			if d, parseErr := parseHOCONDuration(v); parseErr == nil {
+				nodeCfg.PublishStatsInterval = d
+			}
+		}
+	}
 
 	// ── Pub-Sub ────────────────────────────────────────────────────────────
 	pubSubPrefix := prefix + ".cluster.pub-sub"

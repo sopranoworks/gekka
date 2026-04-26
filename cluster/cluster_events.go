@@ -111,30 +111,63 @@ type AppVersionChanged struct {
 	NewVersion AppVersion
 }
 
+// CurrentClusterStats is published periodically to summarize current cluster
+// membership. Emitted by the StartPublishStatsLoop goroutine at
+// PublishStatsInterval cadence.
+//
+// Mirrors Pekko's CurrentClusterStats: it does not contain per-member details,
+// only counts that change with membership transitions.
+//
+// Corresponds to pekko.cluster.publish-stats-interval.
+type CurrentClusterStats struct {
+	// Members is the total number of members in the cluster (any status).
+	Members int
+
+	// Up is the number of members in Up status (available for work).
+	Up int
+
+	// Joining is the number of members in Joining or WeaklyUp status.
+	Joining int
+
+	// Leaving is the number of members in Leaving status.
+	Leaving int
+
+	// Exiting is the number of members in Exiting status.
+	Exiting int
+
+	// Down is the number of members in Down status.
+	Down int
+
+	// Unreachable is the number of members marked unreachable by the failure detector.
+	Unreachable int
+}
+
 // Marker method implementations — satisfy ClusterDomainEvent.
-func (MemberUp) clusterDomainEvent()          {}
-func (MemberWeaklyUp) clusterDomainEvent()    {}
-func (MemberLeft) clusterDomainEvent()        {}
-func (MemberExited) clusterDomainEvent()      {}
-func (MemberDowned) clusterDomainEvent()      {}
-func (MemberRemoved) clusterDomainEvent()     {}
-func (UnreachableMember) clusterDomainEvent() {}
-func (ReachableMember) clusterDomainEvent()   {}
-func (AppVersionChanged) clusterDomainEvent() {}
+func (MemberUp) clusterDomainEvent()            {}
+func (MemberWeaklyUp) clusterDomainEvent()      {}
+func (MemberLeft) clusterDomainEvent()          {}
+func (MemberExited) clusterDomainEvent()        {}
+func (MemberDowned) clusterDomainEvent()        {}
+func (MemberRemoved) clusterDomainEvent()       {}
+func (UnreachableMember) clusterDomainEvent()   {}
+func (ReachableMember) clusterDomainEvent()     {}
+func (AppVersionChanged) clusterDomainEvent()   {}
+func (CurrentClusterStats) clusterDomainEvent() {}
 
 // Convenience reflect.Type values for use with Cluster.Subscribe.
 // Pass one or more of these to filter specific event types.
 //
 //	node.Subscribe(ch, gekka.EventMemberUp, gekka.EventMemberRemoved)
 var (
-	EventMemberUp          = reflect.TypeOf(MemberUp{})
-	EventMemberLeft        = reflect.TypeOf(MemberLeft{})
-	EventMemberExited      = reflect.TypeOf(MemberExited{})
-	EventMemberDowned      = reflect.TypeOf(MemberDowned{})
-	EventMemberRemoved     = reflect.TypeOf(MemberRemoved{})
-	EventUnreachableMember = reflect.TypeOf(UnreachableMember{})
-	EventReachableMember   = reflect.TypeOf(ReachableMember{})
-	EventAppVersionChanged = reflect.TypeOf(AppVersionChanged{})
+	EventMemberUp            = reflect.TypeOf(MemberUp{})
+	EventMemberLeft          = reflect.TypeOf(MemberLeft{})
+	EventMemberExited        = reflect.TypeOf(MemberExited{})
+	EventMemberDowned        = reflect.TypeOf(MemberDowned{})
+	EventMemberRemoved       = reflect.TypeOf(MemberRemoved{})
+	EventUnreachableMember   = reflect.TypeOf(UnreachableMember{})
+	EventReachableMember     = reflect.TypeOf(ReachableMember{})
+	EventAppVersionChanged   = reflect.TypeOf(AppVersionChanged{})
+	EventCurrentClusterStats = reflect.TypeOf(CurrentClusterStats{})
 )
 
 // ── Subscriber management (methods on ClusterManager) ────────────────────────

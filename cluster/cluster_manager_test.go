@@ -13,10 +13,12 @@ import (
 	"context"
 	"log"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/sopranoworks/gekka/actor"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 	"google.golang.org/protobuf/proto"
 )
@@ -570,5 +572,158 @@ func TestLogInfoVerbose_ConvergenceDetails(t *testing.T) {
 	})
 	if !strings.Contains(output, "convergence check failed") {
 		t.Errorf("LogInfoVerbose=true: expected 'convergence check failed', got: %q", output)
+	}
+}
+
+// ── Session 11: publish-stats-interval ──────────────────────────────────────
+
+// statsCollectorActor is a minimal actor.Ref that records every
+// CurrentClusterStats event delivered through the cluster event bus.
+type statsCollectorActor struct {
+	mu       sync.Mutex
+	received []CurrentClusterStats
+}
+
+func (s *statsCollectorActor) Tell(msg any, _ ...actor.Ref) {
+	if stats, ok := msg.(CurrentClusterStats); ok {
+		s.mu.Lock()
+		s.received = append(s.received, stats)
+		s.mu.Unlock()
+	}
+}
+
+func (s *statsCollectorActor) Path() string { return "/user/statsCollector" }
+
+func (s *statsCollectorActor) Count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.received)
+}
+
+func (s *statsCollectorActor) Last() CurrentClusterStats {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.received) == 0 {
+		return CurrentClusterStats{}
+	}
+	return s.received[len(s.received)-1]
+}
+
+// TestComputeClusterStats_Counts walks state and verifies counts by status.
+func TestComputeClusterStats_Counts(t *testing.T) {
+	local := &gproto_cluster.UniqueAddress{
+		Address: &gproto_cluster.Address{
+			Protocol: proto.String("pekko"),
+			System:   proto.String("TestSystem"),
+			Hostname: proto.String("127.0.0.1"),
+			Port:     proto.Uint32(2700),
+		},
+		Uid: proto.Uint32(1),
+	}
+	cm := NewClusterManager(local, func(_ context.Context, _ string, _ any) error { return nil })
+
+	cm.Mu.Lock()
+	cm.State.Members[0].Status = gproto_cluster.MemberStatus_Up.Enum()
+	cm.State.AllAddresses = append(cm.State.AllAddresses, &gproto_cluster.UniqueAddress{
+		Address: &gproto_cluster.Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2701), System: proto.String("TestSystem"), Protocol: proto.String("pekko")},
+		Uid:     proto.Uint32(2),
+	})
+	cm.State.Members = append(cm.State.Members, &gproto_cluster.Member{
+		AddressIndex: proto.Int32(1),
+		Status:       gproto_cluster.MemberStatus_Joining.Enum(),
+	})
+	cm.State.AllAddresses = append(cm.State.AllAddresses, &gproto_cluster.UniqueAddress{
+		Address: &gproto_cluster.Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2702), System: proto.String("TestSystem"), Protocol: proto.String("pekko")},
+		Uid:     proto.Uint32(3),
+	})
+	cm.State.Members = append(cm.State.Members, &gproto_cluster.Member{
+		AddressIndex: proto.Int32(2),
+		Status:       gproto_cluster.MemberStatus_Down.Enum(),
+	})
+	cm.Mu.Unlock()
+
+	stats := cm.computeClusterStats()
+	if stats.Members != 3 {
+		t.Errorf("Members = %d, want 3", stats.Members)
+	}
+	if stats.Up != 1 {
+		t.Errorf("Up = %d, want 1", stats.Up)
+	}
+	if stats.Joining != 1 {
+		t.Errorf("Joining = %d, want 1", stats.Joining)
+	}
+	if stats.Down != 1 {
+		t.Errorf("Down = %d, want 1", stats.Down)
+	}
+}
+
+// TestStartPublishStatsLoop_EmitsAtCadence verifies that StartPublishStatsLoop
+// publishes CurrentClusterStats events to subscribers at PublishStatsInterval
+// cadence (Pekko-compatible: pekko.cluster.publish-stats-interval).
+func TestStartPublishStatsLoop_EmitsAtCadence(t *testing.T) {
+	local := &gproto_cluster.UniqueAddress{
+		Address: &gproto_cluster.Address{
+			Protocol: proto.String("pekko"),
+			System:   proto.String("TestSystem"),
+			Hostname: proto.String("127.0.0.1"),
+			Port:     proto.Uint32(2710),
+		},
+		Uid: proto.Uint32(1),
+	}
+	cm := NewClusterManager(local, func(_ context.Context, _ string, _ any) error { return nil })
+	cm.Mu.Lock()
+	cm.State.Members[0].Status = gproto_cluster.MemberStatus_Up.Enum()
+	cm.Mu.Unlock()
+
+	cm.PublishStatsInterval = 50 * time.Millisecond
+
+	collector := &statsCollectorActor{}
+	cm.Subscribe(collector, EventCurrentClusterStats)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cm.StartPublishStatsLoop(ctx)
+
+	deadline := time.Now().Add(1 * time.Second)
+	for time.Now().Before(deadline) {
+		if collector.Count() >= 2 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := collector.Count(); got < 2 {
+		t.Fatalf("expected ≥2 CurrentClusterStats events at 50ms cadence, got %d", got)
+	}
+	last := collector.Last()
+	if last.Up != 1 {
+		t.Errorf("last stats Up = %d, want 1", last.Up)
+	}
+}
+
+// TestStartPublishStatsLoop_OffDisables verifies that PublishStatsInterval=0
+// (HOCON value "off") disables the loop entirely.
+func TestStartPublishStatsLoop_OffDisables(t *testing.T) {
+	local := &gproto_cluster.UniqueAddress{
+		Address: &gproto_cluster.Address{
+			Protocol: proto.String("pekko"),
+			System:   proto.String("TestSystem"),
+			Hostname: proto.String("127.0.0.1"),
+			Port:     proto.Uint32(2711),
+		},
+		Uid: proto.Uint32(1),
+	}
+	cm := NewClusterManager(local, func(_ context.Context, _ string, _ any) error { return nil })
+	cm.PublishStatsInterval = 0
+
+	collector := &statsCollectorActor{}
+	cm.Subscribe(collector, EventCurrentClusterStats)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cm.StartPublishStatsLoop(ctx)
+
+	time.Sleep(150 * time.Millisecond)
+	if got := collector.Count(); got != 0 {
+		t.Errorf("expected 0 events when PublishStatsInterval=0, got %d", got)
 	}
 }

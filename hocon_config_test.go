@@ -3286,3 +3286,49 @@ akka {
 		t.Errorf("AcceptableHeartbeatPause = %v, want %v", got, want)
 	}
 }
+
+// ── Session 11: pekko.cluster.publish-stats-interval ────────────────────────
+
+// TestParseHOCON_PublishStatsInterval verifies that a duration value is
+// parsed into ClusterConfig.PublishStatsInterval.
+func TestParseHOCON_PublishStatsInterval(t *testing.T) {
+	hocon := `
+pekko {
+  remote.artery.canonical.hostname = "127.0.0.1"
+  remote.artery.canonical.port = 2552
+  cluster {
+    seed-nodes = []
+    publish-stats-interval = 5s
+  }
+}
+`
+	cfg, err := ParseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("ParseHOCONString: %v", err)
+	}
+	if cfg.PublishStatsInterval != 5*time.Second {
+		t.Errorf("PublishStatsInterval = %v, want 5s", cfg.PublishStatsInterval)
+	}
+}
+
+// TestParseHOCON_PublishStatsIntervalOff verifies that "off" leaves the
+// interval at zero (loop disabled).
+func TestParseHOCON_PublishStatsIntervalOff(t *testing.T) {
+	hocon := `
+pekko {
+  remote.artery.canonical.hostname = "127.0.0.1"
+  remote.artery.canonical.port = 2552
+  cluster {
+    seed-nodes = []
+    publish-stats-interval = off
+  }
+}
+`
+	cfg, err := ParseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("ParseHOCONString: %v", err)
+	}
+	if cfg.PublishStatsInterval != 0 {
+		t.Errorf("PublishStatsInterval = %v, want 0 (off)", cfg.PublishStatsInterval)
+	}
+}

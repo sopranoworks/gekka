@@ -143,3 +143,64 @@ pekko.actor.deployment {
 		t.Error("expected Resizer.Enabled = false when no resizer block")
 	}
 }
+
+// TestDeploymentConfig_MaxNrOfInstancesPerNode verifies the cluster.max-nr-of-instances-per-node
+// HOCON path is parsed into ClusterRouterSettings.
+func TestDeploymentConfig_MaxNrOfInstancesPerNode(t *testing.T) {
+	input := `
+pekko.actor.deployment {
+  "/user/cappedPool" {
+    router = round-robin-pool
+    nr-of-instances = 1
+    cluster {
+      enabled = on
+      total-instances = 100
+      max-nr-of-instances-per-node = 7
+    }
+  }
+}
+`
+	cfg, err := hocon.ParseString(input)
+	if err != nil {
+		t.Fatalf("failed to parse HOCON: %v", err)
+	}
+
+	dc, ok := LookupDeployment(cfg, "/user/cappedPool")
+	if !ok {
+		t.Fatal("expected deployment config to be found")
+	}
+	if dc.Cluster.MaxNrOfInstancesPerNode != 7 {
+		t.Errorf("MaxNrOfInstancesPerNode = %d, want 7", dc.Cluster.MaxNrOfInstancesPerNode)
+	}
+	if dc.Cluster.TotalInstances != 100 {
+		t.Errorf("TotalInstances = %d, want 100", dc.Cluster.TotalInstances)
+	}
+}
+
+// TestDeploymentConfig_MaxNrOfInstancesPerNode_AbsentDefault verifies that an
+// absent max-nr-of-instances-per-node key leaves the field zero (no cap).
+func TestDeploymentConfig_MaxNrOfInstancesPerNode_AbsentDefault(t *testing.T) {
+	input := `
+pekko.actor.deployment {
+  "/user/uncapped" {
+    router = round-robin-pool
+    nr-of-instances = 1
+    cluster {
+      enabled = on
+      total-instances = 8
+    }
+  }
+}
+`
+	cfg, err := hocon.ParseString(input)
+	if err != nil {
+		t.Fatalf("failed to parse HOCON: %v", err)
+	}
+	dc, ok := LookupDeployment(cfg, "/user/uncapped")
+	if !ok {
+		t.Fatal("expected deployment config to be found")
+	}
+	if dc.Cluster.MaxNrOfInstancesPerNode != 0 {
+		t.Errorf("expected MaxNrOfInstancesPerNode = 0 when key absent, got %d", dc.Cluster.MaxNrOfInstancesPerNode)
+	}
+}

@@ -470,6 +470,20 @@ type ClusterConfig struct {
 	// Default: 5.
 	CrossDataCenterConnections int
 
+	// MultiDCFailureDetector tunes the cross-DC failure detector. The values
+	// here only apply when sending heartbeats to (or judging reachability of)
+	// a node in a different data center than this one; intra-DC nodes still
+	// use the FailureDetector field above.
+	//
+	// Parse from HOCON:
+	//
+	//	pekko.cluster.multi-data-center.failure-detector {
+	//	    heartbeat-interval         = 3s
+	//	    acceptable-heartbeat-pause = 10s
+	//	    expected-response-after    = 1s
+	//	}
+	MultiDCFailureDetector MultiDCFailureDetectorConfig
+
 	// Roles is the list of cluster roles this node advertises to the rest of the
 	// cluster.  These are merged with the automatic "dc-<DataCenter>" role before
 	// the Join message is sent.  Parsed from HOCON:
@@ -744,6 +758,37 @@ type ClusterReceptionistConfig = client.ReceptionistConfig
 // It tunes the Phi Accrual Failure Detector parameters.
 // Parsed from HOCON: gekka.cluster.failure-detector.*
 type FailureDetectorConfig = gcluster.FailureDetectorConfig
+
+// MultiDCFailureDetectorConfig tunes the cross-DC failure detector. Values
+// only take effect when communicating with a node in a different data center.
+// Zero values fall back to the intra-DC FailureDetector settings.
+//
+// Parse from HOCON:
+//
+//	pekko.cluster.multi-data-center.failure-detector {
+//	    heartbeat-interval         = 3s
+//	    acceptable-heartbeat-pause = 10s
+//	    expected-response-after    = 1s
+//	}
+type MultiDCFailureDetectorConfig struct {
+	// HeartbeatInterval is how often heartbeat messages are sent to monitored
+	// foreign-DC nodes.
+	// Corresponds to pekko.cluster.multi-data-center.failure-detector.heartbeat-interval.
+	// Pekko default: 3s.
+	HeartbeatInterval time.Duration
+
+	// AcceptableHeartbeatPause is the duration of lost heartbeats acceptable
+	// for a foreign-DC node before it is considered an anomaly.
+	// Corresponds to pekko.cluster.multi-data-center.failure-detector.acceptable-heartbeat-pause.
+	// Pekko default: 10s.
+	AcceptableHeartbeatPause time.Duration
+
+	// ExpectedResponseAfter is the expected time between a heartbeat request
+	// and its response when communicating with a foreign-DC node.
+	// Corresponds to pekko.cluster.multi-data-center.failure-detector.expected-response-after.
+	// Pekko default: 1s.
+	ExpectedResponseAfter time.Duration
+}
 
 // InternalSBRConfig is a re-export of cluster.InternalSBRConfig.
 // It configures the lightweight icluster.Strategy (internal SBR primitives).
@@ -1728,6 +1773,15 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	}
 	if cfg.PublishStatsInterval > 0 {
 		cm.PublishStatsInterval = cfg.PublishStatsInterval
+	}
+	if cfg.MultiDCFailureDetector.HeartbeatInterval > 0 {
+		cm.CrossDCHeartbeatInterval = cfg.MultiDCFailureDetector.HeartbeatInterval
+	}
+	if cfg.MultiDCFailureDetector.AcceptableHeartbeatPause > 0 {
+		cm.CrossDCAcceptableHeartbeatPause = cfg.MultiDCFailureDetector.AcceptableHeartbeatPause
+	}
+	if cfg.MultiDCFailureDetector.ExpectedResponseAfter > 0 {
+		cm.CrossDCExpectedResponseAfter = cfg.MultiDCFailureDetector.ExpectedResponseAfter
 	}
 	if cfg.DownRemovalMargin > 0 {
 		cm.DownRemovalMargin = cfg.DownRemovalMargin

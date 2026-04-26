@@ -140,7 +140,9 @@ Legend:
 | `self-data-center` | `"default"` | ✅ | |
 | `cross-data-center-connections` | `5` | ❌ | No feature |
 | `cross-data-center-gossip-probability` | `0.2` | ✅ | |
-| `failure-detector.*` | (various) | ❌ | No feature (cross-DC FD) |
+| `failure-detector.heartbeat-interval` | `3s` | ✅ | Cross-DC HB cadence; `EffectiveHeartbeatInterval` returns this for cross-DC targets, intra-DC default otherwise (Round-2 session 12) |
+| `failure-detector.acceptable-heartbeat-pause` | `10s` | ✅ | Plumbed via `MultiDCFailureDetectorConfig`; consulted by future cross-DC reachability margin (Round-2 session 12) |
+| `failure-detector.expected-response-after` | `1s` | ✅ | Plumbed via `MultiDCFailureDetectorConfig` (Round-2 session 12) |
 
 ### pekko.cluster.split-brain-resolver
 

@@ -727,3 +727,102 @@ func TestStartPublishStatsLoop_OffDisables(t *testing.T) {
 		t.Errorf("expected 0 events when PublishStatsInterval=0, got %d", got)
 	}
 }
+
+// ── Session 12: multi-DC failure detector ───────────────────────────────────
+
+// multiDCTestCM builds a cluster manager with a local Up node in DC "us-east"
+// plus a peer Up node in DC "eu-west" (cross-DC).
+func multiDCTestCM(t *testing.T) (*ClusterManager, *gproto_cluster.Address, *gproto_cluster.Address) {
+	t.Helper()
+	local := &gproto_cluster.UniqueAddress{
+		Address: &gproto_cluster.Address{
+			Protocol: proto.String("pekko"),
+			System:   proto.String("TestSystem"),
+			Hostname: proto.String("127.0.0.1"),
+			Port:     proto.Uint32(2720),
+		},
+		Uid: proto.Uint32(1),
+	}
+	cm := NewClusterManager(local, func(_ context.Context, _ string, _ any) error { return nil })
+	cm.SetLocalDataCenter("us-east")
+
+	peer := &gproto_cluster.UniqueAddress{
+		Address: &gproto_cluster.Address{
+			Protocol: proto.String("pekko"),
+			System:   proto.String("TestSystem"),
+			Hostname: proto.String("127.0.0.1"),
+			Port:     proto.Uint32(2721),
+		},
+		Uid: proto.Uint32(2),
+	}
+
+	cm.Mu.Lock()
+	cm.State.AllRoles = []string{"dc-us-east", "dc-eu-west"}
+	cm.State.Members[0].Status = gproto_cluster.MemberStatus_Up.Enum()
+	cm.State.Members[0].RolesIndexes = []int32{0}
+	cm.State.AllAddresses = append(cm.State.AllAddresses, peer)
+	cm.State.Members = append(cm.State.Members, &gproto_cluster.Member{
+		AddressIndex: proto.Int32(1),
+		Status:       gproto_cluster.MemberStatus_Up.Enum(),
+		RolesIndexes: []int32{1},
+	})
+	cm.Mu.Unlock()
+
+	return cm, local.GetAddress(), peer.GetAddress()
+}
+
+// TestIsCrossDC_DistinguishesByDC verifies IsCrossDC returns true only when
+// the target's data-center role differs from LocalDataCenter.
+func TestIsCrossDC_DistinguishesByDC(t *testing.T) {
+	cm, localAddr, peerAddr := multiDCTestCM(t)
+
+	if cm.IsCrossDC(localAddr) {
+		t.Errorf("IsCrossDC(local) = true, want false (same DC)")
+	}
+	if !cm.IsCrossDC(peerAddr) {
+		t.Errorf("IsCrossDC(peer) = false, want true (different DC)")
+	}
+}
+
+// TestIsCrossDC_UnknownDefaultsToIntraDC verifies that an unknown target
+// (not in gossip state) is treated as intra-DC for safety.
+func TestIsCrossDC_UnknownDefaultsToIntraDC(t *testing.T) {
+	cm, _, _ := multiDCTestCM(t)
+	stranger := &gproto_cluster.Address{
+		Protocol: proto.String("pekko"),
+		System:   proto.String("TestSystem"),
+		Hostname: proto.String("203.0.113.42"),
+		Port:     proto.Uint32(2552),
+	}
+	if cm.IsCrossDC(stranger) {
+		t.Errorf("IsCrossDC(unknown) = true, want false (default safe)")
+	}
+}
+
+// TestEffectiveHeartbeatInterval_PicksCrossDCWhenSet verifies the helper
+// returns CrossDCHeartbeatInterval for cross-DC targets and HeartbeatInterval
+// for intra-DC targets.
+func TestEffectiveHeartbeatInterval_PicksCrossDCWhenSet(t *testing.T) {
+	cm, localAddr, peerAddr := multiDCTestCM(t)
+	cm.HeartbeatInterval = 1 * time.Second
+	cm.CrossDCHeartbeatInterval = 3 * time.Second
+
+	if got := cm.EffectiveHeartbeatInterval(localAddr); got != 1*time.Second {
+		t.Errorf("EffectiveHeartbeatInterval(local) = %v, want 1s (intra-DC)", got)
+	}
+	if got := cm.EffectiveHeartbeatInterval(peerAddr); got != 3*time.Second {
+		t.Errorf("EffectiveHeartbeatInterval(peer) = %v, want 3s (cross-DC)", got)
+	}
+}
+
+// TestEffectiveHeartbeatInterval_FallsBackWhenCrossDCZero verifies that when
+// CrossDCHeartbeatInterval is zero, even cross-DC targets use HeartbeatInterval.
+func TestEffectiveHeartbeatInterval_FallsBackWhenCrossDCZero(t *testing.T) {
+	cm, _, peerAddr := multiDCTestCM(t)
+	cm.HeartbeatInterval = 750 * time.Millisecond
+	cm.CrossDCHeartbeatInterval = 0
+
+	if got := cm.EffectiveHeartbeatInterval(peerAddr); got != 750*time.Millisecond {
+		t.Errorf("EffectiveHeartbeatInterval(peer) with CrossDC=0 = %v, want 750ms", got)
+	}
+}

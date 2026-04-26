@@ -278,6 +278,18 @@ type ClusterManager struct {
 	// Default: 0 (off).
 	PublishStatsInterval time.Duration
 
+	// CrossDCHeartbeatInterval, CrossDCAcceptableHeartbeatPause and
+	// CrossDCExpectedResponseAfter tune the multi-data-center failure
+	// detector and only apply when sending heartbeats to (or judging
+	// reachability of) a node in a different data center.
+	// When zero, the intra-DC values from FailureDetector are used.
+	// Corresponds to pekko.cluster.multi-data-center.failure-detector.{
+	//   heartbeat-interval, acceptable-heartbeat-pause, expected-response-after}.
+	// Pekko defaults: 3s / 10s / 1s.
+	CrossDCHeartbeatInterval        time.Duration
+	CrossDCAcceptableHeartbeatPause time.Duration
+	CrossDCExpectedResponseAfter    time.Duration
+
 	// ShutdownCallback is invoked when the join timeout fires
 	// (shutdown-after-unsuccessful-join-seed-nodes). The Cluster layer wires
 	// this to CoordinatedShutdown.Run, matching Pekko's behavior of
@@ -3227,10 +3239,7 @@ func (cm *ClusterManager) StartHeartbeat(target *gproto_cluster.Address) {
 			}
 		}
 
-		interval := cm.HeartbeatInterval
-		if interval <= 0 {
-			interval = 1 * time.Second
-		}
+		interval := cm.EffectiveHeartbeatInterval(target)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		path := cm.HeartbeatPath(target.GetSystem(), target.GetHostname(), target.GetPort())
@@ -3286,6 +3295,63 @@ func (cm *ClusterManager) StopHeartbeat(target *gproto_cluster.Address) {
 // GetLocalAddress returns the local unique address.
 func (cm *ClusterManager) GetLocalAddress() *gproto_cluster.UniqueAddress {
 	return cm.LocalAddress
+}
+
+// IsCrossDC reports whether target is a member of a data center that differs
+// from this node's LocalDataCenter. Returns false when the target's DC cannot
+// be determined from gossip state (treated as intra-DC for safety).
+//
+// Used by the multi-data-center failure detector to choose between intra-DC
+// and cross-DC heartbeat / pause / response-after parameters.
+func (cm *ClusterManager) IsCrossDC(target *gproto_cluster.Address) bool {
+	if target == nil {
+		return false
+	}
+	localDC := cm.LocalDataCenter
+	if localDC == "" {
+		localDC = "default"
+	}
+	cm.Mu.RLock()
+	state := cm.State
+	cm.Mu.RUnlock()
+	if state == nil {
+		return false
+	}
+	host := target.GetHostname()
+	port := target.GetPort()
+	for _, m := range state.Members {
+		idx := m.GetAddressIndex()
+		if int(idx) >= len(state.AllAddresses) {
+			continue
+		}
+		ua := state.AllAddresses[idx]
+		if ua == nil || ua.GetAddress() == nil {
+			continue
+		}
+		if ua.GetAddress().GetHostname() != host || ua.GetAddress().GetPort() != port {
+			continue
+		}
+		dc := DataCenterForMember(state, m)
+		if dc == "" {
+			dc = "default"
+		}
+		return dc != localDC
+	}
+	return false
+}
+
+// EffectiveHeartbeatInterval returns the heartbeat-interval to use for target,
+// preferring CrossDCHeartbeatInterval when target is in a foreign DC and the
+// cross-DC value is non-zero. Falls back to HeartbeatInterval (then to 1s when
+// that is also zero).
+func (cm *ClusterManager) EffectiveHeartbeatInterval(target *gproto_cluster.Address) time.Duration {
+	if cm.CrossDCHeartbeatInterval > 0 && cm.IsCrossDC(target) {
+		return cm.CrossDCHeartbeatInterval
+	}
+	if cm.HeartbeatInterval > 0 {
+		return cm.HeartbeatInterval
+	}
+	return 1 * time.Second
 }
 
 // GetFailureDetector returns the internal failure detector.

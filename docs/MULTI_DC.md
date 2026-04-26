@@ -193,8 +193,25 @@ pekko.cluster.multi-data-center {
   # other nodes in the same DC will also carry.
   # Default: "default"
   self-data-center = "us-east"
+
+  # Cross-DC failure detector: only consulted for nodes whose data-center
+  # role differs from self-data-center.  Intra-DC nodes still use the
+  # cluster-wide pekko.cluster.failure-detector settings.
+  # Pekko defaults shown.
+  failure-detector {
+    heartbeat-interval         = 3s
+    acceptable-heartbeat-pause = 10s
+    expected-response-after    = 1s
+  }
 }
 ```
+
+The cross-DC heartbeat-interval is selected at runtime by
+`ClusterManager.EffectiveHeartbeatInterval(target)`: it returns
+`CrossDCHeartbeatInterval` for foreign-DC targets when set, falling back to
+the intra-DC `HeartbeatInterval` otherwise.  `acceptable-heartbeat-pause`
+and `expected-response-after` are plumbed onto `ClusterManager` for use by
+future cross-DC reachability checks.
 
 ---
 

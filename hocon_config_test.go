@@ -3332,3 +3332,66 @@ pekko {
 		t.Errorf("PublishStatsInterval = %v, want 0 (off)", cfg.PublishStatsInterval)
 	}
 }
+
+// ── Session 12: pekko.cluster.multi-data-center.failure-detector.* ─────────
+
+// TestParseHOCON_MultiDCFailureDetector verifies the three multi-DC FD keys
+// are parsed into ClusterConfig.MultiDCFailureDetector.
+func TestParseHOCON_MultiDCFailureDetector(t *testing.T) {
+	hocon := `
+pekko {
+  remote.artery.canonical.hostname = "127.0.0.1"
+  remote.artery.canonical.port = 2552
+  cluster {
+    seed-nodes = []
+    multi-data-center {
+      failure-detector {
+        heartbeat-interval         = 4s
+        acceptable-heartbeat-pause = 12s
+        expected-response-after    = 750ms
+      }
+    }
+  }
+}
+`
+	cfg, err := ParseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("ParseHOCONString: %v", err)
+	}
+	if got, want := cfg.MultiDCFailureDetector.HeartbeatInterval, 4*time.Second; got != want {
+		t.Errorf("MultiDCFailureDetector.HeartbeatInterval = %v, want %v", got, want)
+	}
+	if got, want := cfg.MultiDCFailureDetector.AcceptableHeartbeatPause, 12*time.Second; got != want {
+		t.Errorf("MultiDCFailureDetector.AcceptableHeartbeatPause = %v, want %v", got, want)
+	}
+	if got, want := cfg.MultiDCFailureDetector.ExpectedResponseAfter, 750*time.Millisecond; got != want {
+		t.Errorf("MultiDCFailureDetector.ExpectedResponseAfter = %v, want %v", got, want)
+	}
+}
+
+// TestParseHOCON_MultiDCFailureDetector_AbsentDefaults verifies that absent
+// keys leave the MultiDCFailureDetector struct zero-valued (intra-DC fallback).
+func TestParseHOCON_MultiDCFailureDetector_AbsentDefaults(t *testing.T) {
+	hocon := `
+pekko {
+  remote.artery.canonical.hostname = "127.0.0.1"
+  remote.artery.canonical.port = 2552
+  cluster {
+    seed-nodes = []
+  }
+}
+`
+	cfg, err := ParseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("ParseHOCONString: %v", err)
+	}
+	if cfg.MultiDCFailureDetector.HeartbeatInterval != 0 {
+		t.Errorf("HeartbeatInterval = %v, want 0 (absent → fall back)", cfg.MultiDCFailureDetector.HeartbeatInterval)
+	}
+	if cfg.MultiDCFailureDetector.AcceptableHeartbeatPause != 0 {
+		t.Errorf("AcceptableHeartbeatPause = %v, want 0", cfg.MultiDCFailureDetector.AcceptableHeartbeatPause)
+	}
+	if cfg.MultiDCFailureDetector.ExpectedResponseAfter != 0 {
+		t.Errorf("ExpectedResponseAfter = %v, want 0", cfg.MultiDCFailureDetector.ExpectedResponseAfter)
+	}
+}

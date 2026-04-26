@@ -325,6 +325,23 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 	if v, err := cfg.GetInt(prefix + ".cluster.multi-data-center.cross-data-center-connections"); err == nil {
 		nodeCfg.CrossDataCenterConnections = v
 	}
+	// pekko.cluster.multi-data-center.failure-detector.* — separate cross-DC FD.
+	mdcFdPrefix := prefix + ".cluster.multi-data-center.failure-detector"
+	if v, err := cfg.GetString(mdcFdPrefix + ".heartbeat-interval"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.MultiDCFailureDetector.HeartbeatInterval = d
+		}
+	}
+	if v, err := cfg.GetString(mdcFdPrefix + ".acceptable-heartbeat-pause"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.MultiDCFailureDetector.AcceptableHeartbeatPause = d
+		}
+	}
+	if v, err := cfg.GetString(mdcFdPrefix + ".expected-response-after"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.MultiDCFailureDetector.ExpectedResponseAfter = d
+		}
+	}
 
 	// ── Cluster Sharding ────────────────────────────────────────────────────
 	shardingPrefix := prefix + ".cluster.sharding"

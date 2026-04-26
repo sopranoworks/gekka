@@ -48,9 +48,19 @@ target/
 # OS
 .DS_Store
 gekka-compat-test
+gekka-aeron-compat-test
+aeron-transport
 *.log
 *.pid
 bin/
+
+# Go build / module caches kept inside the repo for sandbox convenience
+.gocache/
+.gomodcache/
+
+# Local Claude / superpowers tooling artifacts (never tracked)
+.superpowers/
+docs/superpowers/
 
 .claude/
 .gemini/

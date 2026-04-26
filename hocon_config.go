@@ -299,6 +299,69 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		nodeCfg.Persistence.MaxConcurrentRecoveries = v
 	}
 
+	// ── Persistence small features (round2 session 17) ──────────────────────
+	nodeCfg.Persistence.AutoMigrateManifest = "pekko"
+	nodeCfg.Persistence.StatePluginFallbackRecoveryTimeout = 30 * time.Second
+	nodeCfg.Persistence.TypedStashCapacity = 4096
+	nodeCfg.Persistence.TypedStashOverflowStrategy = "drop"
+	nodeCfg.Persistence.TypedSnapshotOnRecovery = false
+	nodeCfg.Persistence.FSMSnapshotAfter = 0
+	var persistAuto struct {
+		PekkoJournals    []string `hocon:"pekko.persistence.journal.auto-start-journals"`
+		AkkaJournals     []string `hocon:"akka.persistence.journal.auto-start-journals"`
+		PekkoSnapshots   []string `hocon:"pekko.persistence.snapshot-store.auto-start-snapshot-stores"`
+		AkkaSnapshots    []string `hocon:"akka.persistence.snapshot-store.auto-start-snapshot-stores"`
+	}
+	_ = cfg.Unmarshal(&persistAuto)
+	if prefix == "pekko" {
+		if len(persistAuto.PekkoJournals) > 0 {
+			nodeCfg.Persistence.AutoStartJournals = persistAuto.PekkoJournals
+		}
+		if len(persistAuto.PekkoSnapshots) > 0 {
+			nodeCfg.Persistence.AutoStartSnapshotStores = persistAuto.PekkoSnapshots
+		}
+	} else {
+		if len(persistAuto.AkkaJournals) > 0 {
+			nodeCfg.Persistence.AutoStartJournals = persistAuto.AkkaJournals
+		}
+		if len(persistAuto.AkkaSnapshots) > 0 {
+			nodeCfg.Persistence.AutoStartSnapshotStores = persistAuto.AkkaSnapshots
+		}
+	}
+	if v, err := cfg.GetString(prefix + ".persistence.snapshot-store.auto-migrate-manifest"); err == nil {
+		v = strings.Trim(strings.TrimSpace(v), `"`)
+		if v != "" {
+			nodeCfg.Persistence.AutoMigrateManifest = v
+		}
+	}
+	if v, err := cfg.GetString(prefix + ".persistence.state-plugin-fallback.recovery-timeout"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.Persistence.StatePluginFallbackRecoveryTimeout = d
+		}
+	}
+	if v, err := cfg.GetInt(prefix + ".persistence.typed.stash-capacity"); err == nil && v > 0 {
+		nodeCfg.Persistence.TypedStashCapacity = v
+	}
+	if v, err := cfg.GetString(prefix + ".persistence.typed.stash-overflow-strategy"); err == nil {
+		v = strings.Trim(strings.TrimSpace(v), `"`)
+		if v != "" {
+			nodeCfg.Persistence.TypedStashOverflowStrategy = strings.ToLower(v)
+		}
+	}
+	if v, err := cfg.GetString(prefix + ".persistence.typed.snapshot-on-recovery"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		nodeCfg.Persistence.TypedSnapshotOnRecovery = v == "on" || v == "true"
+	}
+	if v, err := cfg.GetString(prefix + ".persistence.fsm.snapshot-after"); err == nil {
+		trimmed := strings.ToLower(strings.TrimSpace(v))
+		if trimmed == "off" || trimmed == "false" {
+			nodeCfg.Persistence.FSMSnapshotAfter = 0
+		}
+	}
+	if v, err := cfg.GetInt(prefix + ".persistence.fsm.snapshot-after"); err == nil && v > 0 {
+		nodeCfg.Persistence.FSMSnapshotAfter = v
+	}
+
 	// ── Cluster Roles ───────────────────────────────────────────────────────
 	var rolesTmp struct {
 		PekkoRoles []string `hocon:"pekko.cluster.roles"`

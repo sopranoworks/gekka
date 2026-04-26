@@ -252,6 +252,32 @@ When the limit is reached, additional actors wait until a slot becomes available
 
 ---
 
+## Configurable Defaults (round-2 session 17)
+
+The following Pekko reference paths are honored by `gekka.LoadConfig` and
+applied to the persistence subsystem at cluster start-up:
+
+| HOCON path | Setter | Default | Notes |
+|------------|--------|---------|-------|
+| `pekko.persistence.journal.auto-start-journals` | `persistence.AutoStartJournals` | `[]` | Eagerly instantiates each named journal provider |
+| `pekko.persistence.snapshot-store.auto-start-snapshot-stores` | `persistence.AutoStartSnapshotStores` | `[]` | Eagerly instantiates each named snapshot-store provider |
+| `pekko.persistence.snapshot-store.auto-migrate-manifest` | `persistence.SetAutoMigrateManifest` | `"pekko"` | Manifest written when migrating Akka-encoded snapshots |
+| `pekko.persistence.state-plugin-fallback.recovery-timeout` | `persistence.SetStatePluginFallbackRecoveryTimeout` | `30s` | Cap for durable-state fallback recovery |
+| `pekko.persistence.typed.stash-capacity` | `persistence/typed.SetDefaultStashCapacity` | `4096` | Recovery-phase stash size for typed persistent actors |
+| `pekko.persistence.typed.stash-overflow-strategy` | `persistence/typed.SetDefaultStashOverflowStrategy` | `"drop"` | Honors `drop` and `fail` |
+| `pekko.persistence.typed.snapshot-on-recovery` | `persistence/typed.SetSnapshotOnRecovery` | `false` | Save a snapshot at end of recovery |
+| `pekko.persistence.fsm.snapshot-after` | `persistence.SetDefaultFSMSnapshotAfter` | `0` (off) | Save a `FSMSnapshot[S,D]` every N events when a snapshot store is attached |
+
+Per-FSM opt-in for `fsm.snapshot-after`:
+
+```go
+fsm := persistence.NewPersistentFSM[State, Data, Event]("fsm-1", journal).
+    WithSnapshotStore(snapStore).
+    SetSnapshotAfter(50) // override or rely on the global default
+```
+
+---
+
 ## Integration with Cluster Sharding
 
 When using `StartSharding`, each entity is automatically a persistent actor.

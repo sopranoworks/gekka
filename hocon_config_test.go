@@ -3786,3 +3786,100 @@ pekko {
 		t.Errorf("SerializerCacheTimeToLive = %v, want %v", got, want)
 	}
 }
+
+// TestParseHOCON_S17_PersistenceSmallFeatures verifies the eight HOCON paths
+// added by round-2 session 17 (persistence small features) populate the
+// corresponding ClusterConfig.Persistence fields.
+func TestParseHOCON_S17_PersistenceSmallFeatures(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster.seed-nodes = []
+  persistence {
+    journal {
+      auto-start-journals = ["primary", "audit"]
+    }
+    snapshot-store {
+      auto-start-snapshot-stores = ["primary-snap"]
+      auto-migrate-manifest = "akka-legacy"
+    }
+    state-plugin-fallback {
+      recovery-timeout = 12s
+    }
+    typed {
+      stash-capacity = 8192
+      stash-overflow-strategy = "fail"
+      snapshot-on-recovery = on
+    }
+    fsm {
+      snapshot-after = 250
+    }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.Persistence.AutoStartJournals, []string{"primary", "audit"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("AutoStartJournals = %v, want %v", got, want)
+	}
+	if got, want := cfg.Persistence.AutoStartSnapshotStores, []string{"primary-snap"}; len(got) != len(want) || got[0] != want[0] {
+		t.Errorf("AutoStartSnapshotStores = %v, want %v", got, want)
+	}
+	if got, want := cfg.Persistence.AutoMigrateManifest, "akka-legacy"; got != want {
+		t.Errorf("AutoMigrateManifest = %q, want %q", got, want)
+	}
+	if got, want := cfg.Persistence.StatePluginFallbackRecoveryTimeout, 12*time.Second; got != want {
+		t.Errorf("StatePluginFallbackRecoveryTimeout = %v, want %v", got, want)
+	}
+	if got, want := cfg.Persistence.TypedStashCapacity, 8192; got != want {
+		t.Errorf("TypedStashCapacity = %d, want %d", got, want)
+	}
+	if got, want := cfg.Persistence.TypedStashOverflowStrategy, "fail"; got != want {
+		t.Errorf("TypedStashOverflowStrategy = %q, want %q", got, want)
+	}
+	if !cfg.Persistence.TypedSnapshotOnRecovery {
+		t.Error("TypedSnapshotOnRecovery = false, want true")
+	}
+	if got, want := cfg.Persistence.FSMSnapshotAfter, 250; got != want {
+		t.Errorf("FSMSnapshotAfter = %d, want %d", got, want)
+	}
+}
+
+// TestParseHOCON_S17_PersistenceDefaults verifies that omitting the new paths
+// leaves the gekka defaults (matching Pekko reference.conf).
+func TestParseHOCON_S17_PersistenceDefaults(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.Persistence.AutoMigrateManifest, "pekko"; got != want {
+		t.Errorf("default AutoMigrateManifest = %q, want %q", got, want)
+	}
+	if got, want := cfg.Persistence.StatePluginFallbackRecoveryTimeout, 30*time.Second; got != want {
+		t.Errorf("default StatePluginFallbackRecoveryTimeout = %v, want %v", got, want)
+	}
+	if got, want := cfg.Persistence.TypedStashCapacity, 4096; got != want {
+		t.Errorf("default TypedStashCapacity = %d, want %d", got, want)
+	}
+	if got, want := cfg.Persistence.TypedStashOverflowStrategy, "drop"; got != want {
+		t.Errorf("default TypedStashOverflowStrategy = %q, want %q", got, want)
+	}
+	if cfg.Persistence.TypedSnapshotOnRecovery {
+		t.Error("default TypedSnapshotOnRecovery should be false")
+	}
+	if cfg.Persistence.FSMSnapshotAfter != 0 {
+		t.Errorf("default FSMSnapshotAfter = %d, want 0", cfg.Persistence.FSMSnapshotAfter)
+	}
+	if len(cfg.Persistence.AutoStartJournals) != 0 {
+		t.Errorf("default AutoStartJournals = %v, want empty", cfg.Persistence.AutoStartJournals)
+	}
+	if len(cfg.Persistence.AutoStartSnapshotStores) != 0 {
+		t.Errorf("default AutoStartSnapshotStores = %v, want empty", cfg.Persistence.AutoStartSnapshotStores)
+	}
+}

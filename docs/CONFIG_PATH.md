@@ -304,10 +304,13 @@ Legend:
 | Path | Pekko Default | Gekka? | Notes |
 |---|---|---|---|
 | `pekko.persistence.journal.plugin` | `""` | ✅ | |
-| `pekko.persistence.journal.auto-start-journals` | `[]` | ❌ | No feature |
+| `pekko.persistence.journal.auto-start-journals` | `[]` | ✅ | Eagerly instantiates journal providers via `persistence.AutoStartJournals` |
 | `pekko.persistence.snapshot-store.plugin` | `""` | ✅ | |
-| `pekko.persistence.snapshot-store.auto-start-snapshot-stores` | `[]` | ❌ | No feature |
+| `pekko.persistence.snapshot-store.auto-start-snapshot-stores` | `[]` | ✅ | Eagerly instantiates snapshot-store providers |
+| `pekko.persistence.snapshot-store.auto-migrate-manifest` | `"pekko"` | ✅ | Manifest used when migrating legacy snapshot envelopes |
+| `pekko.persistence.state-plugin-fallback.recovery-timeout` | `30s` | ✅ | Cap for durable-state plugin fallback recovery |
 | `pekko.persistence.max-concurrent-recoveries` | `50` | ✅ | Global semaphore for recoveries |
+| `pekko.persistence.fsm.snapshot-after` | `off` | ✅ | Per-FSM opt-in via `WithSnapshotStore`+`SetSnapshotAfter`; save-side wired |
 | `pekko.persistence.at-least-once-delivery.redeliver-interval` | `5s` | ❌ | No feature |
 | `pekko.persistence.at-least-once-delivery.redelivery-burst-limit` | `10000` | ❌ | No feature |
 | `pekko.persistence.at-least-once-delivery.max-unconfirmed-messages` | `100000` | ❌ | No feature |
@@ -318,8 +321,9 @@ Legend:
 
 | Path | Pekko Default | Gekka? | Notes |
 |---|---|---|---|
-| `pekko.persistence.typed.stash-capacity` | `4096` | ❌ | No feature |
-| `pekko.persistence.typed.stash-overflow-strategy` | `"drop"` | ❌ | No feature |
+| `pekko.persistence.typed.stash-capacity` | `4096` | ✅ | Default for typed persistent actor recovery stash |
+| `pekko.persistence.typed.stash-overflow-strategy` | `"drop"` | ✅ | Honors `drop` and `fail` |
+| `pekko.persistence.typed.snapshot-on-recovery` | `false` | ✅ | Saves a snapshot at end of recovery |
 | `pekko.persistence.typed.log-stashing` | `off` | ❌ | No feature |
 
 ---

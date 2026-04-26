@@ -255,7 +255,7 @@ func (r *contextAskResponder[T]) Path() string {
 
 func (p *persistentActor[Command, Event, State]) PreStart() {
 	p.timers = actor.NewTimerScheduler[Command](p.Self())
-	p.userStash = actor.NewStashBuffer[Command](actor.DefaultStashCapacity, func(cmd Command) {
+	p.userStash = actor.NewStashBuffer[Command](GetDefaultStashCapacity(), func(cmd Command) {
 		p.userStashPending = append(p.userStashPending, cmd)
 	})
 	p.recover()
@@ -272,6 +272,24 @@ func (p *persistentActor[Command, Event, State]) Receive(msg any) {
 
 	if p.recovering {
 		if cmd, ok := msg.(Command); ok {
+			capacity := GetDefaultStashCapacity()
+			if capacity > 0 && len(p.stash) >= capacity {
+				switch GetDefaultStashOverflowStrategy() {
+				case "fail":
+					p.Log().Error("PersistentActor: recovery stash overflow — failing actor",
+						"persistenceID", p.behavior.PersistenceID,
+						"capacity", capacity)
+					if s, ok := p.System().(interface{ Stop(actor.Ref) }); ok {
+						s.Stop(p.Self())
+					}
+				default: // "drop"
+					p.Log().Warn("PersistentActor: recovery stash full — dropping command",
+						"persistenceID", p.behavior.PersistenceID,
+						"capacity", capacity,
+						"msgType", fmt.Sprintf("%T", cmd))
+				}
+				return
+			}
 			p.Log().Debug("Stashing command during recovery")
 			p.stash = append(p.stash, cmd)
 		}
@@ -400,6 +418,23 @@ func (p *persistentActor[Command, Event, State]) getReplayFilter() func(persiste
 func (p *persistentActor[Command, Event, State]) deliverRecoveryCompleted() {
 	if p.behavior.SignalHandler != nil {
 		p.behavior.SignalHandler(RecoveryCompleted{HighestSequenceNr: p.seqNr})
+	}
+	// pekko.persistence.typed.snapshot-on-recovery — save a snapshot once
+	// recovery finishes so that the next restart only replays new events.
+	if GetSnapshotOnRecovery() && p.behavior.SnapshotStore != nil && p.seqNr > 0 && p.seqNr != p.lastSnapSeqNr {
+		ctx := context.Background()
+		meta := persistence.SnapshotMetadata{
+			PersistenceID: p.behavior.PersistenceID,
+			SequenceNr:    p.seqNr,
+			Timestamp:     time.Now().UnixNano(),
+		}
+		if err := p.behavior.SnapshotStore.SaveSnapshot(ctx, meta, p.state); err != nil {
+			p.Log().Error("snapshot-on-recovery save failed",
+				"persistenceID", p.behavior.PersistenceID,
+				"error", err)
+			return
+		}
+		p.lastSnapSeqNr = p.seqNr
 	}
 }
 

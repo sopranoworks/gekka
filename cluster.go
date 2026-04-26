@@ -37,6 +37,7 @@ import (
 	"github.com/sopranoworks/gekka/internal/core"
 	"github.com/sopranoworks/gekka/internal/management"
 	"github.com/sopranoworks/gekka/persistence"
+	persistencetyped "github.com/sopranoworks/gekka/persistence/typed"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 	"github.com/sopranoworks/gekka/stream"
@@ -765,6 +766,58 @@ type PersistenceConfig struct {
 	// Corresponds to pekko.persistence.max-concurrent-recoveries.
 	// Default: 50. Zero means use default.
 	MaxConcurrentRecoveries int
+
+	// AutoStartJournals lists journal-provider names that should be
+	// instantiated eagerly at cluster startup. Names must be registered with
+	// persistence.RegisterJournalProvider.
+	// Corresponds to pekko.persistence.journal.auto-start-journals.
+	// Default: nil (none — journals are created lazily on first use).
+	AutoStartJournals []string
+
+	// AutoStartSnapshotStores lists snapshot-store-provider names that should
+	// be instantiated eagerly at cluster startup.
+	// Corresponds to pekko.persistence.snapshot-store.auto-start-snapshot-stores.
+	// Default: nil (none).
+	AutoStartSnapshotStores []string
+
+	// AutoMigrateManifest is the manifest written into snapshot envelopes
+	// when migrating a legacy class-named snapshot to a manifest-coded one.
+	// Corresponds to pekko.persistence.snapshot-store.auto-migrate-manifest.
+	// Default: "pekko".
+	AutoMigrateManifest string
+
+	// StatePluginFallbackRecoveryTimeout caps how long the durable-state
+	// plugin fallback waits for recovery before failing.
+	// Corresponds to pekko.persistence.state-plugin-fallback.recovery-timeout.
+	// Default: 30s.
+	StatePluginFallbackRecoveryTimeout time.Duration
+
+	// TypedStashCapacity caps the number of commands a typed persistent
+	// actor will stash while recovering / persisting.
+	// Corresponds to pekko.persistence.typed.stash-capacity.
+	// Default: 4096.
+	TypedStashCapacity int
+
+	// TypedStashOverflowStrategy selects what happens when a typed
+	// persistent actor's stash hits its capacity. Currently honored values:
+	//   "drop" — drop the incoming command (default; matches Pekko)
+	//   "fail" — fail the actor with a stash-overflow error
+	// Corresponds to pekko.persistence.typed.stash-overflow-strategy.
+	// Default: "drop".
+	TypedStashOverflowStrategy string
+
+	// TypedSnapshotOnRecovery, when true, instructs typed persistent actors
+	// to save a snapshot once recovery finishes (regardless of the
+	// per-behavior SnapshotInterval / SnapshotWhen settings).
+	// Corresponds to pekko.persistence.typed.snapshot-on-recovery.
+	// Default: false.
+	TypedSnapshotOnRecovery bool
+
+	// FSMSnapshotAfter, when > 0, causes PersistentFSM to save a snapshot
+	// after every N state transitions.
+	// Corresponds to pekko.persistence.fsm.snapshot-after.
+	// Default: 0 (off — Pekko's reference default).
+	FSMSnapshotAfter int
 }
 
 // SBRConfig is a re-export of cluster.SBRConfig for use in ClusterConfig.
@@ -1966,6 +2019,42 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	// Apply persistence recovery concurrency limit from HOCON.
 	if cfg.Persistence.MaxConcurrentRecoveries > 0 {
 		persistence.SetMaxConcurrentRecoveries(cfg.Persistence.MaxConcurrentRecoveries)
+	}
+
+	// Round-2 session 17: persistence small features.
+	if cfg.Persistence.AutoMigrateManifest != "" {
+		persistence.SetAutoMigrateManifest(cfg.Persistence.AutoMigrateManifest)
+	}
+	if cfg.Persistence.StatePluginFallbackRecoveryTimeout > 0 {
+		persistence.SetStatePluginFallbackRecoveryTimeout(cfg.Persistence.StatePluginFallbackRecoveryTimeout)
+	}
+	if cfg.Persistence.TypedStashCapacity > 0 {
+		persistencetyped.SetDefaultStashCapacity(cfg.Persistence.TypedStashCapacity)
+	}
+	if cfg.Persistence.TypedStashOverflowStrategy != "" {
+		persistencetyped.SetDefaultStashOverflowStrategy(cfg.Persistence.TypedStashOverflowStrategy)
+	}
+	persistencetyped.SetSnapshotOnRecovery(cfg.Persistence.TypedSnapshotOnRecovery)
+	persistence.SetDefaultFSMSnapshotAfter(cfg.Persistence.FSMSnapshotAfter)
+	if len(cfg.Persistence.AutoStartJournals) > 0 {
+		var hcfg hocon.Config
+		if cfg.HOCON != nil {
+			hcfg = *cfg.HOCON
+		}
+		if _, autoErr := persistence.AutoStartJournals(cfg.Persistence.AutoStartJournals, hcfg); autoErr != nil {
+			cancel()
+			return nil, fmt.Errorf("gekka: auto-start journals: %w", autoErr)
+		}
+	}
+	if len(cfg.Persistence.AutoStartSnapshotStores) > 0 {
+		var hcfg hocon.Config
+		if cfg.HOCON != nil {
+			hcfg = *cfg.HOCON
+		}
+		if _, autoErr := persistence.AutoStartSnapshotStores(cfg.Persistence.AutoStartSnapshotStores, hcfg); autoErr != nil {
+			cancel()
+			return nil, fmt.Errorf("gekka: auto-start snapshot stores: %w", autoErr)
+		}
 	}
 
 	// Determine the bind address: use BindHostname/BindPort when configured

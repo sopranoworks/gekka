@@ -13,9 +13,19 @@ import (
 	"fmt"
 	"reflect"
 	"sync"
+	"time"
 
 	"github.com/sopranoworks/gekka/actor"
 )
+
+// FSMSnapshot is the on-disk representation of a PersistentFSM snapshot.
+// Persisted by the snapshot-store and consumed during recovery to seed the
+// FSM's state and data before journal replay continues from the post-snapshot
+// sequence number.
+type FSMSnapshot[S comparable, D any] struct {
+	State S `json:"state"`
+	Data  D `json:"data"`
+}
 
 // ── FSM event and result types ────────────────────────────────────────────────
 
@@ -102,6 +112,11 @@ type PersistentFSM[S comparable, D any, E any] struct {
 	// async write support (PersistAsync / PersistAllAsync)
 	asyncWriteCh chan asyncWriteTask
 	asyncOnce    sync.Once
+
+	// pekko.persistence.fsm.snapshot-after support.
+	snapshotStore        SnapshotStore
+	snapshotAfter        int // 0 = use package default
+	eventsSinceSnapshot  int
 }
 
 // NewPersistentFSM creates a PersistentFSM that stores events under persistenceID
@@ -147,6 +162,37 @@ func (f *PersistentFSM[S, D, E]) ApplyEvent(fn func(state S, data D, event E) (S
 // during normal operation (not during recovery).
 func (f *PersistentFSM[S, D, E]) OnTransition(handler func(from S, to S)) {
 	f.transitions = append(f.transitions, handler)
+}
+
+// WithSnapshotStore opts the FSM into snapshotting via store. When combined
+// with a positive snapshot-after value (per-FSM via SetSnapshotAfter or the
+// global default from pekko.persistence.fsm.snapshot-after), a snapshot of the
+// (state, data) pair is saved every N persisted events and is consulted during
+// recovery before journal replay.
+func (f *PersistentFSM[S, D, E]) WithSnapshotStore(store SnapshotStore) *PersistentFSM[S, D, E] {
+	f.snapshotStore = store
+	return f
+}
+
+// SetSnapshotAfter overrides the package-default snapshot-after value for
+// this FSM instance. n <= 0 reverts to the package default.
+//
+// HOCON: pekko.persistence.fsm.snapshot-after.
+func (f *PersistentFSM[S, D, E]) SetSnapshotAfter(n int) *PersistentFSM[S, D, E] {
+	if n < 0 {
+		n = 0
+	}
+	f.snapshotAfter = n
+	return f
+}
+
+// effectiveSnapshotAfter returns the per-FSM override when set, otherwise the
+// package-default from auto_start.go.
+func (f *PersistentFSM[S, D, E]) effectiveSnapshotAfter() int {
+	if f.snapshotAfter > 0 {
+		return f.snapshotAfter
+	}
+	return GetDefaultFSMSnapshotAfter()
 }
 
 // ── Builder helpers (mirrors BaseFSM) ─────────────────────────────────────────
@@ -302,6 +348,23 @@ func (f *PersistentFSM[S, D, E]) recover() {
 	}
 	defer rl.Release()
 
+	// Snapshot replay (pekko.persistence.fsm.snapshot-after).  When a snapshot
+	// store is configured, load the highest available snapshot first so that
+	// journal replay can resume from the post-snapshot sequence number.
+	if f.snapshotStore != nil {
+		crit := SnapshotSelectionCriteria{
+			MaxSequenceNr: ^uint64(0),
+			MaxTimestamp:  int64(^uint64(0) >> 1), // math.MaxInt64
+		}
+		if snap, snapErr := f.snapshotStore.LoadSnapshot(ctx, f.persistenceID, crit); snapErr == nil && snap != nil {
+			if payload, ok := snap.Snapshot.(FSMSnapshot[S, D]); ok {
+				f.currentState = payload.State
+				f.stateData = payload.Data
+				f.seqNr = snap.Metadata.SequenceNr
+			}
+		}
+	}
+
 	if f.journal != nil {
 		err := f.journal.ReplayMessages(ctx, f.persistenceID, f.seqNr+1, ^uint64(0), 0, func(repr PersistentRepr) {
 			if event, ok := repr.Payload.(E); ok {
@@ -382,6 +445,13 @@ func (f *PersistentFSM[S, D, E]) dispatch(msg any) {
 			t(from, result.NextState)
 		}
 	}
+
+	// Snapshot AFTER the transition so the saved (state, data) pair reflects
+	// the post-transition view. snapshot-after fires only when the configured
+	// number of new events have been persisted since the last snapshot.
+	if len(result.Events) > 0 {
+		f.maybeSaveSnapshot(context.Background(), len(result.Events))
+	}
 }
 
 func (f *PersistentFSM[S, D, E]) persistEvents(events []E) error {
@@ -395,5 +465,43 @@ func (f *PersistentFSM[S, D, E]) persistEvents(events []E) error {
 			Payload:       e,
 		})
 	}
-	return f.journal.AsyncWriteMessages(ctx, reprs)
+	if err := f.journal.AsyncWriteMessages(ctx, reprs); err != nil {
+		return err
+	}
+	// Note: maybeSaveSnapshot is intentionally invoked by dispatch() after the
+	// state transition has been applied, so the snapshot reflects post-event
+	// (state, data). Calling it here would capture stale state.
+	return nil
+}
+
+// maybeSaveSnapshot implements pekko.persistence.fsm.snapshot-after.  Each
+// successful event-persist call increments the events-since-snapshot counter;
+// once the counter crosses the configured threshold and a snapshot store is
+// available, the current (state, data) pair is written and the counter resets.
+func (f *PersistentFSM[S, D, E]) maybeSaveSnapshot(ctx context.Context, addedEvents int) {
+	if f.snapshotStore == nil || addedEvents <= 0 {
+		return
+	}
+	threshold := f.effectiveSnapshotAfter()
+	if threshold <= 0 {
+		return
+	}
+	f.eventsSinceSnapshot += addedEvents
+	if f.eventsSinceSnapshot < threshold {
+		return
+	}
+	meta := SnapshotMetadata{
+		PersistenceID: f.persistenceID,
+		SequenceNr:    f.seqNr,
+		Timestamp:     time.Now().UnixNano(),
+	}
+	payload := FSMSnapshot[S, D]{State: f.currentState, Data: f.stateData}
+	if err := f.snapshotStore.SaveSnapshot(ctx, meta, payload); err != nil {
+		f.Log().Error("PersistentFSM: snapshot save failed",
+			"persistenceID", f.persistenceID,
+			"seqNr", f.seqNr,
+			"error", err)
+		return
+	}
+	f.eventsSinceSnapshot = 0
 }

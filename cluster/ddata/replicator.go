@@ -181,6 +181,24 @@ type Replicator struct {
 	// snapshots cached for reuse across gossip rounds. Zero disables caching.
 	// Wired from pekko.cluster.distributed-data.serializer-cache-time-to-live.
 	SerializerCacheTimeToLive time.Duration
+
+	// DurableStore, when non-nil, persists CRDT snapshots whose key matches
+	// one of DurableKeys.  Set by the host (gekka.NewCluster) when
+	// pekko.cluster.distributed-data.durable.enabled = on; tests may inject
+	// a MemoryDurableStore directly.  When nil, no durable path runs even
+	// if DurableEnabled is true.
+	DurableStore DurableStore
+
+	// DurableEnabled mirrors pekko.cluster.distributed-data.durable.enabled.
+	// The host wiring is responsible for installing a DurableStore when this
+	// flag is true; the Replicator itself only checks the flag to short-
+	// circuit the DurableKeys filter when persistence is disabled.
+	DurableEnabled bool
+
+	// DurableKeys is the prefix-glob list from
+	// pekko.cluster.distributed-data.durable.keys.  Only keys matching one
+	// of these patterns trigger DurableStore writes/reads.
+	DurableKeys []string
 }
 
 type peerInfo struct {
@@ -388,6 +406,7 @@ func (r *Replicator) LookupLWWRegister(key string) (*LWWRegister, bool) {
 func (r *Replicator) IncrementCounter(key string, delta uint64, consistency WriteConsistency) {
 	c := r.GCounter(key)
 	c.Increment(r.nodeID, delta)
+	r.persistCounter(key, c)
 	if consistency == WriteAll {
 		r.gossipCounter(context.Background(), key, c)
 	}
@@ -397,6 +416,7 @@ func (r *Replicator) IncrementCounter(key string, delta uint64, consistency Writ
 func (r *Replicator) AddToSet(key, element string, consistency WriteConsistency) {
 	s := r.ORSet(key)
 	s.Add(r.nodeID, element)
+	r.persistORSet(key, s)
 	if consistency == WriteAll {
 		r.gossipSet(context.Background(), key, s)
 	}
@@ -406,6 +426,7 @@ func (r *Replicator) AddToSet(key, element string, consistency WriteConsistency)
 func (r *Replicator) RemoveFromSet(key, element string, consistency WriteConsistency) {
 	s := r.ORSet(key)
 	s.Remove(element)
+	r.persistORSet(key, s)
 	if consistency == WriteAll {
 		r.gossipSet(context.Background(), key, s)
 	}
@@ -415,9 +436,133 @@ func (r *Replicator) RemoveFromSet(key, element string, consistency WriteConsist
 func (r *Replicator) PutInMap(key, itemKey string, value any, consistency WriteConsistency) {
 	m := r.LWWMap(key)
 	m.Put(itemKey, value)
+	r.persistLWWMap(key, m)
 	if consistency == WriteAll {
 		r.gossipMap(context.Background(), key, m)
 	}
+}
+
+// shouldPersist returns true when the durable path is configured for key.
+// Caller may also pass any (read-only) value — only the key + flags matter.
+func (r *Replicator) shouldPersist(key string) bool {
+	if !r.DurableEnabled || r.DurableStore == nil {
+		return false
+	}
+	if len(r.DurableKeys) == 0 {
+		return false
+	}
+	return IsDurableKey(r.DurableKeys, key)
+}
+
+// persistEntry is the single chokepoint that writes to the DurableStore.
+// It silently swallows errors after logging them — durable writes are an
+// optional resilience layer, not a correctness gate, so a backend failure
+// must not crash the gossip loop.
+func (r *Replicator) persistEntry(key string, ctype CRDTType, payload any) {
+	if !r.shouldPersist(key) {
+		return
+	}
+	bytes, err := json.Marshal(payload)
+	if err != nil {
+		slog.Warn("Replicator: durable marshal failed", "key", key, "type", ctype, "err", err)
+		return
+	}
+	if err := r.DurableStore.Store(context.Background(), DurableEntry{
+		Key:     key,
+		Type:    ctype,
+		Payload: bytes,
+	}); err != nil {
+		slog.Warn("Replicator: durable store failed", "key", key, "type", ctype, "err", err)
+	}
+}
+
+func (r *Replicator) persistCounter(key string, c *GCounter) {
+	r.persistEntry(key, CRDTTypeGCounter, GCounterPayload{State: c.Snapshot()})
+}
+
+func (r *Replicator) persistORSet(key string, s *ORSet) {
+	r.persistEntry(key, CRDTTypeORSet, s.Snapshot())
+}
+
+func (r *Replicator) persistLWWMap(key string, m *LWWMap) {
+	r.persistEntry(key, CRDTTypeLWWMap, LWWMapPayload{State: m.Snapshot()})
+}
+
+func (r *Replicator) persistPNCounter(key string, c *PNCounter) {
+	r.persistEntry(key, CRDTTypePNCounter, PNCounterPayload{c.Snapshot()})
+}
+
+func (r *Replicator) persistORFlag(key string, f *ORFlag) {
+	r.persistEntry(key, CRDTTypeORFlag, f.Snapshot())
+}
+
+func (r *Replicator) persistLWWRegister(key string, reg *LWWRegister) {
+	r.persistEntry(key, CRDTTypeLWWRegister, LWWRegisterPayload{reg.Snapshot()})
+}
+
+// Recover loads every entry from DurableStore and merges it into the
+// in-memory CRDTs.  Safe to call before Start.  When DurableEnabled is
+// false or DurableStore is nil, Recover is a no-op.
+//
+// Recovery uses MergeSnapshot/MergeState so re-running it is idempotent
+// (a CRDT snapshot merged with itself is the same snapshot).
+func (r *Replicator) Recover(ctx context.Context) error {
+	if !r.DurableEnabled || r.DurableStore == nil {
+		return nil
+	}
+	entries, err := r.DurableStore.LoadAll(ctx)
+	if err != nil {
+		return fmt.Errorf("replicator: durable load: %w", err)
+	}
+	for _, e := range entries {
+		switch e.Type {
+		case CRDTTypeGCounter:
+			var p GCounterPayload
+			if err := json.Unmarshal(e.Payload, &p); err != nil {
+				slog.Warn("Replicator: durable decode gcounter", "key", e.Key, "err", err)
+				continue
+			}
+			r.GCounter(e.Key).MergeState(p.State)
+		case CRDTTypeORSet:
+			var snap ORSetSnapshot
+			if err := json.Unmarshal(e.Payload, &snap); err != nil {
+				slog.Warn("Replicator: durable decode orset", "key", e.Key, "err", err)
+				continue
+			}
+			r.ORSet(e.Key).MergeSnapshot(snap)
+		case CRDTTypeLWWMap:
+			var p LWWMapPayload
+			if err := json.Unmarshal(e.Payload, &p); err != nil {
+				slog.Warn("Replicator: durable decode lwwmap", "key", e.Key, "err", err)
+				continue
+			}
+			r.LWWMap(e.Key).Merge(p.State)
+		case CRDTTypePNCounter:
+			var p PNCounterPayload
+			if err := json.Unmarshal(e.Payload, &p); err != nil {
+				slog.Warn("Replicator: durable decode pncounter", "key", e.Key, "err", err)
+				continue
+			}
+			r.PNCounter(e.Key).MergeSnapshot(p.PNCounterSnapshot)
+		case CRDTTypeORFlag:
+			var snap ORSetSnapshot
+			if err := json.Unmarshal(e.Payload, &snap); err != nil {
+				slog.Warn("Replicator: durable decode orflag", "key", e.Key, "err", err)
+				continue
+			}
+			r.ORFlag(e.Key).MergeSnapshot(snap)
+		case CRDTTypeLWWRegister:
+			var p LWWRegisterPayload
+			if err := json.Unmarshal(e.Payload, &p); err != nil {
+				slog.Warn("Replicator: durable decode lwwregister", "key", e.Key, "err", err)
+				continue
+			}
+			r.LWWRegister(e.Key).MergeSnapshot(p.LWWRegisterSnapshot)
+		default:
+			slog.Warn("Replicator: durable unknown crdt type", "key", e.Key, "type", e.Type)
+		}
+	}
+	return nil
 }
 
 // WaitForRecovery blocks until at least one peer has been registered or the
@@ -458,7 +603,16 @@ func (r *Replicator) WaitForRecovery(ctx context.Context) bool {
 // Start begins the periodic gossip loop, along with the optional
 // batched-notification loop and pruning-tick loop when those features are
 // enabled via configuration.
+//
+// When durable storage is configured, Start calls Recover synchronously
+// before launching the gossip goroutine so that on-disk state is merged
+// in before the first gossip round can publish stale (empty) snapshots.
 func (r *Replicator) Start(ctx context.Context) {
+	if r.DurableEnabled && r.DurableStore != nil {
+		if err := r.Recover(ctx); err != nil {
+			slog.Warn("Replicator: durable recovery failed", "err", err)
+		}
+	}
 	r.wg.Add(1)
 	go func() {
 		defer r.wg.Done()
@@ -673,6 +827,7 @@ func (r *Replicator) HandleIncoming(data []byte) error {
 		c := r.GCounter(msg.Key)
 		c.MergeState(p.State)
 		log.Printf("Replicator: merged GCounter[%s], value=%d", msg.Key, c.Value())
+		r.persistCounter(msg.Key, c)
 		r.notifySubscribers(msg.Key, c)
 
 	case "orset-gossip":
@@ -683,6 +838,7 @@ func (r *Replicator) HandleIncoming(data []byte) error {
 		s := r.ORSet(msg.Key)
 		s.MergeSnapshot(snap)
 		log.Printf("Replicator: merged ORSet[%s], elements=%v", msg.Key, s.Elements())
+		r.persistORSet(msg.Key, s)
 		r.notifySubscribers(msg.Key, s)
 
 	case "lwwmap-gossip":
@@ -693,6 +849,7 @@ func (r *Replicator) HandleIncoming(data []byte) error {
 		m := r.LWWMap(msg.Key)
 		m.Merge(p.State)
 		log.Printf("Replicator: merged LWWMap[%s], keys=%d", msg.Key, len(m.Entries()))
+		r.persistLWWMap(msg.Key, m)
 		r.notifySubscribers(msg.Key, m)
 
 	case "pncounter-gossip":
@@ -703,6 +860,7 @@ func (r *Replicator) HandleIncoming(data []byte) error {
 		c := r.PNCounter(msg.Key)
 		c.MergeSnapshot(p.PNCounterSnapshot)
 		log.Printf("Replicator: merged PNCounter[%s], value=%d", msg.Key, c.Value())
+		r.persistPNCounter(msg.Key, c)
 		r.notifySubscribers(msg.Key, c)
 
 	case "orflag-gossip":
@@ -713,6 +871,7 @@ func (r *Replicator) HandleIncoming(data []byte) error {
 		f := r.ORFlag(msg.Key)
 		f.MergeSnapshot(snap)
 		log.Printf("Replicator: merged ORFlag[%s], value=%v", msg.Key, f.Value())
+		r.persistORFlag(msg.Key, f)
 		r.notifySubscribers(msg.Key, f)
 
 	case "lwwregister-gossip":
@@ -723,6 +882,7 @@ func (r *Replicator) HandleIncoming(data []byte) error {
 		reg := r.LWWRegister(msg.Key)
 		reg.MergeSnapshot(p.LWWRegisterSnapshot)
 		log.Printf("Replicator: merged LWWRegister[%s], value=%v", msg.Key, func() any { v, _ := reg.Get(); return v }())
+		r.persistLWWRegister(msg.Key, reg)
 		r.notifySubscribers(msg.Key, reg)
 
 	// ── Delta message types ────────────────────────────────────────────────
@@ -735,6 +895,7 @@ func (r *Replicator) HandleIncoming(data []byte) error {
 		c := r.GCounter(msg.Key)
 		c.MergeCounterDelta(d)
 		log.Printf("Replicator: merged GCounter delta[%s], value=%d", msg.Key, c.Value())
+		r.persistCounter(msg.Key, c)
 		r.notifySubscribers(msg.Key, c)
 
 	case "orset-delta":
@@ -745,6 +906,7 @@ func (r *Replicator) HandleIncoming(data []byte) error {
 		s := r.ORSet(msg.Key)
 		s.MergeORSetDelta(d)
 		log.Printf("Replicator: merged ORSet delta[%s], elements=%v", msg.Key, s.Elements())
+		r.persistORSet(msg.Key, s)
 		r.notifySubscribers(msg.Key, s)
 
 	case "lwwmap-delta":
@@ -755,6 +917,7 @@ func (r *Replicator) HandleIncoming(data []byte) error {
 		m := r.LWWMap(msg.Key)
 		m.MergeLWWMapDelta(d)
 		log.Printf("Replicator: merged LWWMap delta[%s], keys=%d", msg.Key, len(m.Entries()))
+		r.persistLWWMap(msg.Key, m)
 		r.notifySubscribers(msg.Key, m)
 
 	default:

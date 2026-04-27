@@ -1334,6 +1334,18 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 	if v, err := cfg.GetString(sbrPrefix + ".static-quorum.role"); err == nil {
 		nodeCfg.SBR.StaticQuorumRole = strings.TrimSpace(v)
 	}
+	// pekko.cluster.split-brain-resolver.lease-majority.* — Round-2 session 19.
+	if v, err := cfg.GetString(sbrPrefix + ".lease-majority.lease-implementation"); err == nil {
+		nodeCfg.SBR.LeaseImplementation = strings.TrimSpace(v)
+	}
+	if v, err := cfg.GetString(sbrPrefix + ".lease-majority.acquire-lease-delay-for-minority"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.SBR.AcquireLeaseDelayForMinority = d
+		}
+	}
+	if v, err := cfg.GetString(sbrPrefix + ".lease-majority.role"); err == nil {
+		nodeCfg.SBR.LeaseMajorityRole = strings.TrimSpace(v)
+	}
 	if v, err := cfg.GetString(sbrPrefix + ".down-all-when-unstable"); err == nil {
 		v = strings.ToLower(strings.TrimSpace(v))
 		switch v {

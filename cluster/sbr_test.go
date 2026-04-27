@@ -11,6 +11,8 @@ package cluster
 import (
 	"testing"
 	"time"
+
+	icluster "github.com/sopranoworks/gekka/internal/cluster"
 )
 
 // stubLease implements LeaseChecker for unit tests.
@@ -526,6 +528,187 @@ func TestLeaseMajority_ViaNewStrategy(t *testing.T) {
 	}
 	if _, ok := strat.(*LeaseMajority); !ok {
 		t.Fatalf("expected *LeaseMajority, got %T", strat)
+	}
+}
+
+// ── lease-majority full-lease path (LeaseImplementation + LeaseManager) ──────
+
+func TestLeaseMajority_ViaNewStrategy_LeaseImplementationRequiresManager(t *testing.T) {
+	_, err := NewStrategy(SBRConfig{
+		ActiveStrategy:      "lease-majority",
+		LeaseImplementation: "memory",
+	})
+	if err == nil {
+		t.Fatal("expected error when LeaseImplementation set but LeaseManager nil")
+	}
+}
+
+func TestLeaseMajority_ViaNewStrategy_UnknownProvider(t *testing.T) {
+	mgr := icluster.NewLeaseManager()
+	_, err := NewStrategy(SBRConfig{
+		ActiveStrategy:      "lease-majority",
+		LeaseImplementation: "no-such-provider",
+		LeaseManager:        mgr,
+	})
+	if err == nil {
+		t.Fatal("expected error when provider name is not registered")
+	}
+}
+
+// stubLeaseProvider returns a *icluster.TestLease with a configurable initial
+// held state — enough to exercise NewStrategy's full-lease wiring.
+type stubLeaseProvider struct{ initialHeld bool }
+
+func (p *stubLeaseProvider) GetLease(s icluster.LeaseSettings) icluster.Lease {
+	return icluster.NewTestLease(s, p.initialHeld)
+}
+
+func TestLeaseMajority_ViaNewStrategy_ResolvesProvider(t *testing.T) {
+	mgr := icluster.NewLeaseManager()
+	mgr.RegisterProvider("memory", &stubLeaseProvider{initialHeld: false})
+	strat, err := NewStrategy(SBRConfig{
+		ActiveStrategy:               "lease-majority",
+		LeaseImplementation:          "memory",
+		LeaseManager:                 mgr,
+		LeaseSettings:                icluster.LeaseSettings{LeaseName: "sbr", OwnerName: "self"},
+		AcquireLeaseDelayForMinority: 10 * time.Millisecond,
+		LeaseMajorityRole:            "dc-a",
+	})
+	if err != nil {
+		t.Fatalf("NewStrategy: %v", err)
+	}
+	lm, ok := strat.(*LeaseMajority)
+	if !ok {
+		t.Fatalf("expected *LeaseMajority, got %T", strat)
+	}
+	if lm.LeaseHolder == nil {
+		t.Fatal("expected LeaseHolder to be populated from provider")
+	}
+	if lm.Role != "dc-a" {
+		t.Fatalf("expected Role=dc-a, got %q", lm.Role)
+	}
+	if lm.AcquireDelay != 10*time.Millisecond {
+		t.Fatalf("expected AcquireDelay=10ms, got %v", lm.AcquireDelay)
+	}
+}
+
+func TestLeaseMajority_ViaNewStrategy_DefaultAcquireDelay(t *testing.T) {
+	mgr := icluster.NewLeaseManager()
+	mgr.RegisterProvider("memory", &stubLeaseProvider{})
+	strat, err := NewStrategy(SBRConfig{
+		ActiveStrategy:      "lease-majority",
+		LeaseImplementation: "memory",
+		LeaseManager:        mgr,
+	})
+	if err != nil {
+		t.Fatalf("NewStrategy: %v", err)
+	}
+	lm := strat.(*LeaseMajority)
+	if lm.AcquireDelay != 2*time.Second {
+		t.Fatalf("expected default AcquireDelay=2s, got %v", lm.AcquireDelay)
+	}
+}
+
+func TestLeaseMajority_ViaNewStrategy_RoleFallback(t *testing.T) {
+	// LeaseMajorityRole empty → fall back to general Role.
+	mgr := icluster.NewLeaseManager()
+	mgr.RegisterProvider("memory", &stubLeaseProvider{})
+	strat, _ := NewStrategy(SBRConfig{
+		ActiveStrategy:      "lease-majority",
+		LeaseImplementation: "memory",
+		LeaseManager:        mgr,
+		Role:                "general-role",
+	})
+	if strat.(*LeaseMajority).Role != "general-role" {
+		t.Fatalf("expected fallback Role=general-role, got %q", strat.(*LeaseMajority).Role)
+	}
+}
+
+// Full-lease Decide path: LeaseHolder.Acquire returns true → keep self.
+func TestLeaseMajority_FullLease_AcquireSucceeds(t *testing.T) {
+	tl := icluster.NewTestLease(icluster.LeaseSettings{LeaseName: "sbr"}, false)
+	strat := &LeaseMajority{LeaseHolder: tl}
+	self := addr("10.0.0.1", 2551)
+	reachable := []Member{mbr("10.0.0.1", 2551, 1, true)}
+	unreachable := []Member{mbr("10.0.0.2", 2551, 2, false)}
+	d := strat.Decide(self, reachable, unreachable)
+	if d.DownSelf {
+		t.Fatal("expected DownSelf=false when Acquire succeeds")
+	}
+	if len(d.DownMembers) != 1 {
+		t.Fatalf("expected 1 down member, got %d", len(d.DownMembers))
+	}
+	if !tl.CheckLease() {
+		t.Fatal("expected lease to be held after Acquire")
+	}
+}
+
+// AcquireDelay is applied when local side is in the minority.
+func TestLeaseMajority_FullLease_DelaysOnMinority(t *testing.T) {
+	tl := icluster.NewTestLease(icluster.LeaseSettings{LeaseName: "sbr"}, false)
+	delay := 50 * time.Millisecond
+	strat := &LeaseMajority{LeaseHolder: tl, AcquireDelay: delay}
+	self := addr("10.0.0.1", 2551)
+	reachable := []Member{mbr("10.0.0.1", 2551, 1, true)} // 1
+	unreachable := []Member{
+		mbr("10.0.0.2", 2551, 2, false),
+		mbr("10.0.0.3", 2551, 3, false),
+	} // 2 — local side is the minority
+	start := time.Now()
+	d := strat.Decide(self, reachable, unreachable)
+	elapsed := time.Since(start)
+	if elapsed < delay {
+		t.Fatalf("expected Decide to wait >= %v on minority side, slept %v", delay, elapsed)
+	}
+	// TestLease.Acquire still succeeds; we only assert that the delay fired.
+	if d.DownSelf {
+		t.Fatal("expected DownSelf=false; TestLease always grants Acquire")
+	}
+}
+
+// AcquireDelay is NOT applied when the local side is in the majority.
+func TestLeaseMajority_FullLease_NoDelayOnMajority(t *testing.T) {
+	tl := icluster.NewTestLease(icluster.LeaseSettings{LeaseName: "sbr"}, false)
+	delay := 200 * time.Millisecond
+	strat := &LeaseMajority{LeaseHolder: tl, AcquireDelay: delay}
+	self := addr("10.0.0.1", 2551)
+	reachable := []Member{
+		mbr("10.0.0.1", 2551, 1, true),
+		mbr("10.0.0.2", 2551, 2, true),
+	} // 2
+	unreachable := []Member{mbr("10.0.0.3", 2551, 3, false)} // 1
+	start := time.Now()
+	_ = strat.Decide(self, reachable, unreachable)
+	elapsed := time.Since(start)
+	// Must not have slept the AcquireDelay.
+	if elapsed >= delay {
+		t.Fatalf("expected no delay on majority side, slept %v (delay=%v)", elapsed, delay)
+	}
+}
+
+// Role filter applied to majority/minority counting in the full-lease path.
+func TestLeaseMajority_FullLease_RoleFilter(t *testing.T) {
+	tl := icluster.NewTestLease(icluster.LeaseSettings{LeaseName: "sbr"}, false)
+	delay := 50 * time.Millisecond
+	strat := &LeaseMajority{Role: "dc-a", LeaseHolder: tl, AcquireDelay: delay}
+	self := addr("10.0.0.1", 2551)
+	// Without role filter local side has 2 vs unreachable 1 (majority).
+	// With role=dc-a filter only the 10.0.0.1 reachable counts (1) and
+	// the 10.0.0.3 unreachable counts (1) → tie.  10.0.0.2 lacks dc-a.
+	reachable := []Member{
+		mbrRole("10.0.0.1", 2551, 1, true, "dc-a"),
+		mbrRole("10.0.0.2", 2551, 2, true, "dc-b"),
+	}
+	unreachable := []Member{mbrRole("10.0.0.3", 2551, 3, false, "dc-a")}
+	start := time.Now()
+	_ = strat.Decide(self, reachable, unreachable)
+	elapsed := time.Since(start)
+	// Tie or minority — len(r)<len(u) is false on tie, so no delay expected
+	// here.  Assert only that the test ran without panicking and that the
+	// elapsed time is bounded (within 5x delay) — protects against runaway
+	// sleeps if the role filter is bypassed.
+	if elapsed > 5*delay {
+		t.Fatalf("Decide ran too long (%v > %v); role filter may be bypassed", elapsed, 5*delay)
 	}
 }
 

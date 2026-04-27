@@ -156,7 +156,9 @@ Legend:
 | `keep-majority.role` | `""` | ✅ | |
 | `keep-oldest.down-if-alone` | `on` | ✅ | |
 | `keep-oldest.role` | `""` | ✅ | |
-| `lease-majority.*` | (various) | ❌ | No feature |
+| `lease-majority.lease-implementation` | `""` | ✅ | `SBRConfig.LeaseImplementation` → resolves a `LeaseProvider` via `cfg.CoordinationLease.LeaseManager`; defaults to `lease.MemoryProviderName` when active-strategy is `lease-majority` and the field is empty (Round-2 session 19) |
+| `lease-majority.acquire-lease-delay-for-minority` | `2s` | ✅ | `SBRConfig.AcquireLeaseDelayForMinority` → `LeaseMajority.AcquireDelay`; minority side waits this long before attempting `Acquire` (Round-2 session 19) |
+| `lease-majority.role` | `""` | ✅ | `SBRConfig.LeaseMajorityRole` → `LeaseMajority.Role`; falls back to `cfg.SBR.Role` when empty (Round-2 session 19) |
 
 ---
 

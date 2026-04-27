@@ -32,6 +32,7 @@ import (
 	"github.com/sopranoworks/gekka/cluster/client"
 	"github.com/sopranoworks/gekka/cluster/ddata"
 	ddata_typed "github.com/sopranoworks/gekka/cluster/ddata/typed"
+	"github.com/sopranoworks/gekka/cluster/lease"
 	"github.com/sopranoworks/gekka/cluster/singleton"
 	"github.com/sopranoworks/gekka/discovery"
 	"github.com/sopranoworks/gekka/internal/core"
@@ -2401,8 +2402,40 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	}
 
 	// ── Split Brain Resolver ─────────────────────────────────────────────────
-	// Start the SBR manager goroutine when a strategy is configured.
-	if sbr := gcluster.NewSBRManager(cm, cfg.SBR); sbr != nil {
+	// Start the SBR manager goroutine when a strategy is configured.  When the
+	// active strategy is "lease-majority" the LeaseManager and LeaseSettings
+	// are defaulted from cfg.CoordinationLease so that a HOCON-only deployment
+	// (no Go-side wiring) lights up the in-memory reference provider.
+	sbrCfg := cfg.SBR
+	if strings.EqualFold(strings.TrimSpace(sbrCfg.ActiveStrategy), "lease-majority") {
+		if sbrCfg.LeaseImplementation == "" {
+			sbrCfg.LeaseImplementation = lease.MemoryProviderName
+		}
+		if sbrCfg.LeaseManager == nil {
+			sbrCfg.LeaseManager = lease.NewDefaultManager()
+		}
+		if sbrCfg.LeaseSettings.LeaseName == "" {
+			sbrCfg.LeaseSettings.LeaseName = cfg.SystemName + "-pekko-sbr"
+		}
+		if sbrCfg.LeaseSettings.OwnerName == "" {
+			sbrCfg.LeaseSettings.OwnerName = fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
+		}
+		if sbrCfg.LeaseSettings.LeaseDuration == 0 {
+			d := cfg.CoordinationLease.HeartbeatTimeout
+			if d == 0 {
+				d = 120 * time.Second
+			}
+			sbrCfg.LeaseSettings.LeaseDuration = d
+		}
+		if sbrCfg.LeaseSettings.RetryInterval == 0 {
+			d := cfg.CoordinationLease.HeartbeatInterval
+			if d == 0 {
+				d = 12 * time.Second
+			}
+			sbrCfg.LeaseSettings.RetryInterval = d
+		}
+	}
+	if sbr := gcluster.NewSBRManager(cm, sbrCfg); sbr != nil {
 		go sbr.Start(ctx)
 	}
 

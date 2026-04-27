@@ -92,11 +92,43 @@ pekko.cluster.split-brain-resolver {
 }
 ```
 
+### lease-majority
+
+Like `keep-majority`, but every survivor must additionally **acquire a
+distributed lease** before downing the unreachable side.  The lease is the
+authoritative tiebreaker — only one partition can hold it at a time, so the
+strategy is safe even when both sides see equal partition sizes (the case
+where `keep-majority` falls back to a lexicographic tiebreaker).
+
+When the local side is in the **minority** the strategy waits
+`acquire-lease-delay-for-minority` before attempting `Acquire`, giving the
+majority side a head-start to acquire the lease first.  If the lease cannot
+be acquired the side downs itself.
+
+```hocon
+pekko.cluster.split-brain-resolver {
+  active-strategy = lease-majority
+  stable-after    = 20s
+  lease-majority {
+    lease-implementation              = ""   # empty → in-memory ref provider
+    acquire-lease-delay-for-minority  = 2s
+    role                              = ""   # empty = all roles
+  }
+}
+```
+
+`lease-implementation` is the name of a `LeaseProvider` registered on the
+`LeaseManager` (defaults to gekka's in-memory `lease.MemoryProviderName`).
+`Cluster.NewCluster` auto-wires `LeaseManager`, `LeaseSettings.LeaseName`
+(`<system>-pekko-sbr`) and `LeaseSettings.OwnerName` (`<host>:<port>`) when
+the active strategy is `lease-majority`, so a HOCON-only deployment lights
+up the in-memory provider out of the box.
+
 ## Configuration reference
 
 | HOCON key | Go field | Default | Notes |
 |---|---|---|---|
-| `active-strategy` | `SBRConfig.ActiveStrategy` | `""` (disabled) | One of the four strategy names |
+| `active-strategy` | `SBRConfig.ActiveStrategy` | `""` (disabled) | One of the five strategy names |
 | `stable-after` | `SBRConfig.StableAfter` | `20s` | How long reachability must remain stable |
 | `down-all-when-unstable` | `SBRConfig.DownAllWhenUnstable` | `on` | Down all nodes if instability persists beyond stable-after + derived duration |
 | `keep-majority.role` | `SBRConfig.Role` | `""` | Count only members with this role |
@@ -104,6 +136,9 @@ pekko.cluster.split-brain-resolver {
 | `keep-oldest.down-if-alone` | `SBRConfig.DownIfAlone` | `false` | |
 | `keep-referee.referee` | `SBRConfig.RefereeAddress` | `""` | `host:port` of the referee |
 | `static-quorum.quorum-size` | `SBRConfig.QuorumSize` | `0` | Minimum reachable members |
+| `lease-majority.lease-implementation` | `SBRConfig.LeaseImplementation` | `""` | LeaseProvider name; resolved via `cfg.CoordinationLease.LeaseManager` (defaults to in-memory) |
+| `lease-majority.acquire-lease-delay-for-minority` | `SBRConfig.AcquireLeaseDelayForMinority` | `2s` | Minority-side delay before `Acquire` |
+| `lease-majority.role` | `SBRConfig.LeaseMajorityRole` | `""` | Count only members with this role; falls back to `SBRConfig.Role` |
 
 ## Programmatic configuration
 

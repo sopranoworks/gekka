@@ -10,10 +10,13 @@
 package cluster
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
+
+	icluster "github.com/sopranoworks/gekka/internal/cluster"
 )
 
 // LeaseChecker is the minimal interface that LeaseMajority needs from a
@@ -100,9 +103,47 @@ type SBRConfig struct {
 	// When non-empty, overrides Role for the static-quorum strategy.
 	StaticQuorumRole string
 
-	// Lease is the distributed lease used by lease-majority.
-	// Required when ActiveStrategy == "lease-majority".
+	// Lease is the distributed lease used by lease-majority when no
+	// LeaseImplementation/LeaseManager pair is configured.  This legacy path
+	// reads CheckLease() only; the strategy never invokes Acquire/Release.
 	Lease LeaseChecker
+
+	// LeaseImplementation names a LeaseProvider registered in LeaseManager.
+	// When non-empty (and LeaseManager is set), NewStrategy resolves the
+	// provider, obtains a Lease bound to LeaseSettings, and constructs a
+	// lease-majority strategy with full Acquire/Release semantics including
+	// the AcquireLeaseDelayForMinority delay.
+	//
+	// Mirrors pekko.cluster.split-brain-resolver.lease-majority.lease-implementation.
+	LeaseImplementation string
+
+	// LeaseManager is the registry consulted to resolve LeaseImplementation.
+	// Typically populated by gekka.NewCluster from cfg.LeaseManager and
+	// defaulted to lease.NewDefaultManager() when unset and lease-majority is
+	// the active strategy.
+	LeaseManager *icluster.LeaseManager
+
+	// LeaseSettings configures the resolved Lease instance.  When fields are
+	// zero, the gekka top-level wiring fills sensible defaults: LeaseName =
+	// "<system>-pekko-sbr", OwnerName = "host:port", LeaseDuration sourced
+	// from pekko.coordination.lease.heartbeat-timeout.
+	LeaseSettings icluster.LeaseSettings
+
+	// AcquireLeaseDelayForMinority is the wait applied on the minority side
+	// (by member count, after applying LeaseMajorityRole/Role filtering)
+	// before attempting to acquire the lease, giving the majority side first
+	// chance to win.  Only honored when LeaseImplementation is configured.
+	//
+	// Mirrors pekko.cluster.split-brain-resolver.lease-majority.acquire-lease-delay-for-minority.
+	// Defaults to 2s when zero.
+	AcquireLeaseDelayForMinority time.Duration
+
+	// LeaseMajorityRole, when non-empty, restricts majority/minority counting
+	// for lease-majority to members carrying this role.  Overrides Role for
+	// lease-majority only.
+	//
+	// Mirrors pekko.cluster.split-brain-resolver.lease-majority.role.
+	LeaseMajorityRole string
 }
 
 // Member represents a cluster member as seen by the SBR strategy.
@@ -163,10 +204,31 @@ func NewStrategy(cfg SBRConfig) (Strategy, error) {
 		}
 		return &StaticQuorum{QuorumSize: cfg.QuorumSize, Role: role}, nil
 	case "lease-majority":
-		if cfg.Lease == nil {
-			return nil, fmt.Errorf("sbr: lease-majority requires a Lease implementation")
+		role := cfg.LeaseMajorityRole
+		if role == "" {
+			role = cfg.Role
 		}
-		return &LeaseMajority{Role: cfg.Role, Lease: cfg.Lease}, nil
+		delay := cfg.AcquireLeaseDelayForMinority
+		if delay <= 0 {
+			delay = 2 * time.Second
+		}
+		if cfg.LeaseImplementation != "" {
+			if cfg.LeaseManager == nil {
+				return nil, fmt.Errorf(
+					"sbr: lease-majority lease-implementation %q requires a LeaseManager",
+					cfg.LeaseImplementation)
+			}
+			l, err := cfg.LeaseManager.GetLease(cfg.LeaseImplementation, cfg.LeaseSettings)
+			if err != nil {
+				return nil, fmt.Errorf("sbr: lease-majority resolve provider: %w", err)
+			}
+			return &LeaseMajority{Role: role, LeaseHolder: l, AcquireDelay: delay}, nil
+		}
+		if cfg.Lease != nil {
+			return &LeaseMajority{Role: role, Lease: cfg.Lease, AcquireDelay: delay}, nil
+		}
+		return nil, fmt.Errorf(
+			"sbr: lease-majority requires either Lease or LeaseImplementation+LeaseManager")
 	case "down-all":
 		return &DownAll{}, nil
 	case "down-all-nodes-in-data-center":
@@ -280,21 +342,51 @@ func (s *StaticQuorum) Decide(self MemberAddress, reachable, unreachable []Membe
 
 // LeaseMajority keeps the partition that holds a distributed lease. The side
 // that holds the lease survives; the side that does not hold the lease downs
-// itself. When Role is set only members with that role are counted for the
-// majority check that determines whether this node should try to hold the lease,
-// but the lease itself is the final arbiter.
+// itself.
 //
-// This mirrors Pekko's lease-majority strategy
-// (pekko.cluster.split-brain-resolver.active-strategy = lease-majority).
+// Two construction paths are supported:
+//
+//   - LeaseHolder set (full lease, preferred for production): Decide filters
+//     members by Role, computes whether this node is on the majority or
+//     minority side, applies AcquireDelay on the minority side to give the
+//     majority first chance, then calls Acquire.  The side that wins the
+//     Acquire race survives.
+//   - Lease set (legacy LeaseChecker): Decide reads CheckLease() only and
+//     does not invoke Acquire/Release.  Used for unit tests and back-compat.
+//
+// Mirrors Pekko's pekko.cluster.split-brain-resolver.active-strategy =
+// lease-majority.
 type LeaseMajority struct {
-	Role  string
-	Lease LeaseChecker
+	Role         string
+	Lease        LeaseChecker
+	LeaseHolder  icluster.Lease
+	AcquireDelay time.Duration
 }
 
-// Decide returns DownSelf when this node does not hold the lease, and
-// DownMembers (all unreachable) when it does.
-func (s *LeaseMajority) Decide(_ MemberAddress, _ []Member, unreachable []Member) Decision {
-	if s.Lease.CheckLease() {
+// Decide implements lease-majority.
+//
+// When LeaseHolder is non-nil the strategy executes the full Pekko algorithm:
+// majority/minority is computed from role-filtered member counts, the
+// minority side waits AcquireDelay before calling Acquire, and the side that
+// successfully acquires the lease keeps the cluster.
+//
+// When LeaseHolder is nil the strategy falls back to the LeaseChecker-only
+// path: it surveys CheckLease() and downs self when the lease is not held.
+func (s *LeaseMajority) Decide(_ MemberAddress, reachable, unreachable []Member) Decision {
+	if s.LeaseHolder != nil {
+		r := filterByRole(reachable, s.Role)
+		u := filterByRole(unreachable, s.Role)
+		if len(r) < len(u) && s.AcquireDelay > 0 {
+			time.Sleep(s.AcquireDelay)
+		}
+		held, _ := s.LeaseHolder.Acquire(context.Background(), nil)
+		if held {
+			return Decision{DownMembers: unreachable}
+		}
+		return Decision{DownSelf: true}
+	}
+
+	if s.Lease != nil && s.Lease.CheckLease() {
 		return Decision{DownMembers: unreachable}
 	}
 	return Decision{DownSelf: true}

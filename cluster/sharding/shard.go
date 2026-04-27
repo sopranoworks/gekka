@@ -18,6 +18,11 @@ import (
 	"github.com/sopranoworks/gekka/persistence"
 )
 
+// shardLeaseRetryDefault is the default backoff between Shard lease-acquisition
+// retries when ShardSettings.LeaseRetryDelay is unset.  Mirrors Pekko's
+// pekko.cluster.sharding.lease-retry-interval default.
+const shardLeaseRetryDefault = 5 * time.Second
+
 // ── Internal event types written to the journal when RememberEntities is on ──
 
 // entityStartedEvent is persisted when an entity is first spawned.
@@ -72,6 +77,10 @@ type Shard struct {
 	// the messages can be re-routed to the new shard home.
 	inHandoff    bool
 	handoffStash []ShardingEnvelope
+
+	// leaseHeld tracks whether settings.Lease (if any) is currently acquired
+	// by this Shard.  Set on Acquire and cleared on Release / loss callback.
+	leaseHeld bool
 }
 
 // NewShard creates a Shard for the given type/shard identifiers.
@@ -104,6 +113,12 @@ func NewShard(
 //   - Journal path (ShardSettings.Journal): event-sourced; only entities
 //     that were active (not passivated) at the time of shutdown are recovered.
 func (s *Shard) PreStart() {
+	// ── Coordination Lease ────────────────────────────────────────────────
+	// When ShardSettings.Lease is configured, block on Acquire before
+	// becoming active so two replicas of the same shard never run at once
+	// (e.g. across an SBR-induced split).
+	s.acquireLease()
+
 	// ── Remember Entities ─────────────────────────────────────────────────
 	if s.settings.RememberEntities {
 		switch {
@@ -555,4 +570,52 @@ func (s *Shard) persistEntityStopped(entityId EntityId) {
 			Payload:       entityStoppedEvent{EntityId: entityId},
 		},
 	})
+}
+
+// PostStop releases the coordination lease (if held) so a peer Shard can
+// take over once handoff completes.
+func (s *Shard) PostStop() {
+	s.releaseLease()
+}
+
+// acquireLease blocks on settings.Lease.Acquire until it succeeds.  When
+// Acquire returns false or errors, the call sleeps for LeaseRetryDelay and
+// retries — mirroring Pekko's Shard.acquireLease loop.  Returns immediately
+// when no lease is configured.
+func (s *Shard) acquireLease() {
+	l := s.settings.Lease
+	if l == nil {
+		return
+	}
+	delay := s.settings.LeaseRetryDelay
+	if delay <= 0 {
+		delay = shardLeaseRetryDefault
+	}
+	ctx := context.Background()
+	for {
+		ok, err := l.Acquire(ctx, func(loseErr error) {
+			s.Log().Warn("shard lease lost", "shard", s.shardId, "error", loseErr)
+			s.leaseHeld = false
+		})
+		if err != nil {
+			s.Log().Error("shard lease acquire failed", "shard", s.shardId, "error", err)
+		}
+		if ok {
+			s.leaseHeld = true
+			return
+		}
+		s.Log().Info("shard lease acquire retrying", "shard", s.shardId, "delay", delay)
+		time.Sleep(delay)
+	}
+}
+
+// releaseLease releases settings.Lease when this Shard currently holds it.
+func (s *Shard) releaseLease() {
+	if s.settings.Lease == nil || !s.leaseHeld {
+		return
+	}
+	if _, err := s.settings.Lease.Release(context.Background()); err != nil {
+		s.Log().Error("shard lease release failed", "shard", s.shardId, "error", err)
+	}
+	s.leaseHeld = false
 }

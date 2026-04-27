@@ -1676,6 +1676,85 @@ pekko {
 	}
 }
 
+// TestHOCON_SingletonConfig_UseLease verifies that
+// pekko.cluster.singleton.use-lease and lease-retry-interval are parsed into
+// SingletonConfig.UseLease / LeaseRetryInterval (Round-2 session 20).
+func TestHOCON_SingletonConfig_UseLease(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery.canonical { hostname = "127.0.0.1", port = 2552 }
+  cluster {
+    seed-nodes = []
+    singleton {
+      use-lease = "memory"
+      lease-retry-interval = 7s
+    }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.Singleton.UseLease != "memory" {
+		t.Errorf("Singleton.UseLease = %q, want %q", cfg.Singleton.UseLease, "memory")
+	}
+	if cfg.Singleton.LeaseRetryInterval != 7*time.Second {
+		t.Errorf("Singleton.LeaseRetryInterval = %v, want 7s", cfg.Singleton.LeaseRetryInterval)
+	}
+}
+
+// TestHOCON_ShardingConfig_UseLease verifies that
+// pekko.cluster.sharding.use-lease and lease-retry-interval are parsed into
+// ShardingConfig.UseLease / LeaseRetryInterval (Round-2 session 20).
+func TestHOCON_ShardingConfig_UseLease(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery.canonical { hostname = "127.0.0.1", port = 2552 }
+  cluster {
+    seed-nodes = []
+    sharding {
+      use-lease = "memory"
+      lease-retry-interval = 11s
+    }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.Sharding.UseLease != "memory" {
+		t.Errorf("Sharding.UseLease = %q, want %q", cfg.Sharding.UseLease, "memory")
+	}
+	if cfg.Sharding.LeaseRetryInterval != 11*time.Second {
+		t.Errorf("Sharding.LeaseRetryInterval = %v, want 11s", cfg.Sharding.LeaseRetryInterval)
+	}
+}
+
+// TestHOCON_UseLease_Defaults verifies that omitting use-lease leaves
+// UseLease empty and LeaseRetryInterval at its zero value (Round-2 session 20).
+func TestHOCON_UseLease_Defaults(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko.remote.artery.canonical.hostname = "127.0.0.1"
+pekko.remote.artery.canonical.port = 2552
+pekko.cluster.seed-nodes = []
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.Singleton.UseLease != "" {
+		t.Errorf("Singleton.UseLease = %q, want empty", cfg.Singleton.UseLease)
+	}
+	if cfg.Singleton.LeaseRetryInterval != 0 {
+		t.Errorf("Singleton.LeaseRetryInterval = %v, want 0", cfg.Singleton.LeaseRetryInterval)
+	}
+	if cfg.Sharding.UseLease != "" {
+		t.Errorf("Sharding.UseLease = %q, want empty", cfg.Sharding.UseLease)
+	}
+	if cfg.Sharding.LeaseRetryInterval != 0 {
+		t.Errorf("Sharding.LeaseRetryInterval = %v, want 0", cfg.Sharding.LeaseRetryInterval)
+	}
+}
+
 func TestHOCON_MaxFrameSize(t *testing.T) {
 	cfg, err := parseHOCONString(`
 pekko {

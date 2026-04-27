@@ -552,6 +552,16 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 			nodeCfg.Sharding.HealthCheck.Timeout = d
 		}
 	}
+	// Round-2 session 20 — Coordination Lease for Sharding.
+	if v, err := cfg.GetString(shardingPrefix + ".use-lease"); err == nil {
+		nodeCfg.Sharding.UseLease = strings.TrimSpace(v)
+	}
+	if v, err := cfg.GetString(shardingPrefix + ".lease-retry-interval"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.Sharding.LeaseRetryInterval = d
+		}
+	}
+
 	leastPrefix := shardingPrefix + ".least-shard-allocation-strategy"
 	if v, err := cfg.GetInt(leastPrefix + ".rebalance-threshold"); err == nil {
 		nodeCfg.Sharding.LeastShardAllocation.RebalanceThreshold = v
@@ -660,6 +670,15 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 	}
 	if v, err := cfg.GetInt(singletonPrefix + ".min-number-of-hand-over-retries"); err == nil {
 		nodeCfg.Singleton.MinNumberOfHandOverRetries = v
+	}
+	// Round-2 session 20 — Coordination Lease for Singleton.
+	if v, err := cfg.GetString(singletonPrefix + ".use-lease"); err == nil {
+		nodeCfg.Singleton.UseLease = strings.TrimSpace(v)
+	}
+	if v, err := cfg.GetString(singletonPrefix + ".lease-retry-interval"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.Singleton.LeaseRetryInterval = d
+		}
 	}
 
 	// ── Cluster Singleton Proxy ────────────────────────────────────────────

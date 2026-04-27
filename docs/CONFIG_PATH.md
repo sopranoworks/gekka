@@ -227,6 +227,8 @@ Legend:
 | `pekko.cluster.sharding.passivation.default-idle-strategy.idle-entity.interval` | `default` (= timeout/2) | ✅ | Overrides idle-entity scan cadence; `"default"` leaves the timeout/2 fallback (Round-2 session 15) |
 | `pekko.cluster.sharding.healthcheck.names` | `[]` | ✅ | List of sharding type names that ClusterShardingHealthCheck must find registered to pass (Round-2 session 15) |
 | `pekko.cluster.sharding.healthcheck.timeout` | `5s` | ✅ | Caps how long ClusterShardingHealthCheck is allowed to run before returning ErrHealthCheckTimeout (Round-2 session 15) |
+| `pekko.cluster.sharding.use-lease` | `""` | ✅ | Resolves a Lease from Cluster.LeaseManager; every Shard acquires before becoming active and releases on handoff/stop (Round-2 session 20) |
+| `pekko.cluster.sharding.lease-retry-interval` | `5s` | ✅ | Backoff between Shard Acquire retries when a prior call returned false (Round-2 session 20) |
 
 ---
 
@@ -252,8 +254,8 @@ Legend:
 | `role` | `""` | ✅ | Applied via SingletonManager factory |
 | `hand-over-retry-interval` | `1s` | ✅ | Applied via WithHandOverRetryInterval |
 | `min-number-of-hand-over-retries` | `15` | ❌ | No feature |
-| `use-lease` | `""` | ❌ | No feature |
-| `lease-retry-interval` | `5s` | ❌ | No feature |
+| `use-lease` | `""` | ✅ | Resolves a Lease from Cluster.LeaseManager; manager acquires before spawn, releases on handoff |
+| `lease-retry-interval` | `5s` | ✅ | Backoff between Acquire retries when prior call returned false |
 
 ### pekko.cluster.singleton-proxy
 
@@ -379,8 +381,11 @@ Legend:
 The public coordination-lease API is provided by package
 `github.com/sopranoworks/gekka/cluster/lease`.  Round-2 session 18 ships the
 in-memory reference provider (registered under name `"memory"` by
-`lease.NewDefaultManager`); SBR `lease-majority` and Singleton/Sharding
-`use-lease` wiring is delivered by sessions 19 and 20.
+`lease.NewDefaultManager`).  SBR `lease-majority` (session 19) and
+Singleton/Sharding `use-lease` (session 20) wiring is now in place: each
+consumer resolves its lease through `Cluster.LeaseManager()` so operators can
+register additional providers (e.g. a Kubernetes-leases extension) without
+touching the consumer code.
 
 ---
 
@@ -406,7 +411,7 @@ discovery, cluster client, management, and remote transport paths.
 These are paths for features that do not exist in gekka. They fall into categories:
 
 1. **JVM-specific** — class loading, dispatchers, JMX, Sigar metrics
-2. **Lease-based SBR** — coordination-lease API ships in `cluster/lease` (round-2 session 18, in-memory ref); SBR/Singleton/Sharding `use-lease` wiring lands in sessions 19 and 20
+2. **Lease-based SBR** — coordination-lease API ships in `cluster/lease` (round-2 session 18, in-memory ref); SBR `lease-majority` (session 19) and Singleton/Sharding `use-lease` (session 20) are wired through `Cluster.LeaseManager()`
 3. **Reliable delivery** — producer/consumer controller not implemented
 4. **Advanced passivation strategies** — only idle timeout supported
 5. **Durable distributed data** — persistence-backed DData not implemented

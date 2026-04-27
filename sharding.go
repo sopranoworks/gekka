@@ -18,6 +18,7 @@ import (
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/cluster/sharding"
 	styped "github.com/sopranoworks/gekka/cluster/sharding/typed"
+	icluster "github.com/sopranoworks/gekka/internal/cluster"
 	"github.com/sopranoworks/gekka/persistence"
 	ptyped "github.com/sopranoworks/gekka/persistence/typed"
 )
@@ -174,6 +175,19 @@ type ShardingSettings struct {
 	// Corresponds to
 	// pekko.cluster.sharding.passivation.default-idle-strategy.idle-entity.interval.
 	IdleEntityCheckInterval time.Duration
+
+	// Lease, when non-nil, is acquired by every Shard before becoming active
+	// and released on shard handoff/stop.  When unset, StartSharding plumbs in
+	// a lease resolved from pekko.cluster.sharding.use-lease.
+	Lease icluster.Lease
+
+	// LeaseRetryDelay is the backoff between Shard lease-acquisition retries
+	// when a previous Acquire returns false or errors.  When zero StartSharding
+	// falls back to ClusterConfig.Sharding.LeaseRetryInterval (default 5s).
+	//
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.lease-retry-interval = 5s
+	LeaseRetryDelay time.Duration
 }
 
 // StartSharding starts cluster sharding for a given entity type.
@@ -280,6 +294,15 @@ func StartSharding[Command any, Event any, State any](
 		}
 		if settings.IdleEntityCheckInterval == 0 && cluster.cfg.Sharding.IdleEntityCheckInterval > 0 {
 			settings.IdleEntityCheckInterval = cluster.cfg.Sharding.IdleEntityCheckInterval
+		}
+		// Round-2 session 20 — Coordination Lease for Sharding.
+		if settings.Lease == nil {
+			if l := cluster.resolveShardingLease(typeName); l != nil {
+				settings.Lease = l
+			}
+		}
+		if settings.LeaseRetryDelay == 0 && cluster.cfg.Sharding.LeaseRetryInterval > 0 {
+			settings.LeaseRetryDelay = cluster.cfg.Sharding.LeaseRetryInterval
 		}
 	}
 
@@ -438,6 +461,8 @@ func StartSharding[Command any, Event any, State any](
 		VerboseDebugLogging:                        settings.VerboseDebugLogging,
 		FailOnInvalidEntityStateTransition:         settings.FailOnInvalidEntityStateTransition,
 		IdleEntityCheckInterval:                    settings.IdleEntityCheckInterval,
+		Lease:                                      settings.Lease,
+		LeaseRetryDelay:                            settings.LeaseRetryDelay,
 	}
 
 	// Populate IsLocalDC when both the cluster and DataCenter are available.

@@ -1513,6 +1513,17 @@ type ShardingConfig struct {
 	// HealthCheck holds settings for the sharding readiness probe.
 	// Corresponds to pekko.cluster.sharding.healthcheck.*.
 	HealthCheck ShardingHealthCheckConfig
+
+	// UseLease names a LeaseProvider registered in the Cluster's LeaseManager.
+	// When non-empty, every Shard actor acquires a distributed lease before
+	// becoming active and releases it on handoff/stop. Mirrors
+	// pekko.cluster.sharding.use-lease. Default: "" (no lease).
+	UseLease string
+
+	// LeaseRetryInterval is the backoff between lease-acquisition retries
+	// when a previous Acquire returned false or errored.
+	// Corresponds to pekko.cluster.sharding.lease-retry-interval. Default: 5s.
+	LeaseRetryInterval time.Duration
 }
 
 // ShardingHealthCheckConfig captures pekko.cluster.sharding.healthcheck.*.
@@ -1617,6 +1628,17 @@ type SingletonConfig struct {
 	// pekko.cluster.singleton.min-number-of-hand-over-retries.
 	// Default: 15.
 	MinNumberOfHandOverRetries int
+
+	// UseLease names a LeaseProvider registered in the Cluster's LeaseManager.
+	// When non-empty, the singleton manager acquires a distributed lease
+	// before spawning the singleton actor and releases it on handoff/stop.
+	// Mirrors pekko.cluster.singleton.use-lease. Default: "" (no lease).
+	UseLease string
+
+	// LeaseRetryInterval is the backoff between lease-acquisition retries when
+	// a previous Acquire returned false or errored.
+	// Corresponds to pekko.cluster.singleton.lease-retry-interval. Default: 5s.
+	LeaseRetryInterval time.Duration
 }
 
 // SingletonProxyConfig holds cluster singleton proxy settings parsed from HOCON.
@@ -1761,6 +1783,13 @@ type Cluster struct {
 	// node.  Populated by RegisterShardingRegion; consumed during the
 	// cluster-sharding-shutdown-region phase.
 	shardingRegions []ActorRef
+
+	// leaseManagerOnce guards lazy initialisation of leaseMgr.
+	leaseManagerOnce sync.Once
+	// leaseMgr is the per-cluster registry of LeaseProviders consulted by
+	// SBR lease-majority and Singleton/Sharding use-lease wiring.  Populated
+	// lazily via LeaseManager() with the in-memory reference provider.
+	leaseMgr *lease.LeaseManager
 
 	sched *systemScheduler
 }
@@ -2412,7 +2441,7 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 			sbrCfg.LeaseImplementation = lease.MemoryProviderName
 		}
 		if sbrCfg.LeaseManager == nil {
-			sbrCfg.LeaseManager = lease.NewDefaultManager()
+			sbrCfg.LeaseManager = cluster.LeaseManager()
 		}
 		if sbrCfg.LeaseSettings.LeaseName == "" {
 			sbrCfg.LeaseSettings.LeaseName = cfg.SystemName + "-pekko-sbr"
@@ -3301,6 +3330,74 @@ func (c *Cluster) SingletonProxy(managerPath, role string) gcluster.ClusterSingl
 	return proxy
 }
 
+// LeaseManager returns the cluster-wide LeaseManager, lazily initialised with
+// the in-memory reference provider registered under "memory".  Callers may
+// register additional providers (e.g. a Kubernetes-leases extension) to make
+// them available to SBR lease-majority and Singleton/Sharding use-lease.
+func (c *Cluster) LeaseManager() *lease.LeaseManager {
+	c.leaseManagerOnce.Do(func() {
+		c.leaseMgr = lease.NewDefaultManager()
+	})
+	return c.leaseMgr
+}
+
+// resolveSingletonLease returns a Lease bound to settings derived from the
+// cluster's CoordinationLease defaults, or nil when UseLease is empty.
+func (c *Cluster) resolveSingletonLease(typeName string) lease.Lease {
+	name := strings.TrimSpace(c.cfg.Singleton.UseLease)
+	if name == "" {
+		return nil
+	}
+	settings := lease.LeaseSettings{
+		LeaseName:     fmt.Sprintf("%s-singleton-%s", c.cfg.SystemName, typeName),
+		OwnerName:     fmt.Sprintf("%s:%d", c.cfg.Host, c.cfg.Port),
+		LeaseDuration: c.cfg.CoordinationLease.HeartbeatTimeout,
+		RetryInterval: c.cfg.CoordinationLease.HeartbeatInterval,
+	}
+	if settings.LeaseDuration == 0 {
+		settings.LeaseDuration = 120 * time.Second
+	}
+	if settings.RetryInterval == 0 {
+		settings.RetryInterval = 12 * time.Second
+	}
+	l, err := c.LeaseManager().GetLease(name, settings)
+	if err != nil {
+		log.Printf("gekka: singleton use-lease %q resolve failed: %v", name, err)
+		return nil
+	}
+	return l
+}
+
+// resolveShardingLease returns a Lease bound to settings derived from the
+// cluster's CoordinationLease defaults, scoped to the entity type, or nil
+// when sharding.use-lease is empty.  Each Shard acquires this lease before
+// becoming active so two replicas of the same shard never run concurrently
+// across an SBR-induced split.
+func (c *Cluster) resolveShardingLease(typeName string) lease.Lease {
+	name := strings.TrimSpace(c.cfg.Sharding.UseLease)
+	if name == "" {
+		return nil
+	}
+	settings := lease.LeaseSettings{
+		LeaseName:     fmt.Sprintf("%s-sharding-%s", c.cfg.SystemName, typeName),
+		OwnerName:     fmt.Sprintf("%s:%d", c.cfg.Host, c.cfg.Port),
+		LeaseDuration: c.cfg.CoordinationLease.HeartbeatTimeout,
+		RetryInterval: c.cfg.CoordinationLease.HeartbeatInterval,
+	}
+	if settings.LeaseDuration == 0 {
+		settings.LeaseDuration = 120 * time.Second
+	}
+	if settings.RetryInterval == 0 {
+		settings.RetryInterval = 12 * time.Second
+	}
+	l, err := c.LeaseManager().GetLease(name, settings)
+	if err != nil {
+		log.Printf("gekka: sharding use-lease %q resolve failed: %v", name, err)
+		return nil
+	}
+	return l
+}
+
 // SingletonManager creates a ClusterSingletonManager that hosts a singleton
 // actor on the oldest Up cluster node. HOCON settings for singleton.role and
 // singleton.hand-over-retry-interval are applied automatically.
@@ -3322,6 +3419,12 @@ func (c *Cluster) SingletonManager(singletonProps actor.Props, role string) gclu
 	}
 	if c.cfg.Singleton.MinNumberOfHandOverRetries > 0 {
 		mgr.WithMinHandOverRetries(c.cfg.Singleton.MinNumberOfHandOverRetries)
+	}
+	if l := c.resolveSingletonLease("singleton"); l != nil {
+		mgr.WithLease(l)
+		if c.cfg.Singleton.LeaseRetryInterval > 0 {
+			mgr.WithLeaseRetryDelay(c.cfg.Singleton.LeaseRetryInterval)
+		}
 	}
 	return mgr
 }

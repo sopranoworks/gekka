@@ -11,6 +11,7 @@ package sharding
 import (
 	"time"
 
+	icluster "github.com/sopranoworks/gekka/internal/cluster"
 	"github.com/sopranoworks/gekka/persistence"
 )
 
@@ -241,6 +242,19 @@ type ShardSettings struct {
 	// Equivalent HOCON key:
 	//   pekko.cluster.sharding.passivation.default-idle-strategy.idle-entity.interval
 	IdleEntityCheckInterval time.Duration
+
+	// Lease, when non-nil, is acquired by every Shard before it becomes
+	// active and released on shard handoff/stop.  Plumbed by StartSharding
+	// from pekko.cluster.sharding.use-lease + LeaseRetryInterval.
+	Lease icluster.Lease
+
+	// LeaseRetryDelay is the backoff between Shard lease-acquisition retries
+	// when a previous Acquire returns false or errors.  When zero the Shard
+	// falls back to 5 seconds.
+	//
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.lease-retry-interval = 5s
+	LeaseRetryDelay time.Duration
 }
 
 // EntityRecoveryStrategyAll is the default entity-recovery strategy: every

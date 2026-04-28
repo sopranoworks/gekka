@@ -75,6 +75,14 @@ type Process struct {
 	stopOnce sync.Once
 	stopped  chan struct{}
 
+	// exited is closed by the dedicated waiter goroutine (started in
+	// Spawn) once cmd.Wait() returns.  WaitForExit selects on it; Stop
+	// uses it to detect "process already exited, no need to kill".
+	// waitErr is the result of cmd.Wait() and is safe to read after
+	// `exited` has been observed closed.
+	exited  chan struct{}
+	waitErr error
+
 	killTimeout        time.Duration
 	port               int
 	portReleaseTimeout time.Duration
@@ -150,10 +158,20 @@ func Spawn(t testing.TB, ctx context.Context, name string, args []string, opts O
 		Stdout:             stdout,
 		pgid:               pgid,
 		stopped:            make(chan struct{}),
+		exited:             make(chan struct{}),
 		killTimeout:        killTimeout,
 		port:               opts.PortToRelease,
 		portReleaseTimeout: portReleaseTimeout,
 	}
+
+	// Single dedicated waiter for cmd.Wait().  Calling cmd.Wait twice on
+	// the same *exec.Cmd is unsafe; routing every wait through this
+	// goroutine + the `exited` channel lets WaitForExit (natural-exit
+	// path) and Stop (kill path) observe the same result without racing.
+	go func() {
+		p.waitErr = p.cmd.Wait()
+		close(p.exited)
+	}()
 
 	t.Cleanup(p.Stop)
 	return p, nil
@@ -172,25 +190,30 @@ func (p *Process) Stop() {
 			return
 		}
 
-		// Go straight to SIGKILL on the entire process group.  SIGTERM
-		// triggers sbt's graceful-shutdown path, which can leave the test
-		// in a state main's `Process.Kill()` (immediate SIGKILL) never
-		// produces — and we observed that asymmetry breaking downstream
-		// cluster tests in full-suite runs.  Killing the group with SIGKILL
-		// matches main's behavior at the leaf while still reaping the
-		// grandchild JVM (the actual leak fix this package exists for).
-		_ = killGroup(p.pgid, syscall.SIGKILL)
-
-		exited := make(chan error, 1)
-		go func() { exited <- p.cmd.Wait() }()
-
+		// Fast path: if the process already exited on its own (e.g. the
+		// natural-exit branch of WaitForExit observed it first), skip
+		// the kill and the kill-timeout entirely.
 		select {
-		case <-exited:
-			// Reaped.
-		case <-time.After(p.killTimeout):
-			// Wait wedged for some reason; resend and continue.
+		case <-p.exited:
+			// Already reaped by the waiter goroutine.
+		default:
+			// Go straight to SIGKILL on the entire process group.  SIGTERM
+			// triggers sbt's graceful-shutdown path, which can leave the
+			// test in a state main's `Process.Kill()` (immediate SIGKILL)
+			// never produces — and we observed that asymmetry breaking
+			// downstream cluster tests in full-suite runs.  Killing the
+			// group with SIGKILL matches main's behavior at the leaf
+			// while still reaping the grandchild JVM (the actual leak
+			// fix this package exists for).
 			_ = killGroup(p.pgid, syscall.SIGKILL)
-			<-exited
+			select {
+			case <-p.exited:
+				// Reaped.
+			case <-time.After(p.killTimeout):
+				// Wait wedged for some reason; resend and continue.
+				_ = killGroup(p.pgid, syscall.SIGKILL)
+				<-p.exited
+			}
 		}
 
 		if p.port > 0 {
@@ -203,6 +226,49 @@ func (p *Process) Stop() {
 // to confirm cleanup landed before asserting on side effects.
 func (p *Process) Wait() {
 	<-p.stopped
+}
+
+// WaitForExit blocks until the underlying process exits on its own (or
+// ctx is cancelled), then returns the exit code.  Use this for tests
+// that drive a finite-duration command (e.g. sbt multi-jvm:test) where
+// success is "process exited cleanly with code 0" rather than the
+// long-lived-server pattern that Stop() supervises.
+//
+// On ctx cancellation the process is left running — the caller is
+// expected to fall through to the t.Cleanup-registered Stop() to reap
+// it.  The returned exit code is -1 in that case.
+//
+// Calling WaitForExit after the process has already exited is safe and
+// returns the cached exit code without blocking.
+func (p *Process) WaitForExit(ctx context.Context) (int, error) {
+	select {
+	case <-p.exited:
+		return p.exitCodeLocked(), p.waitErr
+	case <-ctx.Done():
+		return -1, ctx.Err()
+	}
+}
+
+// ExitCode returns the exit code if the process has exited, or -1 if it
+// is still running.  Non-blocking.  Pair with WaitForExit when you need
+// to wait, or with the `exited` channel via WaitForExit-context for
+// timeout-aware waits.
+func (p *Process) ExitCode() int {
+	select {
+	case <-p.exited:
+		return p.exitCodeLocked()
+	default:
+		return -1
+	}
+}
+
+// exitCodeLocked extracts the exit code from a completed cmd.  Must
+// only be called after `exited` has been observed closed.
+func (p *Process) exitCodeLocked() int {
+	if p.cmd.ProcessState != nil {
+		return p.cmd.ProcessState.ExitCode()
+	}
+	return -1
 }
 
 // Pid returns the direct child's PID.  Tests that want to verify the

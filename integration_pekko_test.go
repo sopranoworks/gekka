@@ -826,6 +826,19 @@ func TestMultiDCInterop(t *testing.T) {
 	waitUp(nodeB, "nodeB")
 	log.Println("[GO] Both Go nodes are Up.")
 
+	// IsLocalNodeUp transitions before the gossip-replicated DC index is
+	// fully populated for queries such as OldestNodeInDC / MembersInDataCenter.
+	// Poll the DC view until it's ready so the per-subtest assertions are
+	// not racing the membership-propagation tail.
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if nodeA.cm.OldestNodeInDC("go-east", "") != nil &&
+			len(nodeA.cm.MembersInDataCenter("go-east")) > 0 {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
 	// ── 5. Verify DC-scoped membership from nodeA's perspective ───────────
 	t.Run("OldestInGoEast", func(t *testing.T) {
 		ua := nodeA.cm.OldestNodeInDC("go-east", "")

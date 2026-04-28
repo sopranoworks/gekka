@@ -175,7 +175,7 @@ Legend:
 | `pekko.cluster.distributed-data.max-pruning-dissemination` | `300s` | ❌ | No feature |
 | `pekko.cluster.distributed-data.delta-crdt.enabled` | `on` | ❌ | No feature |
 | `pekko.cluster.distributed-data.delta-crdt.max-delta-size` | `50` | ❌ | No feature |
-| `pekko.cluster.distributed-data.durable.*` | (various) | ❌ | No feature |
+| `pekko.cluster.distributed-data.durable.*` | (various) | ⚠️ | `DurableStore` interface + `MemoryDurableStore` (Round-2 session 21); `BoltDurableStore` on-disk backend with on-startup recovery and pruning-marker survival (Round-2 session 22). HOCON wiring (`durable.keys`, `durable.lmdb.*`) lands in session 23. |
 | `pekko.cluster.distributed-data.prefer-oldest` | `off` | ❌ | No feature |
 | `pekko.cluster.distributed-data.pruning-marker-time-to-live` | `6h` | ✅ | `DistributedDataConfig.PruningMarkerTimeToLive` → `PruningManager.SetPruningMarkerTimeToLive` retains tombstones in PruningComplete phase for the TTL (Round-2 session 16) |
 | `pekko.cluster.distributed-data.log-data-size-exceeding` | `10 KiB` | ✅ | `DistributedDataConfig.LogDataSizeExceeding` → `Replicator.LogDataSizeExceeding`; `sendToPeers` emits a slog.Warn when serialized payload exceeds the threshold (Round-2 session 16) |

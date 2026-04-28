@@ -64,6 +64,12 @@ type Shard struct {
 	// (Round-2 session 25.)
 	accessCount map[EntityId]uint64
 
+	// composite holds the W-TinyLFU state when PassivationStrategy is the
+	// composite ("default-strategy") family.  Owned by the shard, mutated
+	// only from Receive (single-threaded), so no synchronisation is
+	// required.  nil for every other strategy.  (Round-2 session 26.)
+	composite *compositeStrategy
+
 	// remember-entities (journal path): monotonic sequence number.
 	seqNr         uint64
 	persistenceId string
@@ -98,7 +104,7 @@ func NewShard(
 	unmarshaler func(string, json.RawMessage) (any, error),
 	settings ShardSettings,
 ) *Shard {
-	return &Shard{
+	s := &Shard{
 		BaseActor:          actor.NewBaseActor(),
 		typeName:           typeName,
 		shardId:            shardId,
@@ -109,6 +115,23 @@ func NewShard(
 		lastActivity:       make(map[EntityId]time.Time),
 		accessCount:        make(map[EntityId]uint64),
 	}
+	// Round-2 session 26: bootstrap composite strategy state when
+	// PassivationStrategy selects the W-TinyLFU family.  Building the
+	// state here (rather than lazily on first envelope) keeps the
+	// happy-path eviction loop branch-free.
+	if isCompositeStrategy(settings.PassivationStrategy) {
+		s.composite = newCompositeStrategy(compositeConfig{
+			activeEntityLimit:            settings.PassivationActiveEntityLimit,
+			windowProportion:             settings.PassivationWindowProportion,
+			windowPolicy:                 settings.PassivationWindowPolicy,
+			filter:                       settings.PassivationFilter,
+			frequencySketchDepth:         settings.PassivationFrequencySketchDepth,
+			frequencySketchCounterBits:   settings.PassivationFrequencySketchCounterBits,
+			frequencySketchWidthMult:     settings.PassivationFrequencySketchWidthMultiplier,
+			frequencySketchResetMultpler: settings.PassivationFrequencySketchResetMultiplier,
+		})
+	}
+	return s
 }
 
 // PreStart recovers entity membership from the configured store (when
@@ -473,8 +496,22 @@ func (s *Shard) handleEnvelope(m ShardingEnvelope) {
 	// i.e. a new entity was just spawned.  Each replacement strategy
 	// owns its own entry-point; the dispatch is on the canonical
 	// strategy name the parser produced.  Round-2 session 24 added LRU;
-	// session 25 adds MRU and LFU.
-	if freshlySpawned {
+	// session 25 adds MRU and LFU; session 26 adds composite (W-TinyLFU)
+	// which tracks every access (not just spawn) so it lives outside
+	// the freshlySpawned gate.
+	if s.composite != nil {
+		s.composite.OnAccess(m.EntityId, freshlySpawned)
+		for {
+			victim, ok := s.composite.NextEviction()
+			if !ok {
+				break
+			}
+			if ref, ok := s.entities[victim]; ok {
+				s.Log().Info("composite evicting entity", "entityId", victim, "activeEntities", s.composite.activeCount(), "limit", s.passivationLimit())
+				s.handlePassivate(ref)
+			}
+		}
+	} else if freshlySpawned {
 		switch {
 		case isLRUStrategy(s.settings.PassivationStrategy):
 			s.checkLRUEviction()
@@ -499,6 +536,9 @@ func (s *Shard) handlePassivate(entity actor.Ref) {
 			delete(s.entities, id)
 			delete(s.lastActivity, id)
 			delete(s.accessCount, id)
+			if s.composite != nil {
+				s.composite.OnRemove(id)
+			}
 			s.persistEntityStopped(id)
 			s.Log().Info("entity passivated", "entityId", id)
 			return
@@ -516,6 +556,9 @@ func (s *Shard) handleTerminated(terminated actor.Ref) {
 			delete(s.entities, id)
 			delete(s.lastActivity, id)
 			delete(s.accessCount, id)
+			if s.composite != nil {
+				s.composite.OnRemove(id)
+			}
 			if s.store != nil {
 				if err := s.store.RemoveEntity(s.shardId, id); err != nil {
 					s.Log().Error("remember-entities: store.RemoveEntity failed",

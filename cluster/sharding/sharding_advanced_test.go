@@ -518,11 +518,64 @@ func TestLFUPassivation_EvictsRarestEntity(t *testing.T) {
 // regression of the dispatch switch would silently route their evicts
 // through the LRU comparator.
 func TestPassivation_StrategyDispatchIsolation(t *testing.T) {
-	for _, strategy := range []string{MRUStrategyName, LFUStrategyName} {
+	for _, strategy := range []string{MRUStrategyName, LFUStrategyName, DefaultStrategyName} {
 		t.Run(strategy, func(t *testing.T) {
 			if isLRUStrategy(strategy) {
-				t.Errorf("isLRUStrategy(%q) returned true; MRU/LFU must not match", strategy)
+				t.Errorf("isLRUStrategy(%q) returned true; sibling strategies must not match", strategy)
 			}
 		})
+	}
+}
+
+// TestCompositePassivation_EvictsOnLimitOverflow is the round-2 session-26
+// acceptance test for the composite (W-TinyLFU) strategy: when the active
+// limit is exceeded, the strategy passivates an entity through the same
+// Shard.handlePassivate path the simpler strategies use.
+func TestCompositePassivation_EvictsOnLimitOverflow(t *testing.T) {
+	shard, mctx := newTestShard(t, "TestType", "shard-0", ShardSettings{
+		PassivationStrategy:                   DefaultStrategyName,
+		PassivationActiveEntityLimit:          3,
+		PassivationWindowProportion:           0.5, // window cap=1; main cap=2
+		PassivationFilter:                     "off",
+		PassivationFrequencySketchDepth:       4,
+		PassivationFrequencySketchWidthMultiplier: 4,
+		PassivationFrequencySketchResetMultiplier: 10,
+	})
+	shard.PreStart()
+
+	if shard.composite == nil {
+		t.Fatal("composite strategy not bootstrapped from PassivationStrategy=default-strategy")
+	}
+
+	// Spawn 3 entities — at the limit (window=1, main=2), no eviction.
+	sendEnvelope(shard, "e1", "msg1")
+	sendEnvelope(shard, "e2", "msg2")
+	sendEnvelope(shard, "e3", "msg3")
+	if got := len(mctx.stopped); got != 0 {
+		t.Errorf("expected no stops at the limit, got %d", got)
+	}
+
+	// 4th entity → window overflow + main overflow → one eviction.
+	sendEnvelope(shard, "e4", "msg4")
+	if got := len(mctx.stopped); got != 1 {
+		t.Errorf("expected exactly 1 stop after limit-overflow, got %d", got)
+	}
+	if got := len(shard.entities); got != 3 {
+		t.Errorf("expected 3 surviving entities, got %d", got)
+	}
+}
+
+// TestCompositePassivation_AliasResolvesToDefault confirms the
+// "composite-strategy" alias reaches the same code path as the
+// Pekko-canonical "default-strategy".  Without this an operator using
+// the plan-internal name would silently fall through to no-eviction.
+func TestCompositePassivation_AliasResolvesToDefault(t *testing.T) {
+	shard, _ := newTestShard(t, "TestType", "shard-0", ShardSettings{
+		PassivationStrategy:          CompositeStrategyAlias,
+		PassivationActiveEntityLimit: 4,
+	})
+	shard.PreStart()
+	if shard.composite == nil {
+		t.Errorf("composite-strategy alias did not bootstrap composite state")
 	}
 }

@@ -441,9 +441,15 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		// originally shipped under the in-house alias "custom-lru-strategy".
 		// We accept both, normalising to the Pekko name internally so the
 		// shard-side switch only has to recognise one canonical form.
+		// Round-2 session 26 adds the W-TinyLFU composite strategy under
+		// Pekko's "default-strategy" name; the plan-internal alias
+		// "composite-strategy" is normalised here for parity.
 		raw := strings.TrimSpace(v)
-		if raw == "custom-lru-strategy" {
+		switch raw {
+		case "custom-lru-strategy":
 			raw = "least-recently-used"
+		case "composite-strategy":
+			raw = "default-strategy"
 		}
 		nodeCfg.Sharding.PassivationStrategy = raw
 	}
@@ -459,7 +465,15 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		return v, err == nil
 	}
 	activeStrategyKey := nodeCfg.Sharding.PassivationStrategy + "-strategy"
+	// Round-2 session 26: composite ("default-strategy") drops the
+	// "-strategy" suffix in HOCON since the strategy name already ends
+	// in "-strategy".
+	if nodeCfg.Sharding.PassivationStrategy == "default-strategy" {
+		activeStrategyKey = "default-strategy"
+	}
 	if v, ok := limitFromBlock(activeStrategyKey); ok {
+		nodeCfg.Sharding.PassivationActiveEntityLimit = v
+	} else if v, ok := limitFromBlock("default-strategy"); ok {
 		nodeCfg.Sharding.PassivationActiveEntityLimit = v
 	} else if v, ok := limitFromBlock("least-recently-used-strategy"); ok {
 		nodeCfg.Sharding.PassivationActiveEntityLimit = v
@@ -473,12 +487,71 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 	if v, err := cfg.GetString(shardingPrefix + ".passivation.least-recently-used-strategy.replacement.policy"); err == nil {
 		nodeCfg.Sharding.PassivationReplacementPolicy = strings.TrimSpace(v)
 	}
+	// Round-2 session 26: composite ("default-strategy") replacement.policy
+	// overrides the LRU-strategy default when both are present.
+	if v, err := cfg.GetString(shardingPrefix + ".passivation.default-strategy.replacement.policy"); err == nil {
+		nodeCfg.Sharding.PassivationReplacementPolicy = strings.TrimSpace(v)
+	}
 	// Round-2 session 25: LFU dynamic-aging knob.  Parsed but not yet
 	// consumed by the eviction loop; sessions 26+ will start aging the
 	// frequency counters once we have a workload to calibrate against.
 	if v, err := cfg.GetString(shardingPrefix + ".passivation.least-frequently-used-strategy.dynamic-aging"); err == nil {
 		v = strings.ToLower(strings.TrimSpace(v))
 		nodeCfg.Sharding.PassivationLFUDynamicAging = v == "on" || v == "true"
+	}
+	// Round-2 session 26: composite (W-TinyLFU) admission knobs.
+	// Pekko separates "shape" (default-strategy.admission.*) from
+	// "defaults" (strategy-defaults.admission.*); we read the shape keys
+	// first so an explicit default-strategy.* override wins over the
+	// inherited default.
+	parseFloat := func(path string) (float64, bool) {
+		if v, err := cfg.GetString(path); err == nil {
+			s := strings.TrimSpace(v)
+			if s == "" || s == "off" || s == "none" {
+				return 0, false
+			}
+			var f float64
+			if _, err := fmt.Sscanf(s, "%f", &f); err == nil {
+				return f, true
+			}
+		}
+		return 0, false
+	}
+	for _, path := range []string{
+		shardingPrefix + ".passivation.strategy-defaults.admission.window.proportion",
+		shardingPrefix + ".passivation.default-strategy.admission.window.proportion",
+	} {
+		if f, ok := parseFloat(path); ok {
+			nodeCfg.Sharding.PassivationWindowProportion = f
+		}
+	}
+	for _, path := range []string{
+		shardingPrefix + ".passivation.strategy-defaults.admission.window.policy",
+		shardingPrefix + ".passivation.default-strategy.admission.window.policy",
+	} {
+		if v, err := cfg.GetString(path); err == nil {
+			nodeCfg.Sharding.PassivationWindowPolicy = strings.TrimSpace(v)
+		}
+	}
+	for _, path := range []string{
+		shardingPrefix + ".passivation.strategy-defaults.admission.filter",
+		shardingPrefix + ".passivation.default-strategy.admission.filter",
+	} {
+		if v, err := cfg.GetString(path); err == nil {
+			nodeCfg.Sharding.PassivationFilter = strings.TrimSpace(v)
+		}
+	}
+	if v, err := cfg.GetInt(shardingPrefix + ".passivation.strategy-defaults.admission.frequency-sketch.depth"); err == nil {
+		nodeCfg.Sharding.PassivationFrequencySketchDepth = v
+	}
+	if v, err := cfg.GetInt(shardingPrefix + ".passivation.strategy-defaults.admission.frequency-sketch.counter-bits"); err == nil {
+		nodeCfg.Sharding.PassivationFrequencySketchCounterBits = v
+	}
+	if v, err := cfg.GetInt(shardingPrefix + ".passivation.strategy-defaults.admission.frequency-sketch.width-multiplier"); err == nil {
+		nodeCfg.Sharding.PassivationFrequencySketchWidthMultiplier = v
+	}
+	if f, ok := parseFloat(shardingPrefix + ".passivation.strategy-defaults.admission.frequency-sketch.reset-multiplier"); ok {
+		nodeCfg.Sharding.PassivationFrequencySketchResetMultiplier = f
 	}
 	if v, err := cfg.GetString(shardingPrefix + ".rebalance-interval"); err == nil {
 		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {

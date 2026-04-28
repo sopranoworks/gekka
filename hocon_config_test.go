@@ -4415,3 +4415,142 @@ pekko {
 		t.Errorf("DurableKeys = %v, want empty", cfg.DistributedData.DurableKeys)
 	}
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Round-2 session 26: composite (W-TinyLFU) passivation HOCON wiring
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestHOCON_PassivationComposite_PekkoCanonicalName proves a Pekko-style
+// HOCON config using "default-strategy" reaches ShardingConfig and the
+// admission-window proportion lands in the dedicated field.  Without this
+// test, gekka would silently parse the strategy name without exposing the
+// composite knobs to the runtime.
+func TestHOCON_PassivationComposite_PekkoCanonicalName(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    sharding.passivation {
+      strategy = "default-strategy"
+      default-strategy {
+        active-entity-limit = 8000
+        admission {
+          window {
+            policy = "least-recently-used"
+          }
+          filter = "frequency-sketch"
+        }
+        replacement {
+          policy = "least-recently-used"
+        }
+      }
+      strategy-defaults.admission {
+        window.proportion = 0.05
+        frequency-sketch {
+          depth            = 8
+          counter-bits     = 4
+          width-multiplier = 6
+          reset-multiplier = 12.5
+        }
+      }
+    }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.Sharding.PassivationStrategy, "default-strategy"; got != want {
+		t.Errorf("PassivationStrategy = %q, want %q", got, want)
+	}
+	if got, want := cfg.Sharding.PassivationActiveEntityLimit, 8000; got != want {
+		t.Errorf("PassivationActiveEntityLimit = %d, want %d", got, want)
+	}
+	if got, want := cfg.Sharding.PassivationWindowProportion, 0.05; got != want {
+		t.Errorf("PassivationWindowProportion = %v, want %v", got, want)
+	}
+	if got, want := cfg.Sharding.PassivationFilter, "frequency-sketch"; got != want {
+		t.Errorf("PassivationFilter = %q, want %q", got, want)
+	}
+	if got, want := cfg.Sharding.PassivationFrequencySketchDepth, 8; got != want {
+		t.Errorf("PassivationFrequencySketchDepth = %d, want %d", got, want)
+	}
+	if got, want := cfg.Sharding.PassivationFrequencySketchWidthMultiplier, 6; got != want {
+		t.Errorf("PassivationFrequencySketchWidthMultiplier = %d, want %d", got, want)
+	}
+	if got, want := cfg.Sharding.PassivationFrequencySketchResetMultiplier, 12.5; got != want {
+		t.Errorf("PassivationFrequencySketchResetMultiplier = %v, want %v", got, want)
+	}
+	if got, want := cfg.Sharding.PassivationReplacementPolicy, "least-recently-used"; got != want {
+		t.Errorf("PassivationReplacementPolicy = %q, want %q", got, want)
+	}
+}
+
+// TestHOCON_PassivationComposite_AliasNormalised confirms the
+// plan-internal "composite-strategy" name is normalised to Pekko's
+// "default-strategy" at parse time so the runtime check only has to
+// recognise one canonical form.
+func TestHOCON_PassivationComposite_AliasNormalised(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    sharding.passivation {
+      strategy = "composite-strategy"
+      default-strategy.active-entity-limit = 50
+    }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.Sharding.PassivationStrategy, "default-strategy"; got != want {
+		t.Errorf("PassivationStrategy after alias-normalisation = %q, want %q", got, want)
+	}
+	if got, want := cfg.Sharding.PassivationActiveEntityLimit, 50; got != want {
+		t.Errorf("PassivationActiveEntityLimit (default-strategy block) = %d, want %d", got, want)
+	}
+}
+
+// TestHOCON_PassivationComposite_DefaultStrategyOverridesDefaults proves
+// the per-strategy `default-strategy.admission.*` block wins over the
+// inheritable `strategy-defaults.admission.*` defaults.  Without this
+// precedence, an operator who tightened the window in `default-strategy`
+// would have it silently overridden by the looser inherited default.
+func TestHOCON_PassivationComposite_DefaultStrategyOverridesDefaults(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    sharding.passivation {
+      strategy = "default-strategy"
+      default-strategy {
+        admission {
+          window {
+            proportion = 0.20
+          }
+          filter = "off"
+        }
+      }
+      strategy-defaults.admission {
+        window.proportion = 0.01
+        filter = "frequency-sketch"
+      }
+    }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.Sharding.PassivationWindowProportion, 0.20; got != want {
+		t.Errorf("PassivationWindowProportion = %v, want %v (per-strategy override must win)", got, want)
+	}
+	if got, want := cfg.Sharding.PassivationFilter, "off"; got != want {
+		t.Errorf("PassivationFilter = %q, want %q (per-strategy override must win)", got, want)
+	}
+}

@@ -243,6 +243,69 @@ type ShardSettings struct {
 	//   pekko.cluster.sharding.passivation.default-idle-strategy.idle-entity.interval
 	IdleEntityCheckInterval time.Duration
 
+	// ── Round-2 session 26 — composite (W-TinyLFU) passivation knobs ──
+	//
+	// PassivationWindowProportion is the fraction of
+	// PassivationActiveEntityLimit reserved for the admission window of
+	// the composite ("default-strategy") passivation strategy.  Pekko's
+	// reference.conf default is 0.01.
+	//
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.passivation.strategy-defaults.admission.window.proportion
+	PassivationWindowProportion float64
+
+	// PassivationWindowPolicy names the replacement policy for the
+	// admission window.  Currently only "least-recently-used" is honoured
+	// at runtime; any non-empty value selects LRU.  Set to "off" / "none"
+	// to disable the admission window (composite strategy degrades to
+	// LRU-with-filter).
+	//
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.passivation.default-strategy.admission.window.policy
+	PassivationWindowPolicy string
+
+	// PassivationFilter selects the admission filter that decides whether
+	// a window-evicted entity is allowed to displace the main area's LRU
+	// candidate.  Recognised values: "frequency-sketch", "off", "none",
+	// or empty.  Pekko default: "frequency-sketch".
+	//
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.passivation.default-strategy.admission.filter
+	PassivationFilter string
+
+	// PassivationFrequencySketchDepth is the number of independent hash
+	// rows in the count-min sketch that backs the frequency-sketch
+	// admission filter.  Pekko default: 4.
+	//
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.passivation.strategy-defaults.admission.frequency-sketch.depth
+	PassivationFrequencySketchDepth int
+
+	// PassivationFrequencySketchCounterBits names the counter cell width
+	// in bits.  Pekko documents 2/4/8/16/32/64; gekka stores 4-bit values
+	// in uint8 cells so any value > 4 just caps at 4-bit precision while
+	// any value < 4 is rounded up.  Parsed for forward-compat.
+	//
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.passivation.strategy-defaults.admission.frequency-sketch.counter-bits
+	PassivationFrequencySketchCounterBits int
+
+	// PassivationFrequencySketchWidthMultiplier sets the sketch width as
+	// (active-entity-limit × multiplier).  Larger widths reduce hash
+	// collisions at the cost of memory.  Pekko default: 4.
+	//
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.passivation.strategy-defaults.admission.frequency-sketch.width-multiplier
+	PassivationFrequencySketchWidthMultiplier int
+
+	// PassivationFrequencySketchResetMultiplier triggers the sketch's
+	// counter-halving reset every (active-entity-limit × multiplier)
+	// total accesses.  Pekko default: 10.0.
+	//
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.passivation.strategy-defaults.admission.frequency-sketch.reset-multiplier
+	PassivationFrequencySketchResetMultiplier float64
+
 	// Lease, when non-nil, is acquired by every Shard before it becomes
 	// active and released on shard handoff/stop.  Plumbed by StartSharding
 	// from pekko.cluster.sharding.use-lease + LeaseRetryInterval.

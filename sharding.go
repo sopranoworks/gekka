@@ -188,6 +188,34 @@ type ShardingSettings struct {
 	// Equivalent HOCON key:
 	//   pekko.cluster.sharding.lease-retry-interval = 5s
 	LeaseRetryDelay time.Duration
+
+	// ── Round-2 session 26 — composite (W-TinyLFU) passivation knobs ──
+	//
+	// PassivationWindowProportion is the admission-window size as a
+	// fraction of PassivationActiveEntityLimit.  Used only by the
+	// composite "default-strategy".  Pekko default: 0.01.
+	PassivationWindowProportion float64
+	// PassivationWindowPolicy names the window-area replacement policy.
+	// Only "least-recently-used" is honoured at runtime today.
+	PassivationWindowPolicy string
+	// PassivationFilter selects the admission filter for the composite
+	// strategy.  Recognised values: "frequency-sketch" (Pekko default),
+	// "off", "none".
+	PassivationFilter string
+	// PassivationFrequencySketchDepth is the count-min-sketch depth.
+	// Pekko default: 4.
+	PassivationFrequencySketchDepth int
+	// PassivationFrequencySketchCounterBits is documented for
+	// forward-compat with Pekko configs; gekka stores 4-bit counters
+	// regardless.  Pekko default: 4.
+	PassivationFrequencySketchCounterBits int
+	// PassivationFrequencySketchWidthMultiplier sets the sketch width
+	// as active-entity-limit × multiplier.  Pekko default: 4.
+	PassivationFrequencySketchWidthMultiplier int
+	// PassivationFrequencySketchResetMultiplier governs the cadence of
+	// the sketch's halving reset, expressed as a multiplier of the
+	// active-entity-limit.  Pekko default: 10.0.
+	PassivationFrequencySketchResetMultiplier float64
 }
 
 // StartSharding starts cluster sharding for a given entity type.
@@ -240,6 +268,30 @@ func StartSharding[Command any, Event any, State any](
 		}
 		if settings.PassivationActiveEntityLimit == 0 && cluster.cfg.Sharding.PassivationActiveEntityLimit > 0 {
 			settings.PassivationActiveEntityLimit = cluster.cfg.Sharding.PassivationActiveEntityLimit
+		}
+		// Round-2 session 26 — composite (W-TinyLFU) knobs.  Each falls
+		// back to the HOCON-loaded ClusterShardingConfig value when the
+		// caller didn't override it directly on ShardingSettings.
+		if settings.PassivationWindowProportion == 0 && cluster.cfg.Sharding.PassivationWindowProportion > 0 {
+			settings.PassivationWindowProportion = cluster.cfg.Sharding.PassivationWindowProportion
+		}
+		if settings.PassivationWindowPolicy == "" && cluster.cfg.Sharding.PassivationWindowPolicy != "" {
+			settings.PassivationWindowPolicy = cluster.cfg.Sharding.PassivationWindowPolicy
+		}
+		if settings.PassivationFilter == "" && cluster.cfg.Sharding.PassivationFilter != "" {
+			settings.PassivationFilter = cluster.cfg.Sharding.PassivationFilter
+		}
+		if settings.PassivationFrequencySketchDepth == 0 && cluster.cfg.Sharding.PassivationFrequencySketchDepth > 0 {
+			settings.PassivationFrequencySketchDepth = cluster.cfg.Sharding.PassivationFrequencySketchDepth
+		}
+		if settings.PassivationFrequencySketchCounterBits == 0 && cluster.cfg.Sharding.PassivationFrequencySketchCounterBits > 0 {
+			settings.PassivationFrequencySketchCounterBits = cluster.cfg.Sharding.PassivationFrequencySketchCounterBits
+		}
+		if settings.PassivationFrequencySketchWidthMultiplier == 0 && cluster.cfg.Sharding.PassivationFrequencySketchWidthMultiplier > 0 {
+			settings.PassivationFrequencySketchWidthMultiplier = cluster.cfg.Sharding.PassivationFrequencySketchWidthMultiplier
+		}
+		if settings.PassivationFrequencySketchResetMultiplier == 0 && cluster.cfg.Sharding.PassivationFrequencySketchResetMultiplier > 0 {
+			settings.PassivationFrequencySketchResetMultiplier = cluster.cfg.Sharding.PassivationFrequencySketchResetMultiplier
 		}
 		// Round-2 session 13 — retry/backoff (part 1).
 		if settings.RetryInterval == 0 && cluster.cfg.Sharding.RetryInterval > 0 {
@@ -463,6 +515,13 @@ func StartSharding[Command any, Event any, State any](
 		IdleEntityCheckInterval:                    settings.IdleEntityCheckInterval,
 		Lease:                                      settings.Lease,
 		LeaseRetryDelay:                            settings.LeaseRetryDelay,
+		PassivationWindowProportion:                settings.PassivationWindowProportion,
+		PassivationWindowPolicy:                    settings.PassivationWindowPolicy,
+		PassivationFilter:                          settings.PassivationFilter,
+		PassivationFrequencySketchDepth:            settings.PassivationFrequencySketchDepth,
+		PassivationFrequencySketchCounterBits:      settings.PassivationFrequencySketchCounterBits,
+		PassivationFrequencySketchWidthMultiplier:  settings.PassivationFrequencySketchWidthMultiplier,
+		PassivationFrequencySketchResetMultiplier:  settings.PassivationFrequencySketchResetMultiplier,
 	}
 
 	// Populate IsLocalDC when both the cluster and DataCenter are available.

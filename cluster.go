@@ -1447,6 +1447,36 @@ type ShardingConfig struct {
 	// workload exists.  Default: false.
 	PassivationLFUDynamicAging bool
 
+	// ── Round-2 session 26 — composite (W-TinyLFU) passivation knobs ──
+	//
+	// PassivationWindowProportion is the admission-window size as a
+	// fraction of PassivationActiveEntityLimit.  Pekko default: 0.01.
+	// HOCON: pekko.cluster.sharding.passivation.strategy-defaults.admission.window.proportion.
+	PassivationWindowProportion float64
+	// PassivationWindowPolicy is the replacement policy for the window
+	// area.  Currently only "least-recently-used" is honoured at
+	// runtime.  HOCON: passivation.default-strategy.admission.window.policy.
+	PassivationWindowPolicy string
+	// PassivationFilter selects the admission filter.  Recognised
+	// values: "frequency-sketch" (Pekko default), "off", "none".  HOCON:
+	// passivation.default-strategy.admission.filter.
+	PassivationFilter string
+	// PassivationFrequencySketchDepth is the count-min-sketch depth
+	// (number of hash rows).  Pekko default: 4.
+	// HOCON: passivation.strategy-defaults.admission.frequency-sketch.depth.
+	PassivationFrequencySketchDepth int
+	// PassivationFrequencySketchCounterBits names the per-cell counter
+	// width.  gekka stores 4-bit values regardless; parsed for
+	// forward-compat.  Pekko default: 4.
+	PassivationFrequencySketchCounterBits int
+	// PassivationFrequencySketchWidthMultiplier sets the sketch width as
+	// (active-entity-limit × multiplier).  Pekko default: 4.
+	PassivationFrequencySketchWidthMultiplier int
+	// PassivationFrequencySketchResetMultiplier triggers the
+	// counter-halving reset every (active-entity-limit × multiplier)
+	// total accesses.  Pekko default: 10.0.
+	PassivationFrequencySketchResetMultiplier float64
+
 	// AdaptiveRebalancing, when enabled, rebalances shards based on real-time
 	// node metrics (CPU, Memory, Mailbox size).
 	AdaptiveRebalancing AdaptiveRebalancingConfig

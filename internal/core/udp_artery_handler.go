@@ -788,6 +788,10 @@ func (nm *NodeManager) DialRemoteUDP(ctx context.Context, udpHandler *UdpArteryH
 		Uid: proto.Uint64(0),
 	}
 
+	largeCap := 512
+	if nm.OutboundLargeMessageQueueSize > 0 {
+		largeCap = nm.OutboundLargeMessageQueueSize
+	}
 	assoc := &GekkaAssociation{
 		state:             INITIATED,
 		role:              OUTBOUND,
@@ -796,6 +800,7 @@ func (nm *NodeManager) DialRemoteUDP(ctx context.Context, udpHandler *UdpArteryH
 		Handshake:         make(chan struct{}),
 		outbox:            make(chan []byte, 512),
 		udpOrdinaryOutbox: make(chan []byte, 512),
+		udpLargeOutbox:    make(chan []byte, largeCap),
 		nodeMgr:           nm,
 		remote:            remoteUA,
 		udpHandler:        udpHandler,
@@ -803,7 +808,8 @@ func (nm *NodeManager) DialRemoteUDP(ctx context.Context, udpHandler *UdpArteryH
 	}
 	nm.RegisterAssociation(remoteUA, assoc)
 
-	// Drain control (stream 1) and ordinary (stream 2) outboxes concurrently.
+	// Drain control (stream 1), ordinary (stream 2), and large (stream 3)
+	// outboxes concurrently. (Large stream wired in Round-2 session 29.)
 	go func() {
 		for {
 			select {
@@ -822,6 +828,13 @@ func (nm *NodeManager) DialRemoteUDP(ctx context.Context, udpHandler *UdpArteryH
 				}
 				if err := udpHandler.SendFrame(dstAddr, AeronStreamOrdinary, frame); err != nil {
 					slog.Warn("aeron-udp: outbound ordinary outbox send error", "error", err)
+				}
+			case frame, ok := <-assoc.udpLargeOutbox:
+				if !ok {
+					return
+				}
+				if err := udpHandler.SendFrame(dstAddr, AeronStreamLarge, frame); err != nil {
+					slog.Warn("aeron-udp: outbound large outbox send error", "error", err)
 				}
 			}
 		}

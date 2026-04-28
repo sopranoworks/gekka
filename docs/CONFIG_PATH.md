@@ -51,7 +51,7 @@ Legend:
 | `pekko.remote.artery.log-sent-messages` | `off` | ✅ | DEBUG-level outbound logging in `Send` |
 | `pekko.remote.artery.log-frame-size-exceeding` | `off` | ✅ | Warns once per (serializerId, manifest) when payload exceeds threshold; +10% growth re-logs |
 | `pekko.remote.artery.propagate-harmless-quarantine-events` | `off` | ✅ | Toggles severity (DEBUG vs WARN) of `EmitHarmlessQuarantineEvent` (legacy Pekko 1.x WARN behavior) |
-| `pekko.remote.artery.large-message-destinations` | `[]` | ❌ | No feature |
+| `pekko.remote.artery.large-message-destinations` | `[]` | ✅ | Round-2 session 29 — `LargeMessageRouter` glob-matches recipient paths; matching outbound user messages route via `udpLargeOutbox` onto Aeron stream 3 (`AeronStreamLarge`). TCP separate stream-3 connection deferred to session 30; until then matching TCP recipients fall back to stream 1 |
 | `pekko.remote.artery.advanced.maximum-frame-size` | `256 KiB` | ✅ | Configurable via HOCON |
 | `pekko.remote.artery.advanced.buffer-pool-size` | `128` | ✅ | Recorded on NodeManager (`EffectiveBufferPoolSize`) for future receive-buffer-pool consumer |
 | `pekko.remote.artery.advanced.maximum-large-frame-size` | `2 MiB` | ✅ | Recorded on NodeManager (`EffectiveMaximumLargeFrameSize`) for the large-message stream |

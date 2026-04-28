@@ -114,6 +114,10 @@ type GekkaAssociation struct {
 	// (OrdinaryStream).  Control/cluster/artery-internal messages continue to
 	// use the primary outbox (stream 1).  Nil for TCP associations.
 	udpOrdinaryOutbox chan []byte
+	// udpLargeOutbox carries user messages destined for Aeron stream 3
+	// (LargeStream). Used when the recipient path matches a configured
+	// large-message-destinations glob. Nil for TCP associations.
+	udpLargeOutbox chan []byte
 }
 
 var _ actor.RemoteAssociation = (*GekkaAssociation)(nil)
@@ -407,6 +411,12 @@ type NodeManager struct {
 	// fail for subsequent frames from the ephemeral media-driver port.
 	// Guarded by mu.
 	udpSrcAssoc map[string]*GekkaAssociation
+
+	// largeRouter resolves outbound recipient paths to streamId 3 when they
+	// match a configured glob in pekko.remote.artery.large-message-destinations.
+	// Nil-safe: a nil router treats everything as non-large.
+	// Guarded by mu (read-mostly; replaced via SetLargeMessageDestinations).
+	largeRouter *LargeMessageRouter
 }
 
 func NewNodeManager(local *gproto_remote.Address, uid uint64) *NodeManager {
@@ -429,6 +439,25 @@ func (nm *NodeManager) EffectiveInboundLanes() int {
 		return nm.InboundLanes
 	}
 	return DefaultInboundLanes
+}
+
+// SetLargeMessageDestinations replaces the large-message router with one
+// compiled from the supplied actor-path globs. Round-2 session 29 hooks this
+// into the Cluster spawn pipeline.
+func (nm *NodeManager) SetLargeMessageDestinations(patterns []string) {
+	router := NewLargeMessageRouter(patterns)
+	nm.mu.Lock()
+	nm.largeRouter = router
+	nm.mu.Unlock()
+}
+
+// IsLargeRecipient reports whether the supplied recipient path is configured
+// to route over the dedicated large-message stream.
+func (nm *NodeManager) IsLargeRecipient(recipient string) bool {
+	nm.mu.RLock()
+	r := nm.largeRouter
+	nm.mu.RUnlock()
+	return r.IsLarge(recipient)
 }
 
 // EmitHarmlessQuarantineEvent logs a quarantine event whose severity is
@@ -1769,7 +1798,9 @@ func (assoc *GekkaAssociation) SendWithSender(recipient, senderPath string, payl
 
 	// User messages go on Aeron stream 2 (Ordinary) when a separate outbox is
 	// available (UDP transport).  Control/cluster messages stay on stream 1.
-	outbox := assoc.udpOrdinaryOutboxFor(serializerId)
+	// Recipients matching a configured large-message-destinations glob route
+	// onto stream 3 (Large) — Round-2 session 29.
+	outbox := assoc.outboxFor(recipient, serializerId)
 	select {
 	case outbox <- frame:
 		return nil
@@ -1926,7 +1957,7 @@ func (assoc *GekkaAssociation) Send(recipient string, payload []byte, serializer
 		return nil
 	}
 
-	outbox := assoc.udpOrdinaryOutboxFor(serializerId)
+	outbox := assoc.outboxFor(recipient, serializerId)
 	select {
 	case outbox <- frame:
 		return nil
@@ -1946,6 +1977,21 @@ func (assoc *GekkaAssociation) udpOrdinaryOutboxFor(serializerId int32) chan []b
 		return assoc.udpOrdinaryOutbox
 	}
 	return assoc.outbox
+}
+
+// outboxFor selects the outbox channel for a (recipient, serializerId) pair.
+// Large-message routing (Round-2 session 29) preempts the ordinary stream
+// when the recipient matches a configured large-message-destinations glob
+// AND the serializer is a user serializer (cluster/artery-internal control
+// traffic always stays on stream 1). Falls through to udpOrdinaryOutboxFor
+// for other user messages.
+func (assoc *GekkaAssociation) outboxFor(recipient string, serializerId int32) chan []byte {
+	if serializerId != ClusterSerializerID && serializerId != ArteryInternalSerializerID {
+		if nm := assoc.nodeMgr; nm != nil && assoc.udpLargeOutbox != nil && nm.IsLargeRecipient(recipient) {
+			return assoc.udpLargeOutbox
+		}
+	}
+	return assoc.udpOrdinaryOutboxFor(serializerId)
 }
 
 func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *ArteryMetadata) error {

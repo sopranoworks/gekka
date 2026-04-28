@@ -1059,6 +1059,22 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		nodeCfg.PropagateHarmlessQuarantineEvents = v == "on" || v == "true"
 	}
 
+	// pekko.remote.artery.large-message-destinations — list of actor-path
+	// globs whose recipients route over the dedicated large-message stream
+	// (streamId=3). (Round-2 session 29.)
+	{
+		var lmdTmp struct {
+			PekkoLMD []string `hocon:"pekko.remote.artery.large-message-destinations"`
+			AkkaLMD  []string `hocon:"akka.remote.artery.large-message-destinations"`
+		}
+		_ = cfg.Unmarshal(&lmdTmp)
+		if prefix == "pekko" && len(lmdTmp.PekkoLMD) > 0 {
+			nodeCfg.LargeMessageDestinations = lmdTmp.PekkoLMD
+		} else if prefix == "akka" && len(lmdTmp.AkkaLMD) > 0 {
+			nodeCfg.LargeMessageDestinations = lmdTmp.AkkaLMD
+		}
+	}
+
 	// ── pekko.actor.debug.* logging toggles (Round-2 session 10) ───────────
 	parseBoolFlag := func(path string, dst *bool) {
 		if v, err := cfg.GetString(path); err == nil {

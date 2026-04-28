@@ -4626,3 +4626,44 @@ pekko {
 		t.Errorf("DowningProviderClass = %q, want %q (unknown name must be preserved)", got, want)
 	}
 }
+
+// TestHOCON_LargeMessageDestinations_Parsed verifies that a configured
+// pekko.remote.artery.large-message-destinations list reaches NodeConfig
+// verbatim. Round-2 session 29 wires this into the LargeMessageRouter via
+// SetLargeMessageDestinations during cluster spawn.
+func TestHOCON_LargeMessageDestinations_Parsed(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery {
+    canonical { hostname = "127.0.0.1", port = 2552 }
+    large-message-destinations = ["/user/large-*", "/svc/blob"]
+  }
+  cluster { seed-nodes = [] }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	want := []string{"/user/large-*", "/svc/blob"}
+	if !reflect.DeepEqual(cfg.LargeMessageDestinations, want) {
+		t.Errorf("LargeMessageDestinations = %v, want %v", cfg.LargeMessageDestinations, want)
+	}
+}
+
+// TestHOCON_LargeMessageDestinations_DefaultEmpty verifies that the absence
+// of pekko.remote.artery.large-message-destinations leaves the field empty,
+// disabling large-stream routing entirely (the Pekko default).
+func TestHOCON_LargeMessageDestinations_DefaultEmpty(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster { seed-nodes = [] }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if len(cfg.LargeMessageDestinations) != 0 {
+		t.Errorf("LargeMessageDestinations = %v, want [] when unset", cfg.LargeMessageDestinations)
+	}
+}

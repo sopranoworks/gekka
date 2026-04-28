@@ -142,6 +142,14 @@ type ClusterConfig struct {
 	// Corresponds to pekko.remote.artery.propagate-harmless-quarantine-events.
 	PropagateHarmlessQuarantineEvents bool
 
+	// LargeMessageDestinations lists actor-path globs whose recipients route
+	// over the dedicated large-message stream (streamId=3). Patterns may use
+	// trailing-segment wildcards ("/user/large-*") or per-segment wildcards
+	// ("/user/*/big"). Empty list disables large-stream routing.
+	// Corresponds to pekko.remote.artery.large-message-destinations.
+	// Default: [].
+	LargeMessageDestinations []string
+
 	// ActorDebug bundles the pekko.actor.debug.* logging toggles.
 	// All flags default to false (off). When true, the corresponding
 	// actor-framework event is emitted at slog.Debug.
@@ -2069,6 +2077,9 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	nm.LogSentMessages = cfg.LogSentMessages
 	nm.LogFrameSizeExceeding = cfg.LogFrameSizeExceeding
 	nm.PropagateHarmlessQuarantineEvents = cfg.PropagateHarmlessQuarantineEvents
+	// Round-2 session 29: large-message-destinations routes matching outbound
+	// recipients onto the large-message stream (streamId=3).
+	nm.SetLargeMessageDestinations(cfg.LargeMessageDestinations)
 	// Apply flight recorder config from HOCON (defaults: enabled=true, level=lifecycle).
 	frEnabled := cfg.FlightRecorder.Enabled
 	// When neither LoadConfig nor explicit struct init has been called,

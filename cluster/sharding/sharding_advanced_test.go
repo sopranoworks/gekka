@@ -394,3 +394,53 @@ func TestLRUPassivation(t *testing.T) {
 		t.Errorf("expected 1 stop call (evicted entity), got %d", len(mctx.stopped))
 	}
 }
+
+// TestLRUPassivation_PekkoCanonicalName is the round-2 session-24 acceptance
+// test: configs that use Pekko's canonical strategy name ("least-recently-used")
+// must reach the same eviction loop the legacy alias drives.  Without this,
+// porting a Pekko config to gekka would silently disable LRU eviction.
+func TestLRUPassivation_PekkoCanonicalName(t *testing.T) {
+	shard, mctx := newTestShard(t, "TestType", "shard-0", ShardSettings{
+		PassivationStrategy:          LRUStrategyName, // "least-recently-used"
+		PassivationActiveEntityLimit: 2,
+	})
+	shard.PreStart()
+
+	sendEnvelope(shard, "e1", "msg1")
+	sendEnvelope(shard, "e2", "msg2")
+	now := time.Now()
+	shard.lastActivity["e1"] = now // older
+	shard.lastActivity["e2"] = now.Add(time.Second)
+
+	// 3rd entity → LRU evicts e1 (oldest).
+	sendEnvelope(shard, "e3", "msg3")
+
+	if _, ok := shard.entities["e1"]; ok {
+		t.Error("e1 should have been LRU-evicted under the Pekko-canonical strategy name")
+	}
+	if got, want := len(mctx.stopped), 1; got != want {
+		t.Errorf("expected %d stop calls, got %d", want, got)
+	}
+}
+
+// TestIsLRUStrategy locks down the alias-resolution table.  Adding an
+// alias here without flipping the runtime check is a silent regression
+// risk; the test is the canary.
+func TestIsLRUStrategy(t *testing.T) {
+	cases := []struct {
+		name string
+		want bool
+	}{
+		{LRUStrategyName, true},        // Pekko canonical
+		{LegacyLRUStrategyName, true},  // gekka legacy alias
+		{"default-idle-strategy", false},
+		{"most-recently-used", false},  // session 25
+		{"least-frequently-used", false}, // session 25
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := isLRUStrategy(c.name); got != c.want {
+			t.Errorf("isLRUStrategy(%q) = %v, want %v", c.name, got, c.want)
+		}
+	}
+}

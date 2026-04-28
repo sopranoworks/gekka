@@ -437,10 +437,26 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		nodeCfg.Sharding.RememberEntitiesStore = strings.TrimSpace(v)
 	}
 	if v, err := cfg.GetString(shardingPrefix + ".passivation.strategy"); err == nil {
-		nodeCfg.Sharding.PassivationStrategy = strings.TrimSpace(v)
+		// Pekko's canonical strategy name is "least-recently-used"; gekka
+		// originally shipped under the in-house alias "custom-lru-strategy".
+		// We accept both, normalising to the Pekko name internally so the
+		// shard-side switch only has to recognise one canonical form.
+		raw := strings.TrimSpace(v)
+		if raw == "custom-lru-strategy" {
+			raw = "least-recently-used"
+		}
+		nodeCfg.Sharding.PassivationStrategy = raw
 	}
-	if v, err := cfg.GetInt(shardingPrefix + ".passivation.custom-lru-strategy.active-entity-limit"); err == nil {
+	// Round-2 session 24: pekko.cluster.sharding.passivation.least-recently-used-strategy.*
+	// Accept the legacy custom-lru-strategy.active-entity-limit path too,
+	// so existing configs keep working without edits.
+	if v, err := cfg.GetInt(shardingPrefix + ".passivation.least-recently-used-strategy.active-entity-limit"); err == nil {
 		nodeCfg.Sharding.PassivationActiveEntityLimit = v
+	} else if v, err := cfg.GetInt(shardingPrefix + ".passivation.custom-lru-strategy.active-entity-limit"); err == nil {
+		nodeCfg.Sharding.PassivationActiveEntityLimit = v
+	}
+	if v, err := cfg.GetString(shardingPrefix + ".passivation.least-recently-used-strategy.replacement.policy"); err == nil {
+		nodeCfg.Sharding.PassivationReplacementPolicy = strings.TrimSpace(v)
 	}
 	if v, err := cfg.GetString(shardingPrefix + ".rebalance-interval"); err == nil {
 		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {

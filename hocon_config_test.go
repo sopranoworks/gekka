@@ -437,8 +437,11 @@ pekko {
 	if err != nil {
 		t.Fatalf("parseHOCONString: %v", err)
 	}
-	if cfg.Sharding.PassivationStrategy != "custom-lru-strategy" {
-		t.Errorf("PassivationStrategy = %q, want %q", cfg.Sharding.PassivationStrategy, "custom-lru-strategy")
+	// Round-2 session 24: the legacy "custom-lru-strategy" name is
+	// normalised to the Pekko-canonical "least-recently-used" at parse
+	// time so the runtime check only has to switch on one form.
+	if got, want := cfg.Sharding.PassivationStrategy, "least-recently-used"; got != want {
+		t.Errorf("PassivationStrategy = %q, want %q (legacy alias should normalise)", got, want)
 	}
 	if cfg.Sharding.PassivationActiveEntityLimit != 5000 {
 		t.Errorf("PassivationActiveEntityLimit = %d, want 5000", cfg.Sharding.PassivationActiveEntityLimit)
@@ -4198,6 +4201,100 @@ pekko {
 	}
 	if got := cfg.DistributedData.DurableLmdbWriteBehindInterval; got != 0 {
 		t.Errorf("DurableLmdbWriteBehindInterval = %v, want 0", got)
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Round-2 session 24: passivation least-recently-used-strategy wiring
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestHOCON_PassivationLRU_PekkoCanonicalName proves a Pekko-style HOCON
+// config using the canonical strategy name and the
+// least-recently-used-strategy.* sub-block reaches ShardingConfig
+// without the operator having to translate to gekka's legacy names.
+func TestHOCON_PassivationLRU_PekkoCanonicalName(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    sharding.passivation {
+      strategy = "least-recently-used"
+      least-recently-used-strategy {
+        active-entity-limit = 4242
+        replacement.policy  = "least-recently-used"
+      }
+    }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.Sharding.PassivationStrategy, "least-recently-used"; got != want {
+		t.Errorf("PassivationStrategy = %q, want %q", got, want)
+	}
+	if got, want := cfg.Sharding.PassivationActiveEntityLimit, 4242; got != want {
+		t.Errorf("PassivationActiveEntityLimit = %d, want %d", got, want)
+	}
+	if got, want := cfg.Sharding.PassivationReplacementPolicy, "least-recently-used"; got != want {
+		t.Errorf("PassivationReplacementPolicy = %q, want %q", got, want)
+	}
+}
+
+// TestHOCON_PassivationLRU_LegacyAliasNormalised confirms the gekka v0.7.0
+// strategy name "custom-lru-strategy" is normalised to the Pekko canonical
+// name at parse time.  Without that, the runtime check would have to
+// branch on two strings and the next session would inherit the same
+// duplication.
+func TestHOCON_PassivationLRU_LegacyAliasNormalised(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    sharding.passivation {
+      strategy = "custom-lru-strategy"
+      custom-lru-strategy.active-entity-limit = 99
+    }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.Sharding.PassivationStrategy, "least-recently-used"; got != want {
+		t.Errorf("PassivationStrategy after alias-normalisation = %q, want %q", got, want)
+	}
+	if got, want := cfg.Sharding.PassivationActiveEntityLimit, 99; got != want {
+		t.Errorf("PassivationActiveEntityLimit (legacy path) = %d, want %d", got, want)
+	}
+}
+
+// TestHOCON_PassivationLRU_PekkoBeatsLegacy asserts the Pekko-canonical
+// path wins when both old and new HOCON keys appear in the same config
+// (e.g. during a half-finished migration).  Otherwise an operator who
+// added the new key but forgot to remove the legacy one would see the
+// old value silently take precedence.
+func TestHOCON_PassivationLRU_PekkoBeatsLegacy(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    sharding.passivation {
+      strategy = "least-recently-used"
+      least-recently-used-strategy.active-entity-limit = 7
+      custom-lru-strategy.active-entity-limit = 999
+    }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.Sharding.PassivationActiveEntityLimit, 7; got != want {
+		t.Errorf("PassivationActiveEntityLimit = %d, want %d (Pekko path must win)", got, want)
 	}
 }
 

@@ -1412,14 +1412,33 @@ type ShardingConfig struct {
 	RememberEntitiesStore string
 
 	// PassivationStrategy selects the passivation strategy.
-	// "default-idle-strategy" (idle timeout) or "custom-lru-strategy" (LRU eviction).
-	// Corresponds to pekko.cluster.sharding.passivation.strategy. Default: "default-idle-strategy".
+	// Recognised values:
+	//   - "default-idle-strategy"  — idle-timeout-only (Pekko default)
+	//   - "least-recently-used"    — LRU eviction at active-entity-limit (Pekko name)
+	//   - "custom-lru-strategy"    — gekka legacy alias for "least-recently-used"
+	// Corresponds to pekko.cluster.sharding.passivation.strategy.
+	// Round-2 session 24 added the "least-recently-used" name; the legacy
+	// "custom-lru-strategy" alias is normalised at parse time so the
+	// runtime only has to switch on the Pekko canonical form.
+	// Default: "default-idle-strategy".
 	PassivationStrategy string
 
-	// PassivationActiveEntityLimit is the max active entities for LRU strategy.
-	// Corresponds to pekko.cluster.sharding.passivation.custom-lru-strategy.active-entity-limit.
-	// Default: 100000.
+	// PassivationActiveEntityLimit is the cap on active entities before the
+	// configured replacement policy passivates the eviction candidate.
+	// Corresponds (in priority order) to:
+	//   - pekko.cluster.sharding.passivation.least-recently-used-strategy.active-entity-limit
+	//   - pekko.cluster.sharding.passivation.custom-lru-strategy.active-entity-limit (legacy)
+	// Pekko default: 100000 (round-2 session 24).
 	PassivationActiveEntityLimit int
+
+	// PassivationReplacementPolicy names the eviction policy used when the
+	// active-entity-limit is reached.  Round-2 session 24 ships only
+	// "least-recently-used"; sessions 25/26 add "most-recently-used",
+	// "least-frequently-used", and the composite W-TinyLFU strategy.
+	// Corresponds to pekko.cluster.sharding.passivation.<strategy>-strategy.replacement.policy.
+	// Empty string defers to the strategy's default (LRU when the strategy
+	// is least-recently-used).
+	PassivationReplacementPolicy string
 
 	// AdaptiveRebalancing, when enabled, rebalances shards based on real-time
 	// node metrics (CPU, Memory, Mailbox size).

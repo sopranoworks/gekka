@@ -446,8 +446,11 @@ func (s *Shard) handleEnvelope(m ShardingEnvelope) {
 		// Journal path: persist EntityStarted event.
 		s.persistEntityStarted(m.EntityId)
 
-		// LRU eviction: if using custom-lru-strategy, check entity limit.
-		if s.settings.PassivationStrategy == "custom-lru-strategy" {
+		// LRU eviction: if the active strategy is LRU, check entity limit.
+		// Round-2 session 24 normalises the Pekko-canonical name
+		// "least-recently-used" with the gekka legacy alias
+		// "custom-lru-strategy"; both route to the same eviction loop.
+		if isLRUStrategy(s.settings.PassivationStrategy) {
 			s.checkLRUEviction()
 		}
 	}

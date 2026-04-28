@@ -197,7 +197,10 @@ Legend:
 | `pekko.cluster.sharding.passivation.default-idle-strategy.idle-entity.timeout` | `120s` | ⚠️ | **Wrong path**: gekka uses `.passivation.idle-timeout` |
 | `pekko.cluster.sharding.passivation.strategy` | `"default-idle-strategy"` | ✅ | Round-2 session 24. Recognises `default-idle-strategy`, `least-recently-used` (Pekko canonical) and `custom-lru-strategy` (legacy alias normalised at parse time). |
 | `pekko.cluster.sharding.passivation.least-recently-used-strategy.active-entity-limit` | `100000` | ✅ | Round-2 session 24. `ShardingConfig.PassivationActiveEntityLimit`; legacy `custom-lru-strategy.active-entity-limit` still parsed as a fallback. |
-| `pekko.cluster.sharding.passivation.least-recently-used-strategy.replacement.policy` | `"least-recently-used"` | ✅ | Round-2 session 24. `ShardingConfig.PassivationReplacementPolicy`; only `least-recently-used` is implemented in S24, MRU/LFU land in S25. |
+| `pekko.cluster.sharding.passivation.least-recently-used-strategy.replacement.policy` | `"least-recently-used"` | ✅ | Round-2 session 24. `ShardingConfig.PassivationReplacementPolicy`. |
+| `pekko.cluster.sharding.passivation.most-recently-used-strategy.active-entity-limit` | `100000` | ✅ | Round-2 session 25. Active strategy limit reaches `ShardingConfig.PassivationActiveEntityLimit`; the eviction loop picks the freshest entity. |
+| `pekko.cluster.sharding.passivation.least-frequently-used-strategy.active-entity-limit` | `100000` | ✅ | Round-2 session 25. Active strategy limit reaches `ShardingConfig.PassivationActiveEntityLimit`; the eviction loop picks the entity with the lowest cumulative access count, ties broken by oldest activity. |
+| `pekko.cluster.sharding.passivation.least-frequently-used-strategy.dynamic-aging` | `off` | ⚠️ | Round-2 session 25. `ShardingConfig.PassivationLFUDynamicAging` is parsed for forward-compat; the actual frequency-aging loop will land in a later session. |
 | `pekko.cluster.sharding.guardian-name` | `"sharding"` | ❌ | No feature |
 | `pekko.cluster.sharding.role` | `""` | ✅ | Filters shard allocation by role |
 | `pekko.cluster.sharding.remember-entities-store` | `"ddata"` | ❌ | No feature |

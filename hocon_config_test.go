@@ -4298,6 +4298,99 @@ pekko {
 	}
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Round-2 session 25: passivation MRU + LFU strategy wiring
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestHOCON_PassivationMRU verifies the most-recently-used strategy
+// reaches ShardingConfig with its own active-entity-limit honored.
+func TestHOCON_PassivationMRU(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    sharding.passivation {
+      strategy = "most-recently-used"
+      most-recently-used-strategy.active-entity-limit = 321
+    }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.Sharding.PassivationStrategy, "most-recently-used"; got != want {
+		t.Errorf("PassivationStrategy = %q, want %q", got, want)
+	}
+	if got, want := cfg.Sharding.PassivationActiveEntityLimit, 321; got != want {
+		t.Errorf("PassivationActiveEntityLimit = %d, want %d", got, want)
+	}
+}
+
+// TestHOCON_PassivationLFU_DynamicAging verifies the LFU strategy
+// reaches ShardingConfig and the dynamic-aging flag round-trips.  The
+// flag is informational in S25 — the parser surface is what matters
+// here so a future session can switch on the field without an HOCON
+// migration.
+func TestHOCON_PassivationLFU_DynamicAging(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    sharding.passivation {
+      strategy = "least-frequently-used"
+      least-frequently-used-strategy {
+        active-entity-limit = 555
+        dynamic-aging       = on
+      }
+    }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.Sharding.PassivationStrategy, "least-frequently-used"; got != want {
+		t.Errorf("PassivationStrategy = %q, want %q", got, want)
+	}
+	if got, want := cfg.Sharding.PassivationActiveEntityLimit, 555; got != want {
+		t.Errorf("PassivationActiveEntityLimit = %d, want %d", got, want)
+	}
+	if !cfg.Sharding.PassivationLFUDynamicAging {
+		t.Error("PassivationLFUDynamicAging = false, want true")
+	}
+}
+
+// TestHOCON_Passivation_ActiveStrategyLimitWins guards the priority
+// rule: when multiple strategy blocks set active-entity-limit, the one
+// matching the active strategy is the source of truth.  Without this,
+// a stale block left over from a previous configuration could silently
+// override the chosen strategy's limit.
+func TestHOCON_Passivation_ActiveStrategyLimitWins(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    sharding.passivation {
+      strategy = "least-frequently-used"
+      least-recently-used-strategy.active-entity-limit  = 1000
+      most-recently-used-strategy.active-entity-limit   = 2000
+      least-frequently-used-strategy.active-entity-limit = 42
+    }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.Sharding.PassivationActiveEntityLimit, 42; got != want {
+		t.Errorf("PassivationActiveEntityLimit = %d, want %d (active strategy LFU should win)", got, want)
+	}
+}
+
 // TestHOCON_DistributedDataDurable_ExplicitEnabledNoKeys covers the gekka
 // extension: `enabled = on` activates the durable path even with no key
 // patterns yet.  Useful for operators that bring up the bbolt store

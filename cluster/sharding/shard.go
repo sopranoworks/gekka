@@ -57,6 +57,13 @@ type Shard struct {
 	// passivation: tracks the last time each entity received a message.
 	lastActivity map[EntityId]time.Time
 
+	// passivation: cumulative message count per entity, consulted by the
+	// least-frequently-used (LFU) strategy when picking an eviction
+	// candidate.  Only populated when the active strategy is LFU; LRU/MRU
+	// don't need it and skipping the increment keeps the hot path lean.
+	// (Round-2 session 25.)
+	accessCount map[EntityId]uint64
+
 	// remember-entities (journal path): monotonic sequence number.
 	seqNr         uint64
 	persistenceId string
@@ -100,6 +107,7 @@ func NewShard(
 		entities:           make(map[EntityId]actor.Ref),
 		settings:           settings,
 		lastActivity:       make(map[EntityId]time.Time),
+		accessCount:        make(map[EntityId]uint64),
 	}
 }
 
@@ -428,6 +436,7 @@ func (s *Shard) handleEnvelope(m ShardingEnvelope) {
 	}
 
 	entity, ok := s.entities[m.EntityId]
+	freshlySpawned := false
 	if !ok {
 		var err error
 		entity, err = s.entityCreator(s.System(), m.EntityId)
@@ -436,6 +445,7 @@ func (s *Shard) handleEnvelope(m ShardingEnvelope) {
 			return
 		}
 		s.entities[m.EntityId] = entity
+		freshlySpawned = true
 		// Store path: record new entity in the set-based store.
 		if s.store != nil {
 			if addErr := s.store.AddEntity(s.shardId, m.EntityId); addErr != nil {
@@ -445,19 +455,34 @@ func (s *Shard) handleEnvelope(m ShardingEnvelope) {
 		}
 		// Journal path: persist EntityStarted event.
 		s.persistEntityStarted(m.EntityId)
-
-		// LRU eviction: if the active strategy is LRU, check entity limit.
-		// Round-2 session 24 normalises the Pekko-canonical name
-		// "least-recently-used" with the gekka legacy alias
-		// "custom-lru-strategy"; both route to the same eviction loop.
-		if isLRUStrategy(s.settings.PassivationStrategy) {
-			s.checkLRUEviction()
-		}
 	}
 
-	// Update activity timestamp for passivation tracking.
-	if s.settings.PassivationIdleTimeout > 0 {
-		s.lastActivity[m.EntityId] = time.Now()
+	// Activity tracking.  Recorded for every message regardless of which
+	// passivation strategy is active so MRU and LFU tie-breaking have
+	// fresh data; the idle-timeout scan also reads from here.
+	s.lastActivity[m.EntityId] = time.Now()
+
+	// LFU frequency counter is incremented on EVERY message — this is
+	// the access-count signal the eviction loop reads.  LRU and MRU
+	// have no per-message bookkeeping so they skip this step.
+	if isLFUStrategy(s.settings.PassivationStrategy) {
+		s.accessCount[m.EntityId]++
+	}
+
+	// Limit-based eviction only needs to run when the population grew,
+	// i.e. a new entity was just spawned.  Each replacement strategy
+	// owns its own entry-point; the dispatch is on the canonical
+	// strategy name the parser produced.  Round-2 session 24 added LRU;
+	// session 25 adds MRU and LFU.
+	if freshlySpawned {
+		switch {
+		case isLRUStrategy(s.settings.PassivationStrategy):
+			s.checkLRUEviction()
+		case isMRUStrategy(s.settings.PassivationStrategy):
+			s.checkMRUEviction()
+		case isLFUStrategy(s.settings.PassivationStrategy):
+			s.checkLFUEviction()
+		}
 	}
 
 	entity.Tell(userMsg, s.Sender())
@@ -473,6 +498,7 @@ func (s *Shard) handlePassivate(entity actor.Ref) {
 			}
 			delete(s.entities, id)
 			delete(s.lastActivity, id)
+			delete(s.accessCount, id)
 			s.persistEntityStopped(id)
 			s.Log().Info("entity passivated", "entityId", id)
 			return
@@ -489,6 +515,7 @@ func (s *Shard) handleTerminated(terminated actor.Ref) {
 		if ref.Path() == terminated.Path() {
 			delete(s.entities, id)
 			delete(s.lastActivity, id)
+			delete(s.accessCount, id)
 			if s.store != nil {
 				if err := s.store.RemoveEntity(s.shardId, id); err != nil {
 					s.Log().Error("remember-entities: store.RemoveEntity failed",
@@ -503,12 +530,11 @@ func (s *Shard) handleTerminated(terminated actor.Ref) {
 }
 
 // checkLRUEviction evicts the least-recently-used entity when the active
-// entity count exceeds the configured limit (custom-lru-strategy).
+// entity count exceeds the configured limit.  Reachable under both the
+// Pekko-canonical name "least-recently-used" and the legacy gekka alias
+// "custom-lru-strategy".
 func (s *Shard) checkLRUEviction() {
-	limit := s.settings.PassivationActiveEntityLimit
-	if limit <= 0 {
-		limit = 100000
-	}
+	limit := s.passivationLimit()
 	if len(s.entities) <= limit {
 		return
 	}
@@ -526,6 +552,76 @@ func (s *Shard) checkLRUEviction() {
 			s.handlePassivate(ref)
 		}
 	}
+}
+
+// checkMRUEviction evicts the most-recently-used entity when the active
+// entity count exceeds the configured limit (round-2 session 25).
+// Useful for scan-style workloads where freshly-touched entities are
+// unlikely to be re-accessed before colder ones.
+func (s *Shard) checkMRUEviction() {
+	limit := s.passivationLimit()
+	if len(s.entities) <= limit {
+		return
+	}
+	var newestID EntityId
+	var newestTime time.Time
+	for id, t := range s.lastActivity {
+		if newestTime.IsZero() || t.After(newestTime) {
+			newestID = id
+			newestTime = t
+		}
+	}
+	if newestID != "" {
+		if ref, ok := s.entities[newestID]; ok {
+			s.Log().Info("MRU evicting entity", "entityId", newestID, "activeEntities", len(s.entities), "limit", limit)
+			s.handlePassivate(ref)
+		}
+	}
+}
+
+// checkLFUEviction evicts the least-frequently-used entity when the
+// active entity count exceeds the configured limit (round-2 session 25).
+// Compared to LRU it favours retaining hot entities even during brief
+// idle gaps.  Ties on frequency are broken by oldest lastActivity so a
+// burst of equally rare entities does not evict the genuinely-stalest.
+func (s *Shard) checkLFUEviction() {
+	limit := s.passivationLimit()
+	if len(s.entities) <= limit {
+		return
+	}
+	var victim EntityId
+	var minCount uint64
+	var oldestTie time.Time
+	first := true
+	for id := range s.entities {
+		c := s.accessCount[id]
+		t := s.lastActivity[id]
+		switch {
+		case first:
+			victim, minCount, oldestTie, first = id, c, t, false
+		case c < minCount:
+			victim, minCount, oldestTie = id, c, t
+		case c == minCount && (oldestTie.IsZero() || t.Before(oldestTie)):
+			victim, oldestTie = id, t
+		}
+	}
+	if victim != "" {
+		if ref, ok := s.entities[victim]; ok {
+			s.Log().Info("LFU evicting entity", "entityId", victim, "frequency", minCount, "activeEntities", len(s.entities), "limit", limit)
+			s.handlePassivate(ref)
+		}
+	}
+}
+
+// passivationLimit returns the resolved active-entity-limit, falling
+// back to Pekko's 100000 default when the setting is unset.  Centralised
+// so the LRU/MRU/LFU routines stay in lock-step on the default.
+func (s *Shard) passivationLimit() int {
+	limit := s.settings.PassivationActiveEntityLimit
+	if limit <= 0 {
+		limit = 100000
+	}
+	return limit
 }
 
 // checkIdleEntities scans all entities for idle timeout and passivates them.

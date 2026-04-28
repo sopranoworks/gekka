@@ -431,16 +431,98 @@ func TestIsLRUStrategy(t *testing.T) {
 		name string
 		want bool
 	}{
-		{LRUStrategyName, true},        // Pekko canonical
-		{LegacyLRUStrategyName, true},  // gekka legacy alias
+		{LRUStrategyName, true},          // Pekko canonical
+		{LegacyLRUStrategyName, true},    // gekka legacy alias
 		{"default-idle-strategy", false},
-		{"most-recently-used", false},  // session 25
-		{"least-frequently-used", false}, // session 25
+		{MRUStrategyName, false},         // session 25
+		{LFUStrategyName, false},         // session 25
 		{"", false},
 	}
 	for _, c := range cases {
 		if got := isLRUStrategy(c.name); got != c.want {
 			t.Errorf("isLRUStrategy(%q) = %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+// TestMRUPassivation_EvictsFreshestEntity is the round-2 session-25
+// acceptance test for the most-recently-used policy: when the active
+// limit is exceeded, the entity with the newest lastActivity timestamp
+// is the eviction target.  This is the inverse of LRU and is correct
+// for scan/replay workloads.
+func TestMRUPassivation_EvictsFreshestEntity(t *testing.T) {
+	shard, mctx := newTestShard(t, "TestType", "shard-0", ShardSettings{
+		PassivationStrategy:          MRUStrategyName,
+		PassivationActiveEntityLimit: 2,
+	})
+	shard.PreStart()
+
+	sendEnvelope(shard, "e1", "msg1")
+	sendEnvelope(shard, "e2", "msg2")
+	now := time.Now()
+	shard.lastActivity["e1"] = now                  // older
+	shard.lastActivity["e2"] = now.Add(time.Second) // freshest — MRU target
+
+	// 3rd entity → MRU evicts e2 (freshest) once over the limit.
+	sendEnvelope(shard, "e3", "msg3")
+	shard.lastActivity["e3"] = now.Add(2 * time.Second) // make e3 the new freshest after eviction
+
+	if _, ok := shard.entities["e2"]; ok {
+		t.Error("expected e2 (freshest) to be MRU-evicted")
+	}
+	if got, want := len(mctx.stopped), 1; got != want {
+		t.Errorf("expected %d stop calls, got %d", want, got)
+	}
+}
+
+// TestLFUPassivation_EvictsRarestEntity is the round-2 session-25
+// acceptance test for the least-frequently-used policy: when the active
+// limit is exceeded, the entity with the lowest cumulative access count
+// is evicted, ties broken by oldest lastActivity.
+func TestLFUPassivation_EvictsRarestEntity(t *testing.T) {
+	shard, mctx := newTestShard(t, "TestType", "shard-0", ShardSettings{
+		PassivationStrategy:          LFUStrategyName,
+		PassivationActiveEntityLimit: 2,
+	})
+	shard.PreStart()
+
+	// Build access skew before exceeding the limit: e1 sees 5 messages,
+	// e2 sees 1.  Then e3 arrives and has to evict the rarest entity.
+	for range 5 {
+		sendEnvelope(shard, "e1", "msg")
+	}
+	sendEnvelope(shard, "e2", "msg")
+	if got, want := shard.accessCount["e1"], uint64(5); got != want {
+		t.Fatalf("setup: accessCount[e1] = %d, want %d", got, want)
+	}
+	if got, want := shard.accessCount["e2"], uint64(1); got != want {
+		t.Fatalf("setup: accessCount[e2] = %d, want %d", got, want)
+	}
+
+	// Activate e3 → over the active-entity-limit (2), so the LFU loop
+	// must evict the entity with the lowest count.  That's e2.
+	sendEnvelope(shard, "e3", "msg")
+	if _, ok := shard.entities["e2"]; ok {
+		t.Error("expected e2 (lowest frequency) to be LFU-evicted")
+	}
+	if _, ok := shard.entities["e1"]; !ok {
+		t.Error("expected e1 (highest frequency) to survive LFU eviction")
+	}
+	if got, want := len(mctx.stopped), 1; got != want {
+		t.Errorf("expected %d stop calls, got %d", want, got)
+	}
+}
+
+// TestPassivation_NonLRUStrategiesIgnoreLastActivityWhenIdle ensures
+// MRU/LFU don't accidentally inherit the LRU eviction loop — a
+// regression of the dispatch switch would silently route their evicts
+// through the LRU comparator.
+func TestPassivation_StrategyDispatchIsolation(t *testing.T) {
+	for _, strategy := range []string{MRUStrategyName, LFUStrategyName} {
+		t.Run(strategy, func(t *testing.T) {
+			if isLRUStrategy(strategy) {
+				t.Errorf("isLRUStrategy(%q) returned true; MRU/LFU must not match", strategy)
+			}
+		})
 	}
 }

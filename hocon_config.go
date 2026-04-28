@@ -447,16 +447,38 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		}
 		nodeCfg.Sharding.PassivationStrategy = raw
 	}
-	// Round-2 session 24: pekko.cluster.sharding.passivation.least-recently-used-strategy.*
-	// Accept the legacy custom-lru-strategy.active-entity-limit path too,
-	// so existing configs keep working without edits.
-	if v, err := cfg.GetInt(shardingPrefix + ".passivation.least-recently-used-strategy.active-entity-limit"); err == nil {
+	// Round-2 session 24/25: read active-entity-limit from whichever
+	// strategy block is present.  Priority: the block whose name matches
+	// the active strategy → other strategy blocks → the legacy gekka
+	// custom-lru-strategy path.  This way an operator who only sets the
+	// limit under their chosen strategy still gets it applied, but a
+	// misconfigured config (limit under a non-active strategy) doesn't
+	// silently take precedence.
+	limitFromBlock := func(strategyKey string) (int, bool) {
+		v, err := cfg.GetInt(shardingPrefix + ".passivation." + strategyKey + ".active-entity-limit")
+		return v, err == nil
+	}
+	activeStrategyKey := nodeCfg.Sharding.PassivationStrategy + "-strategy"
+	if v, ok := limitFromBlock(activeStrategyKey); ok {
+		nodeCfg.Sharding.PassivationActiveEntityLimit = v
+	} else if v, ok := limitFromBlock("least-recently-used-strategy"); ok {
+		nodeCfg.Sharding.PassivationActiveEntityLimit = v
+	} else if v, ok := limitFromBlock("most-recently-used-strategy"); ok {
+		nodeCfg.Sharding.PassivationActiveEntityLimit = v
+	} else if v, ok := limitFromBlock("least-frequently-used-strategy"); ok {
 		nodeCfg.Sharding.PassivationActiveEntityLimit = v
 	} else if v, err := cfg.GetInt(shardingPrefix + ".passivation.custom-lru-strategy.active-entity-limit"); err == nil {
 		nodeCfg.Sharding.PassivationActiveEntityLimit = v
 	}
 	if v, err := cfg.GetString(shardingPrefix + ".passivation.least-recently-used-strategy.replacement.policy"); err == nil {
 		nodeCfg.Sharding.PassivationReplacementPolicy = strings.TrimSpace(v)
+	}
+	// Round-2 session 25: LFU dynamic-aging knob.  Parsed but not yet
+	// consumed by the eviction loop; sessions 26+ will start aging the
+	// frequency counters once we have a workload to calibrate against.
+	if v, err := cfg.GetString(shardingPrefix + ".passivation.least-frequently-used-strategy.dynamic-aging"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		nodeCfg.Sharding.PassivationLFUDynamicAging = v == "on" || v == "true"
 	}
 	if v, err := cfg.GetString(shardingPrefix + ".rebalance-interval"); err == nil {
 		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {

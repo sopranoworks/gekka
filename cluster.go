@@ -1440,6 +1440,13 @@ type ShardingConfig struct {
 	// is least-recently-used).
 	PassivationReplacementPolicy string
 
+	// PassivationLFUDynamicAging mirrors Pekko's
+	// pekko.cluster.sharding.passivation.least-frequently-used-strategy.dynamic-aging.
+	// Round-2 session 25 parses the flag for forward-compat; the actual
+	// counter-aging loop is added in a later session once a calibration
+	// workload exists.  Default: false.
+	PassivationLFUDynamicAging bool
+
 	// AdaptiveRebalancing, when enabled, rebalances shards based on real-time
 	// node metrics (CPU, Memory, Mailbox size).
 	AdaptiveRebalancing AdaptiveRebalancingConfig

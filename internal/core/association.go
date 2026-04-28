@@ -1544,11 +1544,23 @@ func (assoc *GekkaAssociation) Process(ctx context.Context, protocol string) err
 	if assoc.remote != nil {
 		remoteUid = assoc.remote.GetUid()
 	}
-	maxFrame := assoc.nodeMgr.MaxFrameSize
+	maxFrame := assoc.effectiveStreamFrameSizeCap()
 	if assoc.role == OUTBOUND {
 		return TcpArteryOutboundHandler(ctx, assoc.conn, dispatch, assoc.nodeMgr.compressionMgr, remoteUid, assoc.streamId, protocol, maxFrame)
 	}
 	return TcpArteryHandlerWithCallback(ctx, assoc.conn, dispatch, assoc.nodeMgr.compressionMgr, remoteUid, assoc.streamId, maxFrame)
+}
+
+// effectiveStreamFrameSizeCap returns the maximum-frame-size used by the read
+// loop for this association's stream. Round-2 session 30 routes streamId=3
+// onto the dedicated maximum-large-frame-size cap (Pekko default 2 MiB) so
+// large-message frames are accepted; streams 1/2 keep the ordinary
+// maximum-frame-size cap (Pekko default 256 KiB).
+func (assoc *GekkaAssociation) effectiveStreamFrameSizeCap() int {
+	if assoc.streamId == AeronStreamLarge {
+		return assoc.nodeMgr.EffectiveMaximumLargeFrameSize()
+	}
+	return assoc.nodeMgr.MaxFrameSize
 }
 
 func (assoc *GekkaAssociation) dispatch(ctx context.Context, meta *ArteryMetadata) error {

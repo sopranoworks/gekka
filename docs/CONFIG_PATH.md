@@ -54,7 +54,7 @@ Legend:
 | `pekko.remote.artery.large-message-destinations` | `[]` | ✅ | Round-2 session 29 — `LargeMessageRouter` glob-matches recipient paths; matching outbound user messages route via `udpLargeOutbox` onto Aeron stream 3 (`AeronStreamLarge`). TCP separate stream-3 connection deferred to session 30; until then matching TCP recipients fall back to stream 1 |
 | `pekko.remote.artery.advanced.maximum-frame-size` | `256 KiB` | ✅ | Configurable via HOCON |
 | `pekko.remote.artery.advanced.buffer-pool-size` | `128` | ✅ | Recorded on NodeManager (`EffectiveBufferPoolSize`) for future receive-buffer-pool consumer |
-| `pekko.remote.artery.advanced.maximum-large-frame-size` | `2 MiB` | ✅ | Recorded on NodeManager (`EffectiveMaximumLargeFrameSize`) for the large-message stream |
+| `pekko.remote.artery.advanced.maximum-large-frame-size` | `2 MiB` | ✅ | Round-2 session 30 — applied to the inbound read loop when `assoc.streamId == AeronStreamLarge` (stream 3) via `effectiveStreamFrameSizeCap`; streams 1/2 keep `maximum-frame-size` |
 | `pekko.remote.artery.advanced.large-buffer-pool-size` | `32` | ✅ | Recorded on NodeManager (`EffectiveLargeBufferPoolSize`) for future large-stream buffer-pool consumer |
 | `pekko.remote.artery.advanced.outbound-large-message-queue-size` | `256` | ✅ | Recorded on NodeManager (`EffectiveOutboundLargeMessageQueueSize`) for the large-stream outbox |
 | `pekko.remote.artery.advanced.compression.actor-refs.max` | `256` | ✅ | Cap enforced by `CompressionTableManager.UpdateActorRefTable` — oversize advertisements are rejected |

@@ -749,6 +749,46 @@ type DistributedDataConfig struct {
 	// Corresponds to pekko.cluster.distributed-data.serializer-cache-time-to-live.
 	// Default: 10s. Zero disables caching.
 	SerializerCacheTimeToLive time.Duration
+
+	// DurableEnabled toggles the on-disk durable backend. Pekko semantics:
+	// any non-empty `durable.keys` list activates the durable path; gekka
+	// also accepts an explicit `durable.enabled = on/off` for tests that
+	// need to instantiate the store with no key globs configured yet.
+	// Corresponds to pekko.cluster.distributed-data.durable.enabled.
+	// Default: false (also false when DurableKeys is empty).
+	DurableEnabled bool
+
+	// DurableKeys is the prefix-glob list from
+	// pekko.cluster.distributed-data.durable.keys.  Only CRDT keys matching
+	// one of these patterns are persisted via the DurableStore.  A trailing
+	// "*" expands to a prefix match; everything else is exact.
+	// Default: [] (no keys are durable).
+	DurableKeys []string
+
+	// DurablePruningMarkerTimeToLive bounds how long a pruning marker is
+	// retained for *durable* keys.  Distinct from the non-durable marker
+	// TTL because durable replicas can rejoin after a long offline window
+	// and must not silently merge stale state past this horizon.
+	// Corresponds to pekko.cluster.distributed-data.durable.pruning-marker-time-to-live.
+	// Default: 10 days (Pekko parity).
+	DurablePruningMarkerTimeToLive time.Duration
+
+	// DurableLmdbDir is the directory for the on-disk store. Mapped 1:1 to
+	// BoltDurableStoreOptions.Dir.  Corresponds to
+	// pekko.cluster.distributed-data.durable.lmdb.dir.  Default: "ddata".
+	DurableLmdbDir string
+
+	// DurableLmdbMapSize is the hard cap on the file size in bytes. Mapped
+	// 1:1 to BoltDurableStoreOptions.MapSize.  Corresponds to
+	// pekko.cluster.distributed-data.durable.lmdb.map-size.  Default: 100 MiB.
+	DurableLmdbMapSize int64
+
+	// DurableLmdbWriteBehindInterval, when > 0, batches Store/Delete calls
+	// in memory and flushes them on a timer. Mapped 1:1 to
+	// BoltDurableStoreOptions.WriteBehindInterval.  Corresponds to
+	// pekko.cluster.distributed-data.durable.lmdb.write-behind-interval.
+	// Default: 0 (synchronous; matches Pekko's "off").
+	DurableLmdbWriteBehindInterval time.Duration
 }
 
 // CoordinationLeaseConfig holds defaults for the pekko.coordination.lease.*
@@ -1723,6 +1763,7 @@ type Cluster struct {
 	cm         *gcluster.ClusterManager
 	router     *actor.Router
 	repl       *ddata.Replicator
+	durable    ddata.DurableStore // optional: bbolt-backed store, closed during shutdown
 	mg         *gcluster.MetricsGossip
 	server     *core.TcpServer
 	udpHandler *core.UdpArteryHandler // non-nil when transport == "aeron-udp"
@@ -2334,6 +2375,30 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 			repl.SerializerCacheTimeToLive = cfg.DistributedData.SerializerCacheTimeToLive
 		}
 
+		// ── Durable backend (round-2 session 23) ──
+		// When the operator either sets a non-empty `durable.keys` list or
+		// flips `durable.enabled = on` in HOCON, open a bbolt-backed
+		// DurableStore at `durable.lmdb.dir` and attach it to the replicator.
+		// Failure to open the store is logged but not fatal — gossip can
+		// still proceed in volatile mode.
+		if cfg.DistributedData.DurableEnabled {
+			repl.DurableEnabled = true
+			repl.DurableKeys = append(repl.DurableKeys[:0], cfg.DistributedData.DurableKeys...)
+			store, derr := ddata.OpenBoltDurableStore(ddata.BoltDurableStoreOptions{
+				Dir:                 cfg.DistributedData.DurableLmdbDir,
+				MapSize:             cfg.DistributedData.DurableLmdbMapSize,
+				WriteBehindInterval: cfg.DistributedData.DurableLmdbWriteBehindInterval,
+			})
+			if derr != nil {
+				slog.Warn("gekka: durable DData backend disabled", "err", derr,
+					"dir", cfg.DistributedData.DurableLmdbDir)
+				repl.DurableEnabled = false
+			} else {
+				repl.DurableStore = store
+				cluster.durable = store
+			}
+		}
+
 		// Wire pruning manager. Use the DData-configured role (falls back to
 		// cluster role if DData-role is empty) to decide oldness.
 		pruningRole := cfg.DistributedData.Role
@@ -2358,7 +2423,16 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 				return fmt.Sprintf("%s:%d", a.GetHostname(), a.GetPort())
 			},
 		)
-		pruningMgr.SetPruningMarkerTimeToLive(cfg.DistributedData.PruningMarkerTimeToLive)
+		// When durable storage is active, marker TTL must outlive the
+		// durable horizon — durable replicas may rejoin after the
+		// non-durable TTL has elapsed and would otherwise resurrect
+		// stale state.  Pick the larger of the two configured TTLs.
+		markerTTL := cfg.DistributedData.PruningMarkerTimeToLive
+		if cfg.DistributedData.DurableEnabled &&
+			cfg.DistributedData.DurablePruningMarkerTimeToLive > markerTTL {
+			markerTTL = cfg.DistributedData.DurablePruningMarkerTimeToLive
+		}
+		pruningMgr.SetPruningMarkerTimeToLive(markerTTL)
 		repl.SetPruningManager(pruningMgr)
 
 		repl.Start(cluster.ctx)
@@ -3626,6 +3700,9 @@ func (c *Cluster) Shutdown() error {
 	atomic.StoreInt32(&c.shuttingDown, 1)
 	if c.cancel != nil {
 		c.cancel()
+	}
+	if c.durable != nil {
+		_ = c.durable.Close()
 	}
 	if c.server != nil {
 		return c.server.Shutdown()

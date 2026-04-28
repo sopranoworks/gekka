@@ -1542,6 +1542,15 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 	nodeCfg.DistributedData.LogDataSizeExceeding = 10 * 1024
 	nodeCfg.DistributedData.RecoveryTimeout = 10 * time.Second
 	nodeCfg.DistributedData.SerializerCacheTimeToLive = 10 * time.Second
+	// Round-2 session 23: durable storage defaults match Pekko's
+	// pekko.cluster.distributed-data.durable.* reference values.  Keys is
+	// empty (no CRDTs persisted by default); when populated the DurableEnabled
+	// flag is implicitly set so a HOCON-only deployment lights up the bbolt
+	// backend without further wiring.
+	nodeCfg.DistributedData.DurablePruningMarkerTimeToLive = 10 * 24 * time.Hour
+	nodeCfg.DistributedData.DurableLmdbDir = "ddata"
+	nodeCfg.DistributedData.DurableLmdbMapSize = 100 * 1024 * 1024
+	nodeCfg.DistributedData.DurableLmdbWriteBehindInterval = 0
 	ddataPrefixes := []string{prefix + ".cluster.distributed-data", "gekka.cluster.distributed-data"}
 	for _, ddataPrefix := range ddataPrefixes {
 		if v, err := cfg.GetString(ddataPrefix + ".enabled"); err == nil {
@@ -1616,6 +1625,49 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		if v, err := cfg.GetString(ddataPrefix + ".serializer-cache-time-to-live"); err == nil {
 			if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
 				nodeCfg.DistributedData.SerializerCacheTimeToLive = d
+			}
+		}
+
+		// Round-2 session 23: pekko.cluster.distributed-data.durable.*
+		// Pekko's parity rule is "non-empty keys ⇒ durable enabled" — we
+		// honor that and additionally accept an explicit `enabled` toggle
+		// so empty-keys configs can still exercise the durable path.
+		durablePrefix := ddataPrefix + ".durable"
+		if v, err := cfg.GetString(durablePrefix + ".enabled"); err == nil {
+			v = strings.ToLower(strings.TrimSpace(v))
+			nodeCfg.DistributedData.DurableEnabled = v == "on" || v == "true"
+		}
+		if keys := readDurableKeys(cfg, durablePrefix+".keys"); len(keys) > 0 {
+			nodeCfg.DistributedData.DurableKeys = keys
+			nodeCfg.DistributedData.DurableEnabled = true
+		}
+		if v, err := cfg.GetString(durablePrefix + ".pruning-marker-time-to-live"); err == nil {
+			if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+				nodeCfg.DistributedData.DurablePruningMarkerTimeToLive = d
+			}
+		}
+		if v, err := cfg.GetString(durablePrefix + ".lmdb.dir"); err == nil {
+			if t := strings.TrimSpace(v); t != "" {
+				nodeCfg.DistributedData.DurableLmdbDir = t
+			}
+		}
+		if v, err := cfg.GetString(durablePrefix + ".lmdb.map-size"); err == nil {
+			trimmed := strings.TrimSpace(v)
+			if size, parseErr := parseHOCONByteSize(trimmed); parseErr == nil {
+				nodeCfg.DistributedData.DurableLmdbMapSize = int64(size)
+			}
+		} else if v, err := cfg.GetInt(durablePrefix + ".lmdb.map-size"); err == nil {
+			nodeCfg.DistributedData.DurableLmdbMapSize = int64(v)
+		}
+		if v, err := cfg.GetString(durablePrefix + ".lmdb.write-behind-interval"); err == nil {
+			trimmed := strings.ToLower(strings.TrimSpace(v))
+			switch trimmed {
+			case "off", "false":
+				nodeCfg.DistributedData.DurableLmdbWriteBehindInterval = 0
+			default:
+				if d, parseErr := parseHOCONDuration(trimmed); parseErr == nil {
+					nodeCfg.DistributedData.DurableLmdbWriteBehindInterval = d
+				}
 			}
 		}
 	}
@@ -1708,23 +1760,76 @@ func parseHOCONByteSize(s string) (int, error) {
 	return int(num * multiplier), nil
 }
 
+// readDurableKeys extracts a string list at the given HOCON path. The
+// underlying gekka-config library does not expose a list accessor, so we
+// reach for Unmarshal with a struct tag — same pattern used for sharding's
+// durable.keys.  An empty slice (or any read error) returns nil so callers
+// can use a single len() check.
+func readDurableKeys(cfg *hocon.Config, path string) []string {
+	var holder struct {
+		Keys []string `hocon:"keys"`
+	}
+	sub, err := cfg.GetConfig(strings.TrimSuffix(path, ".keys"))
+	if err != nil {
+		return nil
+	}
+	if err := sub.Unmarshal(&holder); err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(holder.Keys))
+	for _, k := range holder.Keys {
+		if t := strings.TrimSpace(k); t != "" {
+			out = append(out, t)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // parseHOCONDuration parses a Pekko/HOCON duration string such as "20s", "5 seconds",
 // "500ms", "1 minute" into a time.Duration. Returns 0, error on parse failure.
 func parseHOCONDuration(s string) (time.Duration, error) {
 	s = strings.ToLower(strings.TrimSpace(s))
 	// Handle unit aliases: "seconds"→"s", "minutes"→"m", etc.
+	// Day units are converted to hours up front because Go's
+	// time.ParseDuration does not recognise "d" (only h/m/s/ms/...).
 	replacer := strings.NewReplacer(
 		" seconds", "s", " second", "s", "seconds", "s", "second", "s",
 		" minutes", "m", " minute", "m", "minutes", "m", "minute", "m",
 		" milliseconds", "ms", " millisecond", "ms", "milliseconds", "ms", "millisecond", "ms",
 		" hours", "h", " hour", "h", "hours", "h", "hour", "h",
+		" days", "d", " day", "d", "days", "d", "day", "d",
 	)
 	normalized := strings.TrimSpace(replacer.Replace(s))
+	if days, ok := tryParseDays(normalized); ok {
+		return days, nil
+	}
 	d, err := time.ParseDuration(normalized)
 	if err != nil {
 		return 0, fmt.Errorf("parseHOCONDuration: cannot parse %q: %w", s, err)
 	}
 	return d, nil
+}
+
+// tryParseDays handles the "<n>d" form that Pekko configs frequently use
+// (durable.pruning-marker-time-to-live = 10d).  Returns ok=false when the
+// input is not a pure days-value so the caller can fall back to
+// time.ParseDuration for compound forms.
+func tryParseDays(s string) (time.Duration, bool) {
+	if !strings.HasSuffix(s, "d") {
+		return 0, false
+	}
+	num := strings.TrimSpace(strings.TrimSuffix(s, "d"))
+	if num == "" {
+		return 0, false
+	}
+	n, err := strconv.ParseFloat(num, 64)
+	if err != nil {
+		return 0, false
+	}
+	return time.Duration(n * float64(24*time.Hour)), true
 }
 
 // detectProtocol returns "pekko" or "akka" by checking which top-level key

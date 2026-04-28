@@ -4065,3 +4065,163 @@ pekko {
 		t.Fatal("Acquire should succeed via the resolved memory provider")
 	}
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Round-2 session 23: pekko.cluster.distributed-data.durable.* wiring
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestHOCON_DistributedDataDurable_Defaults locks down the Pekko-parity
+// defaults applied when no `durable.*` keys appear in the parsed config.
+// A consumer reading cfg.DistributedData should see the same values that
+// reference.conf publishes — without that guarantee, the on-disk path
+// would silently drift between deployments.
+func TestHOCON_DistributedDataDurable_Defaults(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster.seed-nodes = []
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	d := cfg.DistributedData
+	if d.DurableEnabled {
+		t.Error("DurableEnabled default = true, want false")
+	}
+	if len(d.DurableKeys) != 0 {
+		t.Errorf("DurableKeys default = %v, want empty", d.DurableKeys)
+	}
+	if got, want := d.DurablePruningMarkerTimeToLive, 10*24*time.Hour; got != want {
+		t.Errorf("DurablePruningMarkerTimeToLive default = %v, want %v", got, want)
+	}
+	if d.DurableLmdbDir != "ddata" {
+		t.Errorf("DurableLmdbDir default = %q, want ddata", d.DurableLmdbDir)
+	}
+	if d.DurableLmdbMapSize != 100*1024*1024 {
+		t.Errorf("DurableLmdbMapSize default = %d, want 100 MiB", d.DurableLmdbMapSize)
+	}
+	if d.DurableLmdbWriteBehindInterval != 0 {
+		t.Errorf("DurableLmdbWriteBehindInterval default = %v, want 0 (off)", d.DurableLmdbWriteBehindInterval)
+	}
+}
+
+// TestHOCON_DistributedDataDurable_KeysImplyEnabled verifies the Pekko
+// parity rule: a non-empty `durable.keys` list activates the durable path
+// without requiring a separate `durable.enabled = on`.  Operators porting
+// Pekko configs should not have to add a gekka-only flag.
+func TestHOCON_DistributedDataDurable_KeysImplyEnabled(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    distributed-data.durable.keys = ["shard-*", "exact-key"]
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	d := cfg.DistributedData
+	if !d.DurableEnabled {
+		t.Error("DurableEnabled should be implied by non-empty keys")
+	}
+	want := []string{"shard-*", "exact-key"}
+	if !reflect.DeepEqual(d.DurableKeys, want) {
+		t.Errorf("DurableKeys = %v, want %v", d.DurableKeys, want)
+	}
+}
+
+// TestHOCON_DistributedDataDurable_AllOverrides verifies every durable.*
+// key reaches its target field. This is the round-2 session-23 acceptance
+// gate: HOCON override per item, asserting the non-default value lands on
+// the consuming config struct.
+func TestHOCON_DistributedDataDurable_AllOverrides(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    distributed-data.durable {
+      enabled = on
+      keys = ["a-*", "b"]
+      pruning-marker-time-to-live = 3d
+      lmdb {
+        dir = "/var/data/ddata"
+        map-size = "256 MiB"
+        write-behind-interval = 200ms
+      }
+    }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	d := cfg.DistributedData
+	if !d.DurableEnabled {
+		t.Error("DurableEnabled should be true")
+	}
+	if got, want := d.DurableKeys, []string{"a-*", "b"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("DurableKeys = %v, want %v", got, want)
+	}
+	if got, want := d.DurablePruningMarkerTimeToLive, 3*24*time.Hour; got != want {
+		t.Errorf("DurablePruningMarkerTimeToLive = %v, want %v", got, want)
+	}
+	if d.DurableLmdbDir != "/var/data/ddata" {
+		t.Errorf("DurableLmdbDir = %q, want /var/data/ddata", d.DurableLmdbDir)
+	}
+	if d.DurableLmdbMapSize != 256*1024*1024 {
+		t.Errorf("DurableLmdbMapSize = %d, want 256 MiB", d.DurableLmdbMapSize)
+	}
+	if got, want := d.DurableLmdbWriteBehindInterval, 200*time.Millisecond; got != want {
+		t.Errorf("DurableLmdbWriteBehindInterval = %v, want %v", got, want)
+	}
+}
+
+// TestHOCON_DistributedDataDurable_WriteBehindOff confirms the Pekko-style
+// "off" literal disables write-behind. parseHOCONDuration cannot handle
+// "off" on its own — the loader must explicitly map it to zero.
+func TestHOCON_DistributedDataDurable_WriteBehindOff(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    distributed-data.durable.lmdb.write-behind-interval = off
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got := cfg.DistributedData.DurableLmdbWriteBehindInterval; got != 0 {
+		t.Errorf("DurableLmdbWriteBehindInterval = %v, want 0", got)
+	}
+}
+
+// TestHOCON_DistributedDataDurable_ExplicitEnabledNoKeys covers the gekka
+// extension: `enabled = on` activates the durable path even with no key
+// patterns yet.  Useful for operators that bring up the bbolt store
+// before populating the key globs (e.g. via management API).
+func TestHOCON_DistributedDataDurable_ExplicitEnabledNoKeys(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    distributed-data.durable.enabled = on
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if !cfg.DistributedData.DurableEnabled {
+		t.Error("DurableEnabled = false, want true (explicit enable)")
+	}
+	if len(cfg.DistributedData.DurableKeys) != 0 {
+		t.Errorf("DurableKeys = %v, want empty", cfg.DistributedData.DurableKeys)
+	}
+}

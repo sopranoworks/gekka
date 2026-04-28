@@ -10,6 +10,11 @@ package cluster
 
 import (
 	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	icluster "github.com/sopranoworks/gekka/internal/cluster"
 )
 
 // Round-2 session 27 — F4 Downing: SBR registers as the default
@@ -18,16 +23,13 @@ import (
 // DowningProvider interface so cluster.go can resolve "split-brain-
 // resolver" by name and call .Start uniformly across providers.
 //
-// We intentionally keep SBRManager construction outside this adapter:
-// the gekka.NewCluster wiring already builds the SBRManager with
-// lease-majority defaults filled in, and rebuilding it here would
-// duplicate that path.  Instead the wiring code constructs the
-// manager (or accepts a nil) and hands it to NewSBRDowningProvider.
-//
-// Session 28 will route ALL downing through provider.Start; for S27
-// the cluster_manager call site still launches the manager directly
-// in addition to registering it here, so the two paths run side by
-// side as a safety net while the interface settles.
+// Round-2 session 28 — consolidation: ResolveSBRConfigDefaults +
+// BuildSBRDowningProvider were lifted out of gekka.NewCluster so the
+// lease-majority sbrCfg-defaulting and adapter-wrapping live next to
+// the SBR adapter itself.  gekka.NewCluster now hands raw config
+// values to BuildSBRDowningProvider and gets back a ready-to-register
+// provider — eliminating the only remaining direct SBRManager call
+// site from the top-level wiring.
 
 // SBRDowningProvider adapts SBRManager to the DowningProvider contract.
 // Embeds nothing; only holds a pointer to the manager so the adapter
@@ -71,3 +73,81 @@ func (p *SBRDowningProvider) Start(ctx context.Context) error {
 // that need to access SBR-specific knobs (e.g. SetInfraProvider).
 // Returns nil when the provider was constructed with a nil manager.
 func (p *SBRDowningProvider) Manager() *SBRManager { return p.mgr }
+
+// SBRDefaults captures the values gekka.NewCluster used to fill
+// lease-majority blank fields on SBRConfig.  Round-2 session 28 lifts
+// those defaults out of cluster.go and into ResolveSBRConfigDefaults
+// so the only remaining SBRManager construction site is in this
+// package.  Empty fields fall back to Pekko reference defaults
+// (LeaseDuration = 120s, RetryInterval = 12s).
+type SBRDefaults struct {
+	// LeaseManager is the registry the lease-majority strategy
+	// resolves provider names against.  Defaults to nil; the caller
+	// must supply gekka.LeaseManager() when lease-majority is in play.
+	LeaseManager *icluster.LeaseManager
+	// LeaseProviderName is the registered LeaseProvider name to use
+	// when SBRConfig.LeaseImplementation is empty.  Typically
+	// lease.MemoryProviderName.
+	LeaseProviderName string
+	// SystemName / Host / Port build the conventional default
+	// LeaseName ("<system>-pekko-sbr") and OwnerName ("host:port").
+	SystemName string
+	Host       string
+	Port       uint32
+	// LeaseDuration / RetryInterval default to the values pulled from
+	// pekko.coordination.lease.heartbeat-{timeout,interval} when the
+	// SBRConfig.LeaseSettings fields are zero.
+	LeaseDuration time.Duration
+	RetryInterval time.Duration
+}
+
+// ResolveSBRConfigDefaults fills the lease-majority blanks on cfg
+// using d when the active strategy is "lease-majority".  Pure
+// function: returns a new SBRConfig and never mutates the caller's
+// copy.  No-op when the active strategy isn't lease-majority so non-
+// lease strategies keep flowing through the same code path.
+func ResolveSBRConfigDefaults(cfg SBRConfig, d SBRDefaults) SBRConfig {
+	if !strings.EqualFold(strings.TrimSpace(cfg.ActiveStrategy), "lease-majority") {
+		return cfg
+	}
+	if cfg.LeaseImplementation == "" {
+		cfg.LeaseImplementation = d.LeaseProviderName
+	}
+	if cfg.LeaseManager == nil {
+		cfg.LeaseManager = d.LeaseManager
+	}
+	if cfg.LeaseSettings.LeaseName == "" && d.SystemName != "" {
+		cfg.LeaseSettings.LeaseName = d.SystemName + "-pekko-sbr"
+	}
+	if cfg.LeaseSettings.OwnerName == "" && d.Host != "" {
+		cfg.LeaseSettings.OwnerName = fmt.Sprintf("%s:%d", d.Host, d.Port)
+	}
+	if cfg.LeaseSettings.LeaseDuration == 0 {
+		dur := d.LeaseDuration
+		if dur == 0 {
+			dur = 120 * time.Second
+		}
+		cfg.LeaseSettings.LeaseDuration = dur
+	}
+	if cfg.LeaseSettings.RetryInterval == 0 {
+		ri := d.RetryInterval
+		if ri == 0 {
+			ri = 12 * time.Second
+		}
+		cfg.LeaseSettings.RetryInterval = ri
+	}
+	return cfg
+}
+
+// BuildSBRDowningProvider is the one-shot factory gekka.NewCluster
+// calls to obtain a ready-to-register downing provider.  It applies
+// lease-majority defaults (via ResolveSBRConfigDefaults), constructs
+// the underlying SBRManager (which itself returns nil when SBR is
+// disabled), and wraps the result in SBRDowningProvider.  Round-2
+// session 28: this consolidates the two-step "fill defaults +
+// construct manager + wrap adapter" dance previously inlined in
+// cluster.go.
+func BuildSBRDowningProvider(cm *ClusterManager, cfg SBRConfig, d SBRDefaults) *SBRDowningProvider {
+	cfg = ResolveSBRConfigDefaults(cfg, d)
+	return NewSBRDowningProvider(NewSBRManager(cm, cfg))
+}

@@ -263,3 +263,48 @@ go test -v -tags integration -run 'TestSBR' -timeout 300s .
 ```
 
 Expected runtime: ~30–60 s per test (FD detection ≈ 3 s + stable-after ≈ 2 s + gossip convergence).
+
+## Downing Provider Plugin (Round-2 sessions 27 + 28)
+
+Split Brain Resolver is registered as the default `DowningProvider` so it
+participates in the same plugin-style lookup that future custom downing
+implementations will use. The wiring lives in `cluster/downing.go` and
+`cluster/downing_sbr.go`.
+
+| Concept | Type | Notes |
+|---|---|---|
+| `cluster.DowningProvider` | interface | `Name() string` + `Start(ctx) error` |
+| `cluster.DowningProviderRegistry` | struct | Per-cluster lookup keyed by short name |
+| `cluster.SBRDowningProvider` | struct | Adapter that wraps `SBRManager` |
+| `cluster.BuildSBRDowningProvider` | factory | Applies lease-majority defaults via `ResolveSBRConfigDefaults` and constructs the SBR adapter |
+| `gekka.Cluster.DowningProvider()` | accessor | Resolved active provider for the cluster |
+| `gekka.Cluster.DowningProviders()` | accessor | The full registry |
+
+### HOCON Configuration
+
+Pick the provider via the standard Pekko key. Pekko / Akka FQCNs ending in
+`SplitBrainResolverProvider` are normalised to gekka's canonical short
+name `"split-brain-resolver"` at parse time. Empty falls back to SBR.
+
+```hocon
+pekko.cluster.downing-provider-class = "org.apache.pekko.cluster.sbr.SplitBrainResolverProvider"
+# equivalent:
+pekko.cluster.downing-provider-class = "split-brain-resolver"
+# also equivalent (default fallback):
+pekko.cluster.downing-provider-class = ""
+```
+
+Unknown short names are preserved verbatim and looked up in the registry;
+on a miss, gekka logs a warning and falls back to SBR. To register your
+own provider, implement `cluster.DowningProvider` and call
+`cluster.Cluster.DowningProviders().Register(p)` before `gekka.NewCluster`
+finishes wiring (i.e. via `ClusterConfig`'s pre-init hooks).
+
+### Strategy Coverage
+
+All five Pekko-supported SBR strategies — `keep-majority`, `keep-oldest`,
+`static-quorum`, `keep-referee`, `lease-majority`, plus `down-all` — are
+selected by `pekko.cluster.split-brain-resolver.active-strategy` and
+reach the same `SBRDowningProvider` through `BuildSBRDowningProvider`.
+See `cluster/downing_test.go::TestBuildSBRDowningProvider_AllStrategiesResolveByName`
+for the acceptance matrix.

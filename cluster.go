@@ -2589,51 +2589,23 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	}
 
 	// ── Split Brain Resolver ─────────────────────────────────────────────────
-	// Start the SBR manager goroutine when a strategy is configured.  When the
-	// active strategy is "lease-majority" the LeaseManager and LeaseSettings
-	// are defaulted from cfg.CoordinationLease so that a HOCON-only deployment
-	// (no Go-side wiring) lights up the in-memory reference provider.
-	sbrCfg := cfg.SBR
-	if strings.EqualFold(strings.TrimSpace(sbrCfg.ActiveStrategy), "lease-majority") {
-		if sbrCfg.LeaseImplementation == "" {
-			sbrCfg.LeaseImplementation = lease.MemoryProviderName
-		}
-		if sbrCfg.LeaseManager == nil {
-			sbrCfg.LeaseManager = cluster.LeaseManager()
-		}
-		if sbrCfg.LeaseSettings.LeaseName == "" {
-			sbrCfg.LeaseSettings.LeaseName = cfg.SystemName + "-pekko-sbr"
-		}
-		if sbrCfg.LeaseSettings.OwnerName == "" {
-			sbrCfg.LeaseSettings.OwnerName = fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
-		}
-		if sbrCfg.LeaseSettings.LeaseDuration == 0 {
-			d := cfg.CoordinationLease.HeartbeatTimeout
-			if d == 0 {
-				d = 120 * time.Second
-			}
-			sbrCfg.LeaseSettings.LeaseDuration = d
-		}
-		if sbrCfg.LeaseSettings.RetryInterval == 0 {
-			d := cfg.CoordinationLease.HeartbeatInterval
-			if d == 0 {
-				d = 12 * time.Second
-			}
-			sbrCfg.LeaseSettings.RetryInterval = d
-		}
-	}
-	// Round-2 session 27 — F4 Downing: register the bundled SBR provider in
-	// the cluster's DowningProviderRegistry, resolve the operator's
-	// configured `downing-provider-class` (HOCON-normalised to a short
-	// name), and run the resolved provider's decision loop.
-	//
-	// SBRManager construction stays here so the lease-majority defaults
-	// applied above continue to flow into the manager unchanged; the
-	// adapter just exposes that manager through the DowningProvider
-	// interface so the lookup-by-name path is consistent across providers.
+	// Round-2 session 28 — F4 Downing consolidation: lease-majority defaults
+	// + SBRManager construction + DowningProvider wrapping all live behind
+	// gcluster.BuildSBRDowningProvider, so this call site no longer holds a
+	// direct reference to SBRManager.  ResolveSBRConfigDefaults inside the
+	// factory turns into a no-op for non-lease strategies, preserving the
+	// pre-S28 behaviour for keep-majority/keep-oldest/static-quorum/etc.
 	cluster.downingProviders = gcluster.NewDowningProviderRegistry()
-	sbrMgr := gcluster.NewSBRManager(cm, sbrCfg)
-	cluster.downingProviders.Register(gcluster.NewSBRDowningProvider(sbrMgr))
+	sbrProvider := gcluster.BuildSBRDowningProvider(cm, cfg.SBR, gcluster.SBRDefaults{
+		LeaseManager:      cluster.LeaseManager(),
+		LeaseProviderName: lease.MemoryProviderName,
+		SystemName:        cfg.SystemName,
+		Host:              cfg.Host,
+		Port:              cfg.Port,
+		LeaseDuration:     cfg.CoordinationLease.HeartbeatTimeout,
+		RetryInterval:     cfg.CoordinationLease.HeartbeatInterval,
+	})
+	cluster.downingProviders.Register(sbrProvider)
 
 	providerName := strings.TrimSpace(cfg.DowningProviderClass)
 	if providerName == "" {

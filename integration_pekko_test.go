@@ -23,7 +23,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os/exec"
 	"reflect"
 	"strings"
 	"testing"
@@ -34,6 +33,7 @@ import (
 	"github.com/sopranoworks/gekka/cluster/sharding"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 	"github.com/sopranoworks/gekka/persistence"
+	"github.com/sopranoworks/gekka/test/jvmproc"
 )
 
 // scalaSignals collects the named signals emitted by PekkoIntegrationNode on
@@ -62,24 +62,13 @@ type scalaSignals struct {
 func startPekkoIntegrationNode(t *testing.T, ctx context.Context) *scalaSignals {
 	t.Helper()
 
-	cmd := exec.CommandContext(ctx, "sbt", "runMain com.example.PekkoIntegrationNode")
-	cmd.Dir = "scala-server"
-
-	stdout, err := cmd.StdoutPipe()
+	p, err := jvmproc.Spawn(t, ctx, "sbt", []string{"runMain com.example.PekkoIntegrationNode"}, jvmproc.Options{
+		Dir: "scala-server",
+	})
 	if err != nil {
-		t.Fatalf("StdoutPipe: %v", err)
-	}
-	cmd.Stderr = cmd.Stdout // merge stderr into the same scanner
-
-	if err := cmd.Start(); err != nil {
 		t.Fatalf("failed to start sbt: %v", err)
 	}
-	t.Cleanup(func() {
-		if cmd.Process != nil {
-			cmd.Process.Kill()
-			cmd.Wait() //nolint:errcheck
-		}
-	})
+	stdout := p.Stdout
 
 	sig := &scalaSignals{
 		ready:                 make(chan struct{}),

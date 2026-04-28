@@ -24,7 +24,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os/exec"
 	"reflect"
 	"strings"
 	"testing"
@@ -32,6 +31,7 @@ import (
 
 	"github.com/sopranoworks/gekka/actor"
 	gcluster "github.com/sopranoworks/gekka/cluster"
+	"github.com/sopranoworks/gekka/test/jvmproc"
 )
 
 // sbrSignals collects stdout signals emitted by SBRTestNode so sub-tests can
@@ -49,25 +49,14 @@ type sbrSignals struct {
 func startSBRTestNode(t *testing.T, ctx context.Context, strategy string) *sbrSignals {
 	t.Helper()
 
-	cmd := exec.CommandContext(ctx, "sbt",
-		fmt.Sprintf("runMain com.example.SBRTestNode %s", strategy))
-	cmd.Dir = "scala-server"
-
-	stdout, err := cmd.StdoutPipe()
+	p, err := jvmproc.Spawn(t, ctx, "sbt",
+		[]string{fmt.Sprintf("runMain com.example.SBRTestNode %s", strategy)}, jvmproc.Options{
+			Dir: "scala-server",
+		})
 	if err != nil {
-		t.Fatalf("StdoutPipe: %v", err)
-	}
-	cmd.Stderr = cmd.Stdout
-
-	if err := cmd.Start(); err != nil {
 		t.Fatalf("failed to start sbt SBRTestNode: %v", err)
 	}
-	t.Cleanup(func() {
-		if cmd.Process != nil {
-			cmd.Process.Kill()
-			cmd.Wait() //nolint:errcheck
-		}
-	})
+	stdout := p.Stdout
 
 	sig := &sbrSignals{
 		ready:             make(chan struct{}),

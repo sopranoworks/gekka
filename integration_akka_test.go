@@ -23,7 +23,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +30,7 @@ import (
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/cluster/pubsub"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
+	"github.com/sopranoworks/gekka/test/jvmproc"
 )
 
 // akkaSignals collects the named signals emitted by AkkaIntegrationNode on
@@ -47,24 +47,13 @@ type akkaSignals struct {
 func startAkkaIntegrationNode(t *testing.T, ctx context.Context) *akkaSignals {
 	t.Helper()
 
-	cmd := exec.CommandContext(ctx, "sbt", "akkaServer/runMain com.example.AkkaIntegrationNode")
-	cmd.Dir = "scala-server"
-
-	stdout, err := cmd.StdoutPipe()
+	p, err := jvmproc.Spawn(t, ctx, "sbt", []string{"akkaServer/runMain com.example.AkkaIntegrationNode"}, jvmproc.Options{
+		Dir: "scala-server",
+	})
 	if err != nil {
-		t.Fatalf("StdoutPipe: %v", err)
-	}
-	cmd.Stderr = cmd.Stdout // merge stderr into the same scanner
-
-	if err := cmd.Start(); err != nil {
 		t.Fatalf("failed to start sbt: %v", err)
 	}
-	t.Cleanup(func() {
-		if cmd.Process != nil {
-			cmd.Process.Kill()
-			cmd.Wait() //nolint:errcheck
-		}
-	})
+	stdout := p.Stdout
 
 	sig := &akkaSignals{
 		ready:          make(chan struct{}),

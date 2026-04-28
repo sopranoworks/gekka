@@ -17,10 +17,7 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
-	"os/exec"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -28,61 +25,27 @@ import (
 	"github.com/sopranoworks/gekka/cluster"
 	"github.com/sopranoworks/gekka/cluster/ddata"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
+	"github.com/sopranoworks/gekka/test/jvmproc"
 )
 
-// startSbtServer spawns an sbt process with process-group isolation and
-// registers a t.Cleanup that kills the entire group and waits for port release.
-// This prevents stale JVM processes from blocking subsequent tests.
-func startSbtServer(t *testing.T, ctx context.Context, mainClass string, port int) (*exec.Cmd, io.ReadCloser) {
+// startSbtServer spawns an sbt process under jvmproc supervision: process
+// group isolation prevents the JVM that sbt forks from outliving cleanup,
+// and PortToRelease blocks the cleanup until the kernel has freed the
+// socket so the next test can bind without "address in use".
+//
+// The first return value is retained for back-compat with callers that
+// stash it into `_`; the underlying *jvmproc.Process is what actually
+// drives lifecycle.
+func startSbtServer(t *testing.T, ctx context.Context, mainClass string, port int) (*jvmproc.Process, io.ReadCloser) {
 	t.Helper()
-	cmd := exec.CommandContext(ctx, "sbt", fmt.Sprintf("runMain %s", mainClass))
-	cmd.Dir = "scala-server"
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
-	stdout, err := cmd.StdoutPipe()
+	_ = port // port is informational; jvmproc kills the entire process group on cleanup
+	p, err := jvmproc.Spawn(t, ctx, "sbt", []string{fmt.Sprintf("runMain %s", mainClass)}, jvmproc.Options{
+		Dir: "scala-server",
+	})
 	if err != nil {
-		t.Fatalf("failed to get stdout pipe: %v", err)
-	}
-	cmd.Stderr = cmd.Stdout
-
-	if err := cmd.Start(); err != nil {
 		t.Fatalf("failed to start sbt: %v", err)
 	}
-
-	t.Cleanup(func() {
-		// Kill entire process group to catch orphaned child JVMs
-		if cmd.Process != nil {
-			pgid, err := syscall.Getpgid(cmd.Process.Pid)
-			if err == nil {
-				_ = syscall.Kill(-pgid, syscall.SIGKILL)
-			} else {
-				_ = cmd.Process.Kill()
-			}
-		}
-		_ = cmd.Wait()
-
-		// Poll for port release — confirms kernel has freed the socket
-		if port > 0 {
-			addr := fmt.Sprintf("127.0.0.1:%d", port)
-			deadline := time.After(30 * time.Second)
-			ticker := time.NewTicker(500 * time.Millisecond)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-deadline:
-					t.Logf("warning: timeout waiting for port %d release", port)
-					return
-				case <-ticker.C:
-					if l, err := net.Listen("tcp", addr); err == nil {
-						l.Close()
-						return
-					}
-				}
-			}
-		}
-	})
-
-	return cmd, stdout
+	return p, p.Stdout
 }
 
 // remoteSystem constructs an actor.Address for the Scala test server.

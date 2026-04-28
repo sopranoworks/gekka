@@ -265,6 +265,23 @@ type ClusterConfig struct {
 	//	},
 	SBR SBRConfig
 
+	// DowningProviderClass selects the cluster's downing provider via
+	// the same HOCON path Pekko uses (`pekko.cluster.downing-provider-class`).
+	// Round-2 session 27 introduces a Go-native registry: Pekko / Akka
+	// FQCNs are normalised to short names at parse time, and the
+	// resolved short name is looked up in cluster.DowningProviderRegistry
+	// during cluster startup.
+	//
+	// Recognised inputs:
+	//   - "" (empty) — fall back to the bundled SBR provider.
+	//   - "*SplitBrainResolverProvider" (Pekko or Akka FQCN) —
+	//     normalised to "split-brain-resolver".
+	//   - any other string — preserved verbatim and looked up by name;
+	//     when the lookup misses, gekka falls back to SBR with a warn log.
+	//
+	// Corresponds to pekko.cluster.downing-provider-class.
+	DowningProviderClass string
+
 	// FailureDetector tunes the Phi Accrual Failure Detector.
 	// Zero values are replaced by safe defaults (threshold=8.0, maxSamples=1000,
 	// minStdDeviation=500ms).
@@ -1888,6 +1905,17 @@ type Cluster struct {
 	// lazily via LeaseManager() with the in-memory reference provider.
 	leaseMgr *lease.LeaseManager
 
+	// downingProviders is the per-cluster DowningProvider registry.  Populated
+	// during NewCluster with the bundled SBRDowningProvider so an empty
+	// `pekko.cluster.downing-provider-class` resolves cleanly.  Operators can
+	// register additional providers via Cluster.RegisterDowningProvider before
+	// startup completes.  Round-2 session 27.
+	downingProviders *gcluster.DowningProviderRegistry
+	// downingProvider is the resolved active provider for this cluster — what
+	// `Cluster.DowningProvider()` returns and what session 28 will route every
+	// downing decision through.
+	downingProvider gcluster.DowningProvider
+
 	sched *systemScheduler
 }
 
@@ -2594,8 +2622,35 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 			sbrCfg.LeaseSettings.RetryInterval = d
 		}
 	}
-	if sbr := gcluster.NewSBRManager(cm, sbrCfg); sbr != nil {
-		go sbr.Start(ctx)
+	// Round-2 session 27 — F4 Downing: register the bundled SBR provider in
+	// the cluster's DowningProviderRegistry, resolve the operator's
+	// configured `downing-provider-class` (HOCON-normalised to a short
+	// name), and run the resolved provider's decision loop.
+	//
+	// SBRManager construction stays here so the lease-majority defaults
+	// applied above continue to flow into the manager unchanged; the
+	// adapter just exposes that manager through the DowningProvider
+	// interface so the lookup-by-name path is consistent across providers.
+	cluster.downingProviders = gcluster.NewDowningProviderRegistry()
+	sbrMgr := gcluster.NewSBRManager(cm, sbrCfg)
+	cluster.downingProviders.Register(gcluster.NewSBRDowningProvider(sbrMgr))
+
+	providerName := strings.TrimSpace(cfg.DowningProviderClass)
+	if providerName == "" {
+		providerName = gcluster.DefaultDowningProviderName
+	}
+	provider, ok := cluster.downingProviders.Resolve(providerName)
+	if !ok {
+		log.Printf("downing: %s — falling back to %q",
+			gcluster.FormatUnknownProviderError(providerName, cluster.downingProviders.Names()),
+			gcluster.DefaultDowningProviderName)
+		provider, _ = cluster.downingProviders.Resolve(gcluster.DefaultDowningProviderName)
+	}
+	cluster.downingProvider = provider
+	if provider != nil {
+		if err := provider.Start(ctx); err != nil {
+			log.Printf("downing: provider %q Start failed: %v", provider.Name(), err)
+		}
 	}
 
 	// ── Coordinated Shutdown on Self-Down ────────────────────────────────────
@@ -3464,6 +3519,23 @@ func (c *Cluster) SingletonProxy(managerPath, role string) gcluster.ClusterSingl
 // the in-memory reference provider registered under "memory".  Callers may
 // register additional providers (e.g. a Kubernetes-leases extension) to make
 // them available to SBR lease-majority and Singleton/Sharding use-lease.
+// DowningProviders returns the cluster's DowningProvider registry.
+// Operators can register custom providers on it before the cluster
+// boots; the bundled SBR provider is pre-registered under
+// gcluster.DefaultDowningProviderName ("split-brain-resolver").
+// Round-2 session 27.
+func (c *Cluster) DowningProviders() *gcluster.DowningProviderRegistry {
+	return c.downingProviders
+}
+
+// DowningProvider returns the resolved active provider for this
+// cluster — the one whose Start was invoked during NewCluster.  Nil
+// when no downing provider could be resolved (no SBR strategy
+// configured and no operator override).  Round-2 session 27.
+func (c *Cluster) DowningProvider() gcluster.DowningProvider {
+	return c.downingProvider
+}
+
 func (c *Cluster) LeaseManager() *lease.LeaseManager {
 	c.leaseManagerOnce.Do(func() {
 		c.leaseMgr = lease.NewDefaultManager()

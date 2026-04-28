@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
+	gcluster "github.com/sopranoworks/gekka/cluster"
 	"github.com/sopranoworks/gekka/internal/core"
 
 	hocon "github.com/sopranoworks/gekka-config"
@@ -1436,6 +1437,15 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 	}
 
 	// ── Split Brain Resolver ────────────────────────────────────────────────
+	// Round-2 session 27: parse pekko.cluster.downing-provider-class up front
+	// so the resolved short name is already on ClusterConfig by the time
+	// gekka.NewCluster reaches the DowningProviderRegistry lookup.  Pekko /
+	// Akka FQCNs (`*SplitBrainResolverProvider`) normalise to gekka's
+	// canonical "split-brain-resolver" short name; any other string is
+	// preserved verbatim so future providers register and resolve cleanly.
+	if v, err := cfg.GetString(prefix + ".cluster.downing-provider-class"); err == nil {
+		nodeCfg.DowningProviderClass = gcluster.NormalizeDowningProviderClass(v)
+	}
 	sbrPrefix := prefix + ".cluster.split-brain-resolver"
 	if v, err := cfg.GetString(sbrPrefix + ".active-strategy"); err == nil {
 		nodeCfg.SBR.ActiveStrategy = strings.TrimSpace(v)

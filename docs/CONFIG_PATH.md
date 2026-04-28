@@ -98,7 +98,7 @@ Legend:
 | `pekko.cluster.retry-unsuccessful-join-after` | `10s` | ✅ | |
 | `pekko.cluster.shutdown-after-unsuccessful-join-seed-nodes` | `off` | ✅ | Triggers ShutdownCallback |
 | `pekko.cluster.down-removal-margin` | `off` | ✅ | Delays Down→Removed |
-| `pekko.cluster.downing-provider-class` | `""` | ✅ | Used in InitJoin |
+| `pekko.cluster.downing-provider-class` | `""` | ✅ | Round-2 session 27. HOCON parsed into `ClusterConfig.DowningProviderClass`; Pekko / Akka FQCNs ending in `SplitBrainResolverProvider` are normalised to the gekka short name `"split-brain-resolver"` and looked up in `cluster.DowningProviderRegistry` during `gekka.NewCluster`. Unknown names log a warning and fall back to the bundled SBR provider. Empty value defaults to SBR. Also feeds the InitJoin compatibility check. |
 | `pekko.cluster.quarantine-removed-node-after` | `5s` | ✅ | Schedules UID quarantine |
 | `pekko.cluster.allow-weakly-up-members` | `7s` | ✅ | WeaklyUp promotion logic |
 | `pekko.cluster.roles` | `[]` | ✅ | |

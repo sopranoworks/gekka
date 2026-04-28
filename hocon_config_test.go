@@ -4554,3 +4554,75 @@ pekko {
 		t.Errorf("PassivationFilter = %q, want %q (per-strategy override must win)", got, want)
 	}
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Round-2 session 27: downing-provider-class HOCON wiring
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestHOCON_DowningProviderClass_NormaliseFQCN proves the Pekko FQCN is
+// translated to gekka's canonical short name at parse time so the
+// runtime registry lookup only needs to know one form. Without the
+// normalisation a Pekko-imported config would silently fall back to
+// the default provider via the unknown-name path.
+func TestHOCON_DowningProviderClass_NormaliseFQCN(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    downing-provider-class = "org.apache.pekko.cluster.sbr.SplitBrainResolverProvider"
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.DowningProviderClass, "split-brain-resolver"; got != want {
+		t.Errorf("DowningProviderClass = %q, want %q", got, want)
+	}
+}
+
+// TestHOCON_DowningProviderClass_ShortName proves operators can write
+// the gekka-canonical short name directly. This is the form the
+// runtime registry stores SBR under, and HOCON parsing must preserve
+// it verbatim so the lookup hits.
+func TestHOCON_DowningProviderClass_ShortName(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    downing-provider-class = "split-brain-resolver"
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.DowningProviderClass, "split-brain-resolver"; got != want {
+		t.Errorf("DowningProviderClass = %q, want %q", got, want)
+	}
+}
+
+// TestHOCON_DowningProviderClass_UnknownPreserved confirms that names
+// not matching any built-in are kept verbatim so future providers can
+// register under their own short name without code changes in the
+// HOCON parser. Without this, an operator who wires up a custom
+// provider would see their config silently rewritten to "".
+func TestHOCON_DowningProviderClass_UnknownPreserved(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    downing-provider-class = "lease-driven"
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.DowningProviderClass, "lease-driven"; got != want {
+		t.Errorf("DowningProviderClass = %q, want %q (unknown name must be preserved)", got, want)
+	}
+}

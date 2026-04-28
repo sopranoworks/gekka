@@ -15,6 +15,7 @@ import com.typesafe.config.ConfigFactory
 //   "[MULTI] Unreachable: <addr>"        a member has been marked unreachable
 //   "[MULTI] ReachableMember port=N"     a previously unreachable member recovered
 object MultiNodeClusterRecovery extends App {
+  OrchestratorGate.require()
 
   val baseConf = ConfigFactory.load("cluster")
 

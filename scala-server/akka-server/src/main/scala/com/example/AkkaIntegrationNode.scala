@@ -82,6 +82,7 @@ class AkkaBridgeSubscriber(subscriptionReady: Promise[Unit]) extends Actor with 
  *   sbt "akka-server/runMain com.example.AkkaIntegrationNode"
  */
 object AkkaIntegrationNode extends App {
+  OrchestratorGate.require()
   val config = ConfigFactory.parseString(
     """
       |akka {

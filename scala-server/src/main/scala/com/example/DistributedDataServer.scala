@@ -140,6 +140,7 @@ class DDTestProbe extends Actor with ActorLogging {
 
 // ---- Main ----
 object DistributedDataServer extends App {
+  OrchestratorGate.require()
   val config = ConfigFactory.load("cluster")
   val system = ActorSystem("ClusterSystem", config)
 

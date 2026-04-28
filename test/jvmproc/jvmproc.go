@@ -80,9 +80,25 @@ type Process struct {
 	portReleaseTimeout time.Duration
 }
 
+// OrchestratorTokenEnv is the environment variable a Scala test fixture
+// inspects to confirm it was launched by jvmproc and not by hand.  See
+// scala-server/.../OrchestratorGate.scala — both halves must use the
+// same name and value.
+const OrchestratorTokenEnv = "GEKKA_ORCHESTRATOR_TOKEN"
+
+// OrchestratorTokenValue is the literal token jvmproc injects.  Mirrored
+// in OrchestratorGate.TokenValue.  The value is intentionally non-trivial
+// so a human cannot satisfy the gate by guessing the env var alone — they
+// have to read the source and accept the contract.
+const OrchestratorTokenValue = "jvmproc-de0868c-2026"
+
 // Spawn launches name with args under process-group isolation, registers
 // a cleanup that kills the entire group, and returns a Process exposing
 // the merged stdout/stderr stream for scanner-driven readiness detection.
+//
+// Spawn always sets OrchestratorTokenEnv=OrchestratorTokenValue in the
+// child env so that gated Scala mains accept the launch.  Tests don't have
+// to opt in — every jvmproc-launched process gets the token automatically.
 //
 // On any error before Cleanup registration, the partially started child is
 // killed before the function returns — leaks are not possible from Spawn.
@@ -91,7 +107,11 @@ func Spawn(t testing.TB, ctx context.Context, name string, args []string, opts O
 
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = opts.Dir
-	cmd.Env = buildEnv(os.Environ(), opts.ExtraEnv, opts.JVMFlags)
+	// Inject the orchestrator token before any caller-supplied ExtraEnv
+	// so that callers may explicitly override (e.g. negative tests that
+	// want to exercise the "no token → exit 78" path).
+	extra := append([]string{OrchestratorTokenEnv + "=" + OrchestratorTokenValue}, opts.ExtraEnv...)
+	cmd.Env = buildEnv(os.Environ(), extra, opts.JVMFlags)
 	// Setpgid is the load-bearing field: every grandchild the JVM forks
 	// inherits this group, so a single killpg(-pgid, SIGKILL) takes them
 	// all out at once.  Without it, sbt's java child becomes a session

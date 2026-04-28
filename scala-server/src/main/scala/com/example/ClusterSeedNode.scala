@@ -36,6 +36,7 @@ class ClusterListener extends Actor with ActorLogging {
 }
 
 object ClusterSeedNode extends App {
+  OrchestratorGate.require()
   val config = ConfigFactory.load("cluster")
   val system = ActorSystem("ClusterSystem", config)
 

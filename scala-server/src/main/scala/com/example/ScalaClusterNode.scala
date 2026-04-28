@@ -17,6 +17,7 @@ import com.typesafe.config.ConfigFactory
 //
 // Write "leave\n" to stdin to trigger a graceful Cluster.leave() + shutdown.
 object ScalaClusterNode extends App {
+  OrchestratorGate.require()
 
   val seedHost = if (args.length > 0) args(0) else "127.0.0.1"
   val seedPort = if (args.length > 1) args(1).toInt else 2550

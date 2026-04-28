@@ -12,6 +12,7 @@ import com.typesafe.config.ConfigFactory
 //   "--- MULTI-NODE CLUSTER READY ---"   both Scala nodes are confirmed Up
 //   "(Total Up: N)"                      emitted on every MemberUp / MemberRemoved
 object MultiNodeCluster extends App {
+  OrchestratorGate.require()
 
   // ── Node 1: seed at :2552, config from cluster.conf ──────────────────────────
   val baseConf = ConfigFactory.load("cluster")

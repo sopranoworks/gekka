@@ -104,6 +104,7 @@ class SBREventListener extends Actor with ActorLogging {
  *   sbt "runMain com.example.SBRTestNode keep-oldest"
  */
 object SBRTestNode extends App {
+  OrchestratorGate.require()
   val strategy = if (args.nonEmpty) args(0) else "keep-majority"
 
   val config = ConfigFactory.parseString(

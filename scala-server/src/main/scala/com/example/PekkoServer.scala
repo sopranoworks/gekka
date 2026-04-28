@@ -30,6 +30,7 @@ class EchoActor extends Actor {
 }
 
 object PekkoServer extends App {
+  OrchestratorGate.require()
   val config = ConfigFactory.load()
   val system = ActorSystem("RemoteSystem", config)
   val echoActor = system.actorOf(Props[EchoActor], "echo")

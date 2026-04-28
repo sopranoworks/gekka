@@ -251,6 +251,7 @@ class ClusterEventListener extends Actor with ActorLogging {
  *   sbt "runMain com.example.PekkoIntegrationNode"
  */
 object PekkoIntegrationNode extends App {
+  OrchestratorGate.require()
   val config = ConfigFactory.parseString(
     """
       |pekko {

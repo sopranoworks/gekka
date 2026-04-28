@@ -51,6 +51,7 @@ class SingletonClusterListener extends Actor with ActorLogging {
 }
 
 object ClusterSingletonServer extends App {
+  OrchestratorGate.require()
   val config = ConfigFactory.load("cluster")
   val system = ActorSystem("ClusterSystem", config)
 

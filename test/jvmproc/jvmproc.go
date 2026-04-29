@@ -173,6 +173,11 @@ func Spawn(t testing.TB, ctx context.Context, name string, args []string, opts O
 		close(p.exited)
 	}()
 
+	// Register p with the package-level registry so the SIGQUIT/SIGTERM
+	// handler installed by atexit.go can killpg the group even when
+	// `go test -timeout` aborts the binary before t.Cleanup runs.
+	register(p)
+
 	t.Cleanup(p.Stop)
 	return p, nil
 }
@@ -185,6 +190,10 @@ func Spawn(t testing.TB, ctx context.Context, name string, args []string, opts O
 func (p *Process) Stop() {
 	p.stopOnce.Do(func() {
 		defer close(p.stopped)
+		// Drop p from the abnormal-termination registry — its group
+		// is about to be reaped synchronously below, so the handler
+		// (if it ever fires) has no work to do for this *Process.
+		unregister(p)
 
 		if p.cmd.Process == nil {
 			return

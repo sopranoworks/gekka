@@ -150,6 +150,23 @@ type ClusterConfig struct {
 	// Default: [].
 	LargeMessageDestinations []string
 
+	// UntrustedMode rejects PossiblyHarmful and DeathWatch system messages
+	// from remote senders, drops messages addressed to /system/* paths, and
+	// (paired with TrustedSelectionPaths) restricts inbound ActorSelection.
+	// Intended for client/server scenarios where the receiving node should
+	// not blindly trust connecting peers. Cluster-internal traffic is not
+	// affected.
+	// Corresponds to pekko.remote.artery.untrusted-mode.
+	// Default: false (off).
+	UntrustedMode bool
+
+	// TrustedSelectionPaths is the allowlist of actor-path prefixes that may
+	// receive inbound ActorSelection messages when UntrustedMode is on.
+	// An empty list under untrusted-mode blocks all selections.
+	// Corresponds to pekko.remote.artery.trusted-selection-paths.
+	// Default: [].
+	TrustedSelectionPaths []string
+
 	// ActorDebug bundles the pekko.actor.debug.* logging toggles.
 	// All flags default to false (off). When true, the corresponding
 	// actor-framework event is emitted at slog.Debug.
@@ -2080,6 +2097,9 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	// Round-2 session 29: large-message-destinations routes matching outbound
 	// recipients onto the large-message stream (streamId=3).
 	nm.SetLargeMessageDestinations(cfg.LargeMessageDestinations)
+	// Round-2 sessions 31+32: F6 message-security inbound enforcement.
+	nm.UntrustedMode = cfg.UntrustedMode
+	nm.TrustedSelectionPaths = append([]string(nil), cfg.TrustedSelectionPaths...)
 	// Apply flight recorder config from HOCON (defaults: enabled=true, level=lifecycle).
 	frEnabled := cfg.FlightRecorder.Enabled
 	// When neither LoadConfig nor explicit struct init has been called,

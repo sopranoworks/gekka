@@ -1075,6 +1075,25 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		}
 	}
 
+	// pekko.remote.artery.untrusted-mode + trusted-selection-paths
+	// (Round-2 sessions 31+32: F6 message-security).
+	if v, err := cfg.GetString(arteryPrefix + ".untrusted-mode"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		nodeCfg.UntrustedMode = v == "on" || v == "true"
+	}
+	{
+		var tspTmp struct {
+			PekkoTSP []string `hocon:"pekko.remote.artery.trusted-selection-paths"`
+			AkkaTSP  []string `hocon:"akka.remote.artery.trusted-selection-paths"`
+		}
+		_ = cfg.Unmarshal(&tspTmp)
+		if prefix == "pekko" && len(tspTmp.PekkoTSP) > 0 {
+			nodeCfg.TrustedSelectionPaths = tspTmp.PekkoTSP
+		} else if prefix == "akka" && len(tspTmp.AkkaTSP) > 0 {
+			nodeCfg.TrustedSelectionPaths = tspTmp.AkkaTSP
+		}
+	}
+
 	// ── pekko.actor.debug.* logging toggles (Round-2 session 10) ───────────
 	parseBoolFlag := func(path string, dst *bool) {
 		if v, err := cfg.GetString(path); err == nil {

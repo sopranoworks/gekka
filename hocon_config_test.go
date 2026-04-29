@@ -4667,3 +4667,66 @@ pekko {
 		t.Errorf("LargeMessageDestinations = %v, want [] when unset", cfg.LargeMessageDestinations)
 	}
 }
+
+// TestHOCON_UntrustedMode_OnPekko verifies that pekko.remote.artery.untrusted-mode
+// = on lifts into ClusterConfig.UntrustedMode and that
+// trusted-selection-paths populates the allowlist.
+func TestHOCON_UntrustedMode_OnPekko(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko.remote.artery {
+  canonical { hostname = "127.0.0.1", port = 2552 }
+  untrusted-mode = on
+  trusted-selection-paths = ["/user/echo", "/user/bridge"]
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if !cfg.UntrustedMode {
+		t.Error("UntrustedMode = false, want true")
+	}
+	want := []string{"/user/echo", "/user/bridge"}
+	if !reflect.DeepEqual(cfg.TrustedSelectionPaths, want) {
+		t.Errorf("TrustedSelectionPaths = %v, want %v", cfg.TrustedSelectionPaths, want)
+	}
+}
+
+// TestHOCON_UntrustedMode_OnAkka verifies the akka prefix is honored too —
+// gekka detects akka.* keys and routes parsing through the same fields.
+func TestHOCON_UntrustedMode_OnAkka(t *testing.T) {
+	cfg, err := parseHOCONString(`
+akka.remote.artery {
+  canonical { hostname = "127.0.0.1", port = 2552 }
+  untrusted-mode = on
+  trusted-selection-paths = ["/user/api"]
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if !cfg.UntrustedMode {
+		t.Error("UntrustedMode = false, want true under akka prefix")
+	}
+	want := []string{"/user/api"}
+	if !reflect.DeepEqual(cfg.TrustedSelectionPaths, want) {
+		t.Errorf("TrustedSelectionPaths = %v, want %v", cfg.TrustedSelectionPaths, want)
+	}
+}
+
+// TestHOCON_UntrustedMode_DefaultOff verifies omitting the key leaves the
+// flag at its zero value (off) and the allowlist empty — matching the Pekko
+// default of accepting everything from peers.
+func TestHOCON_UntrustedMode_DefaultOff(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko.remote.artery.canonical { hostname = "127.0.0.1", port = 2552 }
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if cfg.UntrustedMode {
+		t.Error("UntrustedMode = true, want false (default)")
+	}
+	if len(cfg.TrustedSelectionPaths) != 0 {
+		t.Errorf("TrustedSelectionPaths = %v, want [] (default)", cfg.TrustedSelectionPaths)
+	}
+}

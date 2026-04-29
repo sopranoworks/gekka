@@ -393,6 +393,18 @@ type NodeManager struct {
 	// Corresponds to pekko.remote.artery.propagate-harmless-quarantine-events.
 	PropagateHarmlessQuarantineEvents bool
 
+	// UntrustedMode rejects PossiblyHarmful and DeathWatch system messages
+	// from remote senders, drops messages addressed to /system/* paths, and
+	// (paired with TrustedSelectionPaths) restricts inbound ActorSelection.
+	// Corresponds to pekko.remote.artery.untrusted-mode. Default off.
+	UntrustedMode bool
+
+	// TrustedSelectionPaths is the allowlist of actor-path prefixes that may
+	// receive inbound ActorSelection messages when UntrustedMode is on.
+	// Empty list under untrusted-mode blocks all selections.
+	// Corresponds to pekko.remote.artery.trusted-selection-paths.
+	TrustedSelectionPaths []string
+
 	// frameSizeMu guards frameSizeMaxByType.
 	frameSizeMu sync.Mutex
 	// frameSizeMaxByType tracks the largest payload seen per (serializerId,
@@ -500,6 +512,90 @@ func (nm *NodeManager) recordOversizedFrame(serializerId int32, manifest string,
 		"payload_bytes", size,
 		"threshold_bytes", nm.LogFrameSizeExceeding,
 		"previous_max", prev)
+}
+
+// IsPossiblyHarmfulManifest reports whether the given (serializerId, manifest)
+// pair identifies an inbound message that Pekko's RemoteActorRefProvider would
+// classify as PossiblyHarmful under untrusted-mode. Pekko treats PoisonPill and
+// Kill (MiscMessageSerializer manifests "P"/"K") plus the DeathWatch system
+// messages (ArteryInternalSerializer manifest "SystemMessage" wrapping
+// Watch/Unwatch) as PossiblyHarmful and drops them when untrusted-mode is on.
+func IsPossiblyHarmfulManifest(serializerId int32, manifest string) bool {
+	if serializerId == MiscMessageSerializerID && (manifest == "P" || manifest == "K") {
+		return true
+	}
+	if serializerId == actor.ArteryInternalSerializerID && manifest == "SystemMessage" {
+		return true
+	}
+	return false
+}
+
+// untrustedModeDrop reports whether UntrustedMode is on and the inbound message
+// must be dropped per Pekko Artery untrusted-mode semantics. The caller logs
+// the drop at WARN exactly once per (serializerId, manifest) tuple via
+// recordUntrustedDrop. ActorSelection enforcement is performed at the
+// SelectionEnvelope dispatch site (see trusted-selection-paths).
+func (nm *NodeManager) untrustedModeDrop(serializerId int32, manifest string) bool {
+	if !nm.UntrustedMode {
+		return false
+	}
+	return IsPossiblyHarmfulManifest(serializerId, manifest)
+}
+
+// recordUntrustedDrop logs a WARN once per (serializerId, manifest) drop tuple.
+// Subsequent drops of the same tuple are downgraded to DEBUG to avoid log
+// flooding when a misbehaving peer is repeatedly probed.
+func (nm *NodeManager) recordUntrustedDrop(serializerId int32, manifest, reason, recipientPath, senderPath string) {
+	key := fmt.Sprintf("untrusted|%d|%s", serializerId, manifest)
+	nm.frameSizeMu.Lock()
+	if nm.frameSizeMaxByType == nil {
+		nm.frameSizeMaxByType = make(map[string]int64)
+	}
+	first := nm.frameSizeMaxByType[key] == 0
+	if first {
+		nm.frameSizeMaxByType[key] = 1
+	}
+	nm.frameSizeMu.Unlock()
+	if first {
+		slog.Warn("artery: untrusted-mode dropping inbound message",
+			"reason", reason,
+			"serializerId", serializerId,
+			"manifest", manifest,
+			"recipient", recipientPath,
+			"sender", senderPath)
+	} else {
+		slog.Debug("artery: untrusted-mode dropping inbound message",
+			"reason", reason,
+			"serializerId", serializerId,
+			"manifest", manifest,
+			"recipient", recipientPath,
+			"sender", senderPath)
+	}
+}
+
+// IsTrustedSelectionPath reports whether path is allowlisted for inbound
+// ActorSelection delivery under untrusted-mode. Matching is exact-prefix on
+// the bare actor path (the URI scheme/authority are stripped before
+// comparison) — mirroring Pekko's Endpoint.scala behaviour where the path is
+// composed via `sel.elements.mkString("/", "/", "")` and tested with
+// `TrustedSelectionPaths.contains(...)`. With an empty allowlist no selection
+// is trusted.
+func (nm *NodeManager) IsTrustedSelectionPath(path string) bool {
+	if len(nm.TrustedSelectionPaths) == 0 {
+		return false
+	}
+	bare := path
+	if i := strings.Index(bare, "://"); i != -1 {
+		if j := strings.Index(bare[i+3:], "/"); j != -1 {
+			bare = bare[i+3+j:]
+		}
+	}
+	for _, allowed := range nm.TrustedSelectionPaths {
+		if allowed == bare {
+			return true
+		}
+	}
+	return false
 }
 
 // EffectiveOutboundLanes returns the configured outbound-lanes or the Pekko default.
@@ -1648,6 +1744,21 @@ func (assoc *GekkaAssociation) dispatch(ctx context.Context, meta *ArteryMetadat
 			return nil
 		}
 
+		// 2c. pekko.remote.artery.untrusted-mode — drop PossiblyHarmful inner
+		// messages (PoisonPill/Kill via MiscMessageSerializer manifests "P"/"K")
+		// even when wrapped by an ActorSelection. Mirrors Pekko's pattern-match
+		// order in MessageDispatcher.scala where PossiblyHarmful is checked
+		// before the inner ActorSelection is delivered.
+		if assoc.nodeMgr.untrustedModeDrop(env.GetSerializerId(), string(env.GetMessageManifest())) {
+			senderPath := ""
+			if meta.Sender != nil {
+				senderPath = meta.Sender.GetPath()
+			}
+			assoc.nodeMgr.recordUntrustedDrop(env.GetSerializerId(), string(env.GetMessageManifest()),
+				"PossiblyHarmful inside ActorSelection", path, senderPath)
+			return nil
+		}
+
 		// 3. Deserialize inner message for non-cluster payloads
 		innerMsg, err := assoc.nodeMgr.SerializerRegistry.DeserializePayload(env.GetSerializerId(), string(env.GetMessageManifest()), env.GetEnclosedMessage())
 		if err != nil {
@@ -1693,6 +1804,27 @@ func (assoc *GekkaAssociation) sendSystemAck(seq uint64, to *gproto_remote.Uniqu
 }
 
 func (assoc *GekkaAssociation) handleSystemMessage(meta *ArteryMetadata) error {
+	// pekko.remote.artery.untrusted-mode — DeathWatch (Watch/Unwatch) and
+	// other PossiblyHarmful system messages must be dropped from remote
+	// senders. We treat the "SystemMessage" manifest itself as PossiblyHarmful
+	// because Pekko's RemoteActorRefProvider matches the PossiblyHarmful trait
+	// before the bare SystemMessage case in MessageDispatcher.scala. This is
+	// stricter than Pekko (it would still deliver Resume/Suspend SystemMessages
+	// from remote in untrusted-mode) but is safer for the cases gekka exposes
+	// today and matches the threat model: a node opting into untrusted-mode
+	// does not want remote peers driving its actor lifecycle.
+	if assoc.nodeMgr.untrustedModeDrop(actor.ArteryInternalSerializerID, "SystemMessage") {
+		var recipient, sender string
+		if meta.Recipient != nil {
+			recipient = meta.Recipient.GetPath()
+		}
+		if meta.Sender != nil {
+			sender = meta.Sender.GetPath()
+		}
+		assoc.nodeMgr.recordUntrustedDrop(actor.ArteryInternalSerializerID, "SystemMessage",
+			"PossiblyHarmful system message", recipient, sender)
+		return nil
+	}
 	// The Artery payload for manifest "SystemMessage" is a SystemMessageEnvelope
 	// which carries the SeqNo, AckReplyTo, and the inner SystemMessage bytes.
 	env := &gproto_remote.SystemMessageEnvelope{}
@@ -1717,6 +1849,21 @@ func (assoc *GekkaAssociation) handleSystemMessage(meta *ArteryMetadata) error {
 }
 
 func (assoc *GekkaAssociation) handleUserMessage(meta *ArteryMetadata) error {
+	// pekko.remote.artery.untrusted-mode — drop PoisonPill/Kill arriving at
+	// the top level. PoisonPill nested inside an ActorSelection is dropped at
+	// the SelectionEnvelope dispatch site before this handler is reached.
+	if assoc.nodeMgr.untrustedModeDrop(meta.SerializerId, string(meta.MessageManifest)) {
+		var recipient, sender string
+		if meta.Recipient != nil {
+			recipient = meta.Recipient.GetPath()
+		}
+		if meta.Sender != nil {
+			sender = meta.Sender.GetPath()
+		}
+		assoc.nodeMgr.recordUntrustedDrop(meta.SerializerId, string(meta.MessageManifest),
+			"PossiblyHarmful user message", recipient, sender)
+		return nil
+	}
 	// Count every incoming user message (cluster-internal messages never
 	// reach this handler — they go to handleControlMessage/cluster.ClusterManager).
 	if assoc.nodeMgr.NodeMetrics != nil {

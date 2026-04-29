@@ -344,6 +344,17 @@ Legend:
 | `pekko.persistence.snapshot-store.proxy.init-timeout` | `10s` | ✅ | Round-2 session 37 — first-use resolution retry budget (100 ms tick). |
 | `pekko.persistence.snapshot-store.proxy.start-target-snapshot-store` | `on` | ⚠️ | Round-2 session 37 — only `on` (in-process) is implemented; `off` is rejected at construction time pending Artery cross-process transport. |
 | `pekko.persistence.state-plugin-fallback.recovery-timeout` | `30s` | ✅ | Cap for durable-state plugin fallback recovery |
+| `pekko.persistence.journal-plugin-fallback.circuit-breaker.max-failures` | `10` | ✅ | Round-2 session 38 — consecutive failures that trip the journal breaker (`persistence/circuit_breaker.go`). |
+| `pekko.persistence.journal-plugin-fallback.circuit-breaker.call-timeout` | `10s` | ✅ | Round-2 session 38 — per-call deadline; expiries count as failures. |
+| `pekko.persistence.journal-plugin-fallback.circuit-breaker.reset-timeout` | `30s` | ✅ | Round-2 session 38 — open→half-open dwell time. |
+| `pekko.persistence.journal-plugin-fallback.replay-filter.mode` | `repair-by-discard-old` | ✅ | Round-2 session 38 — `off`, `warn`, `fail`, or `repair-by-discard-old` (`persistence/replay_filter.go`). |
+| `pekko.persistence.journal-plugin-fallback.replay-filter.window-size` | `100` | ✅ | Round-2 session 38 — look-ahead window in events for writer disambiguation. |
+| `pekko.persistence.journal-plugin-fallback.replay-filter.max-old-writers` | `10` | ✅ | Round-2 session 38 — bounded LRU of stale writer UUIDs to suppress. |
+| `pekko.persistence.journal-plugin-fallback.replay-filter.debug` | `off` | ✅ | Round-2 session 38 — verbose per-event log line during recovery. |
+| `pekko.persistence.journal-plugin-fallback.recovery-event-timeout` | `30s` | ✅ | Round-2 session 38 — inter-event silence ceiling during replay (`RecoveryEventTimeoutJournal`). |
+| `pekko.persistence.snapshot-store-plugin-fallback.circuit-breaker.max-failures` | `5` | ✅ | Round-2 session 38 — snapshot-store breaker trip count. |
+| `pekko.persistence.snapshot-store-plugin-fallback.circuit-breaker.call-timeout` | `20s` | ✅ | Round-2 session 38 — snapshot-store per-call deadline. |
+| `pekko.persistence.snapshot-store-plugin-fallback.circuit-breaker.reset-timeout` | `60s` | ✅ | Round-2 session 38 — snapshot-store open→half-open dwell time. |
 | `pekko.persistence.max-concurrent-recoveries` | `50` | ✅ | Global semaphore for recoveries |
 | `pekko.persistence.fsm.snapshot-after` | `off` | ✅ | Per-FSM opt-in via `WithSnapshotStore`+`SetSnapshotAfter`; save-side wired |
 | `pekko.persistence.at-least-once-delivery.redeliver-interval` | `5s` | ❌ | No feature |

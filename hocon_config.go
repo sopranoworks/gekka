@@ -363,6 +363,61 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		nodeCfg.Persistence.FSMSnapshotAfter = v
 	}
 
+	// ── Round-2 session 38 — F10 plugin-fallback ───────────────────────────
+	// Pekko exposes circuit-breaker, replay-filter and recovery-event-timeout
+	// under journal-plugin-fallback.* and snapshot-store-plugin-fallback.*.
+	// They are read here and wired into the persistence package by cluster.go
+	// (see SetJournalBreakerConfig / SetReplayFilterConfig / SetRecoveryEventTimeout).
+	jfPrefix := prefix + ".persistence.journal-plugin-fallback"
+	if v, err := cfg.GetInt(jfPrefix + ".circuit-breaker.max-failures"); err == nil && v > 0 {
+		nodeCfg.Persistence.JournalBreakerMaxFailures = v
+	}
+	if v, err := cfg.GetString(jfPrefix + ".circuit-breaker.call-timeout"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil && d > 0 {
+			nodeCfg.Persistence.JournalBreakerCallTimeout = d
+		}
+	}
+	if v, err := cfg.GetString(jfPrefix + ".circuit-breaker.reset-timeout"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil && d > 0 {
+			nodeCfg.Persistence.JournalBreakerResetTimeout = d
+		}
+	}
+	if v, err := cfg.GetString(jfPrefix + ".replay-filter.mode"); err == nil {
+		v = strings.Trim(strings.TrimSpace(v), `"`)
+		if v != "" {
+			nodeCfg.Persistence.ReplayFilterMode = strings.ToLower(v)
+		}
+	}
+	if v, err := cfg.GetInt(jfPrefix + ".replay-filter.window-size"); err == nil && v > 0 {
+		nodeCfg.Persistence.ReplayFilterWindowSize = v
+	}
+	if v, err := cfg.GetInt(jfPrefix + ".replay-filter.max-old-writers"); err == nil && v > 0 {
+		nodeCfg.Persistence.ReplayFilterMaxOldWriters = v
+	}
+	if v, err := cfg.GetString(jfPrefix + ".replay-filter.debug"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		nodeCfg.Persistence.ReplayFilterDebug = v == "on" || v == "true"
+	}
+	if v, err := cfg.GetString(jfPrefix + ".recovery-event-timeout"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil && d > 0 {
+			nodeCfg.Persistence.RecoveryEventTimeout = d
+		}
+	}
+	sfPrefix := prefix + ".persistence.snapshot-store-plugin-fallback"
+	if v, err := cfg.GetInt(sfPrefix + ".circuit-breaker.max-failures"); err == nil && v > 0 {
+		nodeCfg.Persistence.SnapshotBreakerMaxFailures = v
+	}
+	if v, err := cfg.GetString(sfPrefix + ".circuit-breaker.call-timeout"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil && d > 0 {
+			nodeCfg.Persistence.SnapshotBreakerCallTimeout = d
+		}
+	}
+	if v, err := cfg.GetString(sfPrefix + ".circuit-breaker.reset-timeout"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil && d > 0 {
+			nodeCfg.Persistence.SnapshotBreakerResetTimeout = d
+		}
+	}
+
 	// ── Cluster Roles ───────────────────────────────────────────────────────
 	var rolesTmp struct {
 		PekkoRoles []string `hocon:"pekko.cluster.roles"`

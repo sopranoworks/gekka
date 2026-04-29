@@ -936,6 +936,42 @@ type PersistenceConfig struct {
 	// Corresponds to pekko.persistence.fsm.snapshot-after.
 	// Default: 0 (off — Pekko's reference default).
 	FSMSnapshotAfter int
+
+	// JournalBreakerMaxFailures, JournalBreakerCallTimeout,
+	// JournalBreakerResetTimeout govern the circuit breaker that
+	// wraps every Journal call when the journal is built through
+	// persistence.WrapJournalWithFallbacks. They mirror
+	// pekko.persistence.journal-plugin-fallback.circuit-breaker.{
+	// max-failures, call-timeout, reset-timeout}.
+	// Defaults: 10 / 10s / 30s. Round-2 session 38.
+	JournalBreakerMaxFailures  int
+	JournalBreakerCallTimeout  time.Duration
+	JournalBreakerResetTimeout time.Duration
+
+	// SnapshotBreakerMaxFailures, SnapshotBreakerCallTimeout,
+	// SnapshotBreakerResetTimeout govern the breaker for the
+	// snapshot store. They mirror
+	// pekko.persistence.snapshot-store-plugin-fallback.circuit-breaker.*.
+	// Defaults: 5 / 20s / 60s. Round-2 session 38.
+	SnapshotBreakerMaxFailures  int
+	SnapshotBreakerCallTimeout  time.Duration
+	SnapshotBreakerResetTimeout time.Duration
+
+	// ReplayFilterMode, ReplayFilterWindowSize, ReplayFilterMaxOldWriters,
+	// ReplayFilterDebug control the replay-filter that guards recovery
+	// against duplicated WriterUuid events. Mirrors
+	// pekko.persistence.journal-plugin-fallback.replay-filter.*.
+	// Defaults: "repair-by-discard-old" / 100 / 10 / off. Round-2 session 38.
+	ReplayFilterMode          string
+	ReplayFilterWindowSize    int
+	ReplayFilterMaxOldWriters int
+	ReplayFilterDebug         bool
+
+	// RecoveryEventTimeout caps the inter-event silence the replay
+	// path tolerates before failing recovery. Mirrors
+	// pekko.persistence.journal-plugin-fallback.recovery-event-timeout.
+	// Default: 30s. Round-2 session 38.
+	RecoveryEventTimeout time.Duration
 }
 
 // SBRConfig is a re-export of cluster.SBRConfig for use in ClusterConfig.
@@ -2286,6 +2322,30 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	}
 	persistencetyped.SetSnapshotOnRecovery(cfg.Persistence.TypedSnapshotOnRecovery)
 	persistence.SetDefaultFSMSnapshotAfter(cfg.Persistence.FSMSnapshotAfter)
+
+	// Round-2 session 38 — F10 plugin-fallback (circuit-breaker, replay-filter,
+	// recovery-event-timeout). Only non-zero values mutate the persistence-
+	// package globals so reference.conf defaults apply when HOCON omits a key.
+	persistence.SetJournalBreakerConfig(persistence.CircuitBreakerConfig{
+		MaxFailures:  cfg.Persistence.JournalBreakerMaxFailures,
+		CallTimeout:  cfg.Persistence.JournalBreakerCallTimeout,
+		ResetTimeout: cfg.Persistence.JournalBreakerResetTimeout,
+	})
+	persistence.SetSnapshotBreakerConfig(persistence.CircuitBreakerConfig{
+		MaxFailures:  cfg.Persistence.SnapshotBreakerMaxFailures,
+		CallTimeout:  cfg.Persistence.SnapshotBreakerCallTimeout,
+		ResetTimeout: cfg.Persistence.SnapshotBreakerResetTimeout,
+	})
+	persistence.SetReplayFilterConfig(persistence.ReplayFilterConfig{
+		Mode:          persistence.ReplayFilterMode(cfg.Persistence.ReplayFilterMode),
+		WindowSize:    cfg.Persistence.ReplayFilterWindowSize,
+		MaxOldWriters: cfg.Persistence.ReplayFilterMaxOldWriters,
+		Debug:         cfg.Persistence.ReplayFilterDebug,
+	})
+	if cfg.Persistence.RecoveryEventTimeout > 0 {
+		persistence.SetRecoveryEventTimeout(cfg.Persistence.RecoveryEventTimeout)
+	}
+
 	if len(cfg.Persistence.AutoStartJournals) > 0 {
 		var hcfg hocon.Config
 		if cfg.HOCON != nil {

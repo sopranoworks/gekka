@@ -34,6 +34,15 @@ type PersistentRepr struct {
 	SenderPath    string
 	Tags          []string
 	TraceContext  map[string]string // W3C TraceContext headers; nil if tracing not active
+
+	// WriterUuid is the per-writer fingerprint Pekko stores alongside
+	// each event so that the replay filter (see replay_filter.go) can
+	// detect duplicated sequence numbers from a previous incarnation
+	// of the same persistent actor. Empty for events written by code
+	// that pre-dates the filter; the filter treats empty UUIDs as
+	// "writer unknown" and bypasses cross-writer conflict detection
+	// for them. Round-2 session 38 — F10 plugin-fallback.
+	WriterUuid string
 }
 
 // EventAdapter is used for schema evolution. It allows transforming events

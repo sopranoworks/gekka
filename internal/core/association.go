@@ -1735,6 +1735,24 @@ func (assoc *GekkaAssociation) dispatch(ctx context.Context, meta *ArteryMetadat
 			return nil
 		}
 
+		// 2a-bis. pekko.remote.artery.untrusted-mode — when on, an inbound
+		// ActorSelection may only land on a path that the operator has
+		// explicitly allowlisted via pekko.remote.artery.trusted-selection-paths.
+		// Pekko applies this check before delivering the selection, so even an
+		// Identify probe is blocked: an attacker who can send selections must
+		// not be able to enumerate the local actor tree by walking paths.
+		// Cluster traffic is routed in the bypass above and never reaches this
+		// gate.
+		if assoc.nodeMgr.UntrustedMode && !assoc.nodeMgr.IsTrustedSelectionPath(path) {
+			senderPath := ""
+			if meta.Sender != nil {
+				senderPath = meta.Sender.GetPath()
+			}
+			assoc.nodeMgr.recordUntrustedDrop(env.GetSerializerId(), string(env.GetMessageManifest()),
+				"selection path not in trusted-selection-paths", path, senderPath)
+			return nil
+		}
+
 		// 2b. Handle Identify (MiscMessageSerializer, sid=16, manifest "A") —
 		// reply with ActorIdentity so Pekko's actorSelection(...).resolveOne() works.
 		// Only respond to manifest "A" (Identify); other MiscMessage types are dropped.

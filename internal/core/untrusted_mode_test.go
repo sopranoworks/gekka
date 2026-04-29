@@ -10,6 +10,7 @@ package core
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/sopranoworks/gekka/actor"
@@ -163,3 +164,178 @@ func TestHandleUserMessage_UntrustedModeDropsPoisonPill(t *testing.T) {
 	}
 }
 
+// ── Session 32: trusted-selection-paths ─────────────────────────────────────
+
+// TestNodeManager_IsTrustedSelectionPath verifies the allowlist matcher: an
+// empty allowlist trusts nothing; entries match exactly on the bare actor
+// path, with the URI scheme + authority stripped before comparison.
+func TestNodeManager_IsTrustedSelectionPath(t *testing.T) {
+	nm := NewNodeManager(&gproto_remote.Address{
+		Protocol: proto.String("pekko"),
+		System:   proto.String("Test"),
+		Hostname: proto.String("127.0.0.1"),
+		Port:     proto.Uint32(0),
+	}, 1)
+
+	// Empty allowlist trusts nothing — matches Pekko's default behavior.
+	if nm.IsTrustedSelectionPath("/user/echo") {
+		t.Fatal("empty allowlist must not trust any path")
+	}
+
+	nm.TrustedSelectionPaths = []string{"/user/echo", "/user/api"}
+	for _, tc := range []struct {
+		path string
+		want bool
+	}{
+		{"/user/echo", true},
+		{"/user/api", true},
+		{"pekko://Test@127.0.0.1:2552/user/echo", true}, // URI form is normalized
+		{"/user/secret", false},                         // not in allowlist
+		{"/user/echo/sub", false},                       // exact match required, not prefix
+		{"/user", false},                                // parent of allowed entry is not allowed
+		{"", false},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			got := nm.IsTrustedSelectionPath(tc.path)
+			if got != tc.want {
+				t.Errorf("IsTrustedSelectionPath(%q) = %v, want %v", tc.path, got, tc.want)
+			}
+		})
+	}
+}
+
+// buildSelectionEnvelopePayload produces an Artery SelectionEnvelope payload
+// addressed at the supplied actor path. Used by the dispatch tests below to
+// exercise the trusted-selection-paths gate end-to-end.
+func buildSelectionEnvelopePayload(t *testing.T, path string, sid int32, manifest string) []byte {
+	t.Helper()
+	if !strings.HasPrefix(path, "/") {
+		t.Fatalf("path must start with /: %q", path)
+	}
+	segments := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	pattern := make([]*gproto_remote.Selection, 0, len(segments))
+	for _, seg := range segments {
+		typ := gproto_remote.PatternType_CHILD_NAME
+		pattern = append(pattern, &gproto_remote.Selection{
+			Type:    &typ,
+			Matcher: proto.String(seg),
+		})
+	}
+	env := &gproto_remote.SelectionEnvelope{
+		EnclosedMessage: []byte("hello"),
+		SerializerId:    proto.Int32(sid),
+		MessageManifest: []byte(manifest),
+		Pattern:         pattern,
+	}
+	bytes, err := proto.Marshal(env)
+	if err != nil {
+		t.Fatalf("marshal SelectionEnvelope: %v", err)
+	}
+	return bytes
+}
+
+// TestDispatch_SelectionEnvelope_UntrustedDropsNonAllowlisted verifies the S32
+// gate: when UntrustedMode is on and the resolved selection path is NOT in
+// TrustedSelectionPaths, the SelectionEnvelope is dropped before deserialize
+// and the user-message callback is never invoked.
+func TestDispatch_SelectionEnvelope_UntrustedDropsNonAllowlisted(t *testing.T) {
+	nm := NewNodeManager(&gproto_remote.Address{
+		Protocol: proto.String("pekko"),
+		System:   proto.String("Test"),
+		Hostname: proto.String("127.0.0.1"),
+		Port:     proto.Uint32(0),
+	}, 1)
+	nm.UntrustedMode = true
+	nm.TrustedSelectionPaths = []string{"/user/allowed"}
+
+	called := false
+	nm.UserMessageCallback = func(_ context.Context, _ *ArteryMetadata) error {
+		called = true
+		return nil
+	}
+
+	assoc := &GekkaAssociation{nodeMgr: nm}
+	meta := &ArteryMetadata{
+		SerializerId: 6, // MessageContainerSerializer
+		Payload:      buildSelectionEnvelopePayload(t, "/user/forbidden", RawSerializerID, ""),
+	}
+	if err := assoc.dispatch(context.Background(), meta); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if called {
+		t.Fatal("non-allowlisted selection must be dropped before user-message dispatch")
+	}
+}
+
+// TestDispatch_SelectionEnvelope_UntrustedAllowsListedPath verifies that an
+// allowlisted path passes the gate and reaches the user-message dispatcher
+// (the inner ByteArray payload deserializes successfully and the callback
+// fires).
+func TestDispatch_SelectionEnvelope_UntrustedAllowsListedPath(t *testing.T) {
+	nm := NewNodeManager(&gproto_remote.Address{
+		Protocol: proto.String("pekko"),
+		System:   proto.String("Test"),
+		Hostname: proto.String("127.0.0.1"),
+		Port:     proto.Uint32(0),
+	}, 1)
+	nm.UntrustedMode = true
+	nm.TrustedSelectionPaths = []string{"/user/allowed"}
+
+	delivered := make(chan string, 1)
+	nm.UserMessageCallback = func(_ context.Context, m *ArteryMetadata) error {
+		if m.Recipient != nil {
+			delivered <- m.Recipient.GetPath()
+		} else {
+			delivered <- ""
+		}
+		return nil
+	}
+
+	assoc := &GekkaAssociation{nodeMgr: nm}
+	meta := &ArteryMetadata{
+		SerializerId: 6,
+		Payload:      buildSelectionEnvelopePayload(t, "/user/allowed", RawSerializerID, ""),
+	}
+	if err := assoc.dispatch(context.Background(), meta); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	select {
+	case got := <-delivered:
+		if got != "/user/allowed" {
+			t.Errorf("delivered recipient = %q, want %q", got, "/user/allowed")
+		}
+	default:
+		t.Fatal("allowlisted selection must reach user-message dispatcher")
+	}
+}
+
+// TestDispatch_SelectionEnvelope_TrustedModeIgnoresAllowlist verifies that
+// when UntrustedMode is off the allowlist is not consulted — selections to
+// any path proceed to user-message dispatch (Pekko default behavior).
+func TestDispatch_SelectionEnvelope_TrustedModeIgnoresAllowlist(t *testing.T) {
+	nm := NewNodeManager(&gproto_remote.Address{
+		Protocol: proto.String("pekko"),
+		System:   proto.String("Test"),
+		Hostname: proto.String("127.0.0.1"),
+		Port:     proto.Uint32(0),
+	}, 1)
+	// UntrustedMode = false; allowlist intentionally empty.
+
+	delivered := false
+	nm.UserMessageCallback = func(_ context.Context, _ *ArteryMetadata) error {
+		delivered = true
+		return nil
+	}
+
+	assoc := &GekkaAssociation{nodeMgr: nm}
+	meta := &ArteryMetadata{
+		SerializerId: 6,
+		Payload:      buildSelectionEnvelopePayload(t, "/user/anything", RawSerializerID, ""),
+	}
+	if err := assoc.dispatch(context.Background(), meta); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if !delivered {
+		t.Fatal("untrusted-mode=off must not consult the allowlist")
+	}
+}

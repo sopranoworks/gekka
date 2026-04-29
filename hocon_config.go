@@ -418,6 +418,31 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		}
 	}
 
+	// ── Round-2 session 39 — F11 AtLeastOnceDelivery ───────────────────────
+	// Pekko exposes the redelivery interval, burst limit, warn threshold and
+	// the maximum unconfirmed-message ceiling under
+	// pekko.persistence.at-least-once-delivery.*. Values flow into the
+	// persistence package through SetDefaultAtLeastOnceConfig (cluster.go).
+	nodeCfg.Persistence.AtLeastOnceRedeliverInterval = 5 * time.Second
+	nodeCfg.Persistence.AtLeastOnceRedeliveryBurstLimit = 10000
+	nodeCfg.Persistence.AtLeastOnceWarnAfterNumberOfUnconfirmedAttempts = 5
+	nodeCfg.Persistence.AtLeastOnceMaxUnconfirmedMessages = 100000
+	aalPrefix := prefix + ".persistence.at-least-once-delivery"
+	if v, err := cfg.GetString(aalPrefix + ".redeliver-interval"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil && d > 0 {
+			nodeCfg.Persistence.AtLeastOnceRedeliverInterval = d
+		}
+	}
+	if v, err := cfg.GetInt(aalPrefix + ".redelivery-burst-limit"); err == nil && v > 0 {
+		nodeCfg.Persistence.AtLeastOnceRedeliveryBurstLimit = v
+	}
+	if v, err := cfg.GetInt(aalPrefix + ".warn-after-number-of-unconfirmed-attempts"); err == nil && v > 0 {
+		nodeCfg.Persistence.AtLeastOnceWarnAfterNumberOfUnconfirmedAttempts = v
+	}
+	if v, err := cfg.GetInt(aalPrefix + ".max-unconfirmed-messages"); err == nil && v > 0 {
+		nodeCfg.Persistence.AtLeastOnceMaxUnconfirmedMessages = v
+	}
+
 	// ── Cluster Roles ───────────────────────────────────────────────────────
 	var rolesTmp struct {
 		PekkoRoles []string `hocon:"pekko.cluster.roles"`

@@ -357,9 +357,10 @@ Legend:
 | `pekko.persistence.snapshot-store-plugin-fallback.circuit-breaker.reset-timeout` | `60s` | ✅ | Round-2 session 38 — snapshot-store open→half-open dwell time. |
 | `pekko.persistence.max-concurrent-recoveries` | `50` | ✅ | Global semaphore for recoveries |
 | `pekko.persistence.fsm.snapshot-after` | `off` | ✅ | Per-FSM opt-in via `WithSnapshotStore`+`SetSnapshotAfter`; save-side wired |
-| `pekko.persistence.at-least-once-delivery.redeliver-interval` | `5s` | ❌ | No feature |
-| `pekko.persistence.at-least-once-delivery.redelivery-burst-limit` | `10000` | ❌ | No feature |
-| `pekko.persistence.at-least-once-delivery.max-unconfirmed-messages` | `100000` | ❌ | No feature |
+| `pekko.persistence.at-least-once-delivery.redeliver-interval` | `5s` | ✅ | Round-2 session 39 — `AtLeastOnceDelivery` redelivery period. Wired through `persistence.SetDefaultAtLeastOnceConfig`. |
+| `pekko.persistence.at-least-once-delivery.redelivery-burst-limit` | `10000` | ✅ | Round-2 session 39 — caps redeliveries fired per redeliver tick. |
+| `pekko.persistence.at-least-once-delivery.warn-after-number-of-unconfirmed-attempts` | `5` | ✅ | Round-2 session 39 — per-message attempt threshold surfaced via `MaxAttempts()`. |
+| `pekko.persistence.at-least-once-delivery.max-unconfirmed-messages` | `100000` | ✅ | Round-2 session 39 — `Deliver` returns `ErrMaxUnconfirmedMessagesExceeded` once the ceiling is reached. |
 
 ---
 

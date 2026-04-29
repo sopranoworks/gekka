@@ -972,6 +972,31 @@ type PersistenceConfig struct {
 	// pekko.persistence.journal-plugin-fallback.recovery-event-timeout.
 	// Default: 30s. Round-2 session 38.
 	RecoveryEventTimeout time.Duration
+
+	// AtLeastOnceRedeliverInterval is the period between redelivery
+	// attempts for unconfirmed messages tracked by AtLeastOnceDelivery.
+	// Mirrors pekko.persistence.at-least-once-delivery.redeliver-interval.
+	// Default: 5s. Round-2 session 39.
+	AtLeastOnceRedeliverInterval time.Duration
+
+	// AtLeastOnceRedeliveryBurstLimit caps the maximum number of
+	// redeliveries fired per redeliver-interval tick. Mirrors
+	// pekko.persistence.at-least-once-delivery.redelivery-burst-limit.
+	// Default: 10000. Round-2 session 39.
+	AtLeastOnceRedeliveryBurstLimit int
+
+	// AtLeastOnceWarnAfterNumberOfUnconfirmedAttempts triggers a warn
+	// log entry when any pending delivery has been re-attempted at least
+	// this many times. Mirrors pekko.persistence.at-least-once-delivery.
+	// warn-after-number-of-unconfirmed-attempts.  Default: 5. Round-2 session 39.
+	AtLeastOnceWarnAfterNumberOfUnconfirmedAttempts int
+
+	// AtLeastOnceMaxUnconfirmedMessages caps the number of unconfirmed
+	// messages an AtLeastOnceDelivery instance accepts. Deliver() returns
+	// ErrMaxUnconfirmedMessagesExceeded once this ceiling is reached.
+	// Mirrors pekko.persistence.at-least-once-delivery.max-unconfirmed-messages.
+	// Default: 100000. Round-2 session 39.
+	AtLeastOnceMaxUnconfirmedMessages int
 }
 
 // SBRConfig is a re-export of cluster.SBRConfig for use in ClusterConfig.
@@ -2345,6 +2370,16 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	if cfg.Persistence.RecoveryEventTimeout > 0 {
 		persistence.SetRecoveryEventTimeout(cfg.Persistence.RecoveryEventTimeout)
 	}
+
+	// Round-2 session 39 — F11 AtLeastOnceDelivery defaults. Zero values
+	// keep the persistence-package defaults so reference.conf wins when
+	// HOCON omits a key.
+	persistence.SetDefaultAtLeastOnceConfig(persistence.AtLeastOnceConfig{
+		RedeliverInterval:                       cfg.Persistence.AtLeastOnceRedeliverInterval,
+		RedeliveryBurstLimit:                    cfg.Persistence.AtLeastOnceRedeliveryBurstLimit,
+		WarnAfterNumberOfUnconfirmedAttempts:    cfg.Persistence.AtLeastOnceWarnAfterNumberOfUnconfirmedAttempts,
+		MaxUnconfirmedMessages:                  cfg.Persistence.AtLeastOnceMaxUnconfirmedMessages,
+	})
 
 	if len(cfg.Persistence.AutoStartJournals) > 0 {
 		var hcfg hocon.Config

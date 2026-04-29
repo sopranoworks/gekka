@@ -334,6 +334,9 @@ Legend:
 |---|---|---|---|
 | `pekko.persistence.journal.plugin` | `""` | ✅ | |
 | `pekko.persistence.journal.auto-start-journals` | `[]` | ✅ | Eagerly instantiates journal providers via `persistence.AutoStartJournals` |
+| `pekko.persistence.journal.proxy.target-journal-plugin-id` | (required) | ✅ | Round-2 session 36 — registry name of the real journal the proxy delegates to (`persistence/proxy_journal.go`). |
+| `pekko.persistence.journal.proxy.init-timeout` | `10s` | ✅ | Round-2 session 36 — first-use resolution retry budget (100 ms tick). |
+| `pekko.persistence.journal.proxy.start-target-journal` | `on` | ⚠️ | Round-2 session 36 — only `on` (in-process) is implemented; `off` is rejected at construction time pending Artery cross-process transport. |
 | `pekko.persistence.snapshot-store.plugin` | `""` | ✅ | |
 | `pekko.persistence.snapshot-store.auto-start-snapshot-stores` | `[]` | ✅ | Eagerly instantiates snapshot-store providers |
 | `pekko.persistence.snapshot-store.auto-migrate-manifest` | `"pekko"` | ✅ | Manifest used when migrating legacy snapshot envelopes |

@@ -168,6 +168,7 @@ Legend:
 
 | Path | Pekko Default | Gekka? | Notes |
 |---|---|---|---|
+| `pekko.cluster.distributed-data.enabled` | `on` | ✅ | `DistributedDataConfig.Enabled` — gates Replicator startup |
 | `pekko.cluster.distributed-data.gossip-interval` | `2s` | ✅ | |
 | `pekko.cluster.distributed-data.name` | `ddataReplicator` | ❌ | No feature (hardcoded) |
 | `pekko.cluster.distributed-data.role` | `""` | ❌ | No feature |
@@ -224,6 +225,15 @@ Legend:
 | `pekko.cluster.sharding.rebalance-interval` | `10s` | ✅ | Applied to ShardCoordinator.RebalanceInterval |
 | `pekko.cluster.sharding.least-shard-allocation-strategy.rebalance-threshold` | `1` | ✅ | Applied to NewLeastShardAllocationStrategy(threshold) |
 | `pekko.cluster.sharding.least-shard-allocation-strategy.max-simultaneous-rebalance` | `3` | ✅ | Applied to NewLeastShardAllocationStrategy(maxSimultaneous) |
+| `pekko.cluster.sharding.least-shard-allocation-strategy.rebalance-absolute-limit` | `0` | ✅ | Round-2 session 33 — when `> 0` selects the Pekko 1.0+ two-phase `LeastShardAllocationStrategyV2` (`cluster/sharding/strategy.go`); `0` keeps the legacy threshold-based strategy. |
+| `pekko.cluster.sharding.least-shard-allocation-strategy.rebalance-relative-limit` | `0.1` | ✅ | Round-2 session 33 — fraction of total shards capping each rebalance round under V2 (`max(1, min(int(rel*total), absolute))`). |
+| `pekko.cluster.sharding.external-shard-allocation-strategy.client-timeout` | `5s` | ✅ | `cluster/sharding/strategy.go` — bound on external strategy RPC calls. |
+| `pekko.cluster.sharding.event-sourced-remember-entities-store.max-updates-per-write` | `100` | ✅ | Round-2 session 34 — Shard buffers EntityStarted/EntityStopped events; the buffer is flushed in a single AsyncWriteMessages call once it hits the cap, with a final flush in PostStop. Cap of `0` keeps the legacy one-event-per-write path. |
+| `pekko.cluster.sharding.state-store-mode` | `"ddata"` | ☕ | JVM-only — gekka commits to `ddata` exclusively for sharding state; the `persistence` mode and its tunables (`snapshot-after`, `keep-nr-of-batches`, `journal-plugin-id`, `snapshot-plugin-id`) are N/A in gekka. |
+| `pekko.cluster.sharding.snapshot-after` | `1000` | ☕ | JVM-only — `state-store-mode = persistence` subset; gekka uses `ddata`. |
+| `pekko.cluster.sharding.keep-nr-of-batches` | `2` | ☕ | JVM-only — `state-store-mode = persistence` subset; gekka uses `ddata`. |
+| `pekko.cluster.sharding.journal-plugin-id` | `""` | ☕ | JVM-only — `state-store-mode = persistence` subset; gekka uses `ddata`. |
+| `pekko.cluster.sharding.snapshot-plugin-id` | `""` | ☕ | JVM-only — `state-store-mode = persistence` subset; gekka uses `ddata`. |
 | `pekko.cluster.sharding.distributed-data.majority-min-cap` | `5` | ⚠️ | Parsed; gekka uses shared replicator (not yet routed) |
 | `pekko.cluster.sharding.distributed-data.max-delta-elements` | `5` | ⚠️ | Parsed; gekka uses shared replicator (not yet routed) |
 | `pekko.cluster.sharding.distributed-data.prefer-oldest` | `on` | ⚠️ | Parsed; gekka uses shared replicator (not yet routed) |
@@ -434,14 +444,26 @@ touching the consumer code.
 
 ## Summary
 
-### Correctly Parsed (✅): 75+ paths
+### Correctly Parsed (✅): ~250 paths
 
-All core cluster formation, failure detection, SBR (including down-all-when-unstable),
-multi-DC, sharding (number-of-shards, role), singleton (role, hand-over-retry-interval),
-singleton-proxy (identification-interval, buffer-size), pub-sub (gossip-interval),
-persistence (max-concurrent-recoveries, plugin selection), advanced gossip tuning
-(probability, TTL, tombstones, reaper), WeaklyUp promotion, app-version, NAT/Docker bind,
-discovery, cluster client, management, and remote transport paths.
+Round-2 sessions 01–40 closed the entire portable Pekko surface.  Coverage now
+includes core cluster formation, failure detection (incl. cross-DC), SBR
+(`down-all-when-unstable` + `lease-majority`), full advanced gossip tuning
+(probability, TTL, tombstones, reaper, prune timers), Artery transport
+(handshake budgets, idle/quarantine sweeps, restart caps, compression tables,
+TCP timeouts, `untrusted-mode`/`trusted-selection-paths`,
+`large-message-destinations` + UDP stream-3 routing,
+`maximum-large-frame-size` cap), full sharding (every retry/backoff path,
+`use-lease`, advanced passivation including W-TinyLFU composite, allocation V1
+& V2, EventSourced remember-entities store with batched writes), full
+distributed-data (durable bbolt store, `prune-marker-time-to-live`,
+`log-data-size-exceeding`, `recovery-timeout`), full singleton/proxy/pub-sub
+(incl. `use-lease`, `send-to-dead-letters-when-no-subscribers`), full cluster
+client + receptionist (`response-tunnel-receive-timeout`,
+`failure-detection-interval`), full persistence (proxy journal/snapshot,
+plugin-fallback circuit-breaker + replay-filter + recovery-event-timeout, FSM
+snapshots, AtLeastOnceDelivery scheduler + warn callback), `pekko.actor.debug`
+sub-flags, `log-config-on-start`, NAT/Docker bind, discovery, management.
 
 ### Wrong Path (⚠️): 1 path
 
@@ -449,15 +471,23 @@ discovery, cluster client, management, and remote transport paths.
 |---|---|
 | `pekko.cluster.sharding.passivation.idle-timeout` | `pekko.cluster.sharding.passivation.default-idle-strategy.idle-entity.timeout` |
 
-### Not Parsed (❌): ~50+ paths
+### Not Parsed: residual JVM-only paths (☕)
 
-These are paths for features that do not exist in gekka. They fall into categories:
+After Round-2 session 41 the only remaining unwired paths on the Pekko surface
+are JVM-only ones — see `docs/LEFTWORKS.md` §9 for the full list. Highlights:
 
-1. **JVM-specific** — class loading, dispatchers, JMX, Sigar metrics
-2. **Lease-based SBR** — coordination-lease API ships in `cluster/lease` (round-2 session 18, in-memory ref); SBR `lease-majority` (session 19) and Singleton/Sharding `use-lease` (session 20) are wired through `Cluster.LeaseManager()`
-3. **Reliable delivery** — producer/consumer controller not implemented
-4. **Advanced passivation strategies** — only idle timeout supported
-5. **Durable distributed data** — persistence-backed DData not implemented
-6. **Sharded daemon process** — not implemented
-7. **Typed receptionist** — write-consistency, pruning, distributed-key-count
-8. **Advanced DData tuning** — delta-crdt, pruning-interval, prefer-oldest
+1. **JVM-specific** — class loading, dispatchers, JMX, Sigar metrics, scheduler internals
+2. **Reliable delivery typed protocol** — producer/consumer controller not implemented (Pekko's `pekko.reliable-delivery.*` is distinct from `at-least-once-delivery.*`, which is ✅ DONE)
+3. **Sharded daemon process** — not implemented (Pekko-typed feature)
+4. **Typed receptionist** — write-consistency, pruning, distributed-key-count
+5. **Sharding `state-store-mode = persistence` subset** — gekka commits to `ddata`; `state-store-mode`, `snapshot-after`, `keep-nr-of-batches`, `journal-plugin-id`, `snapshot-plugin-id`
+6. **Discovery aggregate / pekko-dns** — not implemented (out of scope; gekka uses k8s-extension)
+7. **Cluster metrics (Sigar/JMX)** — JVM-only
+
+### Round-2 close-out
+
+Session 41 (2026-04-30) marks Round-2 complete: 0 HARDCODED + 0 NO FEATURE
+on the portable surface. Full test gate (unit + integration + sbt
+multi-jvm:test 3/3) passes. See
+`docs/superpowers/plans/2026-04-24-config-completeness-round2.md` for the
+session ledger.

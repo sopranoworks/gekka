@@ -681,6 +681,14 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 	if v, err := cfg.GetInt(leastPrefix + ".max-simultaneous-rebalance"); err == nil {
 		nodeCfg.Sharding.LeastShardAllocation.MaxSimultaneousRebalance = v
 	}
+	if v, err := cfg.GetInt(leastPrefix + ".rebalance-absolute-limit"); err == nil {
+		nodeCfg.Sharding.LeastShardAllocation.RebalanceAbsoluteLimit = v
+	}
+	if v, err := cfg.GetString(leastPrefix + ".rebalance-relative-limit"); err == nil {
+		if f, parseErr := strconv.ParseFloat(strings.TrimSpace(v), 64); parseErr == nil {
+			nodeCfg.Sharding.LeastShardAllocation.RebalanceRelativeLimit = f
+		}
+	}
 
 	// pekko.cluster.sharding.distributed-data.* — sharding-specific replicator overrides.
 	shardingDDataPrefix := shardingPrefix + ".distributed-data"

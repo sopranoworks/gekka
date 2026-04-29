@@ -377,19 +377,32 @@ func StartSharding[Command any, Event any, State any](
 				cfg.MaxSimultaneousRebalance,
 			)
 		} else {
-			// Default LeastShardAllocationStrategy parameters: prefer HOCON-
-			// configured values, fall back to gekka legacy defaults (3, 1).
-			threshold := 3
-			maxSimul := 1
+			// Pekko semantics: when rebalance-absolute-limit > 0, use the
+			// 1.0+ two-phase algorithm (LeastShardAllocationStrategyV2);
+			// otherwise keep the legacy threshold-based strategy.
+			absLimit := 0
+			relLimit := 0.0
 			if ok {
-				if v := cluster.cfg.Sharding.LeastShardAllocation.RebalanceThreshold; v > 0 {
-					threshold = v
-				}
-				if v := cluster.cfg.Sharding.LeastShardAllocation.MaxSimultaneousRebalance; v > 0 {
-					maxSimul = v
-				}
+				absLimit = cluster.cfg.Sharding.LeastShardAllocation.RebalanceAbsoluteLimit
+				relLimit = cluster.cfg.Sharding.LeastShardAllocation.RebalanceRelativeLimit
 			}
-			strategy = sharding.NewLeastShardAllocationStrategy(threshold, maxSimul)
+			if absLimit > 0 {
+				strategy = sharding.NewLeastShardAllocationStrategyV2(absLimit, relLimit)
+			} else {
+				// Default LeastShardAllocationStrategy parameters: prefer HOCON-
+				// configured values, fall back to gekka legacy defaults (3, 1).
+				threshold := 3
+				maxSimul := 1
+				if ok {
+					if v := cluster.cfg.Sharding.LeastShardAllocation.RebalanceThreshold; v > 0 {
+						threshold = v
+					}
+					if v := cluster.cfg.Sharding.LeastShardAllocation.MaxSimultaneousRebalance; v > 0 {
+						maxSimul = v
+					}
+				}
+				strategy = sharding.NewLeastShardAllocationStrategy(threshold, maxSimul)
+			}
 		}
 	}
 

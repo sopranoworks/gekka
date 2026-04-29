@@ -553,6 +553,27 @@ pekko.cluster.sharding.least-shard-allocation-strategy {
 	}
 }
 
+func TestHOCON_ShardingConfig_LeastShardAllocationStrategyV2Limits(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko.remote.artery.canonical.hostname = "127.0.0.1"
+pekko.remote.artery.canonical.port = 2552
+pekko.cluster.seed-nodes = []
+pekko.cluster.sharding.least-shard-allocation-strategy {
+  rebalance-absolute-limit = 17
+  rebalance-relative-limit = 0.25
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got := cfg.Sharding.LeastShardAllocation.RebalanceAbsoluteLimit; got != 17 {
+		t.Errorf("RebalanceAbsoluteLimit = %d, want 17", got)
+	}
+	if got := cfg.Sharding.LeastShardAllocation.RebalanceRelativeLimit; got != 0.25 {
+		t.Errorf("RebalanceRelativeLimit = %v, want 0.25", got)
+	}
+}
+
 func TestHOCON_ShardingConfig_DistributedData(t *testing.T) {
 	cfg, err := parseHOCONString(`
 pekko.remote.artery.canonical.hostname = "127.0.0.1"

@@ -1689,6 +1689,19 @@ type LeastShardAllocationConfig struct {
 	// Corresponds to least-shard-allocation-strategy.max-simultaneous-rebalance.
 	// Pekko default: 3.
 	MaxSimultaneousRebalance int
+
+	// RebalanceAbsoluteLimit is the maximum number of shards that will be
+	// rebalanced in one round under the Pekko 1.0+ algorithm. When > 0, the
+	// new two-phase strategy is selected; when 0, the legacy threshold-based
+	// strategy is kept. Corresponds to
+	// least-shard-allocation-strategy.rebalance-absolute-limit. Pekko default: 0.
+	RebalanceAbsoluteLimit int
+
+	// RebalanceRelativeLimit is the fraction (< 1.0) of the total number of
+	// known shards that may be rebalanced in one round under the Pekko 1.0+
+	// algorithm. Corresponds to
+	// least-shard-allocation-strategy.rebalance-relative-limit. Pekko default: 0.1.
+	RebalanceRelativeLimit float64
 }
 
 // ShardingDistributedDataConfig holds sharding-specific overrides for the

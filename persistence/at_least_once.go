@@ -98,6 +98,8 @@ type AtLeastOnceDelivery struct {
 	unconfirmed    map[int64]*pendingDelivery
 	stopCh         chan struct{}
 	running        bool
+	warn           WarnFunc
+	warned         map[int64]bool
 }
 
 type pendingDelivery struct {
@@ -160,6 +162,7 @@ func NewAtLeastOnceDeliveryWithConfig(cfg AtLeastOnceConfig) *AtLeastOnceDeliver
 		nextDeliveryID: 1,
 		unconfirmed:    make(map[int64]*pendingDelivery),
 		stopCh:         make(chan struct{}),
+		warned:         make(map[int64]bool),
 	}
 }
 
@@ -205,6 +208,7 @@ func (d *AtLeastOnceDelivery) ConfirmDelivery(deliveryID int64) bool {
 
 	if _, ok := d.unconfirmed[deliveryID]; ok {
 		delete(d.unconfirmed, deliveryID)
+		delete(d.warned, deliveryID)
 		return true
 	}
 	return false
@@ -248,6 +252,7 @@ func (d *AtLeastOnceDelivery) SetDeliverySnapshot(snap DeliverySnapshot) {
 
 	d.nextDeliveryID = snap.NextDeliveryID
 	d.unconfirmed = make(map[int64]*pendingDelivery, len(snap.Pending))
+	d.warned = make(map[int64]bool, len(snap.Pending))
 
 	for _, entry := range snap.Pending {
 		d.unconfirmed[entry.DeliveryID] = &pendingDelivery{
@@ -256,6 +261,13 @@ func (d *AtLeastOnceDelivery) SetDeliverySnapshot(snap DeliverySnapshot) {
 			Message:     entry.Message,
 			Timestamp:   time.Now(),
 			Attempts:    entry.Attempts,
+		}
+		// Pre-mark deliveries that already crossed the warn threshold so
+		// the next redeliver tick after recovery does not re-fire the
+		// warn callback for the same message.
+		if d.cfg.WarnAfterNumberOfUnconfirmedAttempts > 0 &&
+			entry.Attempts >= d.cfg.WarnAfterNumberOfUnconfirmedAttempts {
+			d.warned[entry.DeliveryID] = true
 		}
 	}
 }
@@ -305,6 +317,8 @@ func (d *AtLeastOnceDelivery) StopRedelivery() {
 func (d *AtLeastOnceDelivery) redeliverPending(redeliver func(string, int64, any)) {
 	d.mu.Lock()
 	burst := d.cfg.RedeliveryBurstLimit
+	threshold := d.cfg.WarnAfterNumberOfUnconfirmedAttempts
+	warn := d.warn
 	pending := make([]*pendingDelivery, 0, len(d.unconfirmed))
 	for _, pd := range d.unconfirmed {
 		pending = append(pending, pd)
@@ -312,13 +326,30 @@ func (d *AtLeastOnceDelivery) redeliverPending(redeliver func(string, int64, any
 	if burst > 0 && len(pending) > burst {
 		pending = pending[:burst]
 	}
+	type warnNotice struct {
+		dest     string
+		id       int64
+		attempts int
+	}
+	var warnNotices []warnNotice
 	for _, pd := range pending {
 		pd.Attempts++
+		if warn != nil && threshold > 0 && pd.Attempts >= threshold && !d.warned[pd.DeliveryID] {
+			d.warned[pd.DeliveryID] = true
+			warnNotices = append(warnNotices, warnNotice{
+				dest:     pd.Destination,
+				id:       pd.DeliveryID,
+				attempts: pd.Attempts,
+			})
+		}
 	}
 	d.mu.Unlock()
 
 	for _, pd := range pending {
 		redeliver(pd.Destination, pd.DeliveryID, pd.Message)
+	}
+	for _, n := range warnNotices {
+		warn(n.dest, n.id, n.attempts)
 	}
 }
 

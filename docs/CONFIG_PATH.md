@@ -357,10 +357,10 @@ Legend:
 | `pekko.persistence.snapshot-store-plugin-fallback.circuit-breaker.reset-timeout` | `60s` | ✅ | Round-2 session 38 — snapshot-store open→half-open dwell time. |
 | `pekko.persistence.max-concurrent-recoveries` | `50` | ✅ | Global semaphore for recoveries |
 | `pekko.persistence.fsm.snapshot-after` | `off` | ✅ | Per-FSM opt-in via `WithSnapshotStore`+`SetSnapshotAfter`; save-side wired |
-| `pekko.persistence.at-least-once-delivery.redeliver-interval` | `5s` | ✅ | Round-2 session 39 — `AtLeastOnceDelivery` redelivery period. Wired through `persistence.SetDefaultAtLeastOnceConfig`. |
-| `pekko.persistence.at-least-once-delivery.redelivery-burst-limit` | `10000` | ✅ | Round-2 session 39 — caps redeliveries fired per redeliver tick. |
-| `pekko.persistence.at-least-once-delivery.warn-after-number-of-unconfirmed-attempts` | `5` | ✅ | Round-2 session 39 — per-message attempt threshold surfaced via `MaxAttempts()`. |
-| `pekko.persistence.at-least-once-delivery.max-unconfirmed-messages` | `100000` | ✅ | Round-2 session 39 — `Deliver` returns `ErrMaxUnconfirmedMessagesExceeded` once the ceiling is reached. |
+| `pekko.persistence.at-least-once-delivery.redeliver-interval` | `5s` | ✅ | Round-2 session 39 — `AtLeastOnceDelivery` redelivery period. Wired through `persistence.SetDefaultAtLeastOnceConfig`. Round-2 session 40 — driven by `persistence.Scheduler` (`aald_scheduler.go`) so persistent actors can wire redelivery + warn callbacks via a single object. |
+| `pekko.persistence.at-least-once-delivery.redelivery-burst-limit` | `10000` | ✅ | Round-2 session 39 — caps redeliveries fired per redeliver tick. Integration test (`persistence/aald_integration_test.go`) exercises the loop end-to-end against a flaky-receiver harness. |
+| `pekko.persistence.at-least-once-delivery.warn-after-number-of-unconfirmed-attempts` | `5` | ✅ | Round-2 session 39 — per-message attempt threshold surfaced via `MaxAttempts()`. Round-2 session 40 wires the threshold into a once-per-delivery `WarnFunc` callback fired by the redelivery loop; `SetDeliverySnapshot` pre-marks restored entries above the threshold so recovery does not re-warn. |
+| `pekko.persistence.at-least-once-delivery.max-unconfirmed-messages` | `100000` | ✅ | Round-2 session 39 — `Deliver` returns `ErrMaxUnconfirmedMessagesExceeded` once the ceiling is reached. Round-2 session 40 — integration test verifies pending ids survive a snapshot-restore cycle and are still confirmable by a late ack. |
 
 ---
 

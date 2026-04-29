@@ -218,7 +218,7 @@ Legend:
 | `pekko.cluster.sharding.passivation.strategy-defaults.admission.frequency-sketch.reset-multiplier` | `10.0` | ✅ | Round-2 session 26. Triggers the sketch's halving reset every (active-entity-limit × multiplier) accesses. |
 | `pekko.cluster.sharding.guardian-name` | `"sharding"` | ❌ | No feature |
 | `pekko.cluster.sharding.role` | `""` | ✅ | Filters shard allocation by role |
-| `pekko.cluster.sharding.remember-entities-store` | `"ddata"` | ❌ | No feature |
+| `pekko.cluster.sharding.remember-entities-store` | `"ddata"` | ✅ | Round-2 session 35. `"ddata"` wires `DDataEntityStore` (existing); `"eventsourced"` wires `EventSourcedEntityStore` (new) — both implement `ShardStore` and are selected in `sharding.go` from `cluster.cfg.Sharding.RememberEntitiesStore`. |
 | `pekko.cluster.sharding.passivate-idle-entity-after` | `null` | ❌ | Deprecated in Pekko |
 | `pekko.cluster.sharding.number-of-shards` | `1000` | ✅ | Wired to coordinator/region |
 | `pekko.cluster.sharding.rebalance-interval` | `10s` | ✅ | Applied to ShardCoordinator.RebalanceInterval |

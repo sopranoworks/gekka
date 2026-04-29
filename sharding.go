@@ -567,6 +567,28 @@ func StartSharding[Command any, Event any, State any](
 		shardSettings.Store = sharding.NewDDataEntityStore(cluster.repl, typeName)
 	}
 
+	// Wire a journal-backed ShardStore when the operator has selected the
+	// "eventsourced" remember-entities backend (Round-2 session 35).  The
+	// store coalesces EntityStarted/EntityStopped events using the same
+	// max-updates-per-write cap that drives the legacy in-Shard batching, so
+	// either path produces equivalent batched journal writes.
+	//
+	// Selection precedence: an explicitly-supplied settings.Store always
+	// wins; otherwise we fall back to settings.Journal, then to the
+	// cluster's provisioned Journal, then to a fresh InMemoryJournal so unit
+	// tests don't have to wire one up.
+	if shardSettings.Store == nil && settings.RememberEntitiesStore == "eventsourced" {
+		journal := settings.Journal
+		if journal == nil && cluster != nil {
+			journal = cluster.Journal()
+		}
+		if journal == nil {
+			journal = persistence.NewInMemoryJournal()
+		}
+		shardSettings.Journal = journal
+		shardSettings.Store = sharding.NewEventSourcedEntityStore(journal, typeName, shardSettings.EventSourcedMaxUpdatesPerWrite)
+	}
+
 	region, err := sys.ActorOf(actor.Props{
 		New: func() actor.Actor {
 			return sharding.NewShardRegion(typeName, entityCreator, unmarshaler, extract, coordinatorRef, shardSettings)

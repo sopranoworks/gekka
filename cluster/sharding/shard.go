@@ -742,6 +742,12 @@ func (s *Shard) flushPendingPersist() {
 // completes.
 func (s *Shard) PostStop() {
 	s.flushPendingPersist()
+	if fs, ok := s.store.(FlushableStore); ok {
+		if err := fs.Flush(s.shardId); err != nil {
+			s.Log().Error("remember-entities: store flush failed",
+				"shardId", s.shardId, "error", err)
+		}
+	}
 	s.releaseLease()
 }
 

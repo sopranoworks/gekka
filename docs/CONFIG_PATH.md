@@ -340,6 +340,9 @@ Legend:
 | `pekko.persistence.snapshot-store.plugin` | `""` | ✅ | |
 | `pekko.persistence.snapshot-store.auto-start-snapshot-stores` | `[]` | ✅ | Eagerly instantiates snapshot-store providers |
 | `pekko.persistence.snapshot-store.auto-migrate-manifest` | `"pekko"` | ✅ | Manifest used when migrating legacy snapshot envelopes |
+| `pekko.persistence.snapshot-store.proxy.target-snapshot-store-plugin-id` | (required) | ✅ | Round-2 session 37 — registry name of the real snapshot store the proxy delegates to (`persistence/proxy_snapshot.go`). |
+| `pekko.persistence.snapshot-store.proxy.init-timeout` | `10s` | ✅ | Round-2 session 37 — first-use resolution retry budget (100 ms tick). |
+| `pekko.persistence.snapshot-store.proxy.start-target-snapshot-store` | `on` | ⚠️ | Round-2 session 37 — only `on` (in-process) is implemented; `off` is rejected at construction time pending Artery cross-process transport. |
 | `pekko.persistence.state-plugin-fallback.recovery-timeout` | `30s` | ✅ | Cap for durable-state plugin fallback recovery |
 | `pekko.persistence.max-concurrent-recoveries` | `50` | ✅ | Global semaphore for recoveries |
 | `pekko.persistence.fsm.snapshot-after` | `off` | ✅ | Per-FSM opt-in via `WithSnapshotStore`+`SetSnapshotAfter`; save-side wired |

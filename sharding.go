@@ -216,6 +216,16 @@ type ShardingSettings struct {
 	// the sketch's halving reset, expressed as a multiplier of the
 	// active-entity-limit.  Pekko default: 10.0.
 	PassivationFrequencySketchResetMultiplier float64
+
+	// EventSourcedMaxUpdatesPerWrite caps the number of buffered
+	// EntityStarted/EntityStopped events that are coalesced into a single
+	// journal write under the eventsourced remember-entities backend.
+	// When zero (and HOCON is also zero) the legacy one-event-per-write
+	// path stays in effect.
+	//
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.event-sourced-remember-entities-store.max-updates-per-write = 100
+	EventSourcedMaxUpdatesPerWrite int
 }
 
 // StartSharding starts cluster sharding for a given entity type.
@@ -355,6 +365,10 @@ func StartSharding[Command any, Event any, State any](
 		}
 		if settings.LeaseRetryDelay == 0 && cluster.cfg.Sharding.LeaseRetryInterval > 0 {
 			settings.LeaseRetryDelay = cluster.cfg.Sharding.LeaseRetryInterval
+		}
+		// Round-2 session 34 — eventsourced remember-entities batch cap.
+		if settings.EventSourcedMaxUpdatesPerWrite == 0 && cluster.cfg.Sharding.EventSourcedRememberEntitiesStore.MaxUpdatesPerWrite > 0 {
+			settings.EventSourcedMaxUpdatesPerWrite = cluster.cfg.Sharding.EventSourcedRememberEntitiesStore.MaxUpdatesPerWrite
 		}
 	}
 
@@ -535,6 +549,7 @@ func StartSharding[Command any, Event any, State any](
 		PassivationFrequencySketchCounterBits:      settings.PassivationFrequencySketchCounterBits,
 		PassivationFrequencySketchWidthMultiplier:  settings.PassivationFrequencySketchWidthMultiplier,
 		PassivationFrequencySketchResetMultiplier:  settings.PassivationFrequencySketchResetMultiplier,
+		EventSourcedMaxUpdatesPerWrite:             settings.EventSourcedMaxUpdatesPerWrite,
 	}
 
 	// Populate IsLocalDC when both the cluster and DataCenter are available.

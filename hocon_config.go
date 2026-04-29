@@ -690,6 +690,13 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		}
 	}
 
+	// pekko.cluster.sharding.event-sourced-remember-entities-store.* — knobs
+	// for the eventsourced remember-entities backend (journal-based).
+	esStorePrefix := shardingPrefix + ".event-sourced-remember-entities-store"
+	if v, err := cfg.GetInt(esStorePrefix + ".max-updates-per-write"); err == nil {
+		nodeCfg.Sharding.EventSourcedRememberEntitiesStore.MaxUpdatesPerWrite = v
+	}
+
 	// pekko.cluster.sharding.distributed-data.* — sharding-specific replicator overrides.
 	shardingDDataPrefix := shardingPrefix + ".distributed-data"
 	if v, err := cfg.GetInt(shardingDDataPrefix + ".majority-min-cap"); err == nil {

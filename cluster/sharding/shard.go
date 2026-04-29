@@ -75,6 +75,13 @@ type Shard struct {
 	persistenceId string
 	journal       persistence.Journal
 
+	// pendingPersist coalesces EntityStarted/EntityStopped events when
+	// settings.EventSourcedMaxUpdatesPerWrite > 0 — the eventsourced
+	// remember-entities backend writes them in a single batch once the
+	// cap is hit (or PostStop fires). When the cap is 0 the slice is
+	// always empty and writes happen one-at-a-time on the legacy path.
+	pendingPersist []persistence.PersistentRepr
+
 	// remember-entities (store path): set-based; passivation keeps entities.
 	store ShardStore
 
@@ -686,37 +693,55 @@ func (s *Shard) checkIdleEntities() {
 
 // persistEntityStarted writes an EntityStarted event when RememberEntities is on.
 func (s *Shard) persistEntityStarted(entityId EntityId) {
-	if !s.settings.RememberEntities || s.journal == nil {
-		return
-	}
-	s.seqNr++
-	_ = s.journal.AsyncWriteMessages(context.Background(), []persistence.PersistentRepr{
-		{
-			PersistenceID: s.persistenceId,
-			SequenceNr:    s.seqNr,
-			Payload:       entityStartedEvent{EntityId: entityId},
-		},
-	})
+	s.appendPersistEvent(entityStartedEvent{EntityId: entityId})
 }
 
 // persistEntityStopped writes an EntityStopped event when RememberEntities is on.
 func (s *Shard) persistEntityStopped(entityId EntityId) {
+	s.appendPersistEvent(entityStoppedEvent{EntityId: entityId})
+}
+
+// appendPersistEvent enqueues a remember-entities event. When
+// EventSourcedMaxUpdatesPerWrite > 0 the event is buffered and flushed once the
+// buffer reaches the cap; otherwise it is written immediately, matching the
+// legacy one-event-per-write behavior.
+func (s *Shard) appendPersistEvent(payload any) {
 	if !s.settings.RememberEntities || s.journal == nil {
 		return
 	}
 	s.seqNr++
-	_ = s.journal.AsyncWriteMessages(context.Background(), []persistence.PersistentRepr{
-		{
-			PersistenceID: s.persistenceId,
-			SequenceNr:    s.seqNr,
-			Payload:       entityStoppedEvent{EntityId: entityId},
-		},
-	})
+	repr := persistence.PersistentRepr{
+		PersistenceID: s.persistenceId,
+		SequenceNr:    s.seqNr,
+		Payload:       payload,
+	}
+	cap := s.settings.EventSourcedMaxUpdatesPerWrite
+	if cap <= 0 {
+		_ = s.journal.AsyncWriteMessages(context.Background(), []persistence.PersistentRepr{repr})
+		return
+	}
+	s.pendingPersist = append(s.pendingPersist, repr)
+	if len(s.pendingPersist) >= cap {
+		s.flushPendingPersist()
+	}
 }
 
-// PostStop releases the coordination lease (if held) so a peer Shard can
-// take over once handoff completes.
+// flushPendingPersist writes any buffered remember-entities events as a single
+// batch. Safe to call when the buffer is empty.
+func (s *Shard) flushPendingPersist() {
+	if len(s.pendingPersist) == 0 || s.journal == nil {
+		return
+	}
+	batch := s.pendingPersist
+	s.pendingPersist = nil
+	_ = s.journal.AsyncWriteMessages(context.Background(), batch)
+}
+
+// PostStop flushes any buffered remember-entities events and releases the
+// coordination lease (if held) so a peer Shard can take over once handoff
+// completes.
 func (s *Shard) PostStop() {
+	s.flushPendingPersist()
 	s.releaseLease()
 }
 

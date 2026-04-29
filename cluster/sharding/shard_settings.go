@@ -318,6 +318,15 @@ type ShardSettings struct {
 	// Equivalent HOCON key:
 	//   pekko.cluster.sharding.lease-retry-interval = 5s
 	LeaseRetryDelay time.Duration
+
+	// EventSourcedMaxUpdatesPerWrite caps the number of buffered
+	// EntityStarted/EntityStopped events that are coalesced into a single
+	// journal write under the eventsourced remember-entities backend.
+	// When zero the Shard writes each event immediately (legacy behavior).
+	//
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.event-sourced-remember-entities-store.max-updates-per-write = 100
+	EventSourcedMaxUpdatesPerWrite int
 }
 
 // EntityRecoveryStrategyAll is the default entity-recovery strategy: every

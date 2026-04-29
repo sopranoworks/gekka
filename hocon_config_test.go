@@ -574,6 +574,23 @@ pekko.cluster.sharding.least-shard-allocation-strategy {
 	}
 }
 
+func TestHOCON_ShardingConfig_EventSourcedRememberEntitiesStore(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko.remote.artery.canonical.hostname = "127.0.0.1"
+pekko.remote.artery.canonical.port = 2552
+pekko.cluster.seed-nodes = []
+pekko.cluster.sharding.event-sourced-remember-entities-store {
+  max-updates-per-write = 250
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got := cfg.Sharding.EventSourcedRememberEntitiesStore.MaxUpdatesPerWrite; got != 250 {
+		t.Errorf("MaxUpdatesPerWrite = %d, want 250", got)
+	}
+}
+
 func TestHOCON_ShardingConfig_DistributedData(t *testing.T) {
 	cfg, err := parseHOCONString(`
 pekko.remote.artery.canonical.hostname = "127.0.0.1"

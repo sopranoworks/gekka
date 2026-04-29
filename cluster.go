@@ -1533,6 +1533,11 @@ type ShardingConfig struct {
 	// and no explicit allocation strategy is supplied via ShardingSettings.
 	LeastShardAllocation LeastShardAllocationConfig
 
+	// EventSourcedRememberEntitiesStore holds knobs for the eventsourced
+	// remember-entities backend.
+	// Corresponds to pekko.cluster.sharding.event-sourced-remember-entities-store.*.
+	EventSourcedRememberEntitiesStore EventSourcedRememberEntitiesStoreConfig
+
 	// DistributedData holds sharding-specific overrides for the DData
 	// replicator that backs coordinator state and remember-entities.
 	// Corresponds to pekko.cluster.sharding.distributed-data.*.
@@ -1674,6 +1679,17 @@ type ShardingHealthCheckConfig struct {
 	// Timeout caps how long the health check is allowed to run.
 	// Corresponds to pekko.cluster.sharding.healthcheck.timeout. Pekko default: 5s.
 	Timeout time.Duration
+}
+
+// EventSourcedRememberEntitiesStoreConfig holds knobs for the eventsourced
+// remember-entities backend (the journal-based variant). Corresponds to
+// pekko.cluster.sharding.event-sourced-remember-entities-store.*.
+type EventSourcedRememberEntitiesStoreConfig struct {
+	// MaxUpdatesPerWrite is the upper bound on the number of buffered
+	// EntityStarted/EntityStopped events that may be coalesced into a
+	// single journal write. Corresponds to max-updates-per-write.
+	// Pekko default: 100.
+	MaxUpdatesPerWrite int
 }
 
 // LeastShardAllocationConfig holds knobs for the default sharding allocation

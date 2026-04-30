@@ -9,8 +9,49 @@
 package ddata
 
 import (
+	"errors"
+	"sync/atomic"
+	"time"
+
 	"github.com/sopranoworks/gekka/actor/typed"
 )
+
+// ErrUnexpectedAskTimeout is delivered in ReplicatorResponse.Err when the
+// adapter could not produce a typed response within UnexpectedAskTimeout.
+//
+// Mirrors Pekko's
+// pekko.cluster.ddata.typed.replicator-message-adapter-unexpected-ask-timeout
+// behaviour: an unexpected/slow underlying ask response is bounded so the
+// owning actor is not blocked indefinitely.
+var ErrUnexpectedAskTimeout = errors.New("ddata: typed replicator adapter unexpected ask timeout")
+
+// defaultUnexpectedAskTimeoutNanos holds the package-level timeout fed by
+// pekko.cluster.ddata.typed.replicator-message-adapter-unexpected-ask-timeout.
+// Stored as nanoseconds so atomic.Int64 reads are lock-free. Zero ⇒ 20s.
+var defaultUnexpectedAskTimeoutNanos atomic.Int64
+
+// SetDefaultUnexpectedAskTimeout installs the default timeout used by
+// TypedReplicatorAdapter when bounding the wait for an unexpected ask response.
+// Non-positive values revert to the 20s Pekko default.
+//
+// HOCON: pekko.cluster.ddata.typed.replicator-message-adapter-unexpected-ask-timeout
+func SetDefaultUnexpectedAskTimeout(d time.Duration) {
+	if d <= 0 {
+		defaultUnexpectedAskTimeoutNanos.Store(0)
+		return
+	}
+	defaultUnexpectedAskTimeoutNanos.Store(int64(d))
+}
+
+// GetDefaultUnexpectedAskTimeout returns the currently configured default.
+// Falls back to 20s when unconfigured.
+func GetDefaultUnexpectedAskTimeout() time.Duration {
+	v := defaultUnexpectedAskTimeoutNanos.Load()
+	if v <= 0 {
+		return 20 * time.Second
+	}
+	return time.Duration(v)
+}
 
 // ReplicatorResponse wraps a CRDT read result for delivery to a typed actor.
 type ReplicatorResponse[D any] struct {
@@ -32,6 +73,15 @@ type TypedReplicatorAdapter[Cmd any, D any] struct {
 	self       typed.TypedActorRef[Cmd]
 	wrap       func(ReplicatorResponse[D]) Cmd
 	subIDs     map[string]SubscriptionID
+
+	// UnexpectedAskTimeout bounds AskGet/AskUpdate dispatches: if the
+	// underlying read or modify call has not produced a response within this
+	// window, a ReplicatorResponse[D] carrying ErrUnexpectedAskTimeout is
+	// delivered to the actor instead. Mirrors Pekko's
+	// pekko.cluster.ddata.typed.replicator-message-adapter-unexpected-ask-timeout.
+	// Defaults to GetDefaultUnexpectedAskTimeout() (20s when unconfigured) at
+	// construction time; tests may override it directly.
+	UnexpectedAskTimeout time.Duration
 }
 
 // NewTypedReplicatorAdapter creates an adapter that routes replicator responses
@@ -53,29 +103,56 @@ func NewTypedReplicatorAdapter[Cmd any, D any](
 	wrap func(ReplicatorResponse[D]) Cmd,
 ) *TypedReplicatorAdapter[Cmd, D] {
 	return &TypedReplicatorAdapter[Cmd, D]{
-		replicator: replicator,
-		self:       ctx.Self(),
-		wrap:       wrap,
-		subIDs:     make(map[string]SubscriptionID),
+		replicator:           replicator,
+		self:                 ctx.Self(),
+		wrap:                 wrap,
+		subIDs:               make(map[string]SubscriptionID),
+		UnexpectedAskTimeout: GetDefaultUnexpectedAskTimeout(),
 	}
 }
 
 // AskGet reads the named CRDT asynchronously and delivers a ReplicatorResponse[D]
 // to the owning actor. getter extracts the typed value from the replicator; use
 // the convenience helpers (GCounterGetter, ORSetGetter, etc.) or provide a custom one.
+//
+// The dispatch is bounded by UnexpectedAskTimeout: if getter has not produced a
+// response within that window, ReplicatorResponse[D]{Err: ErrUnexpectedAskTimeout}
+// is delivered to the actor instead.
 func (a *TypedReplicatorAdapter[Cmd, D]) AskGet(
 	key string,
 	getter func(*Replicator, string) (D, bool),
 ) {
 	repl, self, wrap := a.replicator, a.self, a.wrap
+	timeout := a.UnexpectedAskTimeout
+	if timeout <= 0 {
+		timeout = GetDefaultUnexpectedAskTimeout()
+	}
+
+	type getResult struct {
+		data  D
+		found bool
+	}
+
 	go func() {
-		data, found := getter(repl, key)
-		self.Tell(wrap(ReplicatorResponse[D]{Key: key, Data: data, Found: found}))
+		done := make(chan getResult, 1)
+		go func() {
+			data, found := getter(repl, key)
+			done <- getResult{data: data, found: found}
+		}()
+
+		select {
+		case r := <-done:
+			self.Tell(wrap(ReplicatorResponse[D]{Key: key, Data: r.data, Found: r.found}))
+		case <-time.After(timeout):
+			self.Tell(wrap(ReplicatorResponse[D]{Key: key, Err: ErrUnexpectedAskTimeout}))
+		}
 	}()
 }
 
 // AskUpdate applies modify to the replicator and then delivers a ReplicatorResponse[D]
 // to the owning actor. getter retrieves the updated value for the response payload.
+//
+// As with AskGet, the dispatch is bounded by UnexpectedAskTimeout.
 func (a *TypedReplicatorAdapter[Cmd, D]) AskUpdate(
 	key string,
 	modify func(*Replicator, string),
@@ -83,10 +160,30 @@ func (a *TypedReplicatorAdapter[Cmd, D]) AskUpdate(
 	getter func(*Replicator, string) (D, bool),
 ) {
 	repl, self, wrap := a.replicator, a.self, a.wrap
+	timeout := a.UnexpectedAskTimeout
+	if timeout <= 0 {
+		timeout = GetDefaultUnexpectedAskTimeout()
+	}
+
+	type updateResult struct {
+		data  D
+		found bool
+	}
+
 	go func() {
-		modify(repl, key)
-		data, found := getter(repl, key)
-		self.Tell(wrap(ReplicatorResponse[D]{Key: key, Data: data, Found: found}))
+		done := make(chan updateResult, 1)
+		go func() {
+			modify(repl, key)
+			data, found := getter(repl, key)
+			done <- updateResult{data: data, found: found}
+		}()
+
+		select {
+		case r := <-done:
+			self.Tell(wrap(ReplicatorResponse[D]{Key: key, Data: r.data, Found: r.found}))
+		case <-time.After(timeout):
+			self.Tell(wrap(ReplicatorResponse[D]{Key: key, Err: ErrUnexpectedAskTimeout}))
+		}
 	}()
 }
 

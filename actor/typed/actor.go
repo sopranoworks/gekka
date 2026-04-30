@@ -234,10 +234,12 @@ func NewTypedActorInternal[T any](behavior Behavior[T]) *TypedActor[T] {
 }
 
 // PreStart initialises the timer scheduler and stash buffer once the actor's
-// self reference has been injected by the actor system.
+// self reference has been injected by the actor system. The stash buffer is
+// sized via GetDefaultRestartStashCapacity, which Pekko's
+// pekko.actor.typed.restart-stash-capacity HOCON key feeds.
 func (a *TypedActor[T]) PreStart() {
 	a.timers = newTimerScheduler[T](a.Self())
-	a.stash = actor.NewStashBuffer[T](actor.DefaultStashCapacity, func(msg T) {
+	a.stash = actor.NewStashBuffer[T](GetDefaultRestartStashCapacity(), func(msg T) {
 		a.stashPending = append(a.stashPending, msg)
 	})
 }
@@ -329,9 +331,10 @@ func (a *genericTypedActor) PreStart() {
 	// But we can create a proxy context that implements the interface.
 	a.ctx = createProxyContext(a)
 
-	// Initialize timers/stash
+	// Initialize timers/stash. The stash buffer honours
+	// pekko.actor.typed.restart-stash-capacity (see settings.go).
 	a.timers = actor.NewTimerScheduler[any](a.Self())
-	a.stash = actor.NewStashBuffer[any](actor.DefaultStashCapacity, func(msg any) {
+	a.stash = actor.NewStashBuffer[any](GetDefaultRestartStashCapacity(), func(msg any) {
 		a.stashPending = append(a.stashPending, msg)
 	})
 }

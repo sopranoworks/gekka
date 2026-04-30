@@ -332,12 +332,21 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		nodeCfg.Persistence.MaxConcurrentRecoveries = v
 	}
 
+	// ── Typed-actor surface — pekko.actor.typed.* ──────────────────────────
+	// Default mirrors Pekko's reference.conf:
+	//   pekko.actor.typed.restart-stash-capacity = 1000
+	nodeCfg.ActorTypedRestartStashCapacity = 1000
+	if v, err := cfg.GetInt(prefix + ".actor.typed.restart-stash-capacity"); err == nil && v > 0 {
+		nodeCfg.ActorTypedRestartStashCapacity = v
+	}
+
 	// ── Persistence small features (round2 session 17) ──────────────────────
 	nodeCfg.Persistence.AutoMigrateManifest = "pekko"
 	nodeCfg.Persistence.StatePluginFallbackRecoveryTimeout = 30 * time.Second
 	nodeCfg.Persistence.TypedStashCapacity = 4096
 	nodeCfg.Persistence.TypedStashOverflowStrategy = "drop"
 	nodeCfg.Persistence.TypedSnapshotOnRecovery = false
+	nodeCfg.Persistence.TypedLogStashing = false
 	nodeCfg.Persistence.FSMSnapshotAfter = 0
 	var persistAuto struct {
 		PekkoJournals    []string `hocon:"pekko.persistence.journal.auto-start-journals"`
@@ -384,6 +393,10 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 	if v, err := cfg.GetString(prefix + ".persistence.typed.snapshot-on-recovery"); err == nil {
 		v = strings.ToLower(strings.TrimSpace(v))
 		nodeCfg.Persistence.TypedSnapshotOnRecovery = v == "on" || v == "true"
+	}
+	if v, err := cfg.GetString(prefix + ".persistence.typed.log-stashing"); err == nil {
+		v = strings.ToLower(strings.TrimSpace(v))
+		nodeCfg.Persistence.TypedLogStashing = v == "on" || v == "true"
 	}
 	if v, err := cfg.GetString(prefix + ".persistence.fsm.snapshot-after"); err == nil {
 		trimmed := strings.ToLower(strings.TrimSpace(v))
@@ -1952,6 +1965,17 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 					nodeCfg.DistributedData.DurableLmdbWriteBehindInterval = d
 				}
 			}
+		}
+	}
+
+	// ── pekko.cluster.ddata.typed.* ────────────────────────────────────────
+	// Distinct namespace from pekko.cluster.distributed-data.* — these knobs
+	// govern the typed-API adapter that wraps the classic Replicator. Default
+	// mirrors Pekko's reference.conf: 20s.
+	nodeCfg.DistributedData.TypedReplicatorMessageAdapterUnexpectedAskTimeout = 20 * time.Second
+	if v, err := cfg.GetString(prefix + ".cluster.ddata.typed.replicator-message-adapter-unexpected-ask-timeout"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil && d > 0 {
+			nodeCfg.DistributedData.TypedReplicatorMessageAdapterUnexpectedAskTimeout = d
 		}
 	}
 

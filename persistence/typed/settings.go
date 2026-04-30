@@ -24,6 +24,7 @@ var (
 	stashCapacity         atomic.Int64 // 0 → fall back to actor.DefaultStashCapacity
 	stashOverflowStrategy atomic.Value // string ("drop" | "fail")
 	snapshotOnRecovery    atomic.Bool
+	logStashing           atomic.Bool
 )
 
 func init() {
@@ -88,4 +89,17 @@ func SetSnapshotOnRecovery(enabled bool) {
 // GetSnapshotOnRecovery reports whether the snapshot-on-recovery flag is set.
 func GetSnapshotOnRecovery() bool {
 	return snapshotOnRecovery.Load()
+}
+
+// SetLogStashing toggles emission of DEBUG log lines around the typed
+// persistent actor's stash + unstash operations.
+//
+// HOCON: pekko.persistence.typed.log-stashing (default off).
+func SetLogStashing(enabled bool) {
+	logStashing.Store(enabled)
+}
+
+// GetLogStashing reports whether stash/unstash DEBUG logging is enabled.
+func GetLogStashing() bool {
+	return logStashing.Load()
 }

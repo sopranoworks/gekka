@@ -290,7 +290,12 @@ func (p *persistentActor[Command, Event, State]) Receive(msg any) {
 				}
 				return
 			}
-			p.Log().Debug("Stashing command during recovery")
+			if GetLogStashing() {
+				p.Log().Debug("Stashing command during recovery",
+					"persistenceID", p.behavior.PersistenceID,
+					"size", len(p.stash)+1,
+					"msgType", fmt.Sprintf("%T", cmd))
+			}
 			p.stash = append(p.stash, cmd)
 		}
 		return
@@ -439,6 +444,11 @@ func (p *persistentActor[Command, Event, State]) deliverRecoveryCompleted() {
 }
 
 func (p *persistentActor[Command, Event, State]) processStash() {
+	if GetLogStashing() && len(p.stash) > 0 {
+		p.Log().Debug("Unstashing recovery commands",
+			"persistenceID", p.behavior.PersistenceID,
+			"count", len(p.stash))
+	}
 	for _, cmd := range p.stash {
 		p.Receive(cmd)
 	}

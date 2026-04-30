@@ -172,6 +172,11 @@ type ClusterConfig struct {
 	// actor-framework event is emitted at slog.Debug.
 	ActorDebug ActorDebugConfig
 
+	// ActorTypedRestartStashCapacity sizes the per-actor stash buffer used by
+	// typed actors while they are restarting. Mirrors
+	// pekko.actor.typed.restart-stash-capacity. Default: 1000.
+	ActorTypedRestartStashCapacity int
+
 	// LogConfigOnStart, when true, dumps the resolved configuration at INFO
 	// level during cluster spawn. Useful when uncertain which config layer
 	// is active (e.g., reference.conf vs. application.conf merge order).
@@ -831,6 +836,14 @@ type DistributedDataConfig struct {
 	// pekko.cluster.distributed-data.durable.lmdb.write-behind-interval.
 	// Default: 0 (synchronous; matches Pekko's "off").
 	DurableLmdbWriteBehindInterval time.Duration
+
+	// TypedReplicatorMessageAdapterUnexpectedAskTimeout bounds the wait that a
+	// TypedReplicatorAdapter (used by typed actors that talk to the Replicator)
+	// applies to AskGet / AskUpdate dispatches before delivering a synthetic
+	// timeout error. Corresponds to
+	// pekko.cluster.ddata.typed.replicator-message-adapter-unexpected-ask-timeout.
+	// Default: 20s.
+	TypedReplicatorMessageAdapterUnexpectedAskTimeout time.Duration
 }
 
 // CoordinationLeaseConfig holds defaults for the pekko.coordination.lease.*
@@ -930,6 +943,12 @@ type PersistenceConfig struct {
 	// Corresponds to pekko.persistence.typed.snapshot-on-recovery.
 	// Default: false.
 	TypedSnapshotOnRecovery bool
+
+	// TypedLogStashing, when true, gates DEBUG log lines around stash and
+	// unstash operations inside typed persistent actors during recovery.
+	// Corresponds to pekko.persistence.typed.log-stashing.
+	// Default: false (off).
+	TypedLogStashing bool
 
 	// FSMSnapshotAfter, when > 0, causes PersistentFSM to save a snapshot
 	// after every N state transitions.
@@ -2339,6 +2358,12 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	if cfg.Persistence.StatePluginFallbackRecoveryTimeout > 0 {
 		persistence.SetStatePluginFallbackRecoveryTimeout(cfg.Persistence.StatePluginFallbackRecoveryTimeout)
 	}
+	if cfg.ActorTypedRestartStashCapacity > 0 {
+		typed.SetDefaultRestartStashCapacity(cfg.ActorTypedRestartStashCapacity)
+	}
+	if cfg.DistributedData.TypedReplicatorMessageAdapterUnexpectedAskTimeout > 0 {
+		ddata.SetDefaultUnexpectedAskTimeout(cfg.DistributedData.TypedReplicatorMessageAdapterUnexpectedAskTimeout)
+	}
 	if cfg.Persistence.TypedStashCapacity > 0 {
 		persistencetyped.SetDefaultStashCapacity(cfg.Persistence.TypedStashCapacity)
 	}
@@ -2346,6 +2371,7 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 		persistencetyped.SetDefaultStashOverflowStrategy(cfg.Persistence.TypedStashOverflowStrategy)
 	}
 	persistencetyped.SetSnapshotOnRecovery(cfg.Persistence.TypedSnapshotOnRecovery)
+	persistencetyped.SetLogStashing(cfg.Persistence.TypedLogStashing)
 	persistence.SetDefaultFSMSnapshotAfter(cfg.Persistence.FSMSnapshotAfter)
 
 	// Round-2 session 38 — F10 plugin-fallback (circuit-breaker, replay-filter,

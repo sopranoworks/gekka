@@ -362,7 +362,7 @@ Legend:
 | `pekko.cluster.typed.receptionist.write-consistency` | `local` | ❌ | Not implemented — gekka has typed actors (`actor/typed/`) but no receptionist analog yet; tracked in `docs/LEFTWORKS.md` §11 |
 | `pekko.cluster.typed.receptionist.pruning-interval` | `3s` | ❌ | Not implemented (typed receptionist absent); tracked in `docs/LEFTWORKS.md` §11 |
 | `pekko.cluster.typed.receptionist.distributed-key-count` | `5` | ❌ | Not implemented (typed receptionist absent); tracked in `docs/LEFTWORKS.md` §11 |
-| `pekko.cluster.ddata.typed.replicator-message-adapter-unexpected-ask-timeout` | `20s` | ❌ | Not implemented — typed replicator-adapter timeout; tracked in `docs/LEFTWORKS.md` §11 |
+| `pekko.cluster.ddata.typed.replicator-message-adapter-unexpected-ask-timeout` | `20s` | ✅ | Consumed by `TypedReplicatorAdapter.AskGet/AskUpdate` in `cluster/ddata/typed_replicator.go`; bounds the wait before delivering `ErrUnexpectedAskTimeout` |
 
 ---
 
@@ -409,7 +409,7 @@ Legend:
 | `pekko.persistence.typed.stash-capacity` | `4096` | ✅ | Default for typed persistent actor recovery stash |
 | `pekko.persistence.typed.stash-overflow-strategy` | `"drop"` | ✅ | Honors `drop` and `fail` |
 | `pekko.persistence.typed.snapshot-on-recovery` | `false` | ✅ | Saves a snapshot at end of recovery |
-| `pekko.persistence.typed.log-stashing` | `off` | ❌ | Not implemented — debug log toggle for typed persistent actor stashing; tracked in `docs/LEFTWORKS.md` §11 |
+| `pekko.persistence.typed.log-stashing` | `off` | ✅ | Gates DEBUG log lines around stash/unstash in `persistence/typed/event_sourcing.go` (`GetLogStashing()`); HOCON wires through `persistencetyped.SetLogStashing` |
 
 ---
 
@@ -436,7 +436,7 @@ Legend:
 
 | Path | Pekko Default | Gekka? | Notes |
 |---|---|---|---|
-| `pekko.actor.typed.restart-stash-capacity` | `1000` | ❌ | Not implemented — gekka has stash buffers (`actor/stash.go`) but this knob isn't wired; tracked in `docs/LEFTWORKS.md` §11 |
+| `pekko.actor.typed.restart-stash-capacity` | `1000` | ✅ | Sizes `TypedActor`/`genericTypedActor` stash buffer in `actor/typed/actor.go` PreStart via `typed.GetDefaultRestartStashCapacity()` |
 | `pekko.reliable-delivery.*` | (all) | ❌ | Not implemented — Pekko-typed `ProducerController`/`ConsumerController` API. Distinct from `at-least-once-delivery.*` (✅). Tracked in `docs/LEFTWORKS.md` §11 |
 
 ---
@@ -476,11 +476,11 @@ touching the consumer code.
 
 | Symbol | Substantive table rows | Meaning |
 |---|---|---|
-| ✅ | 227 | Parsed AND consumed |
+| ✅ | 230 | Parsed AND consumed |
 | ⚠️ | 51 | Forward-compat parsed; consumer deferred (Note states what's deferred) |
 | ☕ | 8 | JVM-only — no equivalent capability in Go runtime |
 | 🚫 | 1 | Go/JVM API-shape incompatibility (FQCN class loading) |
-| ❌ | 22 | Not implemented; portable in principle (tracked in `docs/LEFTWORKS.md` §11) |
+| ❌ | 19 | Not implemented; portable in principle (tracked in `docs/LEFTWORKS.md` §11) |
 
 (Counts exclude the legend lines themselves and this Summary table. `grep -c "| ✅ |"` etc. on the file returns counts +1 because each Summary-table row contributes one match.)
 
@@ -534,8 +534,10 @@ Portable Pekko paths gekka has not bridged. The full list lives in
    control-aware mailboxes, system-message priority is not guaranteed and
    the system functions completely differently from Pekko/Akka.
 2. **Typed-API surface** — typed receptionist
-   (`cluster.typed.receptionist.*`), typed `restart-stash-capacity`,
-   persistence-typed `log-stashing`, ddata-typed adapter timeout.
+   (`cluster.typed.receptionist.*`). (Sub-plan 1 closed
+   `actor.typed.restart-stash-capacity`, `persistence.typed.log-stashing`,
+   and `ddata.typed.replicator-message-adapter-unexpected-ask-timeout` on
+   2026-04-30.)
 3. **Reliable-delivery (typed)** — Pekko-typed `ProducerController` /
    `ConsumerController`. Distinct from `at-least-once-delivery.*` (✅).
 4. **Sharded daemon process** — `pekko.cluster.sharded-daemon-process.*`.
@@ -549,6 +551,19 @@ Portable Pekko paths gekka has not bridged. The full list lives in
 
 ### Audit history
 
+- **2026-04-30 — Sub-plan 1 (Typed-API misc) landed:** Wired
+  `pekko.actor.typed.restart-stash-capacity` (sizes the typed-actor stash
+  buffer in `actor/typed/actor.go` PreStart via
+  `typed.GetDefaultRestartStashCapacity()`),
+  `pekko.persistence.typed.log-stashing` (gates DEBUG lines around
+  stash/unstash in `persistence/typed/event_sourcing.go`), and
+  `pekko.cluster.ddata.typed.replicator-message-adapter-unexpected-ask-timeout`
+  (bounds `TypedReplicatorAdapter.AskGet/AskUpdate` in
+  `cluster/ddata/typed_replicator.go` and delivers
+  `ErrUnexpectedAskTimeout` on the slow path). Each path is gated by a unit
+  test that observes the runtime effect, not just the parse. Summary
+  counts: ✅ 227 → 230, ❌ 22 → 19. LEFTWORKS.md §11 "Typed-API surface"
+  subsection emptied.
 - **2026-04-30 — ✅-honesty pass (post-roadmap spot-check):** Pre-roadmap
   spot-check audited 78 ✅ rows in 6 namespaces (artery-advanced,
   multi-DC FD, sharding, ddata, persistence-typed, AALD) and found 27

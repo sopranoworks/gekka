@@ -59,10 +59,53 @@ func (a *AggregateProvider) FetchSeedNodes() ([]string, error) {
 }
 
 func init() {
-	Register("aggregate", func(config DiscoveryConfig) (SeedProvider, error) {
-		// The aggregate provider is typically constructed programmatically
-		// rather than via HOCON config.  This registration allows referencing
-		// it by name for discovery method selection.
-		return &AggregateProvider{}, nil
-	})
+	Register("aggregate", aggregateFactory)
+}
+
+// aggregateFactory wires `pekko.discovery.aggregate.discovery-methods` into
+// a composed [AggregateProvider] over child providers resolved via the
+// existing registry.  The same DiscoveryConfig is threaded down to each
+// child so disjoint keys (`service-name`, `services`, `port`, ...) all
+// resolve from the same flattened map populated by hocon_config.go.
+func aggregateFactory(cfg DiscoveryConfig) (SeedProvider, error) {
+	methods, err := extractDiscoveryMethods(cfg.Config["discovery-methods"])
+	if err != nil {
+		return nil, err
+	}
+	if len(methods) == 0 {
+		return nil, fmt.Errorf("discovery: pekko.discovery.aggregate.discovery-methods must list at least one method")
+	}
+	children := make([]SeedProvider, 0, len(methods))
+	for _, name := range methods {
+		if name == "aggregate" {
+			return nil, fmt.Errorf("discovery: pekko.discovery.aggregate.discovery-methods cannot include %q (would recurse)", name)
+		}
+		child, err := Get(name, cfg)
+		if err != nil {
+			return nil, fmt.Errorf("discovery: pekko.discovery.aggregate.discovery-methods: child %q: %w", name, err)
+		}
+		children = append(children, child)
+	}
+	return NewAggregateProvider(children...), nil
+}
+
+func extractDiscoveryMethods(v any) ([]string, error) {
+	switch m := v.(type) {
+	case nil:
+		return nil, nil
+	case []string:
+		return m, nil
+	case []any:
+		out := make([]string, 0, len(m))
+		for i, item := range m {
+			s, ok := item.(string)
+			if !ok || s == "" {
+				return nil, fmt.Errorf("discovery: aggregate.discovery-methods[%d] must be a non-empty string", i)
+			}
+			out = append(out, s)
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("discovery: aggregate.discovery-methods must be a list of strings")
+	}
 }

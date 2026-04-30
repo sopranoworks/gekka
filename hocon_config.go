@@ -1804,6 +1804,77 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		}
 	}
 
+	// pekko.discovery.config.* — static service map (Pekko-compatible).
+	// `service-name` selects which named service in the resolved services map
+	// the registered factory (discovery/config_provider.go) consumes.
+	// `services-path` is honoured: it indirects to the location of the
+	// services tree (Pekko default `pekko.discovery.config.services`).
+	// All three discovery namespaces below share the `service-name`/`port`
+	// keys via `Discovery.Config.Config`; the active provider is selected by
+	// `Discovery.Type` so last-writer-wins is the intended behaviour.
+	if discoveryObj, err := cfg.GetConfig("pekko.discovery.config"); err == nil {
+		servicesPath := "pekko.discovery.config.services"
+		if sp, e := discoveryObj.GetString("services-path"); e == nil && strings.TrimSpace(sp) != "" {
+			servicesPath = strings.TrimSpace(sp)
+		}
+		if sn, e := discoveryObj.GetString("service-name"); e == nil {
+			nodeCfg.Discovery.Config.Config["service-name"] = strings.TrimSpace(sn)
+		}
+		if dp, e := discoveryObj.GetInt("default-port"); e == nil {
+			nodeCfg.Discovery.Config.Config["default-port"] = dp
+		}
+		if servicesObj, e := cfg.GetConfig(servicesPath); e == nil {
+			servicesMap := make(map[string]any)
+			for _, svcName := range servicesObj.Keys() {
+				svcObj, e2 := servicesObj.GetConfig(svcName)
+				if e2 != nil {
+					continue
+				}
+				var svc struct {
+					Endpoints []string `hocon:"endpoints"`
+				}
+				_ = svcObj.Unmarshal(&svc)
+				if len(svc.Endpoints) == 0 {
+					continue
+				}
+				endpointsList := make([]any, 0, len(svc.Endpoints))
+				for _, ep := range svc.Endpoints {
+					endpointsList = append(endpointsList, ep)
+				}
+				servicesMap[svcName] = map[string]any{"endpoints": endpointsList}
+			}
+			if len(servicesMap) > 0 {
+				nodeCfg.Discovery.Config.Config["services"] = servicesMap
+			}
+		}
+	}
+
+	// pekko.discovery.aggregate.* — multi-method aggregator.
+	// `discovery-methods` is read into Discovery.Config.Config so the
+	// registered factory (discovery/aggregate.go) can resolve children at
+	// factory time via the existing Get registry.
+	if discoveryObj, err := cfg.GetConfig("pekko.discovery.aggregate"); err == nil {
+		var dmTmp struct {
+			Methods []string `hocon:"discovery-methods"`
+		}
+		if e := discoveryObj.Unmarshal(&dmTmp); e == nil && len(dmTmp.Methods) > 0 {
+			nodeCfg.Discovery.Config.Config["discovery-methods"] = dmTmp.Methods
+		}
+	}
+
+	// pekko.discovery.pekko-dns.* — DNS SRV lookup.
+	// The `class` FQCN field is JVM-only and intentionally not honoured;
+	// gekka identifies the provider by the registry name "pekko-dns" (see
+	// discovery/pekko_dns_provider.go).
+	if discoveryObj, err := cfg.GetConfig("pekko.discovery.pekko-dns"); err == nil {
+		if sn, e := discoveryObj.GetString("service-name"); e == nil {
+			nodeCfg.Discovery.Config.Config["service-name"] = strings.TrimSpace(sn)
+		}
+		if p, e := discoveryObj.GetInt("port"); e == nil {
+			nodeCfg.Discovery.Config.Config["port"] = p
+		}
+	}
+
 	// Deprecated: gekka.cluster.discovery (fallback with warning)
 	if !nodeCfg.Discovery.Enabled {
 		deprecatedPrefix := "gekka.cluster.discovery"

@@ -418,9 +418,9 @@ Legend:
 | Path | Pekko Default | Gekka? | Notes |
 |---|---|---|---|
 | `pekko.discovery.method` | `"<method>"` | ✅ | |
-| `pekko.discovery.config.*` | (service map) | ❌ | Not implemented — gekka's k8s extension (`extensions/cluster/k8s`) is the alternative discovery path; tracked in `docs/LEFTWORKS.md` §11 |
-| `pekko.discovery.aggregate.*` | (multi-method) | ❌ | Not implemented — multi-method discovery aggregator; tracked in `docs/LEFTWORKS.md` §11 |
-| `pekko.discovery.pekko-dns.*` | (DNS) | ❌ | Not implemented — DNS-SRV discovery; tracked in `docs/LEFTWORKS.md` §11 |
+| `pekko.discovery.config.*` | (service map) | ✅ | Consumed by `discovery.ConfigProvider` (`discovery/config_provider.go`), driven from `cluster.go:applyDiscoveredSeeds` via `cfg.Discovery.{Type,Config}`; `services-path` indirection honoured. Endpoints accept the gekka string-list form `["host:port", ...]`; the JVM-only `{host, port}` object form is unsupported (gekka-config does not unmarshal lists of objects) and the `class` FQCN field is JVM-only (out of scope; see 🚫 bucket). |
+| `pekko.discovery.aggregate.*` | (multi-method) | ✅ | Consumed by the HOCON-driven aggregate factory in `discovery/aggregate.go`, which composes child providers from `pekko.discovery.aggregate.discovery-methods` via the existing `discovery.Get` registry. Empty list rejected (Pekko parity); the existing `AggregateProvider` tolerate-partial-failure semantics are preserved. |
+| `pekko.discovery.pekko-dns.*` | (DNS) | ✅ | Consumed by `discovery.PekkoDNSProvider` (`discovery/pekko_dns_provider.go`); reads `pekko.discovery.pekko-dns.{service-name,port}` and performs `net.LookupSRV`. The `class` FQCN field is JVM-only (out of scope; see 🚫 bucket). |
 
 ---
 
@@ -476,11 +476,11 @@ touching the consumer code.
 
 | Symbol | Substantive table rows | Meaning |
 |---|---|---|
-| ✅ | 231 | Parsed AND consumed |
+| ✅ | 234 | Parsed AND consumed |
 | ⚠️ | 51 | Forward-compat parsed; consumer deferred (Note states what's deferred) |
 | ☕ | 8 | JVM-only — no equivalent capability in Go runtime |
 | 🚫 | 1 | Go/JVM API-shape incompatibility (FQCN class loading) |
-| ❌ | 18 | Not implemented; portable in principle (tracked in `docs/LEFTWORKS.md` §11) |
+| ❌ | 15 | Not implemented; portable in principle (tracked in `docs/LEFTWORKS.md` §11) |
 
 (Counts exclude the legend lines themselves and this Summary table. `grep -c "| ✅ |"` etc. on the file returns counts +1 because each Summary-table row contributes one match.)
 
@@ -550,6 +550,24 @@ Portable Pekko paths gekka has not bridged. The full list lives in
 
 ### Audit history
 
+- **2026-05-01 — Sub-plan 3 (Discovery) landed:** Wired
+  `pekko.discovery.config.*`, `pekko.discovery.aggregate.*`, and
+  `pekko.discovery.pekko-dns.*` into the existing
+  `discovery.SeedProvider` registry. Three new providers ship in the
+  core `discovery` package (no extension dependency):
+  `ConfigProvider` (services map + `services-path` indirection),
+  `PekkoDNSProvider` (DNS-SRV via `net.LookupSRV`), and a real
+  HOCON-driven factory for the existing `AggregateProvider` (replaces
+  the empty-stub factory previously registered). All three plug into
+  the `applyDiscoveredSeeds` helper extracted from `cluster.go`'s
+  former inline block, which reads `cfg.Discovery.{Type,Config}` and
+  feeds `provider.FetchSeedNodes()` into `cfg.SeedNodes`.
+  Endpoint shape for `pekko.discovery.config` is the gekka string-list
+  form `["host:port", ...]`; the JVM-only `{host, port}` object form
+  is unsupported because gekka-config does not unmarshal lists of
+  objects. `class` FQCN fields stay 🚫 (JVM-only). Summary counts:
+  ✅ 231 → 234, ❌ 18 → 15. LEFTWORKS.md §11 "Discovery" subsection
+  removed.
 - **2026-04-30 — Sub-plan 2 (Sharded daemon process) landed:** Wired
   `pekko.cluster.sharded-daemon-process.keep-alive-interval` (10s default)
   and `pekko.cluster.sharded-daemon-process.sharding.role` into the

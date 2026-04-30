@@ -2078,6 +2078,33 @@ type Cluster struct {
 	sched *systemScheduler
 }
 
+// applyDiscoveredSeeds resolves the configured discovery provider, calls
+// FetchSeedNodes, and appends each discovered "host:port" to cfg.SeedNodes
+// after wrapping it as a `<scheme>://<system>@<host:port>` address.  A
+// FetchSeedNodes failure is logged but does not abort cluster startup; a
+// missing-provider error is fatal (configuration is invalid).
+func applyDiscoveredSeeds(cfg *ClusterConfig, scheme, system string) error {
+	if !cfg.Discovery.Enabled {
+		return nil
+	}
+	provider, err := discovery.Get(cfg.Discovery.Type, cfg.Discovery.Config)
+	if err != nil {
+		return fmt.Errorf("gekka: discovery: %w", err)
+	}
+	discovered, err := provider.FetchSeedNodes()
+	if err != nil {
+		log.Printf("[Discovery] %s: %v", cfg.Discovery.Type, err)
+		return nil
+	}
+	for _, s := range discovered {
+		uri := fmt.Sprintf("%s://%s@%s", scheme, system, s)
+		if addr, err := actor.ParseAddress(uri); err == nil {
+			cfg.SeedNodes = append(cfg.SeedNodes, addr)
+		}
+	}
+	return nil
+}
+
 // NewCluster creates, wires, and starts a Cluster. The TCP listener is bound
 // immediately; call node.Addr() to discover the assigned port when ClusterConfig.Port == 0.
 func NewCluster(cfg ClusterConfig) (*Cluster, error) {
@@ -2091,24 +2118,8 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	}
 
 	// Dynamic seed discovery (v0.9.0)
-	if cfg.Discovery.Enabled {
-		provider, err := discovery.Get(cfg.Discovery.Type, cfg.Discovery.Config)
-		if err != nil {
-			return nil, fmt.Errorf("gekka: discovery: %w", err)
-		}
-
-		discovered, err := provider.FetchSeedNodes()
-		if err != nil {
-			log.Printf("[Discovery] %s: %v", cfg.Discovery.Type, err)
-		} else {
-			for _, s := range discovered {
-				// Discovered seeds must match the same system and protocol.
-				uri := fmt.Sprintf("%s://%s@%s", scheme, system, s)
-				if addr, err := actor.ParseAddress(uri); err == nil {
-					cfg.SeedNodes = append(cfg.SeedNodes, addr)
-				}
-			}
-		}
+	if err := applyDiscoveredSeeds(&cfg, scheme, system); err != nil {
+		return nil, err
 	}
 
 	localAddr := &gproto_remote.Address{

@@ -54,3 +54,11 @@ func ProviderNames() []string {
 	}
 	return names
 }
+
+// Deregister removes a previously registered factory.  Intended for test
+// cleanup; production registrations live for the lifetime of the process.
+func Deregister(name string) {
+	providersMu.Lock()
+	defer providersMu.Unlock()
+	delete(providers, name)
+}

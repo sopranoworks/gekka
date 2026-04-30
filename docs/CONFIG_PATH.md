@@ -16,8 +16,8 @@ Legend:
 
 | Path | Pekko Default | Gekka? | Notes |
 |---|---|---|---|
-| `pekko.loglevel` | `"INFO"` | ✅ | |
-| `pekko.stdout-loglevel` | `"WARNING"` | ❌ | Not implemented — separate from `pekko.loglevel` (✅); tracked in `docs/LEFTWORKS.md` §11 |
+| `pekko.loglevel` | `"INFO"` | ❌ | Not implemented — parsed into `NodeConfig.LogLevel` (cluster.go:223) but no consumer; deferred to the future external-log-server logging cycle (gekka's logger is being replaced). Tracked in `docs/LEFTWORKS.md` §11 |
+| `pekko.stdout-loglevel` | `"WARNING"` | ❌ | Not implemented — deferred to the future external-log-server logging cycle (separate from the immediate post-audit roadmap). Tracked in `docs/LEFTWORKS.md` §11 |
 | `pekko.log-config-on-start` | `off` | ✅ | When on, NewCluster emits the resolved ClusterConfig at INFO via slog |
 | `pekko.log-dead-letters` | `10` | ✅ | `ClusterConfig.LogDeadLetters` — cap on dead-letter log spam (off=disable, N=log first N occurrences) |
 | `pekko.log-dead-letters-during-shutdown` | `on` | ✅ | `ClusterConfig.LogDeadLettersDuringShutdown` — when off, suppresses dead-letter logging during coordinated shutdown |
@@ -72,14 +72,14 @@ Legend:
 | `pekko.remote.artery.advanced.maximum-large-frame-size` | `2 MiB` | ✅ | Round-2 session 30 — applied to the inbound read loop when `assoc.streamId == AeronStreamLarge` (stream 3) via `effectiveStreamFrameSizeCap`; streams 1/2 keep `maximum-frame-size` |
 | `pekko.remote.artery.advanced.large-buffer-pool-size` | `32` | ⚠️ | Parsed and exposed via `NodeManager.EffectiveLargeBufferPoolSize`; large-stream buffer-pool consumer not yet implemented |
 | `pekko.remote.artery.advanced.outbound-large-message-queue-size` | `256` | ✅ | Recorded on NodeManager (`EffectiveOutboundLargeMessageQueueSize`) for the large-stream outbox |
-| `pekko.remote.artery.advanced.compression.actor-refs.max` | `256` | ✅ | Cap enforced by `CompressionTableManager.UpdateActorRefTable` — oversize advertisements are rejected |
-| `pekko.remote.artery.advanced.compression.actor-refs.advertisement-interval` | `1m` | ✅ | Drives `CompressionTableManager.StartAdvertisementScheduler` actor-ref ticker |
-| `pekko.remote.artery.advanced.compression.manifests.max` | `256` | ✅ | Cap enforced by `CompressionTableManager.UpdateManifestTable` — oversize advertisements are rejected |
-| `pekko.remote.artery.advanced.compression.manifests.advertisement-interval` | `1m` | ✅ | Drives `CompressionTableManager.StartAdvertisementScheduler` manifest ticker |
+| `pekko.remote.artery.advanced.compression.actor-refs.max` | `256` | ⚠️ | Plumbed onto `NodeManager.CompressionActorRefsMax`; `CompressionTableManager.UpdateActorRefTable` enforces the cap but the CTM is not constructed in production code (test-only) |
+| `pekko.remote.artery.advanced.compression.actor-refs.advertisement-interval` | `1m` | ⚠️ | Plumbed onto `NodeManager.CompressionActorRefsAdvertisementInterval`; `CompressionTableManager.StartAdvertisementScheduler` is invoked only from tests |
+| `pekko.remote.artery.advanced.compression.manifests.max` | `256` | ⚠️ | Plumbed onto `NodeManager.CompressionManifestsMax`; `CompressionTableManager.UpdateManifestTable` enforces the cap but the CTM is not constructed in production code (test-only) |
+| `pekko.remote.artery.advanced.compression.manifests.advertisement-interval` | `1m` | ⚠️ | Plumbed onto `NodeManager.CompressionManifestsAdvertisementInterval`; advertisement scheduler invoked only from tests |
 | `pekko.remote.artery.advanced.tcp.connection-timeout` | `5s` | ✅ | Threaded into `TcpClient.DialTimeout` and `DialRemote`'s association poll |
 | `pekko.remote.artery.advanced.tcp.outbound-client-hostname` | `""` | ✅ | Sets the local source address for outbound dials (`net.Dialer.LocalAddr`) |
-| `pekko.remote.artery.advanced.inbound-lanes` | `4` | ✅ | Exposed via `NodeManager.EffectiveInboundLanes()` |
-| `pekko.remote.artery.advanced.outbound-lanes` | `1` | ✅ | Exposed via `NodeManager.EffectiveOutboundLanes()` |
+| `pekko.remote.artery.advanced.inbound-lanes` | `4` | ⚠️ | Plumbed onto `NodeManager.InboundLanes` and exposed via `EffectiveInboundLanes()`; no production consumer multiplexes inbound dispatch (getter is test-only) |
+| `pekko.remote.artery.advanced.outbound-lanes` | `1` | ⚠️ | Plumbed onto `NodeManager.OutboundLanes` and exposed via `EffectiveOutboundLanes()`; no production consumer multiplexes outbound dispatch (getter is test-only) |
 | `pekko.remote.artery.advanced.outbound-message-queue-size` | `3072` | ✅ | Sizes each association's outbox channel |
 | `pekko.remote.artery.advanced.system-message-buffer-size` | `20000` | ⚠️ | Parsed and exposed via `NodeManager.EffectiveSystemMessageBufferSize`; sender-side system-message redelivery not yet implemented |
 | `pekko.remote.artery.advanced.outbound-control-queue-size` | `20000` | ✅ | Sizes each outbound control-stream (streamId=1) association's outbox |
@@ -87,17 +87,17 @@ Legend:
 | `pekko.remote.artery.advanced.handshake-retry-interval` | `1s` | ✅ | Re-sends HandshakeReq at this cadence until ASSOCIATED |
 | `pekko.remote.artery.advanced.system-message-resend-interval` | `1s` | ⚠️ | Parsed and exposed via `NodeManager.EffectiveSystemMessageResendInterval`; sender-side system-message redelivery loop not yet implemented |
 | `pekko.remote.artery.advanced.give-up-system-message-after` | `6h` | ⚠️ | Parsed and exposed via `NodeManager.EffectiveGiveUpSystemMessageAfter`; sender-side give-up timer not yet implemented |
-| `pekko.remote.artery.advanced.stop-idle-outbound-after` | `5m` | ✅ | Recorded on NodeManager (`EffectiveStopIdleOutboundAfter`) for the idle-sweep consumer |
-| `pekko.remote.artery.advanced.quarantine-idle-outbound-after` | `6h` | ✅ | Drives `NodeManager.SweepIdleOutboundQuarantine` — idle outbound associations are quarantined and removed |
-| `pekko.remote.artery.advanced.stop-quarantined-after-idle` | `3s` | ✅ | Recorded on NodeManager (`EffectiveStopQuarantinedAfterIdle`) for the idle-sweep consumer |
-| `pekko.remote.artery.advanced.remove-quarantined-association-after` | `1h` | ✅ | Recorded on NodeManager (`EffectiveRemoveQuarantinedAssociationAfter`) for the idle-sweep consumer |
-| `pekko.remote.artery.advanced.shutdown-flush-timeout` | `1s` | ✅ | Recorded on NodeManager (`EffectiveShutdownFlushTimeout`) for the coordinated-shutdown consumer |
-| `pekko.remote.artery.advanced.death-watch-notification-flush-timeout` | `3s` | ✅ | Recorded on NodeManager (`EffectiveDeathWatchNotificationFlushTimeout`) for the death-watch consumer |
-| `pekko.remote.artery.advanced.inbound-restart-timeout` | `5s` | ✅ | Drives `NodeManager.TryRecordInboundRestart` rolling window |
-| `pekko.remote.artery.advanced.inbound-max-restarts` | `5` | ✅ | Cap enforced by `NodeManager.TryRecordInboundRestart` |
-| `pekko.remote.artery.advanced.outbound-restart-backoff` | `1s` | ✅ | Recorded on NodeManager (`EffectiveOutboundRestartBackoff`) for the dialer consumer |
-| `pekko.remote.artery.advanced.outbound-restart-timeout` | `5s` | ✅ | Drives `NodeManager.TryRecordOutboundRestart` rolling window |
-| `pekko.remote.artery.advanced.outbound-max-restarts` | `5` | ✅ | Cap enforced by `NodeManager.TryRecordOutboundRestart` |
+| `pekko.remote.artery.advanced.stop-idle-outbound-after` | `5m` | ⚠️ | Plumbed onto `NodeManager.StopIdleOutboundAfter` and exposed via `EffectiveStopIdleOutboundAfter`; no production idle-sweep consumer reads the getter |
+| `pekko.remote.artery.advanced.quarantine-idle-outbound-after` | `6h` | ⚠️ | Plumbed onto `NodeManager.QuarantineIdleOutboundAfter`; `SweepIdleOutboundQuarantine` reads it but no production scheduler invokes the sweep |
+| `pekko.remote.artery.advanced.stop-quarantined-after-idle` | `3s` | ⚠️ | Plumbed onto `NodeManager.StopQuarantinedAfterIdle`; `EffectiveStopQuarantinedAfterIdle` getter has only test callers |
+| `pekko.remote.artery.advanced.remove-quarantined-association-after` | `1h` | ⚠️ | Plumbed onto `NodeManager.RemoveQuarantinedAssociationAfter`; `EffectiveRemoveQuarantinedAssociationAfter` getter has only test callers |
+| `pekko.remote.artery.advanced.shutdown-flush-timeout` | `1s` | ⚠️ | Plumbed onto `NodeManager.ShutdownFlushTimeout`; no production coordinated-shutdown consumer reads it |
+| `pekko.remote.artery.advanced.death-watch-notification-flush-timeout` | `3s` | ⚠️ | Plumbed onto `NodeManager.DeathWatchNotificationFlushTimeout`; no production death-watch consumer reads it |
+| `pekko.remote.artery.advanced.inbound-restart-timeout` | `5s` | ⚠️ | Plumbed onto `NodeManager.InboundRestartTimeout`; `TryRecordInboundRestart` reads it but is invoked only from tests |
+| `pekko.remote.artery.advanced.inbound-max-restarts` | `5` | ⚠️ | Plumbed onto `NodeManager.InboundMaxRestarts`; `TryRecordInboundRestart` enforces the cap but is invoked only from tests |
+| `pekko.remote.artery.advanced.outbound-restart-backoff` | `1s` | ⚠️ | Plumbed onto `NodeManager.OutboundRestartBackoff`; no production dialer consumer reads it |
+| `pekko.remote.artery.advanced.outbound-restart-timeout` | `5s` | ⚠️ | Plumbed onto `NodeManager.OutboundRestartTimeout`; `TryRecordOutboundRestart` reads it but is invoked only from tests |
+| `pekko.remote.artery.advanced.outbound-max-restarts` | `5` | ⚠️ | Plumbed onto `NodeManager.OutboundMaxRestarts`; `TryRecordOutboundRestart` enforces the cap but is invoked only from tests |
 | `pekko.remote.artery.tls.certificate` | `""` | ✅ | Gekka-native — PEM server certificate (`hocon_config.go` → `core.TLSConfig.CertFile`). Replaces Pekko's `ssl.config-ssl-engine.key-store`. |
 | `pekko.remote.artery.tls.private-key` | `""` | ✅ | Gekka-native — PEM private key paired with `tls.certificate`. Replaces Pekko's `ssl.config-ssl-engine.key-store` private-key entry. |
 | `pekko.remote.artery.tls.ca-certificates` | `""` | ✅ | Gekka-native — PEM CA bundle for peer verification (loaded into `crypto/x509.CertPool`; serves as both `ClientCAs` and `RootCAs`). Replaces Pekko's `ssl.config-ssl-engine.trust-store`. |
@@ -172,7 +172,7 @@ Legend:
 | `cross-data-center-gossip-probability` | `0.2` | ✅ | |
 | `failure-detector.heartbeat-interval` | `3s` | ✅ | Cross-DC HB cadence; `EffectiveHeartbeatInterval` returns this for cross-DC targets, intra-DC default otherwise (Round-2 session 12) |
 | `failure-detector.acceptable-heartbeat-pause` | `10s` | ⚠️ | Plumbed via `MultiDCFailureDetectorConfig` onto `cm.CrossDCAcceptableHeartbeatPause`; cross-DC reachability-margin consumer not yet implemented |
-| `failure-detector.expected-response-after` | `1s` | ✅ | Plumbed via `MultiDCFailureDetectorConfig` (Round-2 session 12) |
+| `failure-detector.expected-response-after` | `1s` | ⚠️ | Plumbed via `MultiDCFailureDetectorConfig` onto `cm.CrossDCExpectedResponseAfter`; no consumer reads the field outside the assignment line (parallel deferral to row 174) |
 
 ### pekko.cluster.split-brain-resolver
 
@@ -255,21 +255,21 @@ Legend:
 | `pekko.cluster.sharding.least-shard-allocation-strategy.max-simultaneous-rebalance` | `3` | ✅ | Applied to NewLeastShardAllocationStrategy(maxSimultaneous) |
 | `pekko.cluster.sharding.least-shard-allocation-strategy.rebalance-absolute-limit` | `0` | ✅ | Round-2 session 33 — when `> 0` selects the Pekko 1.0+ two-phase `LeastShardAllocationStrategyV2` (`cluster/sharding/strategy.go`); `0` keeps the legacy threshold-based strategy. |
 | `pekko.cluster.sharding.least-shard-allocation-strategy.rebalance-relative-limit` | `0.1` | ✅ | Round-2 session 33 — fraction of total shards capping each rebalance round under V2 (`max(1, min(int(rel*total), absolute))`). |
-| `pekko.cluster.sharding.external-shard-allocation-strategy.client-timeout` | `5s` | ✅ | `cluster/sharding/strategy.go` — bound on external strategy RPC calls. |
+| `pekko.cluster.sharding.external-shard-allocation-strategy.client-timeout` | `5s` | ❌ | Not implemented — the canonical Pekko path is never parsed in `hocon_config.go`. The strategy in `cluster/sharding/strategy.go` reads a different sub-path (`external.timeout` of the adaptive-rebalancing block); no Go consumer reads the canonical key. Tracked in `docs/LEFTWORKS.md` §11 |
 | `pekko.cluster.sharding.event-sourced-remember-entities-store.max-updates-per-write` | `100` | ✅ | Round-2 session 34 — Shard buffers EntityStarted/EntityStopped events; the buffer is flushed in a single AsyncWriteMessages call once it hits the cap, with a final flush in PostStop. Cap of `0` keeps the legacy one-event-per-write path. |
 | `pekko.cluster.sharding.state-store-mode` | `"ddata"` | ☕ | JVM-only — gekka commits to `ddata` exclusively for sharding state; the `persistence` mode and its tunables (`snapshot-after`, `keep-nr-of-batches`, `journal-plugin-id`, `snapshot-plugin-id`) are N/A in gekka. |
 | `pekko.cluster.sharding.snapshot-after` | `1000` | ☕ | JVM-only — `state-store-mode = persistence` subset; gekka uses `ddata`. |
 | `pekko.cluster.sharding.keep-nr-of-batches` | `2` | ☕ | JVM-only — `state-store-mode = persistence` subset; gekka uses `ddata`. |
 | `pekko.cluster.sharding.journal-plugin-id` | `""` | ☕ | JVM-only — `state-store-mode = persistence` subset; gekka uses `ddata`. |
 | `pekko.cluster.sharding.snapshot-plugin-id` | `""` | ☕ | JVM-only — `state-store-mode = persistence` subset; gekka uses `ddata`. |
-| `pekko.cluster.sharding.distributed-data.majority-min-cap` | `5` | ✅ | `ShardingConfig.DistributedData.MajorityMinCap` (hocon_config.go) — gekka uses the shared replicator, so this caps the same effective behavior. |
-| `pekko.cluster.sharding.distributed-data.max-delta-elements` | `5` | ✅ | `ShardingConfig.DistributedData.MaxDeltaElements` — bounds delta batch size for sharding's replicator usage. |
-| `pekko.cluster.sharding.distributed-data.prefer-oldest` | `on` | ✅ | `ShardingConfig.DistributedData.PreferOldest` — gossip preference for sharding's replicator usage. |
+| `pekko.cluster.sharding.distributed-data.majority-min-cap` | `5` | ⚠️ | Parsed into `ShardingConfig.DistributedData.MajorityMinCap`; never threaded onto the shared replicator (sharding-specific override consumer not yet wired) |
+| `pekko.cluster.sharding.distributed-data.max-delta-elements` | `5` | ⚠️ | Parsed into `ShardingConfig.DistributedData.MaxDeltaElements`; never threaded onto the shared replicator's `MaxDeltaElements` |
+| `pekko.cluster.sharding.distributed-data.prefer-oldest` | `on` | ⚠️ | Parsed into `ShardingConfig.DistributedData.PreferOldest`; never threaded onto the shared replicator's `PreferOldest` |
 | `pekko.cluster.sharding.distributed-data.durable.keys` | `["shard-*"]` | ⚠️ | Parsed into `ShardingConfig.DistributedData.DurableKeys`; the parent `distributed-data.durable.keys` is fully ✅, but the sharding-specific filter is not yet wired into the durable store |
 | `pekko.cluster.sharding.coordinator-singleton.role` | `""` | ✅ | Applied to coordinator singleton-proxy when override = off |
-| `pekko.cluster.sharding.coordinator-singleton.singleton-name` | `"singleton"` | ✅ | Parsed (gekka uses fixed `<typeName>Coordinator` path) |
-| `pekko.cluster.sharding.coordinator-singleton.hand-over-retry-interval` | `1s` | ✅ | Parsed; routed via SingletonConfig |
-| `pekko.cluster.sharding.coordinator-singleton.min-number-of-hand-over-retries` | `15` | ✅ | Parsed; routed via SingletonConfig |
+| `pekko.cluster.sharding.coordinator-singleton.singleton-name` | `"singleton"` | ⚠️ | Parse-only — gekka hard-codes the `<typeName>Coordinator` path; `Sharding.CoordinatorSingleton.SingletonName` is never read |
+| `pekko.cluster.sharding.coordinator-singleton.hand-over-retry-interval` | `1s` | ⚠️ | Parse-only — `Sharding.CoordinatorSingleton.HandOverRetryInterval` is never threaded onto SingletonConfig (only the top-level `Singleton.HandOverRetryInterval` is consumed) |
+| `pekko.cluster.sharding.coordinator-singleton.min-number-of-hand-over-retries` | `15` | ⚠️ | Parse-only — `Sharding.CoordinatorSingleton.MinNumberOfHandOverRetries` is never threaded onto SingletonConfig |
 | `pekko.cluster.sharding.coordinator-singleton-role-override` | `on` | ✅ | When `on`, sharding.role wins over coordinator-singleton.role |
 | `pekko.cluster.sharding.retry-interval` | `2s` | ✅ | ShardRegion ticker re-tells GetShardHome for shards with unknown home (Round-2 session 13) |
 | `pekko.cluster.sharding.buffer-size` | `100000` | ✅ | Caps per-shard pendingMessages while awaiting ShardHome; further messages are dropped (Round-2 session 13) |
@@ -288,8 +288,8 @@ Legend:
 | `pekko.cluster.sharding.verbose-debug-logging` | `off` | ✅ | Gates fine-grained per-message DEBUG log lines via Shard.vdebug (Round-2 session 15) |
 | `pekko.cluster.sharding.fail-on-invalid-entity-state-transition` | `off` | ✅ | When `on`, Shard panics on invalid handoff transitions; otherwise logs WARN (Round-2 session 15) |
 | `pekko.cluster.sharding.passivation.default-idle-strategy.idle-entity.interval` | `default` (= timeout/2) | ✅ | Overrides idle-entity scan cadence; `"default"` leaves the timeout/2 fallback (Round-2 session 15) |
-| `pekko.cluster.sharding.healthcheck.names` | `[]` | ✅ | List of sharding type names that ClusterShardingHealthCheck must find registered to pass (Round-2 session 15) |
-| `pekko.cluster.sharding.healthcheck.timeout` | `5s` | ✅ | Caps how long ClusterShardingHealthCheck is allowed to run before returning ErrHealthCheckTimeout (Round-2 session 15) |
+| `pekko.cluster.sharding.healthcheck.names` | `[]` | ⚠️ | Parsed into `Sharding.HealthCheck.Names`; `ClusterShardingHealthCheck` reads it but is never invoked outside tests (no production health-check endpoint) |
+| `pekko.cluster.sharding.healthcheck.timeout` | `5s` | ⚠️ | Parsed into `Sharding.HealthCheck.Timeout`; same as row above — `ClusterShardingHealthCheck` is invoked only from tests |
 | `pekko.cluster.sharding.use-lease` | `""` | ✅ | Resolves a Lease from Cluster.LeaseManager; every Shard acquires before becoming active and releases on handoff/stop (Round-2 session 20) |
 | `pekko.cluster.sharding.lease-retry-interval` | `5s` | ✅ | Backoff between Shard Acquire retries when a prior call returned false (Round-2 session 20) |
 
@@ -476,11 +476,11 @@ touching the consumer code.
 
 | Symbol | Substantive table rows | Meaning |
 |---|---|---|
-| ✅ | 255 | Parsed AND consumed |
-| ⚠️ | 25 | Forward-compat parsed; consumer deferred (Note states what's deferred) |
+| ✅ | 227 | Parsed AND consumed |
+| ⚠️ | 51 | Forward-compat parsed; consumer deferred (Note states what's deferred) |
 | ☕ | 8 | JVM-only — no equivalent capability in Go runtime |
 | 🚫 | 1 | Go/JVM API-shape incompatibility (FQCN class loading) |
-| ❌ | 20 | Not implemented; portable in principle (tracked in `docs/LEFTWORKS.md` §11) |
+| ❌ | 22 | Not implemented; portable in principle (tracked in `docs/LEFTWORKS.md` §11) |
 
 (Counts exclude the legend lines themselves and this Summary table. `grep -c "| ✅ |"` etc. on the file returns counts +1 because each Summary-table row contributes one match.)
 
@@ -542,10 +542,37 @@ Portable Pekko paths gekka has not bridged. The full list lives in
 5. **Watch failure detector** — `pekko.remote.watch-failure-detector.*`.
 6. **Discovery** — `pekko.discovery.config / aggregate / pekko-dns.*`
    (gekka's k8s extension is the alternative path).
-7. **Logging** — `pekko.stdout-loglevel`.
+7. **Logging** — `pekko.loglevel` (honesty-downgraded ✅ → ❌ on
+   2026-04-30 — parsed-only) and `pekko.stdout-loglevel`. Both are
+   **deferred to the future external-log-server logging cycle**, not the
+   immediate post-audit roadmap; the in-process logger is being replaced.
 
 ### Audit history
 
+- **2026-04-30 — ✅-honesty pass (post-roadmap spot-check):** Pre-roadmap
+  spot-check audited 78 ✅ rows in 6 namespaces (artery-advanced,
+  multi-DC FD, sharding, ddata, persistence-typed, AALD) and found 27
+  dishonest rows. Downgrades applied: 26 ✅ → ⚠️ and 1 ✅ → ❌. The
+  pattern was concentrated: (a) 14 artery-advanced lifecycle knobs added
+  during round-2 sessions 29-32 followed the `Effective<X>` test-only
+  getter pattern (rows 75-78, 81-82, 90-100); (b) sharding sub-namespace
+  duplications (rows 265-267 ddata, 270-272 coordinator-singleton,
+  291-292 healthcheck) are parsed onto dedicated structs but never
+  threaded onto their consumers; (c) `external-shard-allocation-strategy.client-timeout`
+  (row 258) was ✅ but the canonical Pekko path is never parsed — the
+  current Go code reads a different sub-path. Honest ✅ rate in the
+  audited surface: 50/78 = 64%.
+- **2026-04-30 — Logging honesty downgrade:** `pekko.loglevel` row 19
+  flipped ✅ → ❌. The field is parsed into `NodeConfig.LogLevel`
+  (cluster.go:223) but never read by any non-test code, so the previous
+  ✅ violated the post-refactor "Parsed AND consumed" rule. Both
+  `pekko.loglevel` and `pekko.stdout-loglevel` are deferred to the future
+  external-log-server logging cycle (the in-process logger is being
+  replaced); their Notes call this out explicitly. Other log-* paths
+  (`log-config-on-start`, `log-dead-letters`,
+  `log-dead-letters-during-shutdown`,
+  `pekko.remote.artery.log-frame-size-exceeding`) were spot-checked and
+  remain honestly ✅.
 - **2026-04-30 — Taxonomy refactor:** Replaced 3-symbol legend with
   5-symbol scheme. Reclassified former ❌ rows: 3 → ☕ (dispatcher × 2,
   `cluster.metrics`), 1 → 🚫

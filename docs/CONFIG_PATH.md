@@ -446,7 +446,7 @@ Legend:
 | Path | Pekko Default | Gekka? | Notes |
 |---|---|---|---|
 | `pekko.cluster.sharding.number-of-shards` | `1000` | ✅ | Wired to coordinator/region |
-| `pekko.cluster.sharded-daemon-process.*` | (all) | ❌ | Not implemented — long-running per-shard daemon processes; tracked in `docs/LEFTWORKS.md` §11 |
+| `pekko.cluster.sharded-daemon-process.*` | (all) | ✅ | `keep-alive-interval` and `sharding.role` are honoured: parsed onto `ClusterConfig.ShardedDaemonProcess` and applied via `sharding.SetDefault*KeepAliveInterval`/`sharding.SetDefault*ShardingRole`; `runKeepAliveLoop` in `cluster/sharding/sharded_daemon.go` consumes the cadence; `InitShardedDaemonProcess` reads the role default. Per Pekko's reference.conf, the other `sharding.*` overrides (`remember-entities`, `passivation`, `number-of-shards`) are intentionally not exposed. |
 
 ---
 
@@ -476,11 +476,11 @@ touching the consumer code.
 
 | Symbol | Substantive table rows | Meaning |
 |---|---|---|
-| ✅ | 230 | Parsed AND consumed |
+| ✅ | 231 | Parsed AND consumed |
 | ⚠️ | 51 | Forward-compat parsed; consumer deferred (Note states what's deferred) |
 | ☕ | 8 | JVM-only — no equivalent capability in Go runtime |
 | 🚫 | 1 | Go/JVM API-shape incompatibility (FQCN class loading) |
-| ❌ | 19 | Not implemented; portable in principle (tracked in `docs/LEFTWORKS.md` §11) |
+| ❌ | 18 | Not implemented; portable in principle (tracked in `docs/LEFTWORKS.md` §11) |
 
 (Counts exclude the legend lines themselves and this Summary table. `grep -c "| ✅ |"` etc. on the file returns counts +1 because each Summary-table row contributes one match.)
 
@@ -540,17 +540,28 @@ Portable Pekko paths gekka has not bridged. The full list lives in
    2026-04-30.)
 3. **Reliable-delivery (typed)** — Pekko-typed `ProducerController` /
    `ConsumerController`. Distinct from `at-least-once-delivery.*` (✅).
-4. **Sharded daemon process** — `pekko.cluster.sharded-daemon-process.*`.
-5. **Watch failure detector** — `pekko.remote.watch-failure-detector.*`.
-6. **Discovery** — `pekko.discovery.config / aggregate / pekko-dns.*`
+4. **Watch failure detector** — `pekko.remote.watch-failure-detector.*`.
+5. **Discovery** — `pekko.discovery.config / aggregate / pekko-dns.*`
    (gekka's k8s extension is the alternative path).
-7. **Logging** — `pekko.loglevel` (honesty-downgraded ✅ → ❌ on
+6. **Logging** — `pekko.loglevel` (honesty-downgraded ✅ → ❌ on
    2026-04-30 — parsed-only) and `pekko.stdout-loglevel`. Both are
    **deferred to the future external-log-server logging cycle**, not the
    immediate post-audit roadmap; the in-process logger is being replaced.
 
 ### Audit history
 
+- **2026-04-30 — Sub-plan 2 (Sharded daemon process) landed:** Wired
+  `pekko.cluster.sharded-daemon-process.keep-alive-interval` (10s default)
+  and `pekko.cluster.sharded-daemon-process.sharding.role` into the
+  existing `cluster/sharding/sharded_daemon.go` runtime. The keep-alive
+  interval drives a per-process ticker (`runKeepAliveLoop`) that re-sends
+  `DaemonStart` to every entity index; the role is consumed at
+  `InitShardedDaemonProcess` resolution time via the new
+  `GetDefaultShardedDaemonProcessShardingRole()` package-level default.
+  Per Pekko's reference.conf comment, other `sharded-daemon-process.sharding.*`
+  sub-keys (remember-entities, passivation, number-of-shards) are
+  intentionally not exposed. Summary counts: ✅ 230 → 231, ❌ 19 → 18.
+  LEFTWORKS.md §11 "Sharded daemon process" subsection emptied.
 - **2026-04-30 — Sub-plan 1 (Typed-API misc) landed:** Wired
   `pekko.actor.typed.restart-stash-capacity` (sizes the typed-actor stash
   buffer in `actor/typed/actor.go` PreStart via

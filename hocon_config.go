@@ -533,6 +533,21 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		}
 	}
 
+	// ── pekko.cluster.sharded-daemon-process ───────────────────────────────
+	// Portable surface: keep-alive cadence + role override on the underlying
+	// ShardRegion. Other sharding sub-keys are intentionally not exposed —
+	// Pekko's reference.conf documents that remember-entities, passivation,
+	// and number-of-shards overrides are ignored upstream.
+	nodeCfg.ShardedDaemonProcess.KeepAliveInterval = 10 * time.Second
+	if v, err := cfg.GetString(prefix + ".cluster.sharded-daemon-process.keep-alive-interval"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil && d > 0 {
+			nodeCfg.ShardedDaemonProcess.KeepAliveInterval = d
+		}
+	}
+	if v, err := cfg.GetString(prefix + ".cluster.sharded-daemon-process.sharding.role"); err == nil {
+		nodeCfg.ShardedDaemonProcess.ShardingRole = strings.TrimSpace(v)
+	}
+
 	// ── Cluster Sharding ────────────────────────────────────────────────────
 	shardingPrefix := prefix + ".cluster.sharding"
 	// Passivation: correct Pekko path only (no fallback to legacy .passivation.idle-timeout)

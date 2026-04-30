@@ -11,10 +11,63 @@ package sharding
 import (
 	"fmt"
 	"strconv"
+	"sync/atomic"
+	"time"
 
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/cluster"
 )
+
+// defaultShardedDaemonKeepAliveNanos backs the package-level default that
+// pekko.cluster.sharded-daemon-process.keep-alive-interval feeds. Stored as
+// nanoseconds for lock-free atomic.Int64 reads. Zero ⇒ 10s (Pekko default).
+var defaultShardedDaemonKeepAliveNanos atomic.Int64
+
+// defaultShardedDaemonRole backs the package-level default that
+// pekko.cluster.sharded-daemon-process.sharding.role feeds. Empty ⇒ no role
+// override; the underlying ShardRegion runs on any node.
+var defaultShardedDaemonRole atomic.Value // string
+
+// SetDefaultShardedDaemonProcessKeepAliveInterval installs the default keep-
+// alive cadence used by InitShardedDaemonProcess when callers leave
+// ShardedDaemonProcessSettings.KeepAliveInterval unset (zero). Non-positive
+// values revert to the 10s Pekko default.
+//
+// HOCON: pekko.cluster.sharded-daemon-process.keep-alive-interval (default 10s).
+func SetDefaultShardedDaemonProcessKeepAliveInterval(d time.Duration) {
+	if d <= 0 {
+		defaultShardedDaemonKeepAliveNanos.Store(0)
+		return
+	}
+	defaultShardedDaemonKeepAliveNanos.Store(int64(d))
+}
+
+// GetDefaultShardedDaemonProcessKeepAliveInterval returns the currently
+// configured default keep-alive cadence. Falls back to 10s when unconfigured.
+func GetDefaultShardedDaemonProcessKeepAliveInterval() time.Duration {
+	v := defaultShardedDaemonKeepAliveNanos.Load()
+	if v <= 0 {
+		return 10 * time.Second
+	}
+	return time.Duration(v)
+}
+
+// SetDefaultShardedDaemonProcessShardingRole installs the default role used
+// by InitShardedDaemonProcess when callers leave
+// ShardedDaemonProcessSettings.Role empty. An empty string clears the
+// override (any node).
+//
+// HOCON: pekko.cluster.sharded-daemon-process.sharding.role.
+func SetDefaultShardedDaemonProcessShardingRole(role string) {
+	defaultShardedDaemonRole.Store(role)
+}
+
+// GetDefaultShardedDaemonProcessShardingRole returns the currently configured
+// default role override. Empty when unconfigured.
+func GetDefaultShardedDaemonProcessShardingRole() string {
+	v, _ := defaultShardedDaemonRole.Load().(string)
+	return v
+}
 
 // ShardedDaemonProcessSettings controls how daemon workers are distributed.
 type ShardedDaemonProcessSettings struct {
@@ -22,8 +75,17 @@ type ShardedDaemonProcessSettings struct {
 	ShardSettings ShardSettings
 
 	// Role restricts the coordinator singleton to nodes carrying this cluster
-	// role.  An empty string means "any node".
+	// role.  An empty string means "any node".  Mirrors
+	// pekko.cluster.sharded-daemon-process.sharding.role.
 	Role string
+
+	// KeepAliveInterval, when > 0, overrides the package-level default
+	// (pekko.cluster.sharded-daemon-process.keep-alive-interval; 10s) for
+	// this process. The configured value drives a periodic ping that
+	// re-sends DaemonStart to every entity index, ensuring entities that
+	// stopped (passivation, rebalance, crash) are reignited on the next
+	// tick. Zero falls back to GetDefaultShardedDaemonProcessKeepAliveInterval().
+	KeepAliveInterval time.Duration
 }
 
 // ShardedDaemonProcess distributes numberOfInstances background workers across
@@ -48,6 +110,11 @@ type ShardedDaemonProcess struct {
 
 	// NumberOfInstances is the total number of daemons in the process.
 	NumberOfInstances int
+
+	// stopCh signals the keep-alive goroutine to exit. nil when the
+	// process was constructed without a keep-alive loop (e.g. tests
+	// holding ShardedDaemonProcess directly).
+	stopCh chan struct{}
 }
 
 // Tell sends msg to the daemon with the given zero-based index.
@@ -58,6 +125,20 @@ func (d *ShardedDaemonProcess) Tell(index int, msg any) {
 	// Route through daemonEnvelope so the region's extractor can derive the
 	// entityId and shardId from the index.
 	d.Region.Tell(daemonEnvelope{index: index, payload: msg})
+}
+
+// Stop terminates the keep-alive ping loop spawned by InitShardedDaemonProcess.
+// Safe to call multiple times. Does not stop the underlying ShardRegion.
+func (d *ShardedDaemonProcess) Stop() {
+	if d == nil || d.stopCh == nil {
+		return
+	}
+	select {
+	case <-d.stopCh:
+		// already closed
+	default:
+		close(d.stopCh)
+	}
 }
 
 // daemonEnvelope is an internal message used to route application messages to
@@ -120,6 +201,13 @@ func InitShardedDaemonProcess(
 		}
 	}
 
+	// Resolve the effective role: explicit setting wins, otherwise inherit the
+	// HOCON-fed package default (pekko.cluster.sharded-daemon-process.sharding.role).
+	effectiveRole := settings.Role
+	if effectiveRole == "" {
+		effectiveRole = GetDefaultShardedDaemonProcessShardingRole()
+	}
+
 	cfg := ClusterShardingConfig{
 		TypeName: typeName,
 		EntityProps: EntityProps{
@@ -134,7 +222,7 @@ func InitShardedDaemonProcess(
 		},
 		Settings:  settings.ShardSettings,
 		Extractor: extract,
-		Role:      settings.Role,
+		Role:      effectiveRole,
 	}
 
 	regionRef, err := StartSharding(sys, cm, router, cfg)
@@ -148,8 +236,41 @@ func InitShardedDaemonProcess(
 		regionRef.Tell(daemonEnvelope{index: i, payload: DaemonStart})
 	}
 
+	// Resolve the effective keep-alive cadence from per-process override or
+	// the HOCON-fed package default. Drives a goroutine that re-issues
+	// DaemonStart so passivated/rebalanced/crashed entities are reignited.
+	keepAlive := settings.KeepAliveInterval
+	if keepAlive <= 0 {
+		keepAlive = GetDefaultShardedDaemonProcessKeepAliveInterval()
+	}
+
+	stopCh := make(chan struct{})
+	go runKeepAliveLoop(regionRef, numberOfInstances, keepAlive, stopCh)
+
 	return &ShardedDaemonProcess{
 		Region:            regionRef,
 		NumberOfInstances: numberOfInstances,
+		stopCh:            stopCh,
 	}, nil
+}
+
+// runKeepAliveLoop pings every daemon entity index at the configured cadence
+// until stopCh closes. Each tick sends a DaemonStart envelope to the region
+// for every i in [0, numberOfInstances). Exposed for direct testing.
+func runKeepAliveLoop(region actor.Ref, numberOfInstances int, interval time.Duration, stopCh <-chan struct{}) {
+	if interval <= 0 || numberOfInstances <= 0 || region == nil {
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stopCh:
+			return
+		case <-ticker.C:
+			for i := 0; i < numberOfInstances; i++ {
+				region.Tell(daemonEnvelope{index: i, payload: DaemonStart})
+			}
+		}
+	}
 }

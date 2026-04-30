@@ -4768,3 +4768,44 @@ pekko.remote.artery.canonical { hostname = "127.0.0.1", port = 2552 }
 		t.Errorf("TrustedSelectionPaths = %v, want [] (default)", cfg.TrustedSelectionPaths)
 	}
 }
+
+// TestHOCON_ShardedDaemonProcess_Defaults verifies that omitting the
+// pekko.cluster.sharded-daemon-process namespace yields the Pekko reference
+// defaults: 10s keep-alive, empty role.
+func TestHOCON_ShardedDaemonProcess_Defaults(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko.remote.artery.canonical { hostname = "127.0.0.1", port = 2552 }
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.ShardedDaemonProcess.KeepAliveInterval, 10*time.Second; got != want {
+		t.Errorf("default KeepAliveInterval = %v, want %v", got, want)
+	}
+	if cfg.ShardedDaemonProcess.ShardingRole != "" {
+		t.Errorf("default ShardingRole = %q, want empty", cfg.ShardedDaemonProcess.ShardingRole)
+	}
+}
+
+// TestHOCON_ShardedDaemonProcess_Overrides verifies that explicit HOCON
+// overrides land on ClusterConfig.ShardedDaemonProcess.
+func TestHOCON_ShardedDaemonProcess_Overrides(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery.canonical { hostname = "127.0.0.1", port = 2552 }
+  cluster.sharded-daemon-process {
+    keep-alive-interval = 250ms
+    sharding.role = "daemon-host"
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.ShardedDaemonProcess.KeepAliveInterval, 250*time.Millisecond; got != want {
+		t.Errorf("KeepAliveInterval = %v, want %v", got, want)
+	}
+	if got, want := cfg.ShardedDaemonProcess.ShardingRole, "daemon-host"; got != want {
+		t.Errorf("ShardingRole = %q, want %q", got, want)
+	}
+}

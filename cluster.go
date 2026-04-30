@@ -33,6 +33,7 @@ import (
 	"github.com/sopranoworks/gekka/cluster/ddata"
 	ddata_typed "github.com/sopranoworks/gekka/cluster/ddata/typed"
 	"github.com/sopranoworks/gekka/cluster/lease"
+	"github.com/sopranoworks/gekka/cluster/sharding"
 	"github.com/sopranoworks/gekka/cluster/singleton"
 	"github.com/sopranoworks/gekka/discovery"
 	"github.com/sopranoworks/gekka/internal/core"
@@ -454,6 +455,11 @@ type ClusterConfig struct {
 	//	    remember-entities = on
 	//	}
 	Sharding ShardingConfig `hocon:"gekka.cluster.sharding"`
+
+	// ShardedDaemonProcess holds the portable surface of
+	// pekko.cluster.sharded-daemon-process.* — keep-alive cadence and the
+	// optional role override for the underlying ShardRegion.
+	ShardedDaemonProcess ShardedDaemonProcessConfig
 
 	// Singleton holds singleton manager configuration parsed from HOCON.
 	// Corresponds to pekko.cluster.singleton.*
@@ -1494,6 +1500,25 @@ type TelemetryConfig struct {
 	OtlpEndpoint string
 }
 
+// ShardedDaemonProcessConfig holds the portable surface of
+// pekko.cluster.sharded-daemon-process.*. Per Pekko's reference.conf comment,
+// only `keep-alive-interval` and `sharding.role` are honoured — the other
+// `sharding.*` overrides (remember-entities, passivation, number-of-shards)
+// are explicitly ignored upstream and not exposed here.
+type ShardedDaemonProcessConfig struct {
+	// KeepAliveInterval is how often each running ShardedDaemonProcess
+	// pings every entity index to ensure the daemon actor is alive.
+	// Corresponds to pekko.cluster.sharded-daemon-process.keep-alive-interval.
+	// Default: 10s.
+	KeepAliveInterval time.Duration
+
+	// ShardingRole, when non-empty, scopes the underlying ShardRegion to
+	// nodes advertising this cluster role. Corresponds to
+	// pekko.cluster.sharded-daemon-process.sharding.role.
+	// Default: "" (any node).
+	ShardingRole string
+}
+
 // ShardingConfig holds sharding-specific configuration parsed from HOCON.
 type ShardingConfig struct {
 	// PassivationIdleTimeout is the duration after which an entity that
@@ -2364,6 +2389,10 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	if cfg.DistributedData.TypedReplicatorMessageAdapterUnexpectedAskTimeout > 0 {
 		ddata.SetDefaultUnexpectedAskTimeout(cfg.DistributedData.TypedReplicatorMessageAdapterUnexpectedAskTimeout)
 	}
+	if cfg.ShardedDaemonProcess.KeepAliveInterval > 0 {
+		sharding.SetDefaultShardedDaemonProcessKeepAliveInterval(cfg.ShardedDaemonProcess.KeepAliveInterval)
+	}
+	sharding.SetDefaultShardedDaemonProcessShardingRole(cfg.ShardedDaemonProcess.ShardingRole)
 	if cfg.Persistence.TypedStashCapacity > 0 {
 		persistencetyped.SetDefaultStashCapacity(cfg.Persistence.TypedStashCapacity)
 	}

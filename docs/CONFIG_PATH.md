@@ -4,9 +4,11 @@ This document provides a complete comparison of all Pekko reference.conf configu
 against what gekka currently parses. It covers every module in the Pekko source tree.
 
 Legend:
-- ✅ = Gekka parses this path correctly
-- ⚠️ = Gekka parses a different/wrong path for the same feature
-- ❌ = No equivalent feature in gekka (not parsed)
+- ✅ = Parsed AND consumed in gekka
+- ⚠️ = Parsed for forward-compat at the canonical Pekko path; consumer deferred (Note must say what's deferred and which session it tracks)
+- ☕ = JVM-only — no equivalent capability exists in the Go runtime (e.g., dispatcher hierarchy, JMX/Sigar metrics, Java scheduler internals)
+- 🚫 = Go/JVM API-shape incompatibility — the HOCON value or path semantics doesn't transfer to Go (e.g., the value is a Java FQCN to be loaded via reflection; gekka has its own Go impl wired directly)
+- ❌ = Not implemented in gekka — portable in principle, no current bridge (tracked in `docs/LEFTWORKS.md` §11)
 
 ---
 
@@ -15,7 +17,7 @@ Legend:
 | Path | Pekko Default | Gekka? | Notes |
 |---|---|---|---|
 | `pekko.loglevel` | `"INFO"` | ✅ | |
-| `pekko.stdout-loglevel` | `"WARNING"` | ❌ | No feature |
+| `pekko.stdout-loglevel` | `"WARNING"` | ❌ | Not implemented — separate from `pekko.loglevel` (✅); tracked in `docs/LEFTWORKS.md` §11 |
 | `pekko.log-config-on-start` | `off` | ✅ | When on, NewCluster emits the resolved ClusterConfig at INFO via slog |
 | `pekko.log-dead-letters` | `10` | ✅ | `ClusterConfig.LogDeadLetters` — cap on dead-letter log spam (off=disable, N=log first N occurrences) |
 | `pekko.log-dead-letters-during-shutdown` | `on` | ✅ | `ClusterConfig.LogDeadLettersDuringShutdown` — when off, suppresses dead-letter logging during coordinated shutdown |
@@ -27,13 +29,24 @@ Legend:
 | `pekko.actor.debug.unhandled` | `off` | ✅ | DEBUG slog via `ActorDebugConfig.LogActorUnhandled` |
 | `pekko.actor.debug.router-misconfiguration` | `off` | ✅ | WARN slog via `ActorDebugConfig.LogRouterMisconfiguration` (matches Pekko severity) |
 | `pekko.actor.provider` | `"local"` | ✅ | Used for protocol detection |
-| `pekko.actor.default-dispatcher.*` | (complex) | ❌ | Gekka uses `pekko.dispatchers.*` instead |
-| `pekko.actor.internal-dispatcher.*` | (complex) | ❌ | No feature |
+| `pekko.actor.default-dispatcher.*` | (complex) | ☕ | Go has no dispatcher hierarchy; gekka uses goroutines + per-actor mailboxes |
+| `pekko.actor.internal-dispatcher.*` | (complex) | ☕ | Same — Go runtime has no dispatcher hierarchy |
 | `pekko.actor.deployment.{path}.*` | (various) | ✅ | Router deployment |
 | `pekko.actor.deployment.{path}.cluster.max-nr-of-instances-per-node` | `1` | ✅ | Caps local routees on a cluster pool router (Round-2 session 11) |
 | `pekko.actor.serializers.*` | (registry) | ✅ | Via LoadFromConfig |
 | `pekko.actor.serialization-bindings.*` | (registry) | ✅ | Via LoadFromConfig |
 | `pekko.actor.default-resizer.*` | (various) | ✅ | In reference.conf |
+
+### pekko.actor — mailboxes
+
+| Path | Pekko Default | Gekka? | Notes |
+|---|---|---|---|
+| `pekko.actor.default-mailbox.mailbox-type` | `UnboundedMailbox` | ❌ | Not implemented — gekka uses a fixed Go-channel-backed mailbox per actor; no pluggable mailbox type yet. Tracked in `docs/LEFTWORKS.md` §11 |
+| `pekko.actor.default-mailbox.mailbox-capacity` | `1000` | ❌ | Not implemented — applies only to bounded mailboxes (currently absent). Tracked in `docs/LEFTWORKS.md` §11 |
+| `pekko.actor.default-mailbox.mailbox-push-timeout-time` | `10s` | ❌ | Not implemented — applies only to bounded mailboxes. Tracked in `docs/LEFTWORKS.md` §11 |
+| `pekko.actor.mailbox.requirements.*` | (binding map) | ❌ | Not implemented — type-class-based mailbox requirements have no analog in Go yet. Tracked in `docs/LEFTWORKS.md` §11 |
+| `pekko.dispatch.UnboundedControlAwareMailbox` (binding) | — | ❌ | **Critical gap.** Control-aware mailboxes prioritise system messages over user messages; without this, watch/terminate/failure handling cannot guarantee the system-priority semantics Pekko/Akka actors rely on. Tracked in `docs/LEFTWORKS.md` §11 |
+| `pekko.dispatch.BoundedControlAwareMailbox` (binding) | — | ❌ | **Critical gap.** Bounded variant of the control-aware mailbox; same priority semantics with a capacity cap. Tracked in `docs/LEFTWORKS.md` §11 |
 
 ---
 
@@ -55,9 +68,9 @@ Legend:
 | `pekko.remote.artery.untrusted-mode` | `off` | ✅ | Round-2 session 31 — when on, drops `Watch`/`Unwatch`/PossiblyHarmful system messages and `PoisonPill`/`Kill` MiscMessage payloads from remote (top-level and nested in `ActorSelection`); cluster traffic bypasses the gate so gossip/heartbeats are unaffected. First drop per (serializerId, manifest) emits WARN; subsequent drops downgrade to DEBUG |
 | `pekko.remote.artery.trusted-selection-paths` | `[]` | ✅ | Round-2 session 32 — when `untrusted-mode = on`, inbound `ActorSelection` is delivered only when its resolved path is verbatim in this allowlist (URI scheme/authority stripped before comparison). Empty list under untrusted-mode blocks every selection, including `Identify` |
 | `pekko.remote.artery.advanced.maximum-frame-size` | `256 KiB` | ✅ | Configurable via HOCON |
-| `pekko.remote.artery.advanced.buffer-pool-size` | `128` | ✅ | Recorded on NodeManager (`EffectiveBufferPoolSize`) for future receive-buffer-pool consumer |
+| `pekko.remote.artery.advanced.buffer-pool-size` | `128` | ⚠️ | Parsed and exposed via `NodeManager.EffectiveBufferPoolSize`; receive-buffer-pool consumer not yet implemented |
 | `pekko.remote.artery.advanced.maximum-large-frame-size` | `2 MiB` | ✅ | Round-2 session 30 — applied to the inbound read loop when `assoc.streamId == AeronStreamLarge` (stream 3) via `effectiveStreamFrameSizeCap`; streams 1/2 keep `maximum-frame-size` |
-| `pekko.remote.artery.advanced.large-buffer-pool-size` | `32` | ✅ | Recorded on NodeManager (`EffectiveLargeBufferPoolSize`) for future large-stream buffer-pool consumer |
+| `pekko.remote.artery.advanced.large-buffer-pool-size` | `32` | ⚠️ | Parsed and exposed via `NodeManager.EffectiveLargeBufferPoolSize`; large-stream buffer-pool consumer not yet implemented |
 | `pekko.remote.artery.advanced.outbound-large-message-queue-size` | `256` | ✅ | Recorded on NodeManager (`EffectiveOutboundLargeMessageQueueSize`) for the large-stream outbox |
 | `pekko.remote.artery.advanced.compression.actor-refs.max` | `256` | ✅ | Cap enforced by `CompressionTableManager.UpdateActorRefTable` — oversize advertisements are rejected |
 | `pekko.remote.artery.advanced.compression.actor-refs.advertisement-interval` | `1m` | ✅ | Drives `CompressionTableManager.StartAdvertisementScheduler` actor-ref ticker |
@@ -68,12 +81,12 @@ Legend:
 | `pekko.remote.artery.advanced.inbound-lanes` | `4` | ✅ | Exposed via `NodeManager.EffectiveInboundLanes()` |
 | `pekko.remote.artery.advanced.outbound-lanes` | `1` | ✅ | Exposed via `NodeManager.EffectiveOutboundLanes()` |
 | `pekko.remote.artery.advanced.outbound-message-queue-size` | `3072` | ✅ | Sizes each association's outbox channel |
-| `pekko.remote.artery.advanced.system-message-buffer-size` | `20000` | ✅ | Recorded on NodeManager for future sender-side redelivery |
+| `pekko.remote.artery.advanced.system-message-buffer-size` | `20000` | ⚠️ | Parsed and exposed via `NodeManager.EffectiveSystemMessageBufferSize`; sender-side system-message redelivery not yet implemented |
 | `pekko.remote.artery.advanced.outbound-control-queue-size` | `20000` | ✅ | Sizes each outbound control-stream (streamId=1) association's outbox |
 | `pekko.remote.artery.advanced.handshake-timeout` | `20s` | ✅ | Outbound association gives up after this deadline |
 | `pekko.remote.artery.advanced.handshake-retry-interval` | `1s` | ✅ | Re-sends HandshakeReq at this cadence until ASSOCIATED |
-| `pekko.remote.artery.advanced.system-message-resend-interval` | `1s` | ✅ | Recorded on NodeManager for future sender-side redelivery |
-| `pekko.remote.artery.advanced.give-up-system-message-after` | `6h` | ✅ | Recorded on NodeManager for future sender-side redelivery |
+| `pekko.remote.artery.advanced.system-message-resend-interval` | `1s` | ⚠️ | Parsed and exposed via `NodeManager.EffectiveSystemMessageResendInterval`; sender-side system-message redelivery loop not yet implemented |
+| `pekko.remote.artery.advanced.give-up-system-message-after` | `6h` | ⚠️ | Parsed and exposed via `NodeManager.EffectiveGiveUpSystemMessageAfter`; sender-side give-up timer not yet implemented |
 | `pekko.remote.artery.advanced.stop-idle-outbound-after` | `5m` | ✅ | Recorded on NodeManager (`EffectiveStopIdleOutboundAfter`) for the idle-sweep consumer |
 | `pekko.remote.artery.advanced.quarantine-idle-outbound-after` | `6h` | ✅ | Drives `NodeManager.SweepIdleOutboundQuarantine` — idle outbound associations are quarantined and removed |
 | `pekko.remote.artery.advanced.stop-quarantined-after-idle` | `3s` | ✅ | Recorded on NodeManager (`EffectiveStopQuarantinedAfterIdle`) for the idle-sweep consumer |
@@ -101,7 +114,7 @@ Legend:
 | `pekko.remote.artery.ssl.ssl-engine-provider` | (Pekko FQCN) | ⚠️ | JVM-only — gekka has a fixed Go `crypto/tls` engine (no FQCN plug-in). Configure certificates via the `tls.*` paths above. |
 | `pekko.remote.artery.ssl.config-ssl-engine.random-number-generator` | `""` | ⚠️ | JVM-only — gekka uses `crypto/rand.Reader` (Go `tls.Config.Rand` field is left at default). |
 | `pekko.remote.artery.ssl.rotating-keys-engine.*` | — | ⚠️ | JVM-only — Pekko's K8s secret rotation; gekka has no equivalent. |
-| `pekko.remote.watch-failure-detector.*` | (various) | ❌ | Remote watch FD — no feature |
+| `pekko.remote.watch-failure-detector.*` | (various) | ❌ | Not implemented — gekka watches via association quarantine + heartbeat FD (`cluster/failure_detector.go`); tracked in `docs/LEFTWORKS.md` §11 |
 | `pekko.remote.accept-protocol-names` | `["pekko"]` | ✅ | `ClusterConfig.AcceptProtocolNames` — list of protocols (e.g., `pekko`/`akka`) accepted on inbound handshake |
 
 ---
@@ -141,7 +154,7 @@ Legend:
 
 | Path | Pekko Default | Gekka? | Notes |
 |---|---|---|---|
-| `implementation-class` | (FQCN) | ❌ | N/A (Go implementation) |
+| `implementation-class` | (FQCN) | 🚫 | Value is a Java FQCN; Go has no class loader. Gekka's Phi-Accrual FD is wired directly in `cluster/failure_detector.go`. |
 | `heartbeat-interval` | `1s` | ✅ | |
 | `threshold` | `8.0` | ✅ | |
 | `max-sample-size` | `1000` | ✅ | |
@@ -158,7 +171,7 @@ Legend:
 | `cross-data-center-connections` | `5` | ✅ | `ClusterConfig.MultiDataCenter.CrossDataCenterConnections` — caps gossip-target nodes per remote DC |
 | `cross-data-center-gossip-probability` | `0.2` | ✅ | |
 | `failure-detector.heartbeat-interval` | `3s` | ✅ | Cross-DC HB cadence; `EffectiveHeartbeatInterval` returns this for cross-DC targets, intra-DC default otherwise (Round-2 session 12) |
-| `failure-detector.acceptable-heartbeat-pause` | `10s` | ✅ | Plumbed via `MultiDCFailureDetectorConfig`; consulted by future cross-DC reachability margin (Round-2 session 12) |
+| `failure-detector.acceptable-heartbeat-pause` | `10s` | ⚠️ | Plumbed via `MultiDCFailureDetectorConfig` onto `cm.CrossDCAcceptableHeartbeatPause`; cross-DC reachability-margin consumer not yet implemented |
 | `failure-detector.expected-response-after` | `1s` | ✅ | Plumbed via `MultiDCFailureDetectorConfig` (Round-2 session 12) |
 
 ### pekko.cluster.split-brain-resolver
@@ -203,7 +216,7 @@ Legend:
 | `pekko.cluster.distributed-data.pruning-marker-time-to-live` | `6h` | ✅ | `DistributedDataConfig.PruningMarkerTimeToLive` → `PruningManager.SetPruningMarkerTimeToLive` retains tombstones in PruningComplete phase for the TTL (Round-2 session 16) |
 | `pekko.cluster.distributed-data.log-data-size-exceeding` | `10 KiB` | ✅ | `DistributedDataConfig.LogDataSizeExceeding` → `Replicator.LogDataSizeExceeding`; `sendToPeers` emits a slog.Warn when serialized payload exceeds the threshold (Round-2 session 16) |
 | `pekko.cluster.distributed-data.recovery-timeout` | `10s` | ✅ | `DistributedDataConfig.RecoveryTimeout` → `Replicator.WaitForRecovery` blocks until at least one peer is registered or the timeout elapses (Round-2 session 16) |
-| `pekko.cluster.distributed-data.serializer-cache-time-to-live` | `10s` | ✅ | `DistributedDataConfig.SerializerCacheTimeToLive` → `Replicator.SerializerCacheTimeToLive`; surface field reserved for future per-CRDT serialization cache (Round-2 session 16) |
+| `pekko.cluster.distributed-data.serializer-cache-time-to-live` | `10s` | ⚠️ | Parsed into `DistributedDataConfig.SerializerCacheTimeToLive` and set on `Replicator.SerializerCacheTimeToLive`; per-CRDT serialization cache not yet implemented (field has no readers beyond the setter) |
 
 ---
 
@@ -218,16 +231,16 @@ Legend:
 | `pekko.cluster.sharding.passivation.least-recently-used-strategy.replacement.policy` | `"least-recently-used"` | ✅ | Round-2 session 24. `ShardingConfig.PassivationReplacementPolicy`. |
 | `pekko.cluster.sharding.passivation.most-recently-used-strategy.active-entity-limit` | `100000` | ✅ | Round-2 session 25. Active strategy limit reaches `ShardingConfig.PassivationActiveEntityLimit`; the eviction loop picks the freshest entity. |
 | `pekko.cluster.sharding.passivation.least-frequently-used-strategy.active-entity-limit` | `100000` | ✅ | Round-2 session 25. Active strategy limit reaches `ShardingConfig.PassivationActiveEntityLimit`; the eviction loop picks the entity with the lowest cumulative access count, ties broken by oldest activity. |
-| `pekko.cluster.sharding.passivation.least-frequently-used-strategy.dynamic-aging` | `off` | ⚠️ | Round-2 session 25. `ShardingConfig.PassivationLFUDynamicAging` is parsed for forward-compat; the actual frequency-aging loop will land in a later session. |
+| `pekko.cluster.sharding.passivation.least-frequently-used-strategy.dynamic-aging` | `off` | ⚠️ | Parsed into `ShardingConfig.PassivationLFUDynamicAging` (Round-2 session 25); frequency-aging loop not yet implemented |
 | `pekko.cluster.sharding.passivation.strategy = default-strategy` | `"default-idle-strategy"` | ✅ | Round-2 session 26. Selects the W-TinyLFU composite strategy implemented in `cluster/sharding/passivation_composite.go`. The plan-internal alias `"composite-strategy"` is normalised at parse time so configs that use either convention reach the same code path. |
 | `pekko.cluster.sharding.passivation.default-strategy.active-entity-limit` | `100000` | ✅ | Round-2 session 26. Active strategy limit reaches `ShardingConfig.PassivationActiveEntityLimit`; the composite strategy splits it between admission-window and main areas via `PassivationWindowProportion`. |
 | `pekko.cluster.sharding.passivation.default-strategy.admission.window.policy` | `"least-recently-used"` | ✅ | Round-2 session 26. `ShardingConfig.PassivationWindowPolicy`. Currently only `"least-recently-used"` is honoured at runtime; non-empty values activate the admission window. |
-| `pekko.cluster.sharding.passivation.default-strategy.admission.window.optimizer` | `"hill-climbing"` | ⚠️ | Round-2 session 26. Parsed for forward-compat with Pekko configs; the adaptive resizing loop lands in a later session. |
+| `pekko.cluster.sharding.passivation.default-strategy.admission.window.optimizer` | `"hill-climbing"` | ⚠️ | Parsed for forward-compat with Pekko configs (Round-2 session 26); adaptive resizing loop not yet implemented |
 | `pekko.cluster.sharding.passivation.default-strategy.admission.filter` | `"frequency-sketch"` | ✅ | Round-2 session 26. `ShardingConfig.PassivationFilter`. Recognised values: `"frequency-sketch"` (admission filter active), `"off"` / `"none"` (composite degrades to LRU window + LRU main with no admission gate). |
 | `pekko.cluster.sharding.passivation.default-strategy.replacement.policy` | `"least-recently-used"` | ✅ | Round-2 session 26. Per-strategy override for `ShardingConfig.PassivationReplacementPolicy`; wins over the LRU-strategy block when both are present. |
 | `pekko.cluster.sharding.passivation.strategy-defaults.admission.window.proportion` | `0.01` | ✅ | Round-2 session 26. Admission-window size as a fraction of the active-entity-limit. `default-strategy.admission.window.proportion` overrides per-strategy. |
-| `pekko.cluster.sharding.passivation.strategy-defaults.admission.window.minimum-proportion` | `0.01` | ⚠️ | Round-2 session 26. Parsed; consumed once the hill-climbing optimizer lands. |
-| `pekko.cluster.sharding.passivation.strategy-defaults.admission.window.maximum-proportion` | `1.0` | ⚠️ | Round-2 session 26. Parsed; consumed once the hill-climbing optimizer lands. |
+| `pekko.cluster.sharding.passivation.strategy-defaults.admission.window.minimum-proportion` | `0.01` | ⚠️ | Parsed (Round-2 session 26); consumer is the hill-climbing optimizer, not yet implemented |
+| `pekko.cluster.sharding.passivation.strategy-defaults.admission.window.maximum-proportion` | `1.0` | ⚠️ | Parsed (Round-2 session 26); consumer is the hill-climbing optimizer, not yet implemented |
 | `pekko.cluster.sharding.passivation.strategy-defaults.admission.frequency-sketch.depth` | `4` | ✅ | Round-2 session 26. Count-min-sketch row count; threaded into `cluster/sharding/passivation_admission.go`. |
 | `pekko.cluster.sharding.passivation.strategy-defaults.admission.frequency-sketch.counter-bits` | `4` | ⚠️ | Round-2 session 26. Pekko documents 2/4/8/16/32/64; gekka stores 4-bit counters regardless. Parsed for forward-compat. |
 | `pekko.cluster.sharding.passivation.strategy-defaults.admission.frequency-sketch.width-multiplier` | `4` | ✅ | Round-2 session 26. Sketch width = active-entity-limit × multiplier (rounded up to a power of two, clamped to 64). |
@@ -252,7 +265,7 @@ Legend:
 | `pekko.cluster.sharding.distributed-data.majority-min-cap` | `5` | ✅ | `ShardingConfig.DistributedData.MajorityMinCap` (hocon_config.go) — gekka uses the shared replicator, so this caps the same effective behavior. |
 | `pekko.cluster.sharding.distributed-data.max-delta-elements` | `5` | ✅ | `ShardingConfig.DistributedData.MaxDeltaElements` — bounds delta batch size for sharding's replicator usage. |
 | `pekko.cluster.sharding.distributed-data.prefer-oldest` | `on` | ✅ | `ShardingConfig.DistributedData.PreferOldest` — gossip preference for sharding's replicator usage. |
-| `pekko.cluster.sharding.distributed-data.durable.keys` | `["shard-*"]` | ⚠️ | Parsed; durable storage is roadmap F2 (sessions 21-23) |
+| `pekko.cluster.sharding.distributed-data.durable.keys` | `["shard-*"]` | ⚠️ | Parsed into `ShardingConfig.DistributedData.DurableKeys`; the parent `distributed-data.durable.keys` is fully ✅, but the sharding-specific filter is not yet wired into the durable store |
 | `pekko.cluster.sharding.coordinator-singleton.role` | `""` | ✅ | Applied to coordinator singleton-proxy when override = off |
 | `pekko.cluster.sharding.coordinator-singleton.singleton-name` | `"singleton"` | ✅ | Parsed (gekka uses fixed `<typeName>Coordinator` path) |
 | `pekko.cluster.sharding.coordinator-singleton.hand-over-retry-interval` | `1s` | ✅ | Parsed; routed via SingletonConfig |
@@ -260,9 +273,9 @@ Legend:
 | `pekko.cluster.sharding.coordinator-singleton-role-override` | `on` | ✅ | When `on`, sharding.role wins over coordinator-singleton.role |
 | `pekko.cluster.sharding.retry-interval` | `2s` | ✅ | ShardRegion ticker re-tells GetShardHome for shards with unknown home (Round-2 session 13) |
 | `pekko.cluster.sharding.buffer-size` | `100000` | ✅ | Caps per-shard pendingMessages while awaiting ShardHome; further messages are dropped (Round-2 session 13) |
-| `pekko.cluster.sharding.shard-start-timeout` | `10s` | ✅ | Plumbed onto ShardSettings; Shard-startup consumer wires in part 2 (Round-2 session 13) |
+| `pekko.cluster.sharding.shard-start-timeout` | `10s` | ⚠️ | Plumbed onto `ShardSettings.ShardStartTimeout`; Shard-startup timeout consumer not yet implemented (field is declared but unread) |
 | `pekko.cluster.sharding.shard-failure-backoff` | `10s` | ✅ | Region delays clearing the cached home after a Shard terminates (Round-2 session 13) |
-| `pekko.cluster.sharding.entity-restart-backoff` | `10s` | ✅ | Plumbed onto ShardSettings; entity-restart consumer wires in part 2 (Round-2 session 13) |
+| `pekko.cluster.sharding.entity-restart-backoff` | `10s` | ⚠️ | Plumbed onto `ShardSettings.EntityRestartBackoff`; entity-restart-backoff consumer not yet implemented (field is declared but unread) |
 | `pekko.cluster.sharding.coordinator-failure-backoff` | `5s` | ✅ | Region delays re-registration with the coordinator after termination (Round-2 session 13) |
 | `pekko.cluster.sharding.waiting-for-state-timeout` | `2s` | ⚠️ | Plumbed onto ShardSettings; consumed by the DData coordinator-state path when present (Round-2 session 14) |
 | `pekko.cluster.sharding.updating-state-timeout` | `5s` | ⚠️ | Plumbed onto ShardSettings; consumed by DData updates / remember-entities writes when present (Round-2 session 14) |
@@ -270,8 +283,8 @@ Legend:
 | `pekko.cluster.sharding.entity-recovery-strategy` | `"all"` | ✅ | `"all"` spawns all remembered entities at once; `"constant"` paces recovery in batches (Round-2 session 14) |
 | `pekko.cluster.sharding.entity-recovery-constant-rate-strategy.frequency` | `100ms` | ✅ | Delay between batches under the `"constant"` strategy (Round-2 session 14) |
 | `pekko.cluster.sharding.entity-recovery-constant-rate-strategy.number-of-entities` | `5` | ✅ | Batch size under the `"constant"` strategy (Round-2 session 14) |
-| `pekko.cluster.sharding.coordinator-state.write-majority-plus` | `3` | ⚠️ | Plumbed onto ShardSettings; `"all"` maps to math.MaxInt sentinel; consumer wires when DData write-majority lands (Round-2 session 14) |
-| `pekko.cluster.sharding.coordinator-state.read-majority-plus` | `5` | ⚠️ | Plumbed onto ShardSettings; `"all"` maps to math.MaxInt sentinel; consumer wires when DData read-majority lands (Round-2 session 14) |
+| `pekko.cluster.sharding.coordinator-state.write-majority-plus` | `3` | ⚠️ | Plumbed onto `ShardSettings.CoordinatorWriteMajorityPlus` (`"all"` maps to `math.MaxInt`); DData write-majority consumer not yet implemented |
+| `pekko.cluster.sharding.coordinator-state.read-majority-plus` | `5` | ⚠️ | Plumbed onto `ShardSettings.CoordinatorReadMajorityPlus` (`"all"` maps to `math.MaxInt`); DData read-majority consumer not yet implemented |
 | `pekko.cluster.sharding.verbose-debug-logging` | `off` | ✅ | Gates fine-grained per-message DEBUG log lines via Shard.vdebug (Round-2 session 15) |
 | `pekko.cluster.sharding.fail-on-invalid-entity-state-transition` | `off` | ✅ | When `on`, Shard panics on invalid handoff transitions; otherwise logs WARN (Round-2 session 15) |
 | `pekko.cluster.sharding.passivation.default-idle-strategy.idle-entity.interval` | `default` (= timeout/2) | ✅ | Overrides idle-entity scan cadence; `"default"` leaves the timeout/2 fallback (Round-2 session 15) |
@@ -346,10 +359,10 @@ Legend:
 
 | Path | Pekko Default | Gekka? | Notes |
 |---|---|---|---|
-| `pekko.cluster.typed.receptionist.write-consistency` | `local` | ❌ | No feature |
-| `pekko.cluster.typed.receptionist.pruning-interval` | `3s` | ❌ | No feature |
-| `pekko.cluster.typed.receptionist.distributed-key-count` | `5` | ❌ | No feature |
-| `pekko.cluster.ddata.typed.replicator-message-adapter-unexpected-ask-timeout` | `20s` | ❌ | No feature |
+| `pekko.cluster.typed.receptionist.write-consistency` | `local` | ❌ | Not implemented — gekka has typed actors (`actor/typed/`) but no receptionist analog yet; tracked in `docs/LEFTWORKS.md` §11 |
+| `pekko.cluster.typed.receptionist.pruning-interval` | `3s` | ❌ | Not implemented (typed receptionist absent); tracked in `docs/LEFTWORKS.md` §11 |
+| `pekko.cluster.typed.receptionist.distributed-key-count` | `5` | ❌ | Not implemented (typed receptionist absent); tracked in `docs/LEFTWORKS.md` §11 |
+| `pekko.cluster.ddata.typed.replicator-message-adapter-unexpected-ask-timeout` | `20s` | ❌ | Not implemented — typed replicator-adapter timeout; tracked in `docs/LEFTWORKS.md` §11 |
 
 ---
 
@@ -396,7 +409,7 @@ Legend:
 | `pekko.persistence.typed.stash-capacity` | `4096` | ✅ | Default for typed persistent actor recovery stash |
 | `pekko.persistence.typed.stash-overflow-strategy` | `"drop"` | ✅ | Honors `drop` and `fail` |
 | `pekko.persistence.typed.snapshot-on-recovery` | `false` | ✅ | Saves a snapshot at end of recovery |
-| `pekko.persistence.typed.log-stashing` | `off` | ❌ | No feature |
+| `pekko.persistence.typed.log-stashing` | `off` | ❌ | Not implemented — debug log toggle for typed persistent actor stashing; tracked in `docs/LEFTWORKS.md` §11 |
 
 ---
 
@@ -405,9 +418,9 @@ Legend:
 | Path | Pekko Default | Gekka? | Notes |
 |---|---|---|---|
 | `pekko.discovery.method` | `"<method>"` | ✅ | |
-| `pekko.discovery.config.*` | (service map) | ❌ | No feature (config-based discovery) |
-| `pekko.discovery.aggregate.*` | (multi-method) | ❌ | No feature |
-| `pekko.discovery.pekko-dns.*` | (DNS) | ❌ | No feature |
+| `pekko.discovery.config.*` | (service map) | ❌ | Not implemented — gekka's k8s extension (`extensions/cluster/k8s`) is the alternative discovery path; tracked in `docs/LEFTWORKS.md` §11 |
+| `pekko.discovery.aggregate.*` | (multi-method) | ❌ | Not implemented — multi-method discovery aggregator; tracked in `docs/LEFTWORKS.md` §11 |
+| `pekko.discovery.pekko-dns.*` | (DNS) | ❌ | Not implemented — DNS-SRV discovery; tracked in `docs/LEFTWORKS.md` §11 |
 
 ---
 
@@ -415,7 +428,7 @@ Legend:
 
 | Path | Pekko Default | Gekka? | Notes |
 |---|---|---|---|
-| `pekko.cluster.metrics.*` | (all) | ❌ | No feature (JVM-specific: Sigar/JMX) |
+| `pekko.cluster.metrics.*` | (all) | ☕ | Sigar/JMX — JVM-only metrics frameworks; gekka uses OpenTelemetry via `extensions/telemetry/otel` |
 
 ---
 
@@ -423,8 +436,8 @@ Legend:
 
 | Path | Pekko Default | Gekka? | Notes |
 |---|---|---|---|
-| `pekko.actor.typed.restart-stash-capacity` | `1000` | ❌ | No feature |
-| `pekko.reliable-delivery.*` | (all) | ❌ | No feature |
+| `pekko.actor.typed.restart-stash-capacity` | `1000` | ❌ | Not implemented — gekka has stash buffers (`actor/stash.go`) but this knob isn't wired; tracked in `docs/LEFTWORKS.md` §11 |
+| `pekko.reliable-delivery.*` | (all) | ❌ | Not implemented — Pekko-typed `ProducerController`/`ConsumerController` API. Distinct from `at-least-once-delivery.*` (✅). Tracked in `docs/LEFTWORKS.md` §11 |
 
 ---
 
@@ -433,7 +446,7 @@ Legend:
 | Path | Pekko Default | Gekka? | Notes |
 |---|---|---|---|
 | `pekko.cluster.sharding.number-of-shards` | `1000` | ✅ | Wired to coordinator/region |
-| `pekko.cluster.sharded-daemon-process.*` | (all) | ❌ | No feature |
+| `pekko.cluster.sharded-daemon-process.*` | (all) | ❌ | Not implemented — long-running per-shard daemon processes; tracked in `docs/LEFTWORKS.md` §11 |
 
 ---
 
@@ -459,55 +472,93 @@ touching the consumer code.
 
 ## Summary
 
-### Correctly Parsed (✅): ~260 paths
+### Symbol counts (post 2026-04-30 audit)
 
-Round-2 sessions 01–40 closed the entire portable Pekko surface.  Coverage now
-includes core cluster formation, failure detection (incl. cross-DC), SBR
+| Symbol | Substantive table rows | Meaning |
+|---|---|---|
+| ✅ | 255 | Parsed AND consumed |
+| ⚠️ | 25 | Forward-compat parsed; consumer deferred (Note states what's deferred) |
+| ☕ | 8 | JVM-only — no equivalent capability in Go runtime |
+| 🚫 | 1 | Go/JVM API-shape incompatibility (FQCN class loading) |
+| ❌ | 20 | Not implemented; portable in principle (tracked in `docs/LEFTWORKS.md` §11) |
+
+(Counts exclude the legend lines themselves and this Summary table. `grep -c "| ✅ |"` etc. on the file returns counts +1 because each Summary-table row contributes one match.)
+
+### Correctly Parsed (✅)
+
+Round-2 sessions 01–41 closed the entire portable Pekko surface. Coverage
+now includes core cluster formation, failure detection (incl. cross-DC), SBR
 (`down-all-when-unstable` + `lease-majority`), full advanced gossip tuning
 (probability, TTL, tombstones, reaper, prune timers), Artery transport
-(handshake budgets, idle/quarantine sweeps, restart caps, compression tables,
-TCP timeouts, `untrusted-mode`/`trusted-selection-paths`,
+(handshake budgets, idle/quarantine sweeps, restart caps, compression
+tables, TCP timeouts, `untrusted-mode` / `trusted-selection-paths`,
 `large-message-destinations` + UDP stream-3 routing,
-`maximum-large-frame-size` cap), full sharding (every retry/backoff path,
-`use-lease`, advanced passivation including W-TinyLFU composite, allocation V1
-& V2, EventSourced remember-entities store with batched writes), full
-distributed-data (durable bbolt store, `prune-marker-time-to-live`,
-`log-data-size-exceeding`, `recovery-timeout`), full singleton/proxy/pub-sub
-(incl. `use-lease`, `send-to-dead-letters-when-no-subscribers`), full cluster
-client + receptionist (`response-tunnel-receive-timeout`,
-`failure-detection-interval`), full persistence (proxy journal/snapshot,
-plugin-fallback circuit-breaker + replay-filter + recovery-event-timeout, FSM
-snapshots, AtLeastOnceDelivery scheduler + warn callback), `pekko.actor.debug`
-sub-flags, `log-config-on-start`, NAT/Docker bind, discovery, management.
+`maximum-large-frame-size` cap, TLS cipher-suites + Pekko ssl alias), full
+sharding (every retry/backoff path, `use-lease`, advanced passivation
+including W-TinyLFU composite, allocation V1 & V2, EventSourced
+remember-entities store with batched writes), full distributed-data
+(durable bbolt store, `prune-marker-time-to-live`,
+`log-data-size-exceeding`, `recovery-timeout`), full singleton / proxy /
+pub-sub (incl. `use-lease`, `send-to-dead-letters-when-no-subscribers`),
+full cluster client + receptionist (`response-tunnel-receive-timeout`,
+`failure-detection-interval`), full persistence (proxy journal / snapshot,
+plugin-fallback circuit-breaker + replay-filter + recovery-event-timeout,
+FSM snapshots, AtLeastOnceDelivery scheduler + warn callback),
+`pekko.actor.debug` sub-flags, `log-config-on-start`, NAT/Docker bind,
+discovery, management.
 
-### Wrong Path (⚠️): 0 paths
+### Forward-compat (⚠️)
 
-After Round-2 session 41 + the docs sync that followed, gekka parses every
-supported feature at its canonical Pekko path. The remaining ⚠️ markers in
-this document flag **forward-compat parses** (path is recognised at the
-correct location, but a sub-feature of the runtime behavior is deferred to
-a future session) — see the "Round-2 session 25/26" annotations in the
-sharding-passivation block, and the SSL `ssl-engine-provider` /
-`random-number-generator` / `rotating-keys-engine.*` rows which have no
-gekka equivalent (Go `crypto/tls` is fixed-engine).
+Paths in this bucket are parsed at the canonical Pekko location, but the
+runtime consumer that reads the value is not yet implemented. Each ⚠️
+row's Note states the specific deferred consumer; none reference a stale
+roadmap session. The full list (post-audit) is consolidated in
+`docs/LEFTWORKS.md` §11 under "Deferred consumers".
 
-### Not Parsed: residual JVM-only paths (☕)
+### JVM-Only (☕) and API-Shape Incompatible (🚫)
 
-After Round-2 session 41 the only remaining unwired paths on the Pekko surface
-are JVM-only ones — see `docs/LEFTWORKS.md` §9 for the full list. Highlights:
+JVM-only paths (☕) cover Go-irrelevant infrastructure (dispatcher
+hierarchy, JMX/Sigar metrics, sharding `state-store-mode = persistence`
+subset). API-shape incompatible paths (🚫) cover HOCON values that name
+Java FQCNs to be loaded via reflection — gekka has the underlying
+capability wired directly in Go but cannot bridge the FQCN-swap
+semantics. See `docs/LEFTWORKS.md` §9 for the full JVM-only list.
 
-1. **JVM-specific** — class loading, dispatchers, JMX, Sigar metrics, scheduler internals
-2. **Reliable delivery typed protocol** — producer/consumer controller not implemented (Pekko's `pekko.reliable-delivery.*` is distinct from `at-least-once-delivery.*`, which is ✅ DONE)
-3. **Sharded daemon process** — not implemented (Pekko-typed feature)
-4. **Typed receptionist** — write-consistency, pruning, distributed-key-count
-5. **Sharding `state-store-mode = persistence` subset** — gekka commits to `ddata`; `state-store-mode`, `snapshot-after`, `keep-nr-of-batches`, `journal-plugin-id`, `snapshot-plugin-id`
-6. **Discovery aggregate / pekko-dns** — not implemented (out of scope; gekka uses k8s-extension)
-7. **Cluster metrics (Sigar/JMX)** — JVM-only
+### Not Yet Implemented (❌) — single source of truth
 
-### Round-2 close-out
+Portable Pekko paths gekka has not bridged. The full list lives in
+`docs/LEFTWORKS.md` §11 ("Future Work — Portable"). Highlights:
 
-Session 41 (2026-04-30) marks Round-2 complete: 0 HARDCODED + 0 NO FEATURE
-on the portable surface. Full test gate (unit + integration + sbt
-multi-jvm:test 3/3) passes. See
-`docs/superpowers/plans/2026-04-24-config-completeness-round2.md` for the
-session ledger.
+1. **Mailboxes (critical)** — control-aware mailbox bindings,
+   `default-mailbox.*` tunables, and `mailbox.requirements.*`. Without
+   control-aware mailboxes, system-message priority is not guaranteed and
+   the system functions completely differently from Pekko/Akka.
+2. **Typed-API surface** — typed receptionist
+   (`cluster.typed.receptionist.*`), typed `restart-stash-capacity`,
+   persistence-typed `log-stashing`, ddata-typed adapter timeout.
+3. **Reliable-delivery (typed)** — Pekko-typed `ProducerController` /
+   `ConsumerController`. Distinct from `at-least-once-delivery.*` (✅).
+4. **Sharded daemon process** — `pekko.cluster.sharded-daemon-process.*`.
+5. **Watch failure detector** — `pekko.remote.watch-failure-detector.*`.
+6. **Discovery** — `pekko.discovery.config / aggregate / pekko-dns.*`
+   (gekka's k8s extension is the alternative path).
+7. **Logging** — `pekko.stdout-loglevel`.
+
+### Audit history
+
+- **2026-04-30 — Taxonomy refactor:** Replaced 3-symbol legend with
+  5-symbol scheme. Reclassified former ❌ rows: 3 → ☕ (dispatcher × 2,
+  `cluster.metrics`), 1 → 🚫
+  (`failure-detector.implementation-class`). Honest "not implemented"
+  notes replaced "No feature" hand-waving on the remaining ❌ rows.
+  Added mailbox subsection (control-aware mailbox flagged as critical
+  gap). Stale "future X consumer" / "wires in part N" / roadmap-session
+  references removed; 7 rows previously claimed ✅ but only exposed via a
+  getter were honestly downgraded to ⚠️. New `docs/LEFTWORKS.md` §11
+  "Future Work — Portable" centralises the unwired and deferred-consumer
+  lists.
+- **Round-2 close-out (Session 41, commit `2d72eb2`):** 0 HARDCODED + 0
+  NO FEATURE on the portable surface. Full test gate (unit + integration
+  + sbt multi-jvm:test 3/3) passes. See
+  `docs/superpowers/plans/2026-04-24-config-completeness-round2.md` for
+  the session ledger.

@@ -277,6 +277,38 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 	if v, err := cfg.GetString(tlsPrefix + ".server-name"); err == nil {
 		nodeCfg.TLS.ServerName = v
 	}
+	// tls.cipher-suites — gekka-native explicit cipher allow-list.
+	// `ssl.config-ssl-engine.enabled-algorithms` is accepted as an alias for
+	// Pekko/Akka compatibility; the gekka-native path takes precedence when
+	// both are set. Only TLS 1.2 honors this list — TLS 1.3 ciphers are
+	// spec-fixed in Go's `crypto/tls`.
+	{
+		var suiteTmp struct {
+			GekkaNative []string `hocon:"pekko.remote.artery.tls.cipher-suites"`
+			AkkaNative  []string `hocon:"akka.remote.artery.tls.cipher-suites"`
+			PekkoAlias  []string `hocon:"pekko.remote.artery.ssl.config-ssl-engine.enabled-algorithms"`
+			AkkaAlias   []string `hocon:"akka.remote.artery.ssl.config-ssl-engine.enabled-algorithms"`
+		}
+		_ = cfg.Unmarshal(&suiteTmp)
+		var names []string
+		switch {
+		case prefix == "pekko" && len(suiteTmp.GekkaNative) > 0:
+			names = suiteTmp.GekkaNative
+		case prefix == "akka" && len(suiteTmp.AkkaNative) > 0:
+			names = suiteTmp.AkkaNative
+		case prefix == "pekko" && len(suiteTmp.PekkoAlias) > 0:
+			names = suiteTmp.PekkoAlias
+		case prefix == "akka" && len(suiteTmp.AkkaAlias) > 0:
+			names = suiteTmp.AkkaAlias
+		}
+		if len(names) > 0 {
+			ids, perr := core.ParseCipherSuiteNames(names)
+			if perr != nil {
+				return ClusterConfig{}, fmt.Errorf("gekka: parse %s.remote.artery.tls.cipher-suites: %w", prefix, perr)
+			}
+			nodeCfg.TLS.CipherSuites = ids
+		}
+	}
 
 	// ── Flight Recorder ─────────────────────────────────────────────────────
 	frPrefix := arteryPrefix + ".advanced.flight-recorder"

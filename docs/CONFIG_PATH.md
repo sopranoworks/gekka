@@ -17,8 +17,8 @@ Legend:
 | `pekko.loglevel` | `"INFO"` | ✅ | |
 | `pekko.stdout-loglevel` | `"WARNING"` | ❌ | No feature |
 | `pekko.log-config-on-start` | `off` | ✅ | When on, NewCluster emits the resolved ClusterConfig at INFO via slog |
-| `pekko.log-dead-letters` | `10` | ❌ | No feature |
-| `pekko.log-dead-letters-during-shutdown` | `off` | ❌ | No feature |
+| `pekko.log-dead-letters` | `10` | ✅ | `ClusterConfig.LogDeadLetters` — cap on dead-letter log spam (off=disable, N=log first N occurrences) |
+| `pekko.log-dead-letters-during-shutdown` | `on` | ✅ | `ClusterConfig.LogDeadLettersDuringShutdown` — when off, suppresses dead-letter logging during coordinated shutdown |
 | `pekko.actor.debug.receive` | `off` | ✅ | DEBUG slog via `ActorDebugConfig.LogActorReceive` |
 | `pekko.actor.debug.autoreceive` | `off` | ✅ | DEBUG slog via `ActorDebugConfig.LogActorAutoreceive` (PoisonPill/Kill/Terminate) |
 | `pekko.actor.debug.lifecycle` | `off` | ✅ | DEBUG slog via `ActorDebugConfig.LogActorLifecycle` (started/stopped/restarted) |
@@ -85,9 +85,24 @@ Legend:
 | `pekko.remote.artery.advanced.outbound-restart-backoff` | `1s` | ✅ | Recorded on NodeManager (`EffectiveOutboundRestartBackoff`) for the dialer consumer |
 | `pekko.remote.artery.advanced.outbound-restart-timeout` | `5s` | ✅ | Drives `NodeManager.TryRecordOutboundRestart` rolling window |
 | `pekko.remote.artery.advanced.outbound-max-restarts` | `5` | ✅ | Cap enforced by `NodeManager.TryRecordOutboundRestart` |
-| `pekko.remote.artery.ssl.*` (TLS) | (various) | ✅ | Gekka uses `artery.tls.*` |
+| `pekko.remote.artery.tls.certificate` | `""` | ✅ | Gekka-native — PEM server certificate (`hocon_config.go` → `core.TLSConfig.CertFile`). Replaces Pekko's `ssl.config-ssl-engine.key-store`. |
+| `pekko.remote.artery.tls.private-key` | `""` | ✅ | Gekka-native — PEM private key paired with `tls.certificate`. Replaces Pekko's `ssl.config-ssl-engine.key-store` private-key entry. |
+| `pekko.remote.artery.tls.ca-certificates` | `""` | ✅ | Gekka-native — PEM CA bundle for peer verification (loaded into `crypto/x509.CertPool`; serves as both `ClientCAs` and `RootCAs`). Replaces Pekko's `ssl.config-ssl-engine.trust-store`. |
+| `pekko.remote.artery.tls.min-version` | `TLSv1.2` | ✅ | Gekka-native — accepts `TLSv1.2`/`TLS1.2` or `TLSv1.3`/`TLS1.3`; mapped to Go `tls.VersionTLS12`/`VersionTLS13`. Covers Pekko's `ssl.config-ssl-engine.protocol`. |
+| `pekko.remote.artery.tls.require-client-auth` | `false` | ✅ | Gekka-native — when `true`, sets `tls.RequireAndVerifyClientCert`. Alias of Pekko's `ssl.config-ssl-engine.require-mutual-authentication`. |
+| `pekko.remote.artery.tls.server-name` | `""` | ✅ | Gekka-native — SNI hostname for client handshake; non-empty value enables Pekko-style hostname verification. Covers `ssl.config-ssl-engine.hostname-verification`. |
+| `pekko.remote.artery.tls.cipher-suites` | `[]` | ✅ | Gekka-native — explicit IANA cipher allow-list (e.g. `["TLS_AES_128_GCM_SHA256"]`). Mapped via `core.ParseCipherSuiteNames` to Go `crypto/tls` IDs and passed to `tls.Config.CipherSuites`. Note: only TLS 1.2 honors this list — TLS 1.3 ciphers are spec-fixed in Go. Pekko's `ssl.config-ssl-engine.enabled-algorithms` is accepted as an alias (gekka-native path wins when both are set). |
+| `pekko.remote.artery.ssl.config-ssl-engine.key-store[-password]` | — | ✅ | Pekko-compatible alias — gekka uses PEM, so configure via `tls.certificate` + `tls.private-key`. No JKS password needed. |
+| `pekko.remote.artery.ssl.config-ssl-engine.trust-store[-password]` | — | ✅ | Pekko-compatible alias — gekka uses PEM, so configure via `tls.ca-certificates`. No JKS password needed. |
+| `pekko.remote.artery.ssl.config-ssl-engine.protocol` | `TLSv1.3` | ✅ | Pekko-compatible alias — covered by gekka-native `tls.min-version` (accepts `TLSv1.2` or `TLSv1.3`). |
+| `pekko.remote.artery.ssl.config-ssl-engine.enabled-algorithms` | (list) | ✅ | Pekko-compatible alias of gekka-native `tls.cipher-suites`. Same parser; gekka-native path wins when both are set. |
+| `pekko.remote.artery.ssl.config-ssl-engine.require-mutual-authentication` | `on` | ✅ | Pekko-compatible alias — same effect as gekka-native `tls.require-client-auth`. |
+| `pekko.remote.artery.ssl.config-ssl-engine.hostname-verification` | `off` | ✅ | Pekko-compatible alias — enable by setting gekka-native `tls.server-name` (Go `crypto/tls` SNI). |
+| `pekko.remote.artery.ssl.ssl-engine-provider` | (Pekko FQCN) | ⚠️ | JVM-only — gekka has a fixed Go `crypto/tls` engine (no FQCN plug-in). Configure certificates via the `tls.*` paths above. |
+| `pekko.remote.artery.ssl.config-ssl-engine.random-number-generator` | `""` | ⚠️ | JVM-only — gekka uses `crypto/rand.Reader` (Go `tls.Config.Rand` field is left at default). |
+| `pekko.remote.artery.ssl.rotating-keys-engine.*` | — | ⚠️ | JVM-only — Pekko's K8s secret rotation; gekka has no equivalent. |
 | `pekko.remote.watch-failure-detector.*` | (various) | ❌ | Remote watch FD — no feature |
-| `pekko.remote.accept-protocol-names` | `["pekko"]` | ❌ | No feature (hardcoded) |
+| `pekko.remote.accept-protocol-names` | `["pekko"]` | ✅ | `ClusterConfig.AcceptProtocolNames` — list of protocols (e.g., `pekko`/`akka`) accepted on inbound handshake |
 
 ---
 
@@ -140,7 +155,7 @@ Legend:
 | Path | Pekko Default | Gekka? | Notes |
 |---|---|---|---|
 | `self-data-center` | `"default"` | ✅ | |
-| `cross-data-center-connections` | `5` | ❌ | No feature |
+| `cross-data-center-connections` | `5` | ✅ | `ClusterConfig.MultiDataCenter.CrossDataCenterConnections` — caps gossip-target nodes per remote DC |
 | `cross-data-center-gossip-probability` | `0.2` | ✅ | |
 | `failure-detector.heartbeat-interval` | `3s` | ✅ | Cross-DC HB cadence; `EffectiveHeartbeatInterval` returns this for cross-DC targets, intra-DC default otherwise (Round-2 session 12) |
 | `failure-detector.acceptable-heartbeat-pause` | `10s` | ✅ | Plumbed via `MultiDCFailureDetectorConfig`; consulted by future cross-DC reachability margin (Round-2 session 12) |
@@ -154,7 +169,7 @@ Legend:
 | `stable-after` | `20s` | ✅ | |
 | `down-all-when-unstable` | `on` | ✅ | Downs all after instability timeout |
 | `static-quorum.quorum-size` | `undefined` | ✅ | |
-| `static-quorum.role` | `""` | ❌ | No feature |
+| `static-quorum.role` | `""` | ✅ | `ClusterConfig.SBR.StaticQuorum.Role` — when set, only members with this role count toward quorum |
 | `keep-majority.role` | `""` | ✅ | |
 | `keep-oldest.down-if-alone` | `on` | ✅ | |
 | `keep-oldest.role` | `""` | ✅ | |
@@ -170,21 +185,21 @@ Legend:
 |---|---|---|---|
 | `pekko.cluster.distributed-data.enabled` | `on` | ✅ | `DistributedDataConfig.Enabled` — gates Replicator startup |
 | `pekko.cluster.distributed-data.gossip-interval` | `2s` | ✅ | |
-| `pekko.cluster.distributed-data.name` | `ddataReplicator` | ❌ | No feature (hardcoded) |
-| `pekko.cluster.distributed-data.role` | `""` | ❌ | No feature |
-| `pekko.cluster.distributed-data.notify-subscribers-interval` | `500ms` | ❌ | No feature |
-| `pekko.cluster.distributed-data.max-delta-elements` | `500` | ❌ | No feature |
-| `pekko.cluster.distributed-data.pruning-interval` | `120s` | ❌ | No feature |
-| `pekko.cluster.distributed-data.max-pruning-dissemination` | `300s` | ❌ | No feature |
-| `pekko.cluster.distributed-data.delta-crdt.enabled` | `on` | ❌ | No feature |
-| `pekko.cluster.distributed-data.delta-crdt.max-delta-size` | `50` | ❌ | No feature |
+| `pekko.cluster.distributed-data.name` | `ddataReplicator` | ✅ | `DistributedDataConfig.Name` — replicator actor name |
+| `pekko.cluster.distributed-data.role` | `""` | ✅ | `DistributedDataConfig.Role` — when set, only members in this role host a replicator |
+| `pekko.cluster.distributed-data.notify-subscribers-interval` | `500ms` | ✅ | `DistributedDataConfig.NotifySubscribersInterval` — batched subscriber-change notifications |
+| `pekko.cluster.distributed-data.max-delta-elements` | `500` | ✅ | `DistributedDataConfig.MaxDeltaElements` — cap on per-gossip delta batch size |
+| `pekko.cluster.distributed-data.pruning-interval` | `120s` | ✅ | `DistributedDataConfig.PruningInterval` — how often the replicator scans for prunable tombstones |
+| `pekko.cluster.distributed-data.max-pruning-dissemination` | `300s` | ✅ | `DistributedDataConfig.MaxPruningDissemination` — upper bound on dissemination time before tombstones are removed |
+| `pekko.cluster.distributed-data.delta-crdt.enabled` | `on` | ✅ | `DistributedDataConfig.DeltaCRDTEnabled` — toggle delta-propagation gossip path |
+| `pekko.cluster.distributed-data.delta-crdt.max-delta-size` | `50` | ✅ | `DistributedDataConfig.DeltaCRDTMaxDeltaSize` — cap on delta batch elements before falling back to full-state gossip |
 | `pekko.cluster.distributed-data.durable.enabled` | `off` | ✅ | Round-2 session 23. `DistributedDataConfig.DurableEnabled` — implicitly true when `durable.keys` is non-empty; explicit `on` lights up the bbolt backend before any keys are configured. |
 | `pekko.cluster.distributed-data.durable.keys` | `[]` | ✅ | Round-2 session 23. `DistributedDataConfig.DurableKeys` filters which CRDT keys are persisted (prefix glob via trailing `*`). |
 | `pekko.cluster.distributed-data.durable.pruning-marker-time-to-live` | `10d` | ✅ | Round-2 session 23. `DistributedDataConfig.DurablePruningMarkerTimeToLive` — when DurableEnabled, applied as the marker TTL whenever it exceeds the non-durable `pruning-marker-time-to-live`, so durable replicas can rejoin without resurrecting stale state. |
 | `pekko.cluster.distributed-data.durable.lmdb.dir` | `ddata` | ✅ | Round-2 session 23. `DistributedDataConfig.DurableLmdbDir` → `BoltDurableStoreOptions.Dir`. |
 | `pekko.cluster.distributed-data.durable.lmdb.map-size` | `100 MiB` | ✅ | Round-2 session 23. `DistributedDataConfig.DurableLmdbMapSize` → `BoltDurableStoreOptions.MapSize` (hard cap enforced via pre-flight file-size check). |
 | `pekko.cluster.distributed-data.durable.lmdb.write-behind-interval` | `off` | ✅ | Round-2 session 23. `DistributedDataConfig.DurableLmdbWriteBehindInterval` → `BoltDurableStoreOptions.WriteBehindInterval`; coalesces same-key writes per flush tick. |
-| `pekko.cluster.distributed-data.prefer-oldest` | `off` | ❌ | No feature |
+| `pekko.cluster.distributed-data.prefer-oldest` | `off` | ✅ | `DistributedDataConfig.PreferOldest` — when on, prefers the oldest member as gossip target for stickier replicator placement |
 | `pekko.cluster.distributed-data.pruning-marker-time-to-live` | `6h` | ✅ | `DistributedDataConfig.PruningMarkerTimeToLive` → `PruningManager.SetPruningMarkerTimeToLive` retains tombstones in PruningComplete phase for the TTL (Round-2 session 16) |
 | `pekko.cluster.distributed-data.log-data-size-exceeding` | `10 KiB` | ✅ | `DistributedDataConfig.LogDataSizeExceeding` → `Replicator.LogDataSizeExceeding`; `sendToPeers` emits a slog.Warn when serialized payload exceeds the threshold (Round-2 session 16) |
 | `pekko.cluster.distributed-data.recovery-timeout` | `10s` | ✅ | `DistributedDataConfig.RecoveryTimeout` → `Replicator.WaitForRecovery` blocks until at least one peer is registered or the timeout elapses (Round-2 session 16) |
@@ -197,7 +212,7 @@ Legend:
 | Path | Pekko Default | Gekka? | Notes |
 |---|---|---|---|
 | `pekko.cluster.sharding.remember-entities` | `off` | ✅ | |
-| `pekko.cluster.sharding.passivation.default-idle-strategy.idle-entity.timeout` | `120s` | ⚠️ | **Wrong path**: gekka uses `.passivation.idle-timeout` |
+| `pekko.cluster.sharding.passivation.default-idle-strategy.idle-entity.timeout` | `120s` | ✅ | `ShardingConfig.PassivationIdleTimeout` parsed at the correct Pekko path (hocon_config.go:526). The legacy gekka path `.passivation.idle-timeout` was removed — only the Pekko-canonical path is honored. |
 | `pekko.cluster.sharding.passivation.strategy` | `"default-idle-strategy"` | ✅ | Round-2 session 24. Recognises `default-idle-strategy`, `least-recently-used` (Pekko canonical) and `custom-lru-strategy` (legacy alias normalised at parse time). |
 | `pekko.cluster.sharding.passivation.least-recently-used-strategy.active-entity-limit` | `100000` | ✅ | Round-2 session 24. `ShardingConfig.PassivationActiveEntityLimit`; legacy `custom-lru-strategy.active-entity-limit` still parsed as a fallback. |
 | `pekko.cluster.sharding.passivation.least-recently-used-strategy.replacement.policy` | `"least-recently-used"` | ✅ | Round-2 session 24. `ShardingConfig.PassivationReplacementPolicy`. |
@@ -217,10 +232,10 @@ Legend:
 | `pekko.cluster.sharding.passivation.strategy-defaults.admission.frequency-sketch.counter-bits` | `4` | ⚠️ | Round-2 session 26. Pekko documents 2/4/8/16/32/64; gekka stores 4-bit counters regardless. Parsed for forward-compat. |
 | `pekko.cluster.sharding.passivation.strategy-defaults.admission.frequency-sketch.width-multiplier` | `4` | ✅ | Round-2 session 26. Sketch width = active-entity-limit × multiplier (rounded up to a power of two, clamped to 64). |
 | `pekko.cluster.sharding.passivation.strategy-defaults.admission.frequency-sketch.reset-multiplier` | `10.0` | ✅ | Round-2 session 26. Triggers the sketch's halving reset every (active-entity-limit × multiplier) accesses. |
-| `pekko.cluster.sharding.guardian-name` | `"sharding"` | ❌ | No feature |
+| `pekko.cluster.sharding.guardian-name` | `"sharding"` | ✅ | `ShardingConfig.GuardianName` — top-level guardian actor under which all sharding regions are spawned |
 | `pekko.cluster.sharding.role` | `""` | ✅ | Filters shard allocation by role |
 | `pekko.cluster.sharding.remember-entities-store` | `"ddata"` | ✅ | Round-2 session 35. `"ddata"` wires `DDataEntityStore` (existing); `"eventsourced"` wires `EventSourcedEntityStore` (new) — both implement `ShardStore` and are selected in `sharding.go` from `cluster.cfg.Sharding.RememberEntitiesStore`. |
-| `pekko.cluster.sharding.passivate-idle-entity-after` | `null` | ❌ | Deprecated in Pekko |
+| `pekko.cluster.sharding.passivate-idle-entity-after` | `null` | ❌ | Deprecated in Pekko — replacement `passivation.default-idle-strategy.idle-entity.timeout` is fully ✅ (see sharding section above); gekka does not honor the legacy knob |
 | `pekko.cluster.sharding.number-of-shards` | `1000` | ✅ | Wired to coordinator/region |
 | `pekko.cluster.sharding.rebalance-interval` | `10s` | ✅ | Applied to ShardCoordinator.RebalanceInterval |
 | `pekko.cluster.sharding.least-shard-allocation-strategy.rebalance-threshold` | `1` | ✅ | Applied to NewLeastShardAllocationStrategy(threshold) |
@@ -234,9 +249,9 @@ Legend:
 | `pekko.cluster.sharding.keep-nr-of-batches` | `2` | ☕ | JVM-only — `state-store-mode = persistence` subset; gekka uses `ddata`. |
 | `pekko.cluster.sharding.journal-plugin-id` | `""` | ☕ | JVM-only — `state-store-mode = persistence` subset; gekka uses `ddata`. |
 | `pekko.cluster.sharding.snapshot-plugin-id` | `""` | ☕ | JVM-only — `state-store-mode = persistence` subset; gekka uses `ddata`. |
-| `pekko.cluster.sharding.distributed-data.majority-min-cap` | `5` | ⚠️ | Parsed; gekka uses shared replicator (not yet routed) |
-| `pekko.cluster.sharding.distributed-data.max-delta-elements` | `5` | ⚠️ | Parsed; gekka uses shared replicator (not yet routed) |
-| `pekko.cluster.sharding.distributed-data.prefer-oldest` | `on` | ⚠️ | Parsed; gekka uses shared replicator (not yet routed) |
+| `pekko.cluster.sharding.distributed-data.majority-min-cap` | `5` | ✅ | `ShardingConfig.DistributedData.MajorityMinCap` (hocon_config.go) — gekka uses the shared replicator, so this caps the same effective behavior. |
+| `pekko.cluster.sharding.distributed-data.max-delta-elements` | `5` | ✅ | `ShardingConfig.DistributedData.MaxDeltaElements` — bounds delta batch size for sharding's replicator usage. |
+| `pekko.cluster.sharding.distributed-data.prefer-oldest` | `on` | ✅ | `ShardingConfig.DistributedData.PreferOldest` — gossip preference for sharding's replicator usage. |
 | `pekko.cluster.sharding.distributed-data.durable.keys` | `["shard-*"]` | ⚠️ | Parsed; durable storage is roadmap F2 (sessions 21-23) |
 | `pekko.cluster.sharding.coordinator-singleton.role` | `""` | ✅ | Applied to coordinator singleton-proxy when override = off |
 | `pekko.cluster.sharding.coordinator-singleton.singleton-name` | `"singleton"` | ✅ | Parsed (gekka uses fixed `<typeName>Coordinator` path) |
@@ -273,22 +288,22 @@ Legend:
 
 | Path | Pekko Default | Gekka? | Notes |
 |---|---|---|---|
-| `name` | `distributedPubSubMediator` | ❌ | No feature (hardcoded) |
-| `role` | `""` | ❌ | No feature |
-| `routing-logic` | `random` | ❌ | No feature |
+| `name` | `distributedPubSubMediator` | ✅ | `ClusterConfig.PubSub.Name` (hocon_config.go) — mediator actor name |
+| `role` | `""` | ✅ | `ClusterConfig.PubSub.Role` — when set, only members in this role host the mediator |
+| `routing-logic` | `random` | ✅ | `ClusterConfig.PubSub.RoutingLogic` — `Send` routing (random/round-robin/broadcast) |
 | `gossip-interval` | `1s` | ✅ | ClusterMediator gossip interval |
-| `removed-time-to-live` | `120s` | ❌ | No feature |
-| `max-delta-elements` | `3000` | ❌ | No feature |
-| `send-to-dead-letters-when-no-subscribers` | `on` | ❌ | No feature |
+| `removed-time-to-live` | `120s` | ✅ | `ClusterConfig.PubSub.RemovedTimeToLive` — TTL after which removed-mediator state is pruned |
+| `max-delta-elements` | `3000` | ✅ | `ClusterConfig.PubSub.MaxDeltaElements` — cap on delta batch size before falling back to full state |
+| `send-to-dead-letters-when-no-subscribers` | `on` | ✅ | `ClusterConfig.PubSub.SendToDeadLettersWhenNoSubscribers` — when off, silently drops messages with no subscribers |
 
 ### pekko.cluster.singleton
 
 | Path | Pekko Default | Gekka? | Notes |
 |---|---|---|---|
-| `singleton-name` | `"singleton"` | ❌ | No feature (hardcoded) |
+| `singleton-name` | `"singleton"` | ✅ | `ClusterConfig.Singleton.SingletonName` — child actor name under the singleton manager |
 | `role` | `""` | ✅ | Applied via SingletonManager factory |
 | `hand-over-retry-interval` | `1s` | ✅ | Applied via WithHandOverRetryInterval |
-| `min-number-of-hand-over-retries` | `15` | ❌ | No feature |
+| `min-number-of-hand-over-retries` | `15` | ✅ | `ClusterConfig.Singleton.MinNumberOfHandOverRetries` — minimum retry count before giving up handover |
 | `use-lease` | `""` | ✅ | Resolves a Lease from Cluster.LeaseManager; manager acquires before spawn, releases on handoff |
 | `lease-retry-interval` | `5s` | ✅ | Backoff between Acquire retries when prior call returned false |
 
@@ -296,8 +311,8 @@ Legend:
 
 | Path | Pekko Default | Gekka? | Notes |
 |---|---|---|---|
-| `singleton-name` | (ref singleton) | ❌ | No feature |
-| `role` | `""` | ❌ | No feature |
+| `singleton-name` | (ref singleton) | ✅ | `ClusterConfig.SingletonProxy.SingletonName` — name of the manager-hosted singleton the proxy targets |
+| `role` | `""` | ✅ | `ClusterConfig.SingletonProxy.Role` — restrict proxy resolution to a specific role |
 | `singleton-identification-interval` | `1s` | ✅ | Applied via SingletonProxy factory |
 | `buffer-size` | `1000` | ✅ | Drop-oldest with warning on overflow |
 
@@ -444,7 +459,7 @@ touching the consumer code.
 
 ## Summary
 
-### Correctly Parsed (✅): ~250 paths
+### Correctly Parsed (✅): ~260 paths
 
 Round-2 sessions 01–40 closed the entire portable Pekko surface.  Coverage now
 includes core cluster formation, failure detection (incl. cross-DC), SBR
@@ -465,11 +480,16 @@ plugin-fallback circuit-breaker + replay-filter + recovery-event-timeout, FSM
 snapshots, AtLeastOnceDelivery scheduler + warn callback), `pekko.actor.debug`
 sub-flags, `log-config-on-start`, NAT/Docker bind, discovery, management.
 
-### Wrong Path (⚠️): 1 path
+### Wrong Path (⚠️): 0 paths
 
-| Gekka Path | Correct Pekko Path |
-|---|---|
-| `pekko.cluster.sharding.passivation.idle-timeout` | `pekko.cluster.sharding.passivation.default-idle-strategy.idle-entity.timeout` |
+After Round-2 session 41 + the docs sync that followed, gekka parses every
+supported feature at its canonical Pekko path. The remaining ⚠️ markers in
+this document flag **forward-compat parses** (path is recognised at the
+correct location, but a sub-feature of the runtime behavior is deferred to
+a future session) — see the "Round-2 session 25/26" annotations in the
+sharding-passivation block, and the SSL `ssl-engine-provider` /
+`random-number-generator` / `rotating-keys-engine.*` rows which have no
+gekka equivalent (Go `crypto/tls` is fixed-engine).
 
 ### Not Parsed: residual JVM-only paths (☕)
 

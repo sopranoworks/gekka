@@ -245,10 +245,22 @@ func LoadAllocationStrategy(conf config.Config, cm *cluster.ClusterManager, fall
 			return fallback
 		}
 		url, _ := extCfg.GetString("url")
-		durStr, err := extCfg.GetString("timeout")
+		// Timeout precedence (Pekko-portable):
+		//   1. gekka-native: gekka.cluster.sharding.allocation-strategy.external.timeout
+		//   2. canonical Pekko: pekko.cluster.sharding.external-shard-allocation-strategy.client-timeout
+		//      (akka.* alias also honored)
+		//   3. Pekko default: 5s.
 		timeout := 5 * time.Second
-		if err == nil && durStr != "" {
+		if durStr, err := extCfg.GetString("timeout"); err == nil && durStr != "" {
 			if d, parseErr := time.ParseDuration(durStr); parseErr == nil {
+				timeout = d
+			}
+		} else if v, err := conf.GetString("pekko.cluster.sharding.external-shard-allocation-strategy.client-timeout"); err == nil && v != "" {
+			if d, parseErr := time.ParseDuration(v); parseErr == nil {
+				timeout = d
+			}
+		} else if v, err := conf.GetString("akka.cluster.sharding.external-shard-allocation-strategy.client-timeout"); err == nil && v != "" {
+			if d, parseErr := time.ParseDuration(v); parseErr == nil {
 				timeout = d
 			}
 		}

@@ -1704,6 +1704,11 @@ type ShardingConfig struct {
 	// and no explicit allocation strategy is supplied via ShardingSettings.
 	LeastShardAllocation LeastShardAllocationConfig
 
+	// ExternalShardAllocation holds knobs for the external shard allocation
+	// strategy. Used when the sharding allocation-strategy type is `external`.
+	// Corresponds to pekko.cluster.sharding.external-shard-allocation-strategy.*.
+	ExternalShardAllocation ExternalShardAllocationConfig
+
 	// EventSourcedRememberEntitiesStore holds knobs for the eventsourced
 	// remember-entities backend.
 	// Corresponds to pekko.cluster.sharding.event-sourced-remember-entities-store.*.
@@ -1889,6 +1894,15 @@ type LeastShardAllocationConfig struct {
 	// algorithm. Corresponds to
 	// least-shard-allocation-strategy.rebalance-relative-limit. Pekko default: 0.1.
 	RebalanceRelativeLimit float64
+}
+
+// ExternalShardAllocationConfig holds knobs for the external shard allocation
+// strategy. Corresponds to pekko.cluster.sharding.external-shard-allocation-strategy.*.
+type ExternalShardAllocationConfig struct {
+	// ClientTimeout bounds each call to the external allocation HTTP client.
+	// Corresponds to external-shard-allocation-strategy.client-timeout.
+	// Pekko default: 5s.
+	ClientTimeout time.Duration
 }
 
 // ShardingDistributedDataConfig holds sharding-specific overrides for the

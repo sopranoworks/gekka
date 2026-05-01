@@ -831,6 +831,15 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		}
 	}
 
+	// pekko.cluster.sharding.external-shard-allocation-strategy.client-timeout —
+	// timeout for the external allocation HTTP client (Pekko default: 5s).
+	externalPrefix := shardingPrefix + ".external-shard-allocation-strategy"
+	if v, err := cfg.GetString(externalPrefix + ".client-timeout"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil && d > 0 {
+			nodeCfg.Sharding.ExternalShardAllocation.ClientTimeout = d
+		}
+	}
+
 	// pekko.cluster.sharding.event-sourced-remember-entities-store.* — knobs
 	// for the eventsourced remember-entities backend (journal-based).
 	esStorePrefix := shardingPrefix + ".event-sourced-remember-entities-store"

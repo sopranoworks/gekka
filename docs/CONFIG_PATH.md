@@ -255,7 +255,7 @@ Legend:
 | `pekko.cluster.sharding.least-shard-allocation-strategy.max-simultaneous-rebalance` | `3` | ✅ | Applied to NewLeastShardAllocationStrategy(maxSimultaneous) |
 | `pekko.cluster.sharding.least-shard-allocation-strategy.rebalance-absolute-limit` | `0` | ✅ | Round-2 session 33 — when `> 0` selects the Pekko 1.0+ two-phase `LeastShardAllocationStrategyV2` (`cluster/sharding/strategy.go`); `0` keeps the legacy threshold-based strategy. |
 | `pekko.cluster.sharding.least-shard-allocation-strategy.rebalance-relative-limit` | `0.1` | ✅ | Round-2 session 33 — fraction of total shards capping each rebalance round under V2 (`max(1, min(int(rel*total), absolute))`). |
-| `pekko.cluster.sharding.external-shard-allocation-strategy.client-timeout` | `5s` | ❌ | Not implemented — the canonical Pekko path is never parsed in `hocon_config.go`. The strategy in `cluster/sharding/strategy.go` reads a different sub-path (`external.timeout` of the adaptive-rebalancing block); no Go consumer reads the canonical key. Tracked in `docs/LEFTWORKS.md` §11 |
+| `pekko.cluster.sharding.external-shard-allocation-strategy.client-timeout` | `5s` | ✅ | Sub-plan 7 — parsed in `hocon_config.go` (`Sharding.ExternalShardAllocation.ClientTimeout`); consumed by `LoadAllocationStrategy` in `cluster/sharding/strategy.go` when the `external` allocation strategy is selected. Precedence: gekka-native `gekka.cluster.sharding.allocation-strategy.external.timeout` (legacy) > canonical Pekko `client-timeout` > 5s default. |
 | `pekko.cluster.sharding.event-sourced-remember-entities-store.max-updates-per-write` | `100` | ✅ | Round-2 session 34 — Shard buffers EntityStarted/EntityStopped events; the buffer is flushed in a single AsyncWriteMessages call once it hits the cap, with a final flush in PostStop. Cap of `0` keeps the legacy one-event-per-write path. |
 | `pekko.cluster.sharding.state-store-mode` | `"ddata"` | ☕ | JVM-only — gekka commits to `ddata` exclusively for sharding state; the `persistence` mode and its tunables (`snapshot-after`, `keep-nr-of-batches`, `journal-plugin-id`, `snapshot-plugin-id`) are N/A in gekka. |
 | `pekko.cluster.sharding.snapshot-after` | `1000` | ☕ | JVM-only — `state-store-mode = persistence` subset; gekka uses `ddata`. |
@@ -476,11 +476,11 @@ touching the consumer code.
 
 | Symbol | Substantive table rows | Meaning |
 |---|---|---|
-| ✅ | 238 | Parsed AND consumed |
+| ✅ | 239 | Parsed AND consumed |
 | ⚠️ | 51 | Forward-compat parsed; consumer deferred (Note states what's deferred) |
 | ☕ | 8 | JVM-only — no equivalent capability in Go runtime |
 | 🚫 | 1 | Go/JVM API-shape incompatibility (FQCN class loading) |
-| ❌ | 11 | Not implemented; portable in principle (tracked in `docs/LEFTWORKS.md` §11) |
+| ❌ | 10 | Not implemented; portable in principle (tracked in `docs/LEFTWORKS.md` §11) |
 
 (Counts exclude the legend lines themselves and this Summary table. `grep -c "| ✅ |"` etc. on the file returns counts +1 because each Summary-table row contributes one match.)
 

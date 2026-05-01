@@ -1192,6 +1192,59 @@ func (nm *NodeManager) DialRemote(ctx context.Context, target *gproto_remote.Add
 	}
 }
 
+// DialRemoteWithRestart wraps DialRemote with Pekko-style outbound
+// restart semantics: the first dial is the initial start; each
+// post-failure retry is a "restart" gated by TryRecordOutboundRestart
+// (rolling cap of OutboundMaxRestarts within OutboundRestartTimeout)
+// and separated by EffectiveOutboundRestartBackoff.
+//
+// On the first success, the established association is returned with
+// no counter increment. When DialRemote returns an error the helper
+// records a restart and, if the cap is still respected, sleeps for
+// the configured backoff (interruptible by ctx) and retries. Once the
+// cap is exceeded the most recent dial error is wrapped in
+// "outbound restart cap exceeded" and returned to the caller, matching
+// Pekko's outbound-max-restarts behaviour. Consumes
+// pekko.remote.artery.advanced.{outbound-max-restarts,
+// outbound-restart-timeout, outbound-restart-backoff}.
+func (nm *NodeManager) DialRemoteWithRestart(ctx context.Context, target *gproto_remote.Address) (actor.RemoteAssociation, error) {
+	backoff := nm.EffectiveOutboundRestartBackoff()
+	maxRestarts := nm.EffectiveOutboundMaxRestarts()
+	var lastErr error
+	// Initial attempt + at most maxRestarts retries; the counter is the
+	// primary guard, the loop bound is a defensive belt-and-braces to
+	// prevent runaway iteration if the helper is mis-tuned.
+	for attempt := 0; attempt <= maxRestarts; attempt++ {
+		if ctx.Err() != nil {
+			if lastErr != nil {
+				return nil, fmt.Errorf("outbound dial cancelled after %d attempts: %w", attempt, ctx.Err())
+			}
+			return nil, ctx.Err()
+		}
+		assoc, err := nm.DialRemote(ctx, target)
+		if err == nil {
+			return assoc, nil
+		}
+		lastErr = err
+		// First failure (attempt == 0) and every subsequent retry both
+		// count as restart events — the parsed cap covers all of them.
+		if !nm.TryRecordOutboundRestart() {
+			return nil, fmt.Errorf("outbound restart cap exceeded after %d attempt(s): %w", attempt+1, err)
+		}
+		// Sleep the configured backoff before the next attempt; honor ctx.
+		if backoff > 0 {
+			t := time.NewTimer(backoff)
+			select {
+			case <-ctx.Done():
+				t.Stop()
+				return nil, fmt.Errorf("outbound dial cancelled during backoff: %w", ctx.Err())
+			case <-t.C:
+			}
+		}
+	}
+	return nil, fmt.Errorf("outbound restart cap exceeded after %d attempt(s): %w", maxRestarts+1, lastErr)
+}
+
 func (nm *NodeManager) Serializer(id int32) (actor.RemoteSerializer, error) {
 	s, err := nm.SerializerRegistry.GetSerializer(id)
 	if err != nil {
@@ -2486,7 +2539,7 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 				nm.pendingDials[dialKey] = true
 				slog.Info("artery: no OUTBOUND to remote — initiating reverse outbound",
 					"host", fromAddr.GetHostname(), "port", fromAddr.GetPort())
-				go nm.DialRemote(context.Background(), fromAddr)
+				go nm.DialRemoteWithRestart(context.Background(), fromAddr)
 			}
 			nm.mu.Unlock()
 		}

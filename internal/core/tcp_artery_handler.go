@@ -52,10 +52,48 @@ type FrameHandler func(ctx context.Context, meta *ArteryMetadata) error
 var DefaultFrameHandler FrameHandler = ArteryDispatcher
 
 // TcpArteryHandlerWithNodeManager is a compatibility wrapper that uses NodeManager.ProcessConnection.
+//
+// On a non-nil error from ProcessConnection the wrapper invokes
+// nm.TryRecordInboundRestart() — the gekka analogue of Pekko's inbound
+// stream restart, since the next inbound connection is a fresh
+// "stream materialization". When the rolling cap
+// (pekko.remote.artery.advanced.inbound-max-restarts within
+// inbound-restart-timeout) is exceeded, a slog.Warn is emitted along
+// with a flight-recorder event under CatInboundRestartExceeded so the
+// saturation signal is observable. The listener is intentionally NOT
+// terminated — Pekko terminates the ActorSystem on cap-exceed, but
+// gekka chooses the more conservative route of surfacing the
+// saturation without forcing service-impacting shutdown.
 func TcpArteryHandlerWithNodeManager(nm *NodeManager) TcpHandler {
 	return func(ctx context.Context, conn net.Conn) error {
 		// Existing tests assume INBOUND behavior for this handler.
-		return nm.ProcessConnection(ctx, conn, INBOUND, nil, 0) // Unknown streamId
+		err := nm.ProcessConnection(ctx, conn, INBOUND, nil, 0) // Unknown streamId
+		if err != nil {
+			if !nm.TryRecordInboundRestart() {
+				slog.Warn("artery: inbound-restart cap exceeded",
+					"error", err,
+					"max", nm.EffectiveInboundMaxRestarts(),
+					"window", nm.EffectiveInboundRestartTimeout())
+				if nm.FlightRec != nil {
+					remoteKey := ""
+					if conn != nil && conn.RemoteAddr() != nil {
+						remoteKey = conn.RemoteAddr().String()
+					}
+					nm.FlightRec.Emit(remoteKey, FlightEvent{
+						Timestamp: time.Now(),
+						Severity:  SeverityWarn,
+						Category:  CatInboundRestartExceeded,
+						Message:   "inbound_restart_cap_exceeded",
+						Fields: map[string]any{
+							"error":  err.Error(),
+							"max":    nm.EffectiveInboundMaxRestarts(),
+							"window": nm.EffectiveInboundRestartTimeout().String(),
+						},
+					})
+				}
+			}
+		}
+		return err
 	}
 }
 

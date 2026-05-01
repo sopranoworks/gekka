@@ -40,6 +40,14 @@ type RemoteMessagingProvider interface {
 	// DialRemote initiates a new connection to the target address.
 	DialRemote(ctx context.Context, target *gproto_remote.Address) (RemoteAssociation, error)
 
+	// DialRemoteWithRestart initiates a new connection to the target address
+	// with Pekko-style restart-loop semantics: the first dial is the initial
+	// start; each post-failure retry is a "restart" gated by the configured
+	// outbound restart counters and backoff. Returns the association on
+	// success, or an error wrapping "outbound restart cap exceeded" once the
+	// rolling-window cap is reached.
+	DialRemoteWithRestart(ctx context.Context, target *gproto_remote.Address) (RemoteAssociation, error)
+
 	// Serializer retrieves the serializer registered for the given ID.
 	Serializer(id int32) (RemoteSerializer, error)
 
@@ -684,7 +692,7 @@ func (r *Router) Send(ctx context.Context, path string, msg any) error {
 	if !ok {
 		log.Printf("Router: initiating new connection to %s:%d", targetAddr.GetHostname(), targetAddr.GetPort())
 		var err error
-		assoc, err = r.provider.DialRemote(ctx, targetAddr)
+		assoc, err = r.provider.DialRemoteWithRestart(ctx, targetAddr)
 		if err != nil {
 			return fmt.Errorf("failed to dial remote: %w", err)
 		}
@@ -724,7 +732,7 @@ func (r *Router) SendWithSender(ctx context.Context, path string, senderPath str
 	assoc, ok := r.provider.GetAssociationByHost(targetAddr.GetHostname(), targetAddr.GetPort())
 	if !ok {
 		var err error
-		assoc, err = r.provider.DialRemote(ctx, targetAddr)
+		assoc, err = r.provider.DialRemoteWithRestart(ctx, targetAddr)
 		if err != nil {
 			return fmt.Errorf("failed to dial remote: %w", err)
 		}

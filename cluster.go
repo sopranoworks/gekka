@@ -4218,7 +4218,7 @@ func (c *Cluster) DeliverSelection(s actor.ActorSelection, msg any, sender ...ac
 	assoc, ok := c.nm.GetGekkaAssociationByHost(targetAddr.GetHostname(), targetAddr.GetPort())
 	if !ok {
 		var err error
-		rawAssoc, err := c.nm.DialRemote(context.Background(), targetAddr)
+		rawAssoc, err := c.nm.DialRemoteWithRestart(context.Background(), targetAddr)
 		if err != nil {
 			return
 		}

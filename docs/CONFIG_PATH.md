@@ -93,11 +93,11 @@ Legend:
 | `pekko.remote.artery.advanced.remove-quarantined-association-after` | `1h` | ⚠️ | Plumbed onto `NodeManager.RemoveQuarantinedAssociationAfter`; `EffectiveRemoveQuarantinedAssociationAfter` getter has only test callers |
 | `pekko.remote.artery.advanced.shutdown-flush-timeout` | `1s` | ⚠️ | Plumbed onto `NodeManager.ShutdownFlushTimeout`; no production coordinated-shutdown consumer reads it |
 | `pekko.remote.artery.advanced.death-watch-notification-flush-timeout` | `3s` | ⚠️ | Plumbed onto `NodeManager.DeathWatchNotificationFlushTimeout`; no production death-watch consumer reads it |
-| `pekko.remote.artery.advanced.inbound-restart-timeout` | `5s` | ⚠️ | Plumbed onto `NodeManager.InboundRestartTimeout`; `TryRecordInboundRestart` reads it but is invoked only from tests |
-| `pekko.remote.artery.advanced.inbound-max-restarts` | `5` | ⚠️ | Plumbed onto `NodeManager.InboundMaxRestarts`; `TryRecordInboundRestart` enforces the cap but is invoked only from tests |
-| `pekko.remote.artery.advanced.outbound-restart-backoff` | `1s` | ⚠️ | Plumbed onto `NodeManager.OutboundRestartBackoff`; no production dialer consumer reads it |
-| `pekko.remote.artery.advanced.outbound-restart-timeout` | `5s` | ⚠️ | Plumbed onto `NodeManager.OutboundRestartTimeout`; `TryRecordOutboundRestart` reads it but is invoked only from tests |
-| `pekko.remote.artery.advanced.outbound-max-restarts` | `5` | ⚠️ | Plumbed onto `NodeManager.OutboundMaxRestarts`; `TryRecordOutboundRestart` enforces the cap but is invoked only from tests |
+| `pekko.remote.artery.advanced.inbound-restart-timeout` | `5s` | ✅ | Consumed by `NodeManager.TryRecordInboundRestart`, which `TcpArteryHandlerWithNodeManager` invokes whenever `ProcessConnection(INBOUND, …)` returns an error; saturation events surface via flight-recorder + `slog.Warn` (sub-plan 8e) |
+| `pekko.remote.artery.advanced.inbound-max-restarts` | `5` | ✅ | Same call site as the row above; the parsed cap gates the rolling window enforced by `TryRecordInboundRestart` (sub-plan 8e) |
+| `pekko.remote.artery.advanced.outbound-restart-backoff` | `1s` | ✅ | Consumed by `NodeManager.DialRemoteWithRestart` between retry attempts; the production callers are `Router.Send`, `Router.SendWithSender`, `Cluster.DeliverSelection`, and the post-handshake re-dial in `association.go` (sub-plan 8e) |
+| `pekko.remote.artery.advanced.outbound-restart-timeout` | `5s` | ✅ | Same call site as the row above; the parsed window scopes `TryRecordOutboundRestart`'s count of retries (sub-plan 8e) |
+| `pekko.remote.artery.advanced.outbound-max-restarts` | `5` | ✅ | Same call site as the row above; once the cap is exceeded `DialRemoteWithRestart` returns "outbound restart cap exceeded" (sub-plan 8e) |
 | `pekko.remote.artery.tls.certificate` | `""` | ✅ | Gekka-native — PEM server certificate (`hocon_config.go` → `core.TLSConfig.CertFile`). Replaces Pekko's `ssl.config-ssl-engine.key-store`. |
 | `pekko.remote.artery.tls.private-key` | `""` | ✅ | Gekka-native — PEM private key paired with `tls.certificate`. Replaces Pekko's `ssl.config-ssl-engine.key-store` private-key entry. |
 | `pekko.remote.artery.tls.ca-certificates` | `""` | ✅ | Gekka-native — PEM CA bundle for peer verification (loaded into `crypto/x509.CertPool`; serves as both `ClientCAs` and `RootCAs`). Replaces Pekko's `ssl.config-ssl-engine.trust-store`. |
@@ -476,8 +476,8 @@ touching the consumer code.
 
 | Symbol | Substantive table rows | Meaning |
 |---|---|---|
-| ✅ | 243 | Parsed AND consumed |
-| ⚠️ | 46 | Forward-compat parsed; consumer deferred (Note states what's deferred) |
+| ✅ | 248 | Parsed AND consumed |
+| ⚠️ | 41 | Forward-compat parsed; consumer deferred (Note states what's deferred) |
 | ☕ | 8 | JVM-only — no equivalent capability in Go runtime |
 | 🚫 | 1 | Go/JVM API-shape incompatibility (FQCN class loading) |
 | ❌ | 8 | Not implemented; portable in principle (tracked in `docs/LEFTWORKS.md` §11) |

@@ -51,12 +51,13 @@ func ParseEventLevel(s string) EventLevel {
 type EventCategory string
 
 const (
-	CatHandshake   EventCategory = "handshake"
-	CatQuarantine  EventCategory = "quarantine"
-	CatHeartbeat   EventCategory = "heartbeat"
-	CatCompression EventCategory = "compression"
-	CatLargeFrame  EventCategory = "large-frame"
-	CatFrame       EventCategory = "frame"
+	CatHandshake               EventCategory = "handshake"
+	CatQuarantine              EventCategory = "quarantine"
+	CatHeartbeat               EventCategory = "heartbeat"
+	CatCompression             EventCategory = "compression"
+	CatLargeFrame              EventCategory = "large-frame"
+	CatFrame                   EventCategory = "frame"
+	CatInboundRestartExceeded  EventCategory = "inbound-restart-exceeded"
 )
 
 // EventSeverity is the human-visible log level for an event.

@@ -10,6 +10,7 @@ package sharding
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/sopranoworks/gekka-config"
 	"github.com/sopranoworks/gekka/actor"
@@ -59,6 +60,31 @@ type ClusterShardingConfig struct {
 	// EntitySnapshotStore, when non-nil, enables snapshot support for sharded
 	// persistent entities.  Optional even when PersistentEntityFactory is set.
 	EntitySnapshotStore cpersistence.SnapshotStore
+
+	// CoordinatorSingleton holds the coordinator-singleton manager overrides
+	// from pekko.cluster.sharding.coordinator-singleton.{singleton-name,
+	// hand-over-retry-interval, min-number-of-hand-over-retries}. These are
+	// applied to the ClusterSingletonManager that wraps the shard coordinator
+	// (and to the ClusterSingletonProxy's child path resolution for
+	// SingletonName) at StartSharding time.
+	CoordinatorSingleton CoordinatorSingletonSettings
+}
+
+// CoordinatorSingletonSettings holds the three sharding-specific overrides
+// for the ClusterSingletonManager that hosts the ShardCoordinator. Zero
+// values mean "use the manager's defaults".
+type CoordinatorSingletonSettings struct {
+	// SingletonName is the child actor name spawned by the singleton manager.
+	// Pekko default: "singleton".
+	SingletonName string
+
+	// HandOverRetryInterval is how often the manager retries hand-over
+	// coordination during leadership transfer. Pekko default: 1s.
+	HandOverRetryInterval time.Duration
+
+	// MinNumberOfHandOverRetries is the minimum number of hand-over retries
+	// before the manager gives up. Pekko default: 15.
+	MinNumberOfHandOverRetries int
 }
 
 // entityIdAdapter wraps a PersistentActor and overrides PersistenceId to
@@ -127,9 +153,17 @@ func StartSharding(
 		},
 	}
 	mgrName := "shardCoordinator-" + cfg.TypeName
+	csSettings := cfg.CoordinatorSingleton
 	mgrProps := actor.Props{
 		New: func() actor.Actor {
-			return singleton.NewClusterSingletonManager(cm, coordProps, cfg.Role)
+			m := singleton.NewClusterSingletonManager(cm, coordProps, cfg.Role)
+			// Apply pekko.cluster.sharding.coordinator-singleton.* overrides.
+			// Each setter is a no-op for zero/empty values, preserving the
+			// manager's own defaults (singleton, 1s, 15).
+			m.WithSingletonName(csSettings.SingletonName)
+			m.WithHandOverRetryInterval(csSettings.HandOverRetryInterval)
+			m.WithMinHandOverRetries(csSettings.MinNumberOfHandOverRetries)
+			return m
 		},
 	}
 	if _, err := sys.ActorOf(mgrProps, mgrName); err != nil {
@@ -143,10 +177,16 @@ func StartSharding(
 	// coordinator location and retries with exponential back-off if the
 	// coordinator is temporarily unreachable (e.g. during leader failover).
 	//
-	// Note: the singleton child is named "singleton" by ClusterSingletonManager,
-	// so the full coordinator path is "/user/<mgrName>/singleton".
+	// Note: the singleton child is named "singleton" by ClusterSingletonManager
+	// unless the operator overrides it via
+	// pekko.cluster.sharding.coordinator-singleton.singleton-name; in either
+	// case the proxy's own WithSingletonName must agree so that
+	// CurrentOldestPath resolves to "/user/<mgrName>/<singleton-name>".
 	singletonPath := "/user/" + mgrName
 	coordProxy := singleton.NewClusterSingletonProxy(cm, router, singletonPath, cfg.Role)
+	if csSettings.SingletonName != "" {
+		coordProxy.WithSingletonName(csSettings.SingletonName)
+	}
 	proxyName := "shardCoordinatorProxy-" + cfg.TypeName
 	proxyRef, err := sys.ActorOf(actor.Props{
 		New: func() actor.Actor { return NewShardCoordinatorProxy(coordProxy) },

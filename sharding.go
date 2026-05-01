@@ -18,6 +18,7 @@ import (
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/cluster/sharding"
 	styped "github.com/sopranoworks/gekka/cluster/sharding/typed"
+	"github.com/sopranoworks/gekka/cluster/singleton"
 	icluster "github.com/sopranoworks/gekka/internal/cluster"
 	"github.com/sopranoworks/gekka/persistence"
 	ptyped "github.com/sopranoworks/gekka/persistence/typed"
@@ -441,23 +442,6 @@ func StartSharding[Command any, Event any, State any](
 	var coordinatorRef actor.Ref
 	cluster, ok := sys.(*Cluster)
 	if ok {
-		// Spawn coordinator if we are the oldest
-		ua := cluster.cm.OldestNode(settings.Role)
-		localUA := cluster.cm.GetLocalAddress()
-
-		if ua != nil && localUA != nil && ua.GetAddress().GetHostname() == localUA.GetAddress().GetHostname() &&
-			ua.GetAddress().GetPort() == localUA.GetAddress().GetPort() &&
-			ua.GetUid() == localUA.GetUid() {
-			_, err := sys.ActorOf(coordinatorProps, typeName+"Coordinator")
-			if err != nil {
-				fmt.Printf("Sharding: failed to spawn coordinator: %v\n", err)
-			} else {
-				fmt.Printf("Sharding: spawned coordinator on %s:%d\n", localUA.GetAddress().GetHostname(), localUA.GetAddress().GetPort())
-			}
-		} else {
-			fmt.Printf("Sharding: NOT spawning coordinator (ua=%v, localUA=%v)\n", ua, localUA)
-		}
-
 		// Resolve the role under which the coordinator-singleton runs.
 		// Pekko semantics: coordinator-singleton-role-override = on (default)
 		// means sharding's role wins over coordinator-singleton.role; off
@@ -469,8 +453,35 @@ func StartSharding[Command any, Event any, State any](
 			coordRole = settings.Role
 		}
 
-		// Always use a proxy to reach the coordinator
-		proxy := cluster.SingletonProxy("/user/"+typeName+"Coordinator", coordRole).WithSingletonName("")
+		// Wrap the coordinator in a ClusterSingletonManager so the three
+		// pekko.cluster.sharding.coordinator-singleton.* overrides
+		// (singleton-name, hand-over-retry-interval,
+		// min-number-of-hand-over-retries) reach a real consumer at the
+		// manager. The manager actor lives at /user/<typeName>Coordinator;
+		// the coordinator child lives at /user/<typeName>Coordinator/<singleton-name>
+		// (default "singleton"), matching Pekko's layout.
+		csCfg := cluster.cfg.Sharding.CoordinatorSingleton
+		mgrProps := actor.Props{
+			New: func() actor.Actor {
+				m := singleton.NewClusterSingletonManager(cluster.cm, coordinatorProps, coordRole)
+				m.WithSingletonName(csCfg.SingletonName)
+				m.WithHandOverRetryInterval(csCfg.HandOverRetryInterval)
+				m.WithMinHandOverRetries(csCfg.MinNumberOfHandOverRetries)
+				return m
+			},
+		}
+		mgrName := typeName + "Coordinator"
+		if _, err := sys.ActorOf(mgrProps, mgrName); err != nil {
+			return sharding.ClusterEntityRef[Command]{}, fmt.Errorf("sharding: spawn coordinator singleton manager for %q: %w", typeName, err)
+		}
+
+		// Build a proxy whose singleton-name matches the manager's. The
+		// proxy must agree with the manager on the child path or routing
+		// fails: CurrentOldestPath returns "/user/<mgrName>/<singleton-name>".
+		proxy := cluster.SingletonProxy("/user/"+mgrName, coordRole)
+		if csCfg.SingletonName != "" {
+			proxy.WithSingletonName(csCfg.SingletonName)
+		}
 		ref, err := sys.ActorOf(actor.Props{
 			New: func() actor.Actor {
 				return sharding.NewShardCoordinatorProxy(proxy)

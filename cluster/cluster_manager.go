@@ -65,7 +65,8 @@ type ClusterManager struct {
 	State           *gproto_cluster.Gossip
 	Metrics         Metrics
 	Fd              *PhiAccrualFailureDetector
-	Sys             actor.ActorContext // bridge back to the node's actor system
+	WatchFd         *WatchFailureDetector // remote-watch FD; pekko.remote.watch-failure-detector.*
+	Sys             actor.ActorContext    // bridge back to the node's actor system
 	WelcomeReceived atomic.Bool
 	CancelHeartbeat context.CancelFunc
 
@@ -480,6 +481,7 @@ func NewClusterManager(local *gproto_cluster.UniqueAddress, router func(context.
 		LocalHash:            localHash,
 		Router:               router,
 		Fd:                   NewPhiAccrualFailureDetector(8.0, 1000),
+		WatchFd:              NewWatchFailureDetector(WatchFailureDetectorConfig{}),
 		LogInfo:              true,
 		AllowWeaklyUpMembers: 7 * time.Second,
 		State: &gproto_cluster.Gossip{
@@ -972,6 +974,9 @@ func (cm *ClusterManager) handleHeartbeat(payload []byte, manifest string, remot
 		uid64 := uint64(remoteAddr.GetUid()) | (uint64(remoteAddr.GetUid2()) << 32)
 		key := fmt.Sprintf("%s:%d-%d", addr.GetHostname(), addr.GetPort(), uid64)
 		cm.Fd.Heartbeat(key)
+		if cm.WatchFd != nil {
+			cm.WatchFd.Heartbeat(key)
+		}
 	}
 
 	// When heartbeats are muted (StopHeartbeat), suppress the response so the
@@ -1004,6 +1009,9 @@ func (cm *ClusterManager) handleHeartbeatRsp(payload []byte, manifest string) er
 	uid64 := uint64(from.GetUid()) | (uint64(from.GetUid2()) << 32)
 	key := fmt.Sprintf("%s:%d-%d", addr.GetHostname(), addr.GetPort(), uid64)
 	cm.Fd.Heartbeat(key)
+	if cm.WatchFd != nil {
+		cm.WatchFd.Heartbeat(key)
+	}
 	return nil
 }
 

@@ -144,6 +144,16 @@ func ApplyDetectorConfig(cm *ClusterManager, cfg FailureDetectorConfig) {
 	cm.Fd.Reconfigure(threshold, maxSamples, minStdDev)
 }
 
+// ApplyWatchDetectorConfig reconfigures cm.WatchFd using the supplied
+// WatchFailureDetectorConfig. Zero-valued fields fall back to Pekko reference
+// defaults inside the detector. This is a no-op when cm.WatchFd is nil.
+func ApplyWatchDetectorConfig(cm *ClusterManager, cfg WatchFailureDetectorConfig) {
+	if cm.WatchFd == nil {
+		return
+	}
+	cm.WatchFd.Reconfigure(cfg)
+}
+
 // ApplyInternalSBRConfig wires the icluster.Strategy and stable-after duration
 // into cm from the given InternalSBRConfig.
 func ApplyInternalSBRConfig(cm *ClusterManager, cfg InternalSBRConfig) {

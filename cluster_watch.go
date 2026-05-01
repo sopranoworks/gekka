@@ -9,8 +9,11 @@
 package gekka
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
+	"sync"
+	"time"
 
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/cluster"
@@ -18,6 +21,131 @@ import (
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 	"google.golang.org/protobuf/proto"
 )
+
+// watchFDState carries the runtime bookkeeping needed by the remote-watch
+// failure-detector reaper. It is a separate struct so callers that never
+// register a remote watch pay no allocation / goroutine cost.
+type watchFDState struct {
+	once     sync.Once
+	cancel   context.CancelFunc
+	mu       sync.Mutex
+	keyToAddr map[string]cluster.MemberAddress
+}
+
+func (c *Cluster) watchFD() *watchFDState {
+	c.watchFDOnceInit.Do(func() {
+		c.watchFDStateRef = &watchFDState{
+			keyToAddr: make(map[string]cluster.MemberAddress),
+		}
+	})
+	return c.watchFDStateRef
+}
+
+// registerWatchedNode records (key → MemberAddress) so the reaper can map a
+// detector key back to the address required by triggerRemoteNodeDeath. Also
+// seeds an initial heartbeat so IsAvailable starts in the "available" state.
+func (c *Cluster) registerWatchedNode(key string, addr cluster.MemberAddress) {
+	if c.cm == nil || c.cm.WatchFd == nil {
+		return
+	}
+	state := c.watchFD()
+	state.mu.Lock()
+	state.keyToAddr[key] = addr
+	state.mu.Unlock()
+	// Seed a heartbeat so IsAvailable starts available; subsequent real
+	// heartbeats from the cluster heartbeat path keep it healthy.
+	c.cm.WatchFd.Heartbeat(key)
+}
+
+// startWatchFDReaper lazily starts a single reaper goroutine that polls the
+// watch failure detector at UnreachableNodesReaperInterval and triggers a
+// remote-death notification when IsAvailable flips for a watched node.
+func (c *Cluster) startWatchFDReaper() {
+	if c.cm == nil || c.cm.WatchFd == nil {
+		return
+	}
+	state := c.watchFD()
+	state.once.Do(func() {
+		ctx, cancel := context.WithCancel(c.ctx)
+		state.cancel = cancel
+		go c.watchFDReaperLoop(ctx)
+	})
+}
+
+func (c *Cluster) watchFDReaperLoop(ctx context.Context) {
+	interval := c.cm.WatchFd.ReaperInterval()
+	if interval <= 0 {
+		interval = time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			c.reapUnreachableWatched()
+		}
+	}
+}
+
+func (c *Cluster) reapUnreachableWatched() {
+	if c.cm == nil || c.cm.WatchFd == nil {
+		return
+	}
+	keys := c.cm.WatchFd.WatchedNodes()
+	if len(keys) == 0 {
+		return
+	}
+	state := c.watchFD()
+	for _, key := range keys {
+		if c.cm.WatchFd.IsAvailable(key) {
+			continue
+		}
+		state.mu.Lock()
+		addr, ok := state.keyToAddr[key]
+		if ok {
+			delete(state.keyToAddr, key)
+		}
+		state.mu.Unlock()
+		// Drop the FD state regardless: a re-registered watch will reseed.
+		c.cm.WatchFd.Remove(key)
+		if !ok {
+			continue
+		}
+		slog.Debug("watch-fd: remote node unreachable, triggering Terminated", "key", key, "host", addr.Host, "port", addr.Port)
+		c.triggerRemoteNodeDeath(addr)
+	}
+}
+
+// stopWatchFDReaper cancels the reaper goroutine if it was started. Called
+// from Cluster.Shutdown.
+func (c *Cluster) stopWatchFDReaper() {
+	if c.watchFDStateRef == nil {
+		return
+	}
+	if c.watchFDStateRef.cancel != nil {
+		c.watchFDStateRef.cancel()
+	}
+}
+
+// watchFDKeyForAssociation derives the host:port-uid key the cluster heartbeat
+// path uses to feed the failure detector, given a remote association.
+func watchFDKeyForAssociation(assoc *core.GekkaAssociation) (string, bool) {
+	remote := assoc.Remote()
+	if remote == nil {
+		return "", false
+	}
+	addr := remote.GetAddress()
+	if addr == nil {
+		return "", false
+	}
+	// remote.UniqueAddress.Uid is the full uint64; the cluster heartbeat
+	// path encodes the same uid by combining cluster.UniqueAddress.{Uid, Uid2}
+	// into a uint64. Both representations yield the same key digit sequence.
+	return fmt.Sprintf("%s:%d-%d", addr.GetHostname(), addr.GetPort(), remote.GetUid()), true
+}
+
 
 // ── Remote Death Watch ────────────────────────────────────────────────────────
 
@@ -42,6 +170,17 @@ func (c *Cluster) watchRemote(watcher ActorRef, target ActorRef) {
 	if !ok {
 		slog.Debug("artery: cannot send WATCH, no association for remote", "host", ap.Address.Host, "port", ap.Address.Port)
 		return
+	}
+
+	// Register the remote node with the watch failure detector and lazy-start
+	// the reaper goroutine. The detector key matches the cluster heartbeat
+	// path's key format (host:port-uid) so cluster heartbeats already feed it.
+	if key, kok := watchFDKeyForAssociation(assoc); kok {
+		c.registerWatchedNode(key, cluster.MemberAddress{
+			Host: ap.Address.Host,
+			Port: uint32(ap.Address.Port),
+		})
+		c.startWatchFDReaper()
 	}
 
 	sm := &gproto_remote.SystemMessage{
@@ -185,6 +324,27 @@ func (c *Cluster) triggerRemoteNodeDeath(addr cluster.MemberAddress) {
 		delete(c.remoteWatchers, nodeAddr)
 	}
 	c.remoteWatchersMu.Unlock()
+
+	// Drop any watch-FD bookkeeping for this address so the reaper does not
+	// re-fire for the same node. The mapping is keyed by host:port-uid; we
+	// purge every key whose host:port matches.
+	if c.watchFDStateRef != nil && c.cm != nil && c.cm.WatchFd != nil {
+		state := c.watchFDStateRef
+		state.mu.Lock()
+		var matched []string
+		for k, ka := range state.keyToAddr {
+			if ka.Host == addr.Host && ka.Port == addr.Port {
+				matched = append(matched, k)
+			}
+		}
+		for _, k := range matched {
+			delete(state.keyToAddr, k)
+		}
+		state.mu.Unlock()
+		for _, k := range matched {
+			c.cm.WatchFd.Remove(k)
+		}
+	}
 
 	if !ok {
 		return

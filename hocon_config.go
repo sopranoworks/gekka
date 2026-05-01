@@ -1031,6 +1031,49 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		}
 	}
 
+	// ── Remote Watch Failure Detector ─────────────────────────────────────
+	// pekko.remote.watch-failure-detector.* — separate Phi-Accrual detector
+	// for remote death-watch (distinct from the cluster membership FD).
+	// Defaults follow Pekko reference.conf.
+	nodeCfg.WatchFailureDetector = gcluster.PekkoWatchFDDefaults()
+	watchFdPrefix := prefix + ".remote.watch-failure-detector"
+	if v, err := cfg.GetString(watchFdPrefix + ".implementation-class"); err == nil {
+		nodeCfg.WatchFailureDetector.ImplementationClass = strings.TrimSpace(v)
+	}
+	if v, err := cfg.GetString(watchFdPrefix + ".heartbeat-interval"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.WatchFailureDetector.HeartbeatInterval = d
+		}
+	}
+	if v, err := cfg.GetString(watchFdPrefix + ".threshold"); err == nil {
+		if f, parseErr := strconv.ParseFloat(strings.TrimSpace(v), 64); parseErr == nil {
+			nodeCfg.WatchFailureDetector.Threshold = f
+		}
+	}
+	if v, err := cfg.GetInt(watchFdPrefix + ".max-sample-size"); err == nil {
+		nodeCfg.WatchFailureDetector.MaxSampleSize = v
+	}
+	if v, err := cfg.GetString(watchFdPrefix + ".min-std-deviation"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.WatchFailureDetector.MinStdDeviation = d
+		}
+	}
+	if v, err := cfg.GetString(watchFdPrefix + ".acceptable-heartbeat-pause"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.WatchFailureDetector.AcceptableHeartbeatPause = d
+		}
+	}
+	if v, err := cfg.GetString(watchFdPrefix + ".unreachable-nodes-reaper-interval"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.WatchFailureDetector.UnreachableNodesReaperInterval = d
+		}
+	}
+	if v, err := cfg.GetString(watchFdPrefix + ".expected-response-after"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.WatchFailureDetector.ExpectedResponseAfter = d
+		}
+	}
+
 	// ── Maximum Frame Size ─────────────────────────────────────────────────
 	if v, err := cfg.GetString(arteryPrefix + ".advanced.maximum-frame-size"); err == nil {
 		if size, parseErr := parseHOCONByteSize(strings.TrimSpace(v)); parseErr == nil {

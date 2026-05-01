@@ -114,7 +114,7 @@ Legend:
 | `pekko.remote.artery.ssl.ssl-engine-provider` | (Pekko FQCN) | ⚠️ | JVM-only — gekka has a fixed Go `crypto/tls` engine (no FQCN plug-in). Configure certificates via the `tls.*` paths above. |
 | `pekko.remote.artery.ssl.config-ssl-engine.random-number-generator` | `""` | ⚠️ | JVM-only — gekka uses `crypto/rand.Reader` (Go `tls.Config.Rand` field is left at default). |
 | `pekko.remote.artery.ssl.rotating-keys-engine.*` | — | ⚠️ | JVM-only — Pekko's K8s secret rotation; gekka has no equivalent. |
-| `pekko.remote.watch-failure-detector.*` | (various) | ❌ | Not implemented — gekka watches via association quarantine + heartbeat FD (`cluster/failure_detector.go`); tracked in `docs/LEFTWORKS.md` §11 |
+| `pekko.remote.watch-failure-detector.*` | (various) | ✅ | `cluster.WatchFailureDetector` (`cluster/watch_failure_detector.go`) — separate Phi-Accrual instance fed heartbeats by `ClusterManager.handleHeartbeat`/`handleHeartbeatRsp`; reaper goroutine in `cluster_watch.go` consults `IsAvailable` per `unreachable-nodes-reaper-interval` and drives `triggerRemoteNodeDeath` when a watched node's `acceptable-heartbeat-pause` window expires. Distinct from cluster membership FD (`cluster/failure_detector.go`). |
 | `pekko.remote.accept-protocol-names` | `["pekko"]` | ✅ | `ClusterConfig.AcceptProtocolNames` — list of protocols (e.g., `pekko`/`akka`) accepted on inbound handshake |
 
 ---
@@ -476,11 +476,11 @@ touching the consumer code.
 
 | Symbol | Substantive table rows | Meaning |
 |---|---|---|
-| ✅ | 237 | Parsed AND consumed |
+| ✅ | 238 | Parsed AND consumed |
 | ⚠️ | 51 | Forward-compat parsed; consumer deferred (Note states what's deferred) |
 | ☕ | 8 | JVM-only — no equivalent capability in Go runtime |
 | 🚫 | 1 | Go/JVM API-shape incompatibility (FQCN class loading) |
-| ❌ | 12 | Not implemented; portable in principle (tracked in `docs/LEFTWORKS.md` §11) |
+| ❌ | 11 | Not implemented; portable in principle (tracked in `docs/LEFTWORKS.md` §11) |
 
 (Counts exclude the legend lines themselves and this Summary table. `grep -c "| ✅ |"` etc. on the file returns counts +1 because each Summary-table row contributes one match.)
 
@@ -540,16 +540,34 @@ Portable Pekko paths gekka has not bridged. The full list lives in
    2026-04-30.)
 3. **Reliable-delivery (typed)** — Pekko-typed `ProducerController` /
    `ConsumerController`. Distinct from `at-least-once-delivery.*` (✅).
-4. **Watch failure detector** — `pekko.remote.watch-failure-detector.*`.
-5. **Discovery** — `pekko.discovery.config / aggregate / pekko-dns.*`
+4. **Discovery** — `pekko.discovery.config / aggregate / pekko-dns.*`
    (gekka's k8s extension is the alternative path).
-6. **Logging** — `pekko.loglevel` (honesty-downgraded ✅ → ❌ on
+5. **Logging** — `pekko.loglevel` (honesty-downgraded ✅ → ❌ on
    2026-04-30 — parsed-only) and `pekko.stdout-loglevel`. Both are
    **deferred to the future external-log-server logging cycle**, not the
    immediate post-audit roadmap; the in-process logger is being replaced.
 
 ### Audit history
 
+- **2026-05-01 — Sub-plan 5 (Watch failure detector) landed:** Wired
+  `pekko.remote.watch-failure-detector.*` (8 keys: implementation-class,
+  heartbeat-interval, threshold, max-sample-size, min-std-deviation,
+  acceptable-heartbeat-pause, unreachable-nodes-reaper-interval,
+  expected-response-after) into a new `cluster.WatchFailureDetector`
+  distinct from the cluster membership FD. The detector is fed
+  heartbeats from `ClusterManager.handleHeartbeat` /
+  `handleHeartbeatRsp` (using the same `host:port-uid` key the
+  cluster FD already uses). On the first `Cluster.watchRemote` call,
+  a reaper goroutine lazy-starts and ticks at
+  `unreachable-nodes-reaper-interval`; each tick walks watched nodes
+  and calls `triggerRemoteNodeDeath` for any whose
+  `IsAvailable` flips to false. `acceptable-heartbeat-pause` is
+  enforced at the wrapper level so an aggressive watch-FD pause
+  fires `Terminated` before the cluster FD's slower threshold would.
+  `implementation-class` parses for HOCON parity but only the
+  bundled Phi-Accrual implementation is honoured. Summary counts:
+  ✅ 237 → 238, ❌ 12 → 11. LEFTWORKS.md §11 "Watch failure detector"
+  subsection emptied.
 - **2026-05-01 — Sub-plan 4 (Typed receptionist) landed:** Wired
   `pekko.cluster.typed.receptionist.write-consistency`,
   `pruning-interval`, and `distributed-key-count` into the existing

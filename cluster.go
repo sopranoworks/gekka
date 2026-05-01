@@ -331,6 +331,26 @@ type ClusterConfig struct {
 	// Fallback: gekka.cluster.failure-detector.*
 	FailureDetector FailureDetectorConfig
 
+	// WatchFailureDetector tunes the remote-watch failure detector
+	// (Pekko: pekko.remote.watch-failure-detector.*). Distinct from the
+	// cluster membership FD above: this detector is consulted only for
+	// remote actors registered via Watch. Zero-valued fields fall back to
+	// Pekko reference defaults inside cluster.NewWatchFailureDetector.
+	//
+	// Parse from HOCON:
+	//
+	//	pekko.remote.watch-failure-detector {
+	//	    implementation-class               = "org.apache.pekko.remote.PhiAccrualFailureDetector"
+	//	    heartbeat-interval                 = 1s
+	//	    threshold                          = 10.0
+	//	    max-sample-size                    = 200
+	//	    min-std-deviation                  = 100ms
+	//	    acceptable-heartbeat-pause         = 10s
+	//	    unreachable-nodes-reaper-interval  = 1s
+	//	    expected-response-after            = 1s
+	//	}
+	WatchFailureDetector gcluster.WatchFailureDetectorConfig
+
 	// MinNrOfMembers is the minimum number of members that must join before the
 	// leader promotes Joining members to Up status.
 	// Corresponds to pekko.cluster.min-nr-of-members.
@@ -2049,6 +2069,11 @@ type Cluster struct {
 	// node addr "host:port" → target full path → slice of watcher references
 	remoteWatchers map[string]map[string][]ActorRef
 
+	// watchFDStateRef holds the lazy reaper-goroutine bookkeeping for the
+	// remote-watch failure detector. Allocated on first watch via watchFD().
+	watchFDOnceInit sync.Once
+	watchFDStateRef *watchFDState
+
 	// localWatchers tracks remote actors watching local actors.
 	// local path → remote node unique address string → slice of remote actor refs
 	localWatchersMu sync.Mutex
@@ -2311,6 +2336,10 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 
 	// Apply Phi Accrual Failure Detector configuration from HOCON.
 	gcluster.ApplyDetectorConfig(cm, cfg.FailureDetector)
+
+	// Apply remote watch failure detector configuration from HOCON
+	// (pekko.remote.watch-failure-detector.*).
+	gcluster.ApplyWatchDetectorConfig(cm, cfg.WatchFailureDetector)
 
 	// Apply cluster timing configuration from HOCON.
 	if cfg.FailureDetector.HeartbeatInterval > 0 {
@@ -4053,6 +4082,7 @@ func (c *Cluster) GracefulShutdown(ctx context.Context) error {
 // removed lifecycle, call GracefulShutdown instead.
 func (c *Cluster) Shutdown() error {
 	atomic.StoreInt32(&c.shuttingDown, 1)
+	c.stopWatchFDReaper()
 	if c.cancel != nil {
 		c.cancel()
 	}

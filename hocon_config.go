@@ -1591,7 +1591,30 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		}
 	}
 
-	// ��─ Per-Role Min Nr Of Members ──────────────────────────────────────────
+	// ── Typed Receptionist ────────────────────────────────────────────────
+	// pekko.cluster.typed.receptionist.* — parsed into
+	// ClusterConfig.TypedReceptionist. Defaults match Pekko reference.conf.
+	nodeCfg.TypedReceptionist.WriteConsistency = "local"
+	nodeCfg.TypedReceptionist.PruningInterval = 3 * time.Second
+	nodeCfg.TypedReceptionist.DistributedKeyCount = 5
+	typedReceptionistPrefix := prefix + ".cluster.typed.receptionist"
+	if v, err := cfg.GetString(typedReceptionistPrefix + ".write-consistency"); err == nil {
+		v = strings.ToLower(strings.Trim(strings.TrimSpace(v), `"`))
+		switch v {
+		case "local", "majority", "all":
+			nodeCfg.TypedReceptionist.WriteConsistency = v
+		}
+	}
+	if v, err := cfg.GetString(typedReceptionistPrefix + ".pruning-interval"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			nodeCfg.TypedReceptionist.PruningInterval = d
+		}
+	}
+	if v, err := cfg.GetInt(typedReceptionistPrefix + ".distributed-key-count"); err == nil && v > 0 {
+		nodeCfg.TypedReceptionist.DistributedKeyCount = v
+	}
+
+	// ── Per-Role Min Nr Of Members ──────────────────────────────────────────
 	// Parse pekko.cluster.role.{name}.min-nr-of-members for each role.
 	rolePrefix := prefix + ".cluster.role"
 	if roleObj, err := cfg.GetConfig(rolePrefix); err == nil {

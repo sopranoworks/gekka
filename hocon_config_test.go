@@ -4809,3 +4809,67 @@ pekko {
 		t.Errorf("ShardingRole = %q, want %q", got, want)
 	}
 }
+
+// TestHOCON_TypedReceptionist verifies that the three keys under
+// pekko.cluster.typed.receptionist.* parse into TypedReceptionistConfig
+// and that the documented Pekko defaults apply when the namespace is
+// absent from the HOCON source.
+func TestHOCON_TypedReceptionist(t *testing.T) {
+	t.Run("explicit values", func(t *testing.T) {
+		const hocon = `
+pekko.cluster.typed.receptionist {
+  write-consistency = "majority"
+  pruning-interval = 7s
+  distributed-key-count = 11
+}
+`
+		cfg, err := parseHOCONString(hocon)
+		if err != nil {
+			t.Fatalf("parseHOCONString: %v", err)
+		}
+		if got, want := cfg.TypedReceptionist.WriteConsistency, "majority"; got != want {
+			t.Errorf("WriteConsistency = %q, want %q", got, want)
+		}
+		if got, want := cfg.TypedReceptionist.PruningInterval, 7*time.Second; got != want {
+			t.Errorf("PruningInterval = %v, want %v", got, want)
+		}
+		if got, want := cfg.TypedReceptionist.DistributedKeyCount, 11; got != want {
+			t.Errorf("DistributedKeyCount = %d, want %d", got, want)
+		}
+	})
+
+	t.Run("namespace absent → Pekko defaults", func(t *testing.T) {
+		const hocon = `
+pekko.remote.artery.canonical {
+  hostname = "127.0.0.1"
+  port = 0
+}
+`
+		cfg, err := parseHOCONString(hocon)
+		if err != nil {
+			t.Fatalf("parseHOCONString: %v", err)
+		}
+		if got, want := cfg.TypedReceptionist.WriteConsistency, "local"; got != want {
+			t.Errorf("WriteConsistency default = %q, want %q", got, want)
+		}
+		if got, want := cfg.TypedReceptionist.PruningInterval, 3*time.Second; got != want {
+			t.Errorf("PruningInterval default = %v, want %v", got, want)
+		}
+		if got, want := cfg.TypedReceptionist.DistributedKeyCount, 5; got != want {
+			t.Errorf("DistributedKeyCount default = %d, want %d", got, want)
+		}
+	})
+
+	t.Run("invalid write-consistency falls back to local", func(t *testing.T) {
+		const hocon = `
+pekko.cluster.typed.receptionist.write-consistency = "garbage"
+`
+		cfg, err := parseHOCONString(hocon)
+		if err != nil {
+			t.Fatalf("parseHOCONString: %v", err)
+		}
+		if got, want := cfg.TypedReceptionist.WriteConsistency, "local"; got != want {
+			t.Errorf("WriteConsistency = %q, want %q (default)", got, want)
+		}
+	})
+}

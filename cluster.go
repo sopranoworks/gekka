@@ -642,6 +642,12 @@ type ClusterConfig struct {
 	//	rec := client.NewClusterReceptionist(cm, cfg.ClusterReceptionist, router)
 	ClusterReceptionist ClusterReceptionistConfig
 
+	// TypedReceptionist holds settings for the typed receptionist actor that
+	// runs on cluster member nodes and indexes typed services for discovery
+	// via the typed `Receptionist` API. Corresponds to
+	// pekko.cluster.typed.receptionist.*.
+	TypedReceptionist TypedReceptionistConfig
+
 	// DistributedData configures the Distributed Data Replicator (v0.10.0).
 	DistributedData DistributedDataConfig
 
@@ -1037,6 +1043,34 @@ type ClusterClientConfig = client.Config
 // for use in ClusterConfig.  Import gekka directly — you do not need to import
 // the cluster/client sub-package to read the values populated by LoadConfig.
 type ClusterReceptionistConfig = client.ReceptionistConfig
+
+// TypedReceptionistConfig holds runtime settings for the typed receptionist
+// actor (`actor/typed/receptionist`). Parsed from HOCON namespace
+// pekko.cluster.typed.receptionist.*. Defaults match Pekko reference.conf.
+type TypedReceptionistConfig struct {
+	// WriteConsistency selects the ddata write consistency level used when
+	// the receptionist registers or removes a service ref. Accepted values:
+	// "local", "majority", "all". Translated to ddata.WriteConsistency at
+	// receptionist construction time.
+	// Corresponds to pekko.cluster.typed.receptionist.write-consistency.
+	// Default: "local".
+	WriteConsistency string
+
+	// PruningInterval is the cadence at which the receptionist scans its
+	// registered service paths and removes any whose actor refs no longer
+	// resolve (i.e., the actor is dead or the path lost its binding).
+	// Corresponds to pekko.cluster.typed.receptionist.pruning-interval.
+	// Default: 3s. Zero or negative values disable the pruning ticker.
+	PruningInterval time.Duration
+
+	// DistributedKeyCount is the number of ORSet shards used to spread the
+	// receptionist's keyspace. The bucket name in the ddata replicator is
+	// derived as fmt.Sprintf("receptionist-%d-%s", hash(id) % count, id),
+	// keeping per-id state localised while avoiding one giant ORSet.
+	// Corresponds to pekko.cluster.typed.receptionist.distributed-key-count.
+	// Default: 5. Values <= 0 are coerced to 1 at runtime.
+	DistributedKeyCount int
+}
 
 // FailureDetectorConfig is a re-export of cluster.FailureDetectorConfig.
 // It tunes the Phi Accrual Failure Detector parameters.
@@ -2792,7 +2826,7 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	// ── Receptionist ────────────────────────────────────────────────────────
 	// Spawn the local receptionist actor. It uses the CRDT replicator to
 	// propagate service registrations cluster-wide.
-	if _, err := spawnReceptionist(cluster, repl); err != nil {
+	if _, err := spawnReceptionist(cluster, repl, cfg.TypedReceptionist); err != nil {
 		log.Printf("gekka: failed to spawn receptionist: %v", err)
 	}
 

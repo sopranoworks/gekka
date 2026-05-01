@@ -78,6 +78,13 @@ type WriteConsistency int
 const (
 	WriteLocal WriteConsistency = iota
 	WriteAll
+	// WriteMajority is best-effort today: gekka has no quorum-acknowledged
+	// write op, so it shares the gossip-on-write semantics of WriteAll. The
+	// distinct enum value lets configuration paths (e.g.,
+	// pekko.cluster.typed.receptionist.write-consistency = "majority") parse
+	// faithfully and select an observably different code path; future cycles
+	// can refine the gossip layer without re-shaping the API.
+	WriteMajority
 )
 
 // defaultFullStateEvery is the baseline cadence of full-state gossip when
@@ -407,7 +414,7 @@ func (r *Replicator) IncrementCounter(key string, delta uint64, consistency Writ
 	c := r.GCounter(key)
 	c.Increment(r.nodeID, delta)
 	r.persistCounter(key, c)
-	if consistency == WriteAll {
+	if consistency == WriteAll || consistency == WriteMajority {
 		r.gossipCounter(context.Background(), key, c)
 	}
 }
@@ -417,7 +424,7 @@ func (r *Replicator) AddToSet(key, element string, consistency WriteConsistency)
 	s := r.ORSet(key)
 	s.Add(r.nodeID, element)
 	r.persistORSet(key, s)
-	if consistency == WriteAll {
+	if consistency == WriteAll || consistency == WriteMajority {
 		r.gossipSet(context.Background(), key, s)
 	}
 }
@@ -427,7 +434,7 @@ func (r *Replicator) RemoveFromSet(key, element string, consistency WriteConsist
 	s := r.ORSet(key)
 	s.Remove(element)
 	r.persistORSet(key, s)
-	if consistency == WriteAll {
+	if consistency == WriteAll || consistency == WriteMajority {
 		r.gossipSet(context.Background(), key, s)
 	}
 }
@@ -437,7 +444,7 @@ func (r *Replicator) PutInMap(key, itemKey string, value any, consistency WriteC
 	m := r.LWWMap(key)
 	m.Put(itemKey, value)
 	r.persistLWWMap(key, m)
-	if consistency == WriteAll {
+	if consistency == WriteAll || consistency == WriteMajority {
 		r.gossipMap(context.Background(), key, m)
 	}
 }

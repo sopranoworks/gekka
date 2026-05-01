@@ -20,7 +20,9 @@ import (
 
 func TestReceptionist_Register(t *testing.T) {
 	replicator := ddata.NewReplicator("node1", nil)
-	behavior := receptionist.Behavior(replicator)
+	cfg := receptionist.DefaultConfig()
+	cfg.PruningInterval = 0 // disable timer for direct-Receive tests
+	behavior := receptionist.Behavior(replicator, cfg)
 
 	// Create typed actor manually for test
 	a := typed.NewTypedActor(behavior).(*typed.TypedActor[any])
@@ -38,7 +40,8 @@ func TestReceptionist_Register(t *testing.T) {
 
 	a.Receive(msg)
 
-	elements := replicator.ORSet("test-service").Elements()
+	bucket := receptionist.ShardKey("test-service", cfg.DistributedKeyCount)
+	elements := replicator.ORSet(bucket).Elements()
 	assert.Len(t, elements, 1)
 	assert.Equal(t, "/user/service1", elements[0])
 }

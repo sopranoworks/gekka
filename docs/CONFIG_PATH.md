@@ -359,9 +359,9 @@ Legend:
 
 | Path | Pekko Default | Gekka? | Notes |
 |---|---|---|---|
-| `pekko.cluster.typed.receptionist.write-consistency` | `local` | ❌ | Not implemented — gekka has typed actors (`actor/typed/`) but no receptionist analog yet; tracked in `docs/LEFTWORKS.md` §11 |
-| `pekko.cluster.typed.receptionist.pruning-interval` | `3s` | ❌ | Not implemented (typed receptionist absent); tracked in `docs/LEFTWORKS.md` §11 |
-| `pekko.cluster.typed.receptionist.distributed-key-count` | `5` | ❌ | Not implemented (typed receptionist absent); tracked in `docs/LEFTWORKS.md` §11 |
+| `pekko.cluster.typed.receptionist.write-consistency` | `local` | ✅ | Consumed by `receptionist.Behavior`: `Register.handle`/`prune` pass the configured `ddata.WriteConsistency` to `replicator.AddToSet`/`RemoveFromSet` in `actor/typed/receptionist/receptionist.go`. `majority` is best-effort (same gossip behaviour as `all` until quorum-acked writes ship). |
+| `pekko.cluster.typed.receptionist.pruning-interval` | `3s` | ✅ | Consumed by `receptionist.Behavior` periodic ticker (`actor/typed/receptionist/receptionist.go`): on each tick, `prune` walks tracked services and `RemoveFromSet`s any path whose `ctx.System().Resolve` errors. |
+| `pekko.cluster.typed.receptionist.distributed-key-count` | `5` | ✅ | Consumed by `receptionist.ShardKey(id, count)` (`actor/typed/receptionist/receptionist.go`): `fmt.Sprintf("receptionist-%d-%s", fnv1a(id) %% count, id)` is the ddata bucket name used by every register/find/subscribe/prune call, spreading the receptionist keyspace across N ORSets. |
 | `pekko.cluster.ddata.typed.replicator-message-adapter-unexpected-ask-timeout` | `20s` | ✅ | Consumed by `TypedReplicatorAdapter.AskGet/AskUpdate` in `cluster/ddata/typed_replicator.go`; bounds the wait before delivering `ErrUnexpectedAskTimeout` |
 
 ---
@@ -476,11 +476,11 @@ touching the consumer code.
 
 | Symbol | Substantive table rows | Meaning |
 |---|---|---|
-| ✅ | 234 | Parsed AND consumed |
+| ✅ | 237 | Parsed AND consumed |
 | ⚠️ | 51 | Forward-compat parsed; consumer deferred (Note states what's deferred) |
 | ☕ | 8 | JVM-only — no equivalent capability in Go runtime |
 | 🚫 | 1 | Go/JVM API-shape incompatibility (FQCN class loading) |
-| ❌ | 15 | Not implemented; portable in principle (tracked in `docs/LEFTWORKS.md` §11) |
+| ❌ | 12 | Not implemented; portable in principle (tracked in `docs/LEFTWORKS.md` §11) |
 
 (Counts exclude the legend lines themselves and this Summary table. `grep -c "| ✅ |"` etc. on the file returns counts +1 because each Summary-table row contributes one match.)
 
@@ -550,6 +550,22 @@ Portable Pekko paths gekka has not bridged. The full list lives in
 
 ### Audit history
 
+- **2026-05-01 — Sub-plan 4 (Typed receptionist) landed:** Wired
+  `pekko.cluster.typed.receptionist.write-consistency`,
+  `pruning-interval`, and `distributed-key-count` into the existing
+  typed receptionist actor in `actor/typed/receptionist/`. Added
+  `ddata.WriteMajority` (best-effort: same gossip semantics as
+  `WriteAll` until quorum-acked writes ship), the
+  `TypedReceptionistConfig` field on `ClusterConfig`, a HOCON parse
+  block at `pekko.cluster.typed.receptionist.*`, and a
+  `ReplicatorWriter` interface seam so writes/reads target a
+  `ShardKey(id, count) = "receptionist-<n>-<id>"` ddata bucket. The
+  receptionist `Behavior` now schedules a periodic `pruneTick` via
+  the typed `TimerScheduler` at the configured cadence; each tick
+  walks tracked services and `RemoveFromSet`s any path whose
+  `ctx.System().Resolve` errors, using the configured
+  `ddata.WriteConsistency`. Summary counts: ✅ 234 → 237, ❌ 15 → 12.
+  LEFTWORKS.md §11 "Typed-API surface" subsection emptied.
 - **2026-05-01 — Sub-plan 3 (Discovery) landed:** Wired
   `pekko.discovery.config.*`, `pekko.discovery.aggregate.*`, and
   `pekko.discovery.pekko-dns.*` into the existing

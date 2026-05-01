@@ -95,6 +95,15 @@ func (fd *PhiAccrualFailureDetector) Reconfigure(threshold float64, maxSamples i
 }
 
 func (fd *PhiAccrualFailureDetector) detectorFor(nodeKey string) *icluster.PhiAccrualFailureDetector {
+	return fd.detectorForWithEstimate(nodeKey, 0)
+}
+
+// detectorForWithEstimate is the per-target detector lookup that respects a
+// caller-supplied first-heartbeat estimate (Pekko's `expected-response-after`).
+// The estimate is applied only when the per-node detector is constructed for
+// the first time; an existing detector keeps the estimate it was created with.
+// A zero estimate falls back to icluster.DefaultFirstHeartbeatEstimate.
+func (fd *PhiAccrualFailureDetector) detectorForWithEstimate(nodeKey string, firstHeartbeatEstimate time.Duration) *icluster.PhiAccrualFailureDetector {
 	fd.mu.RLock()
 	d, ok := fd.detectors[nodeKey]
 	fd.mu.RUnlock()
@@ -107,13 +116,40 @@ func (fd *PhiAccrualFailureDetector) detectorFor(nodeKey string) *icluster.PhiAc
 	if d, ok = fd.detectors[nodeKey]; ok {
 		return d
 	}
-	d = icluster.New(fd.threshold, fd.maxSampleSize, fd.minStdDeviation)
+	if firstHeartbeatEstimate <= 0 {
+		d = icluster.New(fd.threshold, fd.maxSampleSize, fd.minStdDeviation)
+	} else {
+		d = icluster.NewWithFirstEstimate(fd.threshold, fd.maxSampleSize, fd.minStdDeviation, firstHeartbeatEstimate)
+	}
 	fd.detectors[nodeKey] = d
 	return d
 }
 
 func (fd *PhiAccrualFailureDetector) Heartbeat(nodeKey string) {
 	fd.detectorFor(nodeKey).Heartbeat()
+}
+
+// HeartbeatWithEstimate records a heartbeat for nodeKey, constructing the
+// per-node detector (on first call only) with the supplied
+// firstHeartbeatEstimate. Production cluster-manager paths call this with
+// `cm.EffectiveExpectedResponseAfter(target)` so cross-DC targets get the
+// configured `pekko.cluster.multi-data-center.failure-detector.expected-response-after`
+// value seeded into history, while intra-DC targets get the intra-DC value.
+func (fd *PhiAccrualFailureDetector) HeartbeatWithEstimate(nodeKey string, firstHeartbeatEstimate time.Duration) {
+	fd.detectorForWithEstimate(nodeKey, firstHeartbeatEstimate).Heartbeat()
+}
+
+// FirstHeartbeatEstimateFor returns the firstHeartbeatEstimate that the
+// per-node detector for nodeKey was constructed with, or 0 if no detector
+// exists yet. Test-only accessor; not used in production code.
+func (fd *PhiAccrualFailureDetector) FirstHeartbeatEstimateFor(nodeKey string) time.Duration {
+	fd.mu.RLock()
+	d, ok := fd.detectors[nodeKey]
+	fd.mu.RUnlock()
+	if !ok {
+		return 0
+	}
+	return d.FirstHeartbeatEstimate()
 }
 
 func (fd *PhiAccrualFailureDetector) Phi(nodeKey string) float64 {

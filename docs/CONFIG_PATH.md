@@ -172,7 +172,7 @@ Legend:
 | `cross-data-center-gossip-probability` | `0.2` | ✅ | |
 | `failure-detector.heartbeat-interval` | `3s` | ✅ | Cross-DC HB cadence; `EffectiveHeartbeatInterval` returns this for cross-DC targets, intra-DC default otherwise (Round-2 session 12) |
 | `failure-detector.acceptable-heartbeat-pause` | `10s` | ⚠️ | Plumbed via `MultiDCFailureDetectorConfig` onto `cm.CrossDCAcceptableHeartbeatPause`; cross-DC reachability-margin consumer not yet implemented |
-| `failure-detector.expected-response-after` | `1s` | ⚠️ | Plumbed via `MultiDCFailureDetectorConfig` onto `cm.CrossDCExpectedResponseAfter`; no consumer reads the field outside the assignment line (parallel deferral to row 174) |
+| `failure-detector.expected-response-after` | `1s` | ✅ | `EffectiveExpectedResponseAfter(target)` on `ClusterManager` returns this for cross-DC targets and the intra-DC `ExpectedResponseAfter` otherwise; consumed by `handleHeartbeat`/`handleHeartbeatRsp` via `Fd.HeartbeatWithEstimate`, which seeds the per-node Phi detector's `firstHeartbeatEstimate` (sub-plan 8 group A) |
 
 ### pekko.cluster.split-brain-resolver
 

@@ -166,3 +166,13 @@ func (d *PhiAccrualFailureDetector) IsAvailable() bool {
 	}
 	return d.Phi() < d.threshold
 }
+
+// FirstHeartbeatEstimate returns the synthetic first-heartbeat interval the
+// detector was constructed with. Read-only accessor used by the cluster-layer
+// failure detector to expose Pekko's `expected-response-after` calibration on
+// a per-target basis.
+func (d *PhiAccrualFailureDetector) FirstHeartbeatEstimate() time.Duration {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.firstHeartbeatEstimate
+}

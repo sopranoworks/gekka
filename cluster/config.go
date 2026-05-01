@@ -142,6 +142,9 @@ func ApplyDetectorConfig(cm *ClusterManager, cfg FailureDetectorConfig) {
 		minStdDev = 500 * time.Millisecond
 	}
 	cm.Fd.Reconfigure(threshold, maxSamples, minStdDev)
+	if cfg.ExpectedResponseAfter > 0 {
+		cm.ExpectedResponseAfter = cfg.ExpectedResponseAfter
+	}
 }
 
 // ApplyWatchDetectorConfig reconfigures cm.WatchFd using the supplied

@@ -11,6 +11,7 @@ package cluster
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -824,5 +825,83 @@ func TestEffectiveHeartbeatInterval_FallsBackWhenCrossDCZero(t *testing.T) {
 
 	if got := cm.EffectiveHeartbeatInterval(peerAddr); got != 750*time.Millisecond {
 		t.Errorf("EffectiveHeartbeatInterval(peer) with CrossDC=0 = %v, want 750ms", got)
+	}
+}
+
+// ── Sub-plan 8 Group A: multi-DC FD expected-response-after ─────────────────
+
+// TestEffectiveExpectedResponseAfter_PicksCrossDCWhenSet verifies the helper
+// returns CrossDCExpectedResponseAfter for cross-DC targets and the intra-DC
+// ExpectedResponseAfter for intra-DC targets.
+func TestEffectiveExpectedResponseAfter_PicksCrossDCWhenSet(t *testing.T) {
+	cm, localAddr, peerAddr := multiDCTestCM(t)
+	cm.ExpectedResponseAfter = 1 * time.Second
+	cm.CrossDCExpectedResponseAfter = 4 * time.Second
+
+	if got := cm.EffectiveExpectedResponseAfter(localAddr); got != 1*time.Second {
+		t.Errorf("EffectiveExpectedResponseAfter(local) = %v, want 1s (intra-DC)", got)
+	}
+	if got := cm.EffectiveExpectedResponseAfter(peerAddr); got != 4*time.Second {
+		t.Errorf("EffectiveExpectedResponseAfter(peer) = %v, want 4s (cross-DC)", got)
+	}
+}
+
+// TestEffectiveExpectedResponseAfter_FallsBackWhenCrossDCZero verifies that
+// when CrossDCExpectedResponseAfter is zero, even cross-DC targets use the
+// intra-DC ExpectedResponseAfter.
+func TestEffectiveExpectedResponseAfter_FallsBackWhenCrossDCZero(t *testing.T) {
+	cm, _, peerAddr := multiDCTestCM(t)
+	cm.ExpectedResponseAfter = 800 * time.Millisecond
+	cm.CrossDCExpectedResponseAfter = 0
+
+	if got := cm.EffectiveExpectedResponseAfter(peerAddr); got != 800*time.Millisecond {
+		t.Errorf("EffectiveExpectedResponseAfter(peer) with CrossDC=0 = %v, want 800ms", got)
+	}
+}
+
+// TestEffectiveExpectedResponseAfter_Default verifies the helper falls back to
+// 1s when both CrossDCExpectedResponseAfter and intra-DC ExpectedResponseAfter
+// are zero (matches the Pekko reference default).
+func TestEffectiveExpectedResponseAfter_Default(t *testing.T) {
+	cm, _, peerAddr := multiDCTestCM(t)
+	if got := cm.EffectiveExpectedResponseAfter(peerAddr); got != 1*time.Second {
+		t.Errorf("EffectiveExpectedResponseAfter default = %v, want 1s", got)
+	}
+}
+
+// TestHandleHeartbeat_SeedsFDWithEffectiveExpectedResponseAfter verifies that
+// the heartbeat handler constructs the per-node Phi detector with the
+// effective expected-response-after for the target's DC. This is the live
+// runtime consumer of pekko.cluster.multi-data-center.failure-detector.
+// expected-response-after.
+func TestHandleHeartbeat_SeedsFDWithEffectiveExpectedResponseAfter(t *testing.T) {
+	cm, _, peerAddr := multiDCTestCM(t)
+	cm.ExpectedResponseAfter = 1 * time.Second
+	cm.CrossDCExpectedResponseAfter = 7 * time.Second
+
+	// Drive a heartbeat directly via the FD path (simulates handleHeartbeat
+	// without needing a full proto-encoded payload).
+	uidLow := uint64(2)
+	key := fmt.Sprintf("%s:%d-%d", peerAddr.GetHostname(), peerAddr.GetPort(), uidLow)
+	cm.Fd.HeartbeatWithEstimate(key, cm.EffectiveExpectedResponseAfter(peerAddr))
+
+	if got := cm.Fd.FirstHeartbeatEstimateFor(key); got != 7*time.Second {
+		t.Errorf("FirstHeartbeatEstimateFor(cross-DC peer) = %v, want 7s", got)
+	}
+}
+
+// TestApplyDetectorConfig_WiresExpectedResponseAfter verifies that a non-zero
+// ExpectedResponseAfter on FailureDetectorConfig is mirrored onto
+// cm.ExpectedResponseAfter so EffectiveExpectedResponseAfter can return it.
+func TestApplyDetectorConfig_WiresExpectedResponseAfter(t *testing.T) {
+	cm := newTestCM()
+	ApplyDetectorConfig(cm, FailureDetectorConfig{
+		Threshold:             10.0,
+		MaxSampleSize:         500,
+		MinStdDeviation:       200 * time.Millisecond,
+		ExpectedResponseAfter: 600 * time.Millisecond,
+	})
+	if cm.ExpectedResponseAfter != 600*time.Millisecond {
+		t.Errorf("cm.ExpectedResponseAfter = %v, want 600ms", cm.ExpectedResponseAfter)
 	}
 }

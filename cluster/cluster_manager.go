@@ -291,6 +291,15 @@ type ClusterManager struct {
 	CrossDCAcceptableHeartbeatPause time.Duration
 	CrossDCExpectedResponseAfter    time.Duration
 
+	// ExpectedResponseAfter is the intra-DC failure-detector calibration
+	// value, mirroring FailureDetectorConfig.ExpectedResponseAfter so that
+	// EffectiveExpectedResponseAfter can pick between cross-DC and
+	// intra-DC values per target. Set by ApplyDetectorConfig from
+	// FailureDetectorConfig.ExpectedResponseAfter.
+	// Corresponds to pekko.cluster.failure-detector.expected-response-after.
+	// Pekko default: 1s.
+	ExpectedResponseAfter time.Duration
+
 	// ShutdownCallback is invoked when the join timeout fires
 	// (shutdown-after-unsuccessful-join-seed-nodes). The Cluster layer wires
 	// this to CoordinatedShutdown.Run, matching Pekko's behavior of
@@ -973,7 +982,10 @@ func (cm *ClusterManager) handleHeartbeat(payload []byte, manifest string, remot
 		addr := remoteAddr.GetAddress()
 		uid64 := uint64(remoteAddr.GetUid()) | (uint64(remoteAddr.GetUid2()) << 32)
 		key := fmt.Sprintf("%s:%d-%d", addr.GetHostname(), addr.GetPort(), uid64)
-		cm.Fd.Heartbeat(key)
+		// Pass the per-target expected-response-after into the FD so the
+		// per-node detector seeds its first-heartbeat estimate from the
+		// configured value (cross-DC vs intra-DC).
+		cm.Fd.HeartbeatWithEstimate(key, cm.EffectiveExpectedResponseAfter(addr))
 		if cm.WatchFd != nil {
 			cm.WatchFd.Heartbeat(key)
 		}
@@ -1008,7 +1020,7 @@ func (cm *ClusterManager) handleHeartbeatRsp(payload []byte, manifest string) er
 	addr := from.GetAddress()
 	uid64 := uint64(from.GetUid()) | (uint64(from.GetUid2()) << 32)
 	key := fmt.Sprintf("%s:%d-%d", addr.GetHostname(), addr.GetPort(), uid64)
-	cm.Fd.Heartbeat(key)
+	cm.Fd.HeartbeatWithEstimate(key, cm.EffectiveExpectedResponseAfter(addr))
 	if cm.WatchFd != nil {
 		cm.WatchFd.Heartbeat(key)
 	}
@@ -3358,6 +3370,27 @@ func (cm *ClusterManager) EffectiveHeartbeatInterval(target *gproto_cluster.Addr
 	}
 	if cm.HeartbeatInterval > 0 {
 		return cm.HeartbeatInterval
+	}
+	return 1 * time.Second
+}
+
+// EffectiveExpectedResponseAfter returns the failure-detector
+// firstHeartbeatEstimate (Pekko: `expected-response-after`) to use for target,
+// preferring CrossDCExpectedResponseAfter when target is in a foreign DC and
+// the cross-DC value is non-zero. Falls back to ExpectedResponseAfter (the
+// intra-DC value, plumbed via FailureDetectorConfig) and finally to 1s.
+//
+// Consumed by handleHeartbeat / handleHeartbeatRsp via
+// PhiAccrualFailureDetector.HeartbeatWithEstimate, which seeds the per-node
+// detector's history window with the configured estimate on first contact.
+// This makes `pekko.cluster.multi-data-center.failure-detector.expected-response-after`
+// a live runtime knob instead of a dead assignment.
+func (cm *ClusterManager) EffectiveExpectedResponseAfter(target *gproto_cluster.Address) time.Duration {
+	if cm.CrossDCExpectedResponseAfter > 0 && cm.IsCrossDC(target) {
+		return cm.CrossDCExpectedResponseAfter
+	}
+	if cm.ExpectedResponseAfter > 0 {
+		return cm.ExpectedResponseAfter
 	}
 	return 1 * time.Second
 }

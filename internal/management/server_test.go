@@ -53,6 +53,12 @@ type mockProvider struct {
 	// Phase-15 extensions
 	rebalanceCalled []rebalanceCall
 	rebalanceErr    error
+
+	// Sub-plan 8d extensions — sharding healthcheck readiness probe.
+	// Negative sense so the zero value yields ready=true and existing
+	// /health/ready tests are not affected.
+	shardingNotReady bool
+	shardingReason   string
 }
 
 type rebalanceCall struct {
@@ -135,6 +141,15 @@ func (p *mockProvider) RebalanceShard(typeName, shardID, targetRegion string) er
 }
 
 func (p *mockProvider) DurableStateStore() persistence.DurableStateStore { return nil }
+
+func (p *mockProvider) ShardingHealthCheckReady() (bool, string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.shardingNotReady {
+		return false, p.shardingReason
+	}
+	return true, ""
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -937,5 +952,88 @@ func TestPostShardingRebalance_MethodNotAllowed(t *testing.T) {
 
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405, got %d", w.Code)
+	}
+}
+
+
+func TestHealthReady_FailsWhenShardingNotReady(t *testing.T) {
+	// Node is Up, no unreachable, no quarantine, but the sharding
+	// healthcheck (pekko.cluster.sharding.healthcheck.names) reports a
+	// missing coordinator. /health/ready must surface the
+	// provider-supplied reason verbatim.
+	p := &mockProvider{
+		cm: buildGossip([]memberSpec{
+			{"127.0.0.1", 2552, "GekkaSystem", gproto_cluster.MemberStatus_Up, []string{}},
+		}),
+		shardingNotReady: true,
+		shardingReason:   `sharding_not_ready: sharding healthcheck: type "Cart" has no registered coordinator`,
+	}
+	h := newHandler(t, p)
+
+	req := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "sharding_not_ready") {
+		t.Errorf("expected body to contain 'sharding_not_ready', got: %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `Cart`) {
+		t.Errorf("expected body to surface provider-supplied detail, got: %s", w.Body.String())
+	}
+}
+
+func TestHealthReady_PassesWhenShardingReady(t *testing.T) {
+	// Node is Up, no unreachable, no quarantine, sharding healthcheck
+	// reports ready. /health/ready must return 200 OK.
+	p := &mockProvider{
+		cm: buildGossip([]memberSpec{
+			{"127.0.0.1", 2552, "GekkaSystem", gproto_cluster.MemberStatus_Up, []string{}},
+		}),
+		// shardingNotReady defaults to false — provider returns ready=true.
+	}
+	h := newHandler(t, p)
+
+	req := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"status":"ready"`) {
+		t.Errorf(`expected body to contain `+"`"+`"status":"ready"`+"`"+`, got: %s`, w.Body.String())
+	}
+}
+
+func TestHealthReady_QuarantinedTakesPriorityOverShardingNotReady(t *testing.T) {
+	// Both quarantined and sharding-not-ready: the quarantined reason
+	// must win because the sharding check is the lowest-priority gate.
+	// This test guards the ordering of readinessReason checks: the
+	// sharding gate runs LAST, so any earlier reason masks it.
+	p := &mockProvider{
+		cm: buildGossip([]memberSpec{
+			{"127.0.0.1", 2552, "GekkaSystem", gproto_cluster.MemberStatus_Up, []string{}},
+		}),
+		quarantined:      true,
+		shardingNotReady: true,
+		shardingReason:   "sharding_not_ready: this should not appear",
+	}
+	h := newHandler(t, p)
+
+	req := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "quarantined") {
+		t.Errorf("expected reason 'quarantined', got: %s", w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "sharding_not_ready") {
+		t.Errorf("sharding reason leaked past higher-priority gate: %s", w.Body.String())
 	}
 }

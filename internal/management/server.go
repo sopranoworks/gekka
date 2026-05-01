@@ -125,6 +125,16 @@ type ClusterStateProvider interface {
 
 	// DurableStateStore returns the DurableStateStore provisioned for this system.
 	DurableStateStore() persistence.DurableStateStore
+
+	// ShardingHealthCheckReady reports whether the configured sharding-type
+	// readiness probe (pekko.cluster.sharding.healthcheck.names) is currently
+	// satisfied. When the configured Names list is empty (the Pekko default)
+	// the implementation must return (true, "") immediately. When at least
+	// one configured type has not yet had its coordinator registered locally,
+	// or the lookup exceeds pekko.cluster.sharding.healthcheck.timeout, the
+	// implementation returns (false, "sharding_not_ready: <reason>") which
+	// /health/ready surfaces verbatim.
+	ShardingHealthCheckReady() (ready bool, reason string)
 }
 
 // MemberInfo is the JSON representation of a single cluster member returned by
@@ -661,6 +671,14 @@ func (ms *ManagementServer) readinessReason() string {
 	// 3. Node not yet Up in the cluster.
 	if !cm.IsUp() {
 		return "not_up"
+	}
+
+	// 4. Sharding readiness check (pekko.cluster.sharding.healthcheck.*).
+	//    Only fails when at least one configured sharding type has not yet
+	//    had its coordinator registered locally (or the lookup timed out).
+	//    Empty Names list short-circuits to ready=true inside the provider.
+	if ready, reason := ms.provider.ShardingHealthCheckReady(); !ready {
+		return reason
 	}
 
 	return ""

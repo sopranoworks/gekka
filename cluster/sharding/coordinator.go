@@ -44,6 +44,16 @@ func LookupCoordinator(typeName string) (*ShardCoordinator, bool) {
 	return c, ok
 }
 
+// UnregisterCoordinator removes any coordinator entry for typeName from
+// the registry. It is safe to call when no entry exists. Intended for
+// use in tests that exercise registration-dependent code paths and need
+// to leave the process-global registry clean for subsequent tests.
+func UnregisterCoordinator(typeName string) {
+	coordRegistryMu.Lock()
+	defer coordRegistryMu.Unlock()
+	delete(coordRegistry, typeName)
+}
+
 // RebalanceTick is a periodic self-message that triggers a rebalance check.
 type RebalanceTick struct{}
 

@@ -288,8 +288,8 @@ Legend:
 | `pekko.cluster.sharding.verbose-debug-logging` | `off` | ✅ | Gates fine-grained per-message DEBUG log lines via Shard.vdebug (Round-2 session 15) |
 | `pekko.cluster.sharding.fail-on-invalid-entity-state-transition` | `off` | ✅ | When `on`, Shard panics on invalid handoff transitions; otherwise logs WARN (Round-2 session 15) |
 | `pekko.cluster.sharding.passivation.default-idle-strategy.idle-entity.interval` | `default` (= timeout/2) | ✅ | Overrides idle-entity scan cadence; `"default"` leaves the timeout/2 fallback (Round-2 session 15) |
-| `pekko.cluster.sharding.healthcheck.names` | `[]` | ⚠️ | Parsed into `Sharding.HealthCheck.Names`; `ClusterShardingHealthCheck` reads it but is never invoked outside tests (no production health-check endpoint) |
-| `pekko.cluster.sharding.healthcheck.timeout` | `5s` | ⚠️ | Parsed into `Sharding.HealthCheck.Timeout`; same as row above — `ClusterShardingHealthCheck` is invoked only from tests |
+| `pekko.cluster.sharding.healthcheck.names` | `[]` | ✅ | Consumed by `Cluster.ShardingHealthCheckReady` (cluster_management.go), which the management server's `/health/ready` probe consults as a readiness gate; the function delegates to `sharding.ClusterShardingHealthCheck` (cluster/sharding/healthcheck.go) (sub-plan 8d) |
+| `pekko.cluster.sharding.healthcheck.timeout` | `5s` | ✅ | Same consumer site as the row above; passed through to `sharding.ClusterShardingHealthCheck` as `HealthCheckConfig.Timeout`, which caps its lookup deadline (sub-plan 8d) |
 | `pekko.cluster.sharding.use-lease` | `""` | ✅ | Resolves a Lease from Cluster.LeaseManager; every Shard acquires before becoming active and releases on handoff/stop (Round-2 session 20) |
 | `pekko.cluster.sharding.lease-retry-interval` | `5s` | ✅ | Backoff between Shard Acquire retries when a prior call returned false (Round-2 session 20) |
 

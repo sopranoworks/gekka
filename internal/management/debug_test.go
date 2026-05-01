@@ -83,6 +83,7 @@ func (minimalClusterProvider) RebalanceShard(_, _, _ string) error { return nil 
 func (minimalClusterProvider) DurableStateStore() persistence.DurableStateStore {
 	return nil
 }
+func (minimalClusterProvider) ShardingHealthCheckReady() (bool, string) { return true, "" }
 
 // newMockClusterProvider returns a minimal ClusterStateProvider for tests that
 // only care about the HTTP surface, not cluster state.

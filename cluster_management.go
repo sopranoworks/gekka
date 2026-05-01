@@ -9,6 +9,7 @@
 package gekka
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/sopranoworks/gekka/cluster/ddata"
@@ -70,4 +71,36 @@ func (c *Cluster) RebalanceShard(typeName, shardId, targetRegion string) error {
 		TargetRegion: targetRegion,
 	})
 	return nil
+}
+
+// ShardingHealthCheckReady evaluates the configured sharding-type readiness
+// probe driven by pekko.cluster.sharding.healthcheck.* and returns
+// (true, "") when every named type has a registered coordinator on this
+// node or when the configured Names list is empty (the Pekko default).
+//
+// On failure it returns (false, "sharding_not_ready: <reason>") which the
+// management server's /health/ready handler surfaces as the readiness
+// probe's reason field. The check delegates to
+// sharding.ClusterShardingHealthCheck (cluster/sharding/healthcheck.go);
+// the Names slice and Timeout duration come from
+// c.cfg.Sharding.HealthCheck, which is parsed in hocon_config.go.
+//
+// Satisfies management.ClusterStateProvider; consumed by
+// internal/management/server.go:readinessReason as the final readiness
+// gate after the existing four (shutting_down, quarantined,
+// unreachable_members, not_up). Empty Names short-circuits to ready=true
+// without invoking the lookup loop.
+func (c *Cluster) ShardingHealthCheckReady() (bool, string) {
+	hc := c.cfg.Sharding.HealthCheck
+	if len(hc.Names) == 0 {
+		return true, ""
+	}
+	err := sharding.ClusterShardingHealthCheck(context.Background(), sharding.HealthCheckConfig{
+		Names:   hc.Names,
+		Timeout: hc.Timeout,
+	})
+	if err != nil {
+		return false, "sharding_not_ready: " + err.Error()
+	}
+	return true, ""
 }

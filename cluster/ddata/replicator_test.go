@@ -118,7 +118,7 @@ func TestReplicator_LogDataSizeExceeding_FiresAtThreshold(t *testing.T) {
 
 	// Below threshold: a tiny gossip envelope with no payload serializes to
 	// well under 128 bytes — hook must NOT fire.
-	r.sendToPeers(context.Background(), ReplicatorMsg{Type: "x", Key: "k"})
+	r.sendToPeers(context.Background(), ReplicatorMsg{Type: "x", Key: "k"}, WriteAll)
 	mu.Lock()
 	if got := len(fires); got != 0 {
 		mu.Unlock()
@@ -132,7 +132,7 @@ func TestReplicator_LogDataSizeExceeding_FiresAtThreshold(t *testing.T) {
 		Type:    "gcounter-gossip",
 		Key:     "huge-counter",
 		Payload: bigPayload,
-	})
+	}, WriteAll)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -165,7 +165,7 @@ func TestReplicator_LogDataSizeExceeding_DisabledByZero(t *testing.T) {
 		Type:    "gcounter-gossip",
 		Key:     "any",
 		Payload: bigPayload,
-	})
+	}, WriteAll)
 	if called {
 		t.Error("hook fired with threshold=0; want suppressed")
 	}

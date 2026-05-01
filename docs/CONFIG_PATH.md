@@ -262,9 +262,9 @@ Legend:
 | `pekko.cluster.sharding.keep-nr-of-batches` | `2` | ☕ | JVM-only — `state-store-mode = persistence` subset; gekka uses `ddata`. |
 | `pekko.cluster.sharding.journal-plugin-id` | `""` | ☕ | JVM-only — `state-store-mode = persistence` subset; gekka uses `ddata`. |
 | `pekko.cluster.sharding.snapshot-plugin-id` | `""` | ☕ | JVM-only — `state-store-mode = persistence` subset; gekka uses `ddata`. |
-| `pekko.cluster.sharding.distributed-data.majority-min-cap` | `5` | ⚠️ | Parsed into `ShardingConfig.DistributedData.MajorityMinCap`; never threaded onto the shared replicator (sharding-specific override consumer not yet wired) |
-| `pekko.cluster.sharding.distributed-data.max-delta-elements` | `5` | ⚠️ | Parsed into `ShardingConfig.DistributedData.MaxDeltaElements`; never threaded onto the shared replicator's `MaxDeltaElements` |
-| `pekko.cluster.sharding.distributed-data.prefer-oldest` | `on` | ⚠️ | Parsed into `ShardingConfig.DistributedData.PreferOldest`; never threaded onto the shared replicator's `PreferOldest` |
+| `pekko.cluster.sharding.distributed-data.majority-min-cap` | `5` | ✅ | Sharding override applied to `cluster.repl.MajorityMinCap`; consumed by `Replicator.sendToPeers` via `EffectiveMajorityQuorum` to size WriteMajority gossip targets (sub-plan 8b) |
+| `pekko.cluster.sharding.distributed-data.max-delta-elements` | `5` | ✅ | Sharding override merged onto `cluster.repl.MaxDeltaElements` (smaller-wins); consumed by `Replicator.gossipAll` periodic-gossip path as the per-round delta-batch cap (sub-plan 8b) |
+| `pekko.cluster.sharding.distributed-data.prefer-oldest` | `on` | ✅ | Sharding override OR-merged onto `cluster.repl.PreferOldest`; consumed by `Replicator.selectGossipTargets` to order WriteMajority/WriteAll gossip targets (sub-plan 8b) |
 | `pekko.cluster.sharding.distributed-data.durable.keys` | `["shard-*"]` | ⚠️ | Parsed into `ShardingConfig.DistributedData.DurableKeys`; the parent `distributed-data.durable.keys` is fully ✅, but the sharding-specific filter is not yet wired into the durable store |
 | `pekko.cluster.sharding.coordinator-singleton.role` | `""` | ✅ | Applied to coordinator singleton-proxy when override = off |
 | `pekko.cluster.sharding.coordinator-singleton.singleton-name` | `"singleton"` | ⚠️ | Parse-only — gekka hard-codes the `<typeName>Coordinator` path; `Sharding.CoordinatorSingleton.SingletonName` is never read |
@@ -476,11 +476,11 @@ touching the consumer code.
 
 | Symbol | Substantive table rows | Meaning |
 |---|---|---|
-| ✅ | 239 | Parsed AND consumed |
-| ⚠️ | 51 | Forward-compat parsed; consumer deferred (Note states what's deferred) |
+| ✅ | 243 | Parsed AND consumed |
+| ⚠️ | 46 | Forward-compat parsed; consumer deferred (Note states what's deferred) |
 | ☕ | 8 | JVM-only — no equivalent capability in Go runtime |
 | 🚫 | 1 | Go/JVM API-shape incompatibility (FQCN class loading) |
-| ❌ | 10 | Not implemented; portable in principle (tracked in `docs/LEFTWORKS.md` §11) |
+| ❌ | 8 | Not implemented; portable in principle (tracked in `docs/LEFTWORKS.md` §11) |
 
 (Counts exclude the legend lines themselves and this Summary table. `grep -c "| ✅ |"` etc. on the file returns counts +1 because each Summary-table row contributes one match.)
 

@@ -135,11 +135,21 @@ type Replicator struct {
 	// message before the replicator falls back to full state for that CRDT.
 	DeltaCRDTMaxDeltaSize int
 
-	// PreferOldest, when true, instructs the peer-selection layer to order
-	// peers by ascending upNumber. The Replicator itself gossips to all
-	// peers each round; this flag is exposed for the membership-integration
-	// layer to sort AddPeer calls.
+	// PreferOldest, when true, orders gossip targets by insertion order
+	// (oldest-first; the membership-integration layer is expected to AddPeer
+	// in upNumber order). When false, the order is reversed so the youngest
+	// peers are gossiped first. Consumed by selectGossipTargets.
 	PreferOldest bool
+
+	// MajorityMinCap raises the minimum quorum size for WriteMajority gossip
+	// fan-out. Effective quorum = max(MajorityMinCap, ceil((n+1)/2)+1),
+	// clamped to the total node count. Zero disables the floor (natural
+	// majority is used). Wired from
+	// pekko.cluster.distributed-data.* and
+	// pekko.cluster.sharding.distributed-data.majority-min-cap; consumed by
+	// EffectiveMajorityQuorum and selectGossipTargets to size WriteMajority
+	// gossip targets.
+	MajorityMinCap int
 
 	// Role restricts gossip participation to peers with this role. Empty =
 	// all peers. Enforced by the membership layer before AddPeer is called.
@@ -415,7 +425,7 @@ func (r *Replicator) IncrementCounter(key string, delta uint64, consistency Writ
 	c.Increment(r.nodeID, delta)
 	r.persistCounter(key, c)
 	if consistency == WriteAll || consistency == WriteMajority {
-		r.gossipCounter(context.Background(), key, c)
+		r.gossipCounter(context.Background(), key, c, consistency)
 	}
 }
 
@@ -425,7 +435,7 @@ func (r *Replicator) AddToSet(key, element string, consistency WriteConsistency)
 	s.Add(r.nodeID, element)
 	r.persistORSet(key, s)
 	if consistency == WriteAll || consistency == WriteMajority {
-		r.gossipSet(context.Background(), key, s)
+		r.gossipSet(context.Background(), key, s, consistency)
 	}
 }
 
@@ -435,7 +445,7 @@ func (r *Replicator) RemoveFromSet(key, element string, consistency WriteConsist
 	s.Remove(element)
 	r.persistORSet(key, s)
 	if consistency == WriteAll || consistency == WriteMajority {
-		r.gossipSet(context.Background(), key, s)
+		r.gossipSet(context.Background(), key, s, consistency)
 	}
 }
 
@@ -445,7 +455,7 @@ func (r *Replicator) PutInMap(key, itemKey string, value any, consistency WriteC
 	m.Put(itemKey, value)
 	r.persistLWWMap(key, m)
 	if consistency == WriteAll || consistency == WriteMajority {
-		r.gossipMap(context.Background(), key, m)
+		r.gossipMap(context.Background(), key, m, consistency)
 	}
 }
 
@@ -985,7 +995,7 @@ func (r *Replicator) gossipAll(ctx context.Context) {
 	gossipCounterDelta := func(key string, c *GCounter) {
 		if fullStateRound || deltaBudget <= 0 {
 			c.ResetDelta()
-			r.gossipCounter(ctx, key, c)
+			r.gossipCounter(ctx, key, c, WriteAll)
 			return
 		}
 		payload, ok := c.DeltaPayload()
@@ -995,10 +1005,10 @@ func (r *Replicator) gossipAll(ctx context.Context) {
 		d, _ := payload.(GCounterDelta)
 		if len(d.Delta) > maxDeltaSize {
 			c.ResetDelta()
-			r.gossipCounter(ctx, key, c)
+			r.gossipCounter(ctx, key, c, WriteAll)
 			return
 		}
-		r.gossipDelta(ctx, "gcounter-delta", key, payload)
+		r.gossipDelta(ctx, "gcounter-delta", key, payload, WriteAll)
 		c.ResetDelta()
 		deltaBudget -= len(d.Delta)
 	}
@@ -1006,7 +1016,7 @@ func (r *Replicator) gossipAll(ctx context.Context) {
 	gossipSetDelta := func(key string, s *ORSet) {
 		if fullStateRound || deltaBudget <= 0 {
 			s.ResetDelta()
-			r.gossipSet(ctx, key, s)
+			r.gossipSet(ctx, key, s, WriteAll)
 			return
 		}
 		payload, ok := s.DeltaPayload()
@@ -1017,10 +1027,10 @@ func (r *Replicator) gossipAll(ctx context.Context) {
 		size := len(d.AddedDots) + len(d.RemovedElements)
 		if size > maxDeltaSize {
 			s.ResetDelta()
-			r.gossipSet(ctx, key, s)
+			r.gossipSet(ctx, key, s, WriteAll)
 			return
 		}
-		r.gossipDelta(ctx, "orset-delta", key, payload)
+		r.gossipDelta(ctx, "orset-delta", key, payload, WriteAll)
 		s.ResetDelta()
 		deltaBudget -= size
 	}
@@ -1028,7 +1038,7 @@ func (r *Replicator) gossipAll(ctx context.Context) {
 	gossipMapDelta := func(key string, m *LWWMap) {
 		if fullStateRound || deltaBudget <= 0 {
 			m.ResetDelta()
-			r.gossipMap(ctx, key, m)
+			r.gossipMap(ctx, key, m, WriteAll)
 			return
 		}
 		payload, ok := m.DeltaPayload()
@@ -1039,10 +1049,10 @@ func (r *Replicator) gossipAll(ctx context.Context) {
 		size := len(d.Changed)
 		if size > maxDeltaSize {
 			m.ResetDelta()
-			r.gossipMap(ctx, key, m)
+			r.gossipMap(ctx, key, m, WriteAll)
 			return
 		}
-		r.gossipDelta(ctx, "lwwmap-delta", key, payload)
+		r.gossipDelta(ctx, "lwwmap-delta", key, payload, WriteAll)
 		m.ResetDelta()
 		deltaBudget -= size
 	}
@@ -1059,77 +1069,132 @@ func (r *Replicator) gossipAll(ctx context.Context) {
 
 	// Non-delta CRDTs: always send full state.
 	for key, c := range pnCounters {
-		r.gossipPNCounter(ctx, key, c)
+		r.gossipPNCounter(ctx, key, c, WriteAll)
 	}
 	for key, f := range orFlags {
-		r.gossipORFlag(ctx, key, f)
+		r.gossipORFlag(ctx, key, f, WriteAll)
 	}
 	for key, reg := range registers {
-		r.gossipLWWRegister(ctx, key, reg)
+		r.gossipLWWRegister(ctx, key, reg, WriteAll)
 	}
 }
 
-func (r *Replicator) gossipDelta(ctx context.Context, msgType, key string, payload any) {
+// EffectiveMajorityQuorum returns the minimum number of cluster members
+// (including self) that must observe a WriteMajority operation. The
+// natural majority is floor(total/2)+1; MajorityMinCap raises that floor
+// (and is itself clamped to the total node count). numPeers is the count
+// of remote replicator peers known to this Replicator; total = numPeers+1.
+func (r *Replicator) EffectiveMajorityQuorum(numPeers int) int {
+	total := numPeers + 1
+	if total <= 0 {
+		return 1
+	}
+	majority := total/2 + 1
+	floor := r.MajorityMinCap
+	if floor > total {
+		floor = total
+	}
+	if floor > majority {
+		return floor
+	}
+	return majority
+}
+
+// selectGossipTargets returns the subset of peers that should receive a
+// gossip message of the given consistency level. Peers are first ordered
+// by PreferOldest (insertion order if true; reversed otherwise — the
+// membership-integration layer is expected to AddPeer in upNumber order).
+// For WriteMajority, the ordered list is truncated to
+// EffectiveMajorityQuorum(n)-1 peers (self counts toward the quorum, so
+// the gossip fan-out is one less). For all other consistency levels the
+// full ordered list is returned.
+func (r *Replicator) selectGossipTargets(peers []peerInfo, consistency WriteConsistency) []peerInfo {
+	if len(peers) == 0 {
+		return peers
+	}
+	ordered := make([]peerInfo, len(peers))
+	if r.PreferOldest {
+		copy(ordered, peers)
+	} else {
+		for i, p := range peers {
+			ordered[len(peers)-1-i] = p
+		}
+	}
+	if consistency != WriteMajority {
+		return ordered
+	}
+	quorum := r.EffectiveMajorityQuorum(len(peers))
+	fanout := quorum - 1
+	if fanout < 0 {
+		fanout = 0
+	}
+	if fanout > len(ordered) {
+		fanout = len(ordered)
+	}
+	return ordered[:fanout]
+}
+
+func (r *Replicator) gossipDelta(ctx context.Context, msgType, key string, payload any, consistency WriteConsistency) {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return
 	}
-	r.sendToPeers(ctx, ReplicatorMsg{Type: msgType, Key: key, Payload: data})
+	r.sendToPeers(ctx, ReplicatorMsg{Type: msgType, Key: key, Payload: data}, consistency)
 }
 
-func (r *Replicator) gossipCounter(ctx context.Context, key string, c *GCounter) {
+func (r *Replicator) gossipCounter(ctx context.Context, key string, c *GCounter, consistency WriteConsistency) {
 	payload, err := json.Marshal(GCounterPayload{State: c.Snapshot()})
 	if err != nil {
 		return
 	}
 	msg := ReplicatorMsg{Type: "gcounter-gossip", Key: key, Payload: payload}
-	r.sendToPeers(ctx, msg)
+	r.sendToPeers(ctx, msg, consistency)
 }
 
-func (r *Replicator) gossipSet(ctx context.Context, key string, s *ORSet) {
+func (r *Replicator) gossipSet(ctx context.Context, key string, s *ORSet, consistency WriteConsistency) {
 	snap := s.Snapshot()
 	payload, err := json.Marshal(snap)
 	if err != nil {
 		return
 	}
 	msg := ReplicatorMsg{Type: "orset-gossip", Key: key, Payload: payload}
-	r.sendToPeers(ctx, msg)
+	r.sendToPeers(ctx, msg, consistency)
 }
 
-func (r *Replicator) gossipMap(ctx context.Context, key string, m *LWWMap) {
+func (r *Replicator) gossipMap(ctx context.Context, key string, m *LWWMap, consistency WriteConsistency) {
 	payload, err := json.Marshal(LWWMapPayload{State: m.Snapshot()})
 	if err != nil {
 		return
 	}
 	msg := ReplicatorMsg{Type: "lwwmap-gossip", Key: key, Payload: payload}
-	r.sendToPeers(ctx, msg)
+	r.sendToPeers(ctx, msg, consistency)
 }
 
-func (r *Replicator) gossipPNCounter(ctx context.Context, key string, c *PNCounter) {
+func (r *Replicator) gossipPNCounter(ctx context.Context, key string, c *PNCounter, consistency WriteConsistency) {
 	payload, err := json.Marshal(PNCounterPayload{c.Snapshot()})
 	if err != nil {
 		return
 	}
-	r.sendToPeers(ctx, ReplicatorMsg{Type: "pncounter-gossip", Key: key, Payload: payload})
+	r.sendToPeers(ctx, ReplicatorMsg{Type: "pncounter-gossip", Key: key, Payload: payload}, consistency)
 }
 
-func (r *Replicator) gossipORFlag(ctx context.Context, key string, f *ORFlag) {
+func (r *Replicator) gossipORFlag(ctx context.Context, key string, f *ORFlag, consistency WriteConsistency) {
 	payload, err := json.Marshal(f.Snapshot())
 	if err != nil {
 		return
 	}
-	r.sendToPeers(ctx, ReplicatorMsg{Type: "orflag-gossip", Key: key, Payload: payload})
+	r.sendToPeers(ctx, ReplicatorMsg{Type: "orflag-gossip", Key: key, Payload: payload}, consistency)
 }
 
-func (r *Replicator) gossipLWWRegister(ctx context.Context, key string, reg *LWWRegister) {
+func (r *Replicator) gossipLWWRegister(ctx context.Context, key string, reg *LWWRegister, consistency WriteConsistency) {
 	payload, err := json.Marshal(LWWRegisterPayload{reg.Snapshot()})
 	if err != nil {
 		return
 	}
-	r.sendToPeers(ctx, ReplicatorMsg{Type: "lwwregister-gossip", Key: key, Payload: payload})
+	r.sendToPeers(ctx, ReplicatorMsg{Type: "lwwregister-gossip", Key: key, Payload: payload}, consistency)
 }
 
-func (r *Replicator) sendToPeers(ctx context.Context, msg ReplicatorMsg) {
+func (r *Replicator) sendToPeers(ctx context.Context, msg ReplicatorMsg, consistency WriteConsistency) {
 	data, err := json.Marshal(msg)
 	if err != nil {
 		log.Printf("Replicator: marshal error: %v", err)
@@ -1143,10 +1208,11 @@ func (r *Replicator) sendToPeers(ctx context.Context, msg ReplicatorMsg) {
 			"type", msg.Type, "key", msg.Key, "size", len(data), "threshold", threshold)
 	}
 	r.mu.RLock()
-	peers := append([]peerInfo(nil), r.peers...)
+	peersSnap := append([]peerInfo(nil), r.peers...)
 	r.mu.RUnlock()
 
-	for _, p := range peers {
+	targets := r.selectGossipTargets(peersSnap, consistency)
+	for _, p := range targets {
 		if err := r.router.Send(ctx, p.path, data); err != nil {
 			log.Printf("Replicator: send to %s failed: %v", p.path, err)
 		}

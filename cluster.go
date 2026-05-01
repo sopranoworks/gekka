@@ -2769,6 +2769,29 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 			repl.SerializerCacheTimeToLive = cfg.DistributedData.SerializerCacheTimeToLive
 		}
 
+		// ── Sharding-specific replicator overrides (sub-plan 8b) ──
+		// Pekko constructs a separate DData replicator instance for sharding
+		// state with overrides from pekko.cluster.sharding.distributed-data.*.
+		// gekka uses a single shared replicator, so the sharding overrides
+		// merge onto cluster.repl: an explicit MajorityMinCap raises the
+		// quorum floor cluster-wide, MaxDeltaElements clamps the per-round
+		// delta-batch cap to the smaller of the two values, and PreferOldest
+		// is OR-merged so the sharding default (`on`) wins. This gives each
+		// of the three sharding-distributed-data paths a real production
+		// consumer in `cluster/ddata/replicator.go` (selectGossipTargets +
+		// EffectiveMajorityQuorum + the gossipAll delta-budget).
+		if cfg.Sharding.DistributedData.MajorityMinCap > 0 {
+			repl.MajorityMinCap = cfg.Sharding.DistributedData.MajorityMinCap
+		}
+		if cfg.Sharding.DistributedData.MaxDeltaElements > 0 {
+			if repl.MaxDeltaElements <= 0 || cfg.Sharding.DistributedData.MaxDeltaElements < repl.MaxDeltaElements {
+				repl.MaxDeltaElements = cfg.Sharding.DistributedData.MaxDeltaElements
+			}
+		}
+		if cfg.Sharding.DistributedData.PreferOldest {
+			repl.PreferOldest = true
+		}
+
 		// ── Durable backend (round-2 session 23) ──
 		// When the operator either sets a non-empty `durable.keys` list or
 		// flips `durable.enabled = on` in HOCON, open a bbolt-backed

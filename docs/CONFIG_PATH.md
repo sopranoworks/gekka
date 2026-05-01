@@ -437,7 +437,7 @@ Legend:
 | Path | Pekko Default | Gekka? | Notes |
 |---|---|---|---|
 | `pekko.actor.typed.restart-stash-capacity` | `1000` | ✅ | Sizes `TypedActor`/`genericTypedActor` stash buffer in `actor/typed/actor.go` PreStart via `typed.GetDefaultRestartStashCapacity()` |
-| `pekko.reliable-delivery.*` | (all) | ❌ | Not implemented — Pekko-typed `ProducerController`/`ConsumerController` API. Distinct from `at-least-once-delivery.*` (✅). Tracked in `docs/LEFTWORKS.md` §11 |
+| `pekko.reliable-delivery.*` | (all) | ✅ | Wired via `delivery.Config` (actor/typed/delivery/config.go), `ClusterConfig.ReliableDelivery`, and HOCON parsing in `hocon_config.go`. `NewProducerControllerFromConfig` consumes `producer-controller.chunk-large-messages` to drive runtime payload chunking; `NewConsumerControllerFromConfig` consumes `consumer-controller.flow-control-window` (drives `Request.RequestUpToSeqNr`) and `only-flow-control` (suppresses gap-filling Resend); `NewWorkPullingProducerControllerFromConfig` consumes `work-pulling.producer-controller.buffer-size` (caps `pendingWork`). Distinct from `at-least-once-delivery.*` |
 
 ---
 

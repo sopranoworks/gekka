@@ -25,6 +25,10 @@ type consumerState struct {
 	confirmedSeqNr int64
 	requestedUpTo  int64
 	windowSize     int
+	// onlyFlowControl mirrors pekko.reliable-delivery.consumer-controller.only-flow-control.
+	// When true, gaps in SeqNr are accepted silently (no Resend request is
+	// sent to the producer). Lost messages are not redelivered.
+	onlyFlowControl bool
 	// stash holds out-of-order messages received before confirmations catch up.
 	stash map[int64]*SequencedMessage
 	// chunkBuffer assembles chunked messages.
@@ -57,6 +61,26 @@ func NewConsumerController(consumerActor actor.Ref, windowSize int) typed.Behavi
 		expectedSeqNr: 1,
 		windowSize:    windowSize,
 		stash:         make(map[int64]*SequencedMessage),
+	}
+	return state.handleCommand
+}
+
+// NewConsumerControllerFromConfig is the HOCON-driven counterpart of
+// NewConsumerController. It honours pekko.reliable-delivery.consumer-controller.*
+// values: flow-control-window seeds windowSize, only-flow-control suppresses
+// the gap-filling Resend behaviour. Zero/negative FlowControlWindow falls
+// back to DefaultWindowSize.
+func NewConsumerControllerFromConfig(consumerActor actor.Ref, cfg ConsumerControllerConfig) typed.Behavior[any] {
+	window := cfg.FlowControlWindow
+	if window <= 0 {
+		window = DefaultWindowSize
+	}
+	state := &consumerState{
+		consumerActor:   consumerActor,
+		expectedSeqNr:   1,
+		windowSize:      window,
+		onlyFlowControl: cfg.OnlyFlowControl,
+		stash:           make(map[int64]*SequencedMessage),
 	}
 	return state.handleCommand
 }
@@ -125,12 +149,20 @@ func (c *consumerState) onSequencedMessage(ctx typed.TypedContext[any], m *Seque
 	}
 
 	if m.SeqNr > c.expectedSeqNr {
-		// Out-of-order: stash and request resend.
-		c.stash[m.SeqNr] = m
-		if c.producerRef != nil {
-			c.producerRef.Tell(&Resend{FromSeqNr: c.expectedSeqNr}, c.selfRef)
+		if c.onlyFlowControl {
+			// only-flow-control: drop the gap silently. Skip ahead so
+			// flow control still operates without redelivering lost
+			// messages. Pekko does the same when only-flow-control=true.
+			c.expectedSeqNr = m.SeqNr
+			c.confirmedSeqNr = m.SeqNr - 1
+		} else {
+			// Out-of-order: stash and request resend.
+			c.stash[m.SeqNr] = m
+			if c.producerRef != nil {
+				c.producerRef.Tell(&Resend{FromSeqNr: c.expectedSeqNr}, c.selfRef)
+			}
+			return
 		}
-		return
 	}
 
 	// In-order: deliver to consumer.

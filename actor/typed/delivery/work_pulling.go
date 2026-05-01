@@ -72,6 +72,13 @@ type workPullingState struct {
 
 	// pendingWork holds work items that arrived before any worker was ready.
 	pendingWork []any
+	// bufferSize mirrors
+	// pekko.reliable-delivery.work-pulling.producer-controller.buffer-size.
+	// 0 means unlimited (legacy behaviour).
+	bufferSize int
+	// droppedCount counts items dropped because the buffer was full. Read
+	// by tests via DroppedCount(); never reset.
+	droppedCount int
 }
 
 // NewWorkPullingProducerController returns a typed.Behavior[any] that
@@ -111,6 +118,33 @@ func NewWorkPullingProducerController() typed.Behavior[any] {
 	}
 	return state.handle
 }
+
+// NewWorkPullingProducerControllerFromConfig is the HOCON-driven counterpart
+// of NewWorkPullingProducerController. It honours
+// pekko.reliable-delivery.work-pulling.producer-controller.* values:
+// buffer-size caps pendingWork length (excess items are dropped and
+// counted, observable via the returned tuple's state pointer for tests).
+//
+// The state pointer is exposed so tests can observe runtime decisions
+// (e.g., DroppedCount after overflow). Production callers can ignore it.
+func NewWorkPullingProducerControllerFromConfig(cfg WorkPullingProducerControllerConfig) (typed.Behavior[any], *WorkPullingState) {
+	state := &workPullingState{
+		busyWorkers: make(map[string]actor.Ref),
+		bufferSize:  cfg.BufferSize,
+	}
+	return state.handle, (*WorkPullingState)(state)
+}
+
+// WorkPullingState is an opaque handle returned from
+// NewWorkPullingProducerControllerFromConfig that lets tests observe
+// runtime counters (e.g., DroppedCount). Methods on this type are safe
+// to call only after the controller has stopped processing, since the
+// underlying state is updated from the actor goroutine.
+type WorkPullingState workPullingState
+
+// DroppedCount returns the number of work items dropped because the
+// configured buffer-size was exceeded.
+func (s *WorkPullingState) DroppedCount() int { return s.droppedCount }
 
 func (s *workPullingState) handle(ctx typed.TypedContext[any], msg any) typed.Behavior[any] {
 	// Capture self on first message.
@@ -186,11 +220,25 @@ func (s *workPullingState) handle(ctx typed.TypedContext[any], msg any) typed.Be
 			// Request another item proactively if more workers are idle.
 			s.maybeRequestNext()
 		} else {
-			// No idle worker — buffer the item.
-			s.pendingWork = append(s.pendingWork, msg)
+			// No idle worker — buffer the item, respecting the
+			// configured buffer-size cap.
+			s.appendPending(msg)
 		}
 	}
 	return nil
+}
+
+// appendPending appends an item to pendingWork, respecting the configured
+// buffer-size cap. Items beyond the cap are dropped and counted in
+// droppedCount. bufferSize == 0 means unlimited (legacy behaviour).
+// Called by handle when a work item arrives with no idle workers.
+func (s *workPullingState) appendPending(item any) {
+	if s.bufferSize > 0 && len(s.pendingWork) >= s.bufferSize {
+		s.droppedCount++
+		log.Printf("WorkPulling: buffer full (size=%d), dropping work item", s.bufferSize)
+		return
+	}
+	s.pendingWork = append(s.pendingWork, item)
 }
 
 // maybeRequestNext asks the producer for the next work item if there is an

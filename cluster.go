@@ -27,6 +27,7 @@ import (
 	hocon "github.com/sopranoworks/gekka-config"
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/actor/typed"
+	"github.com/sopranoworks/gekka/actor/typed/delivery"
 	"github.com/sopranoworks/gekka/actor/typed/receptionist"
 	gcluster "github.com/sopranoworks/gekka/cluster"
 	"github.com/sopranoworks/gekka/cluster/client"
@@ -668,6 +669,12 @@ type ClusterConfig struct {
 	// pekko.cluster.typed.receptionist.*.
 	TypedReceptionist TypedReceptionistConfig
 
+	// ReliableDelivery holds settings for the typed reliable-delivery
+	// ProducerController / ConsumerController / WorkPullingProducerController
+	// actors. Corresponds to pekko.reliable-delivery.*.
+	// Pre-seeded with delivery.DefaultConfig() during HOCON parsing.
+	ReliableDelivery ReliableDeliveryConfig
+
 	// DistributedData configures the Distributed Data Replicator (v0.10.0).
 	DistributedData DistributedDataConfig
 
@@ -1063,6 +1070,11 @@ type ClusterClientConfig = client.Config
 // for use in ClusterConfig.  Import gekka directly — you do not need to import
 // the cluster/client sub-package to read the values populated by LoadConfig.
 type ClusterReceptionistConfig = client.ReceptionistConfig
+
+// ReliableDeliveryConfig is a re-export of delivery.Config for use in
+// ClusterConfig. Parsed from HOCON namespace pekko.reliable-delivery.*.
+// Defaults match Pekko reference.conf via delivery.DefaultConfig().
+type ReliableDeliveryConfig = delivery.Config
 
 // TypedReceptionistConfig holds runtime settings for the typed receptionist
 // actor (`actor/typed/receptionist`). Parsed from HOCON namespace

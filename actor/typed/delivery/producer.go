@@ -25,6 +25,9 @@ type producerState struct {
 	sentUpTo      int64
 	confirmedUpTo int64
 	requestUpTo   int64
+	// chunkSize mirrors pekko.reliable-delivery.producer-controller.chunk-large-messages.
+	// 0 = chunking disabled.
+	chunkSize int
 	// buffer holds messages waiting for window space or confirmation.
 	buffer []*SequencedMessage
 }
@@ -42,6 +45,20 @@ func NewProducerController(producerID string) typed.Behavior[any] {
 	state := &producerState{
 		producerID: producerID,
 		nextSeqNr:  1,
+	}
+	return state.handleCommand
+}
+
+// NewProducerControllerFromConfig is the HOCON-driven counterpart of
+// NewProducerController. It honours
+// pekko.reliable-delivery.producer-controller.* values: chunk-large-messages
+// drives the byte threshold above which payloads are split into chunked
+// SequencedMessages.
+func NewProducerControllerFromConfig(producerID string, cfg ProducerControllerConfig) typed.Behavior[any] {
+	state := &producerState{
+		producerID: producerID,
+		nextSeqNr:  1,
+		chunkSize:  cfg.ChunkLargeMessages,
 	}
 	return state.handleCommand
 }
@@ -101,6 +118,16 @@ func (p *producerState) onAck(_ typed.TypedContext[any], m *AckMsg) {
 }
 
 func (p *producerState) onSendMessage(ctx typed.TypedContext[any], m SendMessage) {
+	// Chunking: when chunkSize is configured and the payload exceeds it,
+	// split into multiple SequencedMessages with HasChunk=true. The first
+	// chunk gets FirstChunk=true and the last LastChunk=true. Each chunk
+	// receives its own SeqNr (the consumer reassembles them on arrival).
+	if p.chunkSize > 0 && len(m.Payload) > p.chunkSize {
+		p.appendChunkedMessages(m)
+		p.sendBuffered(ctx)
+		return
+	}
+
 	seqMsg := &SequencedMessage{
 		ProducerRef: p.selfRef.Path(),
 		SeqNr:       p.nextSeqNr,
@@ -114,6 +141,36 @@ func (p *producerState) onSendMessage(ctx typed.TypedContext[any], m SendMessage
 	p.nextSeqNr++
 	p.buffer = append(p.buffer, seqMsg)
 	p.sendBuffered(ctx)
+}
+
+// appendChunkedMessages splits a SendMessage payload into chunks of at
+// most p.chunkSize bytes and appends each as its own SequencedMessage
+// to the producer buffer.
+func (p *producerState) appendChunkedMessages(m SendMessage) {
+	payload := m.Payload
+	total := len(payload)
+	for offset := 0; offset < total; offset += p.chunkSize {
+		end := offset + p.chunkSize
+		if end > total {
+			end = total
+		}
+		chunk := payload[offset:end]
+		seqMsg := &SequencedMessage{
+			ProducerRef: p.selfRef.Path(),
+			SeqNr:       p.nextSeqNr,
+			Message: Payload{
+				EnclosedMessage: chunk,
+				SerializerID:    m.SerializerID,
+				Manifest:        m.Manifest,
+			},
+			First:      p.nextSeqNr == 1,
+			HasChunk:   true,
+			FirstChunk: offset == 0,
+			LastChunk:  end == total,
+		}
+		p.nextSeqNr++
+		p.buffer = append(p.buffer, seqMsg)
+	}
 }
 
 func (p *producerState) sendBuffered(_ typed.TypedContext[any]) {

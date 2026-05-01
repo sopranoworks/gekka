@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/actor/typed/delivery"
 	gcluster "github.com/sopranoworks/gekka/cluster"
 	"github.com/sopranoworks/gekka/internal/core"
 
@@ -1657,6 +1658,65 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		nodeCfg.TypedReceptionist.DistributedKeyCount = v
 	}
 
+	// ── Reliable Delivery (typed) ─────────────────────────────────────────
+	// pekko.reliable-delivery.* — parsed into ClusterConfig.ReliableDelivery.
+	// Defaults match Pekko reference.conf via delivery.DefaultConfig().
+	nodeCfg.ReliableDelivery = delivery.DefaultConfig()
+	rdPrefix := prefix + ".reliable-delivery"
+	// producer-controller.*
+	rdPC := rdPrefix + ".producer-controller"
+	if s, err := cfg.GetString(rdPC + ".chunk-large-messages"); err == nil {
+		nodeCfg.ReliableDelivery.ProducerController.ChunkLargeMessages = parseChunkLargeMessages(s)
+	} else if v, err := cfg.GetInt(rdPC + ".chunk-large-messages"); err == nil && v >= 0 {
+		nodeCfg.ReliableDelivery.ProducerController.ChunkLargeMessages = v
+	}
+	if v, err := cfg.GetString(rdPC + ".durable-queue.request-timeout"); err == nil {
+		if d, perr := parseHOCONDuration(strings.TrimSpace(v)); perr == nil {
+			nodeCfg.ReliableDelivery.ProducerController.DurableQueueRequestTimeout = d
+		}
+	}
+	if v, err := cfg.GetInt(rdPC + ".durable-queue.retry-attempts"); err == nil && v >= 0 {
+		nodeCfg.ReliableDelivery.ProducerController.DurableQueueRetryAttempts = v
+	}
+	if v, err := cfg.GetString(rdPC + ".durable-queue.resend-first-interval"); err == nil {
+		if d, perr := parseHOCONDuration(strings.TrimSpace(v)); perr == nil {
+			nodeCfg.ReliableDelivery.ProducerController.DurableQueueResendFirstInterval = d
+		}
+	}
+	// consumer-controller.*
+	rdCC := rdPrefix + ".consumer-controller"
+	if v, err := cfg.GetInt(rdCC + ".flow-control-window"); err == nil && v > 0 {
+		nodeCfg.ReliableDelivery.ConsumerController.FlowControlWindow = v
+	}
+	if v, err := cfg.GetString(rdCC + ".resend-interval-min"); err == nil {
+		if d, perr := parseHOCONDuration(strings.TrimSpace(v)); perr == nil {
+			nodeCfg.ReliableDelivery.ConsumerController.ResendIntervalMin = d
+		}
+	}
+	if v, err := cfg.GetString(rdCC + ".resend-interval-max"); err == nil {
+		if d, perr := parseHOCONDuration(strings.TrimSpace(v)); perr == nil {
+			nodeCfg.ReliableDelivery.ConsumerController.ResendIntervalMax = d
+		}
+	}
+	if v, err := cfg.GetBoolean(rdCC + ".only-flow-control"); err == nil {
+		nodeCfg.ReliableDelivery.ConsumerController.OnlyFlowControl = v
+	}
+	// work-pulling.producer-controller.*
+	rdWP := rdPrefix + ".work-pulling.producer-controller"
+	if v, err := cfg.GetInt(rdWP + ".buffer-size"); err == nil && v > 0 {
+		nodeCfg.ReliableDelivery.WorkPullingProducerController.BufferSize = v
+	}
+	if v, err := cfg.GetString(rdWP + ".internal-ask-timeout"); err == nil {
+		if d, perr := parseHOCONDuration(strings.TrimSpace(v)); perr == nil {
+			nodeCfg.ReliableDelivery.WorkPullingProducerController.InternalAskTimeout = d
+		}
+	}
+	if s, err := cfg.GetString(rdWP + ".chunk-large-messages"); err == nil {
+		nodeCfg.ReliableDelivery.WorkPullingProducerController.ChunkLargeMessages = parseChunkLargeMessages(s)
+	} else if v, err := cfg.GetInt(rdWP + ".chunk-large-messages"); err == nil && v >= 0 {
+		nodeCfg.ReliableDelivery.WorkPullingProducerController.ChunkLargeMessages = v
+	}
+
 	// ── Per-Role Min Nr Of Members ──────────────────────────────────────────
 	// Parse pekko.cluster.role.{name}.min-nr-of-members for each role.
 	rolePrefix := prefix + ".cluster.role"
@@ -2179,6 +2239,22 @@ func extractDispatchers(cfg *hocon.Config, prefix string) {
 		}
 		actor.RegisterDispatcherConfig(key, dcfg)
 	}
+}
+
+// parseChunkLargeMessages handles the Pekko reliable-delivery
+// chunk-large-messages key, which accepts either the literal "off"/"false"
+// (chunking disabled) or a HOCON byte-size string ("64 KiB", "1048576").
+// Returns 0 on the off/empty/parse-error path.
+func parseChunkLargeMessages(raw string) int {
+	s := strings.ToLower(strings.Trim(strings.TrimSpace(raw), `"`))
+	switch s {
+	case "", "off", "false", "0":
+		return 0
+	}
+	if n, err := parseHOCONByteSize(s); err == nil {
+		return n
+	}
+	return 0
 }
 
 // parseHOCONByteSize parses a Pekko/HOCON byte-size string such as "256 KiB",

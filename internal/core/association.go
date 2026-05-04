@@ -118,6 +118,15 @@ type GekkaAssociation struct {
 	// (LargeStream). Used when the recipient path matches a configured
 	// large-message-destinations glob. Nil for TCP associations.
 	udpLargeOutbox chan []byte
+
+	// inboundLanes is the per-association inbound dispatch fan-out. When
+	// pekko.remote.artery.advanced.inbound-lanes > 1 and streamId != 1
+	// (control), ProcessConnection allocates N lane channels and starts N
+	// drain goroutines that call assoc.dispatch on each frame, hashing by
+	// recipient actor path. When nil, dispatch runs single-threaded on the
+	// read goroutine (legacy behavior). See dispatchSharded.
+	inboundLanes   []chan *ArteryMetadata
+	inboundLanesWg sync.WaitGroup
 }
 
 var _ actor.RemoteAssociation = (*GekkaAssociation)(nil)
@@ -1471,6 +1480,40 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 		"remote": assoc.remoteKey(),
 		"role":   role,
 	})
+
+	// Inbound-lanes fan-out: when configured (>1) and not on the control
+	// stream, allocate per-lane channels and start drain goroutines that
+	// call assoc.dispatch hashed by recipient path. Control-stream traffic
+	// (streamId=1) bypasses the lanes to preserve handshake/heartbeat
+	// ordering. Sub-plan 8f.
+	if inboundN := nm.EffectiveInboundLanes(); inboundN > 1 && streamId != 1 {
+		assoc.inboundLanes = make([]chan *ArteryMetadata, inboundN)
+		laneCap := nm.EffectiveOutboundMessageQueueSize()
+		for i := range assoc.inboundLanes {
+			assoc.inboundLanes[i] = make(chan *ArteryMetadata, laneCap)
+		}
+		for i := range assoc.inboundLanes {
+			lane := assoc.inboundLanes[i]
+			assoc.inboundLanesWg.Add(1)
+			go func() {
+				defer assoc.inboundLanesWg.Done()
+				for {
+					select {
+					case <-assocCtx.Done():
+						return
+					case meta, ok := <-lane:
+						if !ok {
+							return
+						}
+						if err := assoc.dispatch(assocCtx, meta); err != nil {
+							slog.Debug("artery: lane dispatch error", "error", err)
+						}
+					}
+				}
+			}()
+		}
+	}
+
 	// Register early so handleHandshakeRsp can find it
 	if remote != nil {
 		nm.RegisterAssociation(assoc.remote, assoc)
@@ -1687,7 +1730,7 @@ func (assoc *GekkaAssociation) initiateHandshake(to *gproto_remote.Address) erro
 
 func (assoc *GekkaAssociation) Process(ctx context.Context, protocol string) error {
 	dispatch := func(ctx context.Context, meta *ArteryMetadata) error {
-		return assoc.dispatch(ctx, meta)
+		return assoc.dispatchSharded(ctx, meta)
 	}
 	remoteUid := uint64(0)
 	if assoc.remote != nil {

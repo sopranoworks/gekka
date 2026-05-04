@@ -58,6 +58,7 @@ const (
 	CatLargeFrame              EventCategory = "large-frame"
 	CatFrame                   EventCategory = "frame"
 	CatInboundRestartExceeded  EventCategory = "inbound-restart-exceeded"
+	CatInboundLaneFull         EventCategory = "inbound-lane-full"
 )
 
 // EventSeverity is the human-visible log level for an event.

@@ -217,9 +217,9 @@ The keys most users actually tune. All are Pekko-compatible (drop them into your
 | `pekko.remote.artery.ssl.config-ssl-engine.enabled-algorithms` | (list) | ✅ | Pekko-compatible alias of gekka-native `tls.cipher-suites`. Same parser; gekka-native path wins when both are set. |
 | `pekko.remote.artery.ssl.config-ssl-engine.require-mutual-authentication` | `on` | ✅ | Pekko-compatible alias — same effect as gekka-native `tls.require-client-auth`. |
 | `pekko.remote.artery.ssl.config-ssl-engine.hostname-verification` | `off` | ✅ | Pekko-compatible alias — enable by setting gekka-native `tls.server-name` (Go `crypto/tls` SNI). |
-| `pekko.remote.artery.ssl.ssl-engine-provider` | (Pekko FQCN) | ⚠️ | JVM-only — gekka has a fixed Go `crypto/tls` engine (no FQCN plug-in). Configure certificates via the `tls.*` paths above. |
-| `pekko.remote.artery.ssl.config-ssl-engine.random-number-generator` | `""` | ⚠️ | JVM-only — gekka uses `crypto/rand.Reader` (Go `tls.Config.Rand` field is left at default). |
-| `pekko.remote.artery.ssl.rotating-keys-engine.*` | — | ⚠️ | JVM-only — Pekko's K8s secret rotation; gekka has no equivalent. |
+| `pekko.remote.artery.ssl.ssl-engine-provider` | (Pekko FQCN) | 🚫 | JVM-only API-shape incompatibility — value is a Java FQCN selecting an `SSLEngineProvider` plug-in via reflection. Gekka has a fixed Go `crypto/tls` engine wired directly; no class-loader bridge. Configure certificates via the `tls.*` paths above. |
+| `pekko.remote.artery.ssl.config-ssl-engine.random-number-generator` | `""` | 🚫 | JVM-only API-shape incompatibility — value names a JCA SecureRandom algorithm strung through Java's `Provider` SPI. Gekka uses `crypto/rand.Reader` (Go's `tls.Config.Rand` left at default); the JCA name does not transfer. |
+| `pekko.remote.artery.ssl.rotating-keys-engine.*` | — | 🚫 | JVM-only API-shape incompatibility — Pekko's `RotatingKeysSSLEngineProvider` re-loads JKS/PKCS#12 key-stores from disk on a JVM filesystem watcher. Gekka has no equivalent rotation mechanism in Go's `crypto/tls`; operators must reload via process restart or an external SIGHUP path. |
 | `pekko.remote.watch-failure-detector.*` | (various) | ✅ | `cluster.WatchFailureDetector` (`cluster/watch_failure_detector.go`) — separate Phi-Accrual instance fed heartbeats by `ClusterManager.handleHeartbeat`/`handleHeartbeatRsp`; reaper goroutine in `cluster_watch.go` consults `IsAvailable` per `unreachable-nodes-reaper-interval` and drives `triggerRemoteNodeDeath` when a watched node's `acceptable-heartbeat-pause` window expires. Distinct from cluster membership FD (`cluster/failure_detector.go`). |
 | `pekko.remote.accept-protocol-names` | `["pekko"]` | ✅ | `ClusterConfig.AcceptProtocolNames` — list of protocols (e.g., `pekko`/`akka`) accepted on inbound handshake |
 
@@ -583,9 +583,9 @@ touching the consumer code.
 | Symbol | Substantive table rows | Meaning |
 |---|---|---|
 | ✅ | 267 | Parsed AND consumed |
-| ⚠️ | 25 | Forward-compat parsed; consumer deferred (Note states what's deferred) |
+| ⚠️ | 22 | Forward-compat parsed; consumer deferred (Note states what's deferred) |
 | ☕ | 8 | JVM-only — no equivalent capability in Go runtime |
-| 🚫 | 1 | Go/JVM API-shape incompatibility (FQCN class loading) |
+| 🚫 | 4 | Go/JVM API-shape incompatibility (FQCN class loading, JCA Provider, JKS rotation) |
 | ❌ | 9 | Not implemented; portable in principle (tracked in `docs/LEFTWORKS.md` §11) |
 
 (Counts exclude the legend lines themselves and this Summary table. `grep -c "| ✅ |"` etc. on the file returns counts +1 because each Summary-table row contributes one match.)
@@ -655,6 +655,28 @@ Portable Pekko paths gekka has not bridged. The full list lives in
 
 ### Audit history
 
+- **2026-05-06 — Perfect-pekko Phase 0 (audit refresh + ssl.* reclassification):**
+  Three SSL `ssl.*` rows previously parked at ⚠️ (forward-compat parses with
+  deferred consumers) reclassified to 🚫 (Go/JVM API-shape incompatibility),
+  matching their long-standing classification in `docs/LEFTWORKS.md` §9. The
+  flipped paths are `pekko.remote.artery.ssl.ssl-engine-provider`,
+  `ssl.config-ssl-engine.random-number-generator`, and
+  `ssl.rotating-keys-engine.*` — each is a JVM-only plug-in / Provider /
+  rotation-watcher mechanism with no Go bridge. Notes updated to make the
+  JVM-only reason explicit instead of the "deferred consumer" framing.
+  Re-grep of upstream Pekko 1.1.5 `reference.conf` confirmed the existing
+  audit covers every leaf path that gekka could portably wire; the additional
+  upstream paths surfaced by the mechanical diff (~377 of 935) are either (a)
+  documented under section-relative table forms (cluster.client / pub-sub /
+  singleton / failure-detector / multi-DC sub-tables), (b) wildcard-handled
+  (`deployment.{path}.*`, `role.{name}.*`, `serializers.*`, etc.), or (c)
+  already classified JVM-only in `docs/LEFTWORKS.md` §9 (classic transport,
+  dispatcher hierarchy, JMX, Java NIO, Java serialization, Akka classic,
+  scheduler tick wheel). No new audit rows added. Summary counts: ⚠️ 25 → 22,
+  🚫 1 → 4. The plan's `passivate-idle-entity-after ❌→✅` flip is deferred
+  to Phase 1.6 where the runtime alias actually lands — flipping in Phase 0
+  without a runtime consumer would violate the "Parsed AND consumed" honesty
+  rule established by the 2026-04-30 ✅-honesty pass.
 - **2026-05-05 — Portable-pekko milestone closed (sub-plans 8a–8i):** All
   26 ⚠️ rows surfaced by the 2026-04-30 honesty pass were wired onto real
   production consumers. **8a** multi-DC FD `expected-response-after`

@@ -12,7 +12,9 @@ Configuration is loaded via [`gekka-config`](https://github.com/sopranoworks/gek
 
 ## What's New in v1.0.0-rc2
 
-- **Pekko Config Completeness — 100% on the portable surface** (Round-2 sessions 01–41, closed 2026-04-30): every leaf path in `pekko/{actor,remote,cluster,cluster-sharding,cluster-tools,distributed-data,persistence}/reference.conf` that has a meaningful Go equivalent is now parsed from HOCON and consumed at runtime — 0 `🔒 HARDCODED`, 0 `❌ NO FEATURE` remaining. Highlights since rc1: full Artery security surface (`untrusted-mode`, `trusted-selection-paths`, `large-message-destinations`), W-TinyLFU sharding passivation, allocation strategy V2, EventSourced remember-entities store, BoltDB-backed durable Distributed Data, persistence plugin proxies + plugin-fallback (circuit-breaker / replay-filter / recovery-event-timeout), and AtLeastOnceDelivery (redelivery scheduler + once-only warn callback + snapshot integration). See `docs/CONFIG_PATH.md` and `docs/LEFTWORKS.md` for the full audit.
+- **Pekko Config Completeness — honest accounting** (Round-2 sessions 01–41 closed 2026-04-30, portable-pekko milestone sub-plans 1–8i closed 2026-05-05): the 2026-04-30 ✅-honesty pass surfaced 27 dishonest classifications (rows that parsed the HOCON value but only exposed it via an `Effective<X>()` getter that test code called); 16 sub-plan commits then wired each path onto a real production consumer. Sub-plan scope: typed-API misc (restart-stash-capacity, log-stashing, replicator-message-adapter unexpected-ask-timeout), sharded-daemon-process keep-alive + role, three discovery providers (`config`, `aggregate`, `pekko-dns`), typed receptionist (write-consistency / pruning / sharding), separate watch failure detector (`pekko.remote.watch-failure-detector.*`), reliable-delivery (chunking, flow-control window, only-flow-control, work-pulling buffer-size), external shard allocation client-timeout, multi-DC FD `expected-response-after`, sharding ddata replicator + coordinator-singleton overrides, sharding healthcheck `/health/ready` endpoint, Artery restart counters (inbound + outbound), idle/quarantine sweep schedulers, compression-table-manager production wiring, shutdown-flush + death-watch flush consumers. **Current state: 267 ✅, 25 ⚠️ (forward-compat parses with deferred consumers — receive buffer pools, sender-side system-message redelivery, hill-climbing passivation optimizer, sharding read/write-majority-plus, persistence-plugin-proxy `start-target=off`, plus a few JVM-only `ssl.*` aliases), 9 ❌ (portable but unbridged — including the **critical control-aware mailbox gap** so system-message priority is not yet guaranteed, plus the in-process logger paths `pekko.{loglevel,stdout-loglevel}` deferred to the external-log-server cycle).** The Round-2 milestone closure remains accurate in its original taxonomy — 0 `🔒 HARDCODED`, 0 `❌ NO FEATURE` — but in the current 5-symbol scheme this is **not** "100% portable surface". See `docs/CONFIG_PATH.md` and `docs/LEFTWORKS.md §11`.
+- **Artery Multi-TCP Outbound Transport** (sub-plan 8f) — `pekko.remote.artery.advanced.outbound-lanes` now drives a real multi-TCP transport refactor: each peer association opens N additional `streamId=2` (Ordinary) sockets in parallel to the control stream, with per-lane handshake, per-lane writer goroutine, per-lane send buffer, lane-aware HandshakeRsp routing, recipient-hash dispatch (`fnv32(path) % N`), and inbound coalescence so multiple inbound TCPs from the same peer share one logical association. Pekko's default `outbound-lanes=1` is honoured (1 control + 1 ordinary), and Akka 2.6.x compat tests pass with the additional stream. Inbound side (sub-plan 8f inbound half) adds per-association lane fan-out hashed by recipient with a saturation counter on the flight recorder.
+- **Artery TLS Cipher Suites** — New gekka-native `pekko.remote.artery.tls.cipher-suites` (IANA names, TLS 1.2 only) plus full Pekko alias coverage at `pekko.remote.artery.ssl.config-ssl-engine.enabled-algorithms`. Every `tls.*` and `ssl.config-ssl-engine.*` path is documented row-by-row in `docs/CONFIG_PATH.md`.
 - **Pekko-compatible Cluster Bootstrap Config** — Discovery config migrated from `gekka.cluster.discovery` to `pekko.management.cluster.bootstrap` for full Pekko HOCON compatibility. Old namespace still works with deprecation warning.
 - **Pekko-compatible Cluster Configuration** — Standard `pekko.cluster.*` settings now parsed directly: `failure-detector` (threshold, heartbeat-interval, acceptable-heartbeat-pause), `min-nr-of-members`, `retry-unsuccessful-join-after`, `gossip-interval`. Existing Pekko/Akka configs work without translation.
 - **gekka-dashboard** — New web-based operational console ([gekka-dashboard](https://github.com/sopranoworks/gekka-dashboard)) with real-time WebSocket cluster monitoring, dark/light theme, and management actions.
@@ -20,104 +22,9 @@ Configuration is loaded via [`gekka-config`](https://github.com/sopranoworks/gek
 
 ## Configuration
 
-Gekka uses HOCON for flexible, layered configuration. Standard `pekko.*` and `akka.*` configuration keys are supported directly for full compatibility with existing Pekko/Akka configs.
+Gekka uses HOCON for layered configuration. Standard `pekko.*` and `akka.*` keys are accepted directly — existing Pekko/Akka HOCON works without translation.
 
-### Cluster Settings (Pekko-compatible)
-
-| Key | Default | Description |
-|---|---|---|
-| `pekko.cluster.min-nr-of-members` | `1` | Min members before leader promotes Joining to Up |
-| `pekko.cluster.retry-unsuccessful-join-after` | `10s` | InitJoin retry interval |
-| `pekko.cluster.gossip-interval` | `1s` | Duration between gossip rounds |
-| `pekko.cluster.failure-detector.threshold` | `8.0` | Phi threshold for unreachable declaration |
-| `pekko.cluster.failure-detector.heartbeat-interval` | `1s` | Heartbeat send interval |
-| `pekko.cluster.failure-detector.acceptable-heartbeat-pause` | `3s` | Tolerable heartbeat gap |
-| `pekko.cluster.failure-detector.max-sample-size` | `1000` | Heartbeat history window |
-| `pekko.cluster.failure-detector.monitored-by-nr-of-members` | `9` | Max heartbeat targets per node |
-| `pekko.cluster.leader-actions-interval` | `1s` | Independent leader action ticker |
-| `pekko.cluster.periodic-tasks-initial-delay` | `1s` | Delay before first periodic tick |
-| `pekko.cluster.shutdown-after-unsuccessful-join-seed-nodes` | `off` | Shutdown on join timeout (`off` = disabled) |
-| `pekko.cluster.allow-weakly-up-members` | `7s` | WeaklyUp promotion timeout (`off` = disabled) |
-| `pekko.cluster.log-info` | `on` | Gate info-level cluster log messages |
-| `pekko.cluster.log-info-verbose` | `off` | Verbose heartbeat, phi, and gossip logging |
-| `pekko.cluster.app-version` | `"0.0.0"` | Application version advertised in handshake |
-| `pekko.cluster.gossip-different-view-probability` | `0.8` | Prefer different-view gossip targets |
-| `pekko.cluster.reduce-gossip-different-view-probability` | `400` | Halve probability at large cluster sizes |
-| `pekko.cluster.gossip-time-to-live` | `2s` | Discard stale incoming gossip |
-| `pekko.cluster.unreachable-nodes-reaper-interval` | `1s` | Periodic phi re-evaluation interval |
-| `pekko.cluster.prune-gossip-tombstones-after` | `24h` | Prune removed-member tombstones |
-| `pekko.cluster.down-removal-margin` | `off` | Delay Down→Removed transition |
-| `pekko.cluster.seed-node-timeout` | `5s` | Warn when seed doesn't respond in time |
-| `pekko.cluster.quarantine-removed-node-after` | `5s` | Schedule UID quarantine after removal |
-| `pekko.cluster.run-coordinated-shutdown-when-down` | `on` | Trigger shutdown when self is downed |
-| `pekko.cluster.configuration-compatibility-check.enforce-on-join` | `on` | Validate config on incoming InitJoin |
-| `pekko.cluster.role.{name}.min-nr-of-members` | — | Per-role gating before leader promotes |
-
-### Singleton & Singleton Proxy (Pekko-compatible)
-
-| Key | Default | Description |
-|---|---|---|
-| `pekko.cluster.singleton.role` | `""` | Restrict singleton to nodes with this role |
-| `pekko.cluster.singleton.hand-over-retry-interval` | `1s` | Retry interval during leadership transfer |
-| `pekko.cluster.singleton-proxy.singleton-identification-interval` | `1s` | Periodic re-resolution of singleton location |
-| `pekko.cluster.singleton-proxy.buffer-size` | `1000` | Buffer messages while singleton is unknown |
-
-### Sharding (Pekko-compatible)
-
-| Key | Default | Description |
-|---|---|---|
-| `pekko.cluster.sharding.number-of-shards` | `1000` | Total shard count (immutable after start) |
-| `pekko.cluster.sharding.role` | `""` | Restrict sharding to nodes with this role |
-| `pekko.cluster.sharding.remember-entities` | `off` | Persist entity lifecycle for auto-respawn |
-| `pekko.cluster.sharding.passivation.default-idle-strategy.idle-entity.timeout` | `120s` | Stop idle entities after this duration |
-
-### Split Brain Resolver (Pekko-compatible)
-
-| Key | Default | Description |
-|---|---|---|
-| `pekko.cluster.split-brain-resolver.active-strategy` | `""` | Strategy: keep-majority, keep-oldest, static-quorum, keep-referee |
-| `pekko.cluster.split-brain-resolver.stable-after` | `20s` | Stability window before decision |
-| `pekko.cluster.split-brain-resolver.down-all-when-unstable` | `on` | Down all nodes if instability persists |
-
-### Pub-Sub (Pekko-compatible)
-
-| Key | Default | Description |
-|---|---|---|
-| `pekko.cluster.pub-sub.gossip-interval` | `1s` | Subscription gossip interval |
-
-### Persistence
-
-| Key | Default | Description |
-|---|---|---|
-| `pekko.persistence.max-concurrent-recoveries` | `50` | Global semaphore for concurrent actor recoveries |
-
-### Remote Transport (Pekko-compatible)
-
-| Key | Default | Description |
-|---|---|---|
-| `pekko.remote.artery.advanced.maximum-frame-size` | `256 KiB` | Maximum Artery frame payload size |
-| `pekko.remote.artery.bind.hostname` | `""` | NAT/Docker: bind address (advertise canonical) |
-| `pekko.remote.artery.bind.port` | `""` | NAT/Docker: bind port (advertise canonical) |
-
-### Management (Pekko Management-compatible)
-
-| Key | Default | Description |
-|---|---|---|
-| `pekko.management.http.port` | `8558` | TCP port for the HTTP Management API |
-| `pekko.management.http.hostname` | `127.0.0.1` | Binding interface for the Management API |
-| `pekko.management.http.enabled` | `false` | Explicitly enable/disable the Management API |
-
-### Other Settings (Pekko-compatible)
-
-| Key | Default | Description |
-|---|---|---|
-| `pekko.loglevel` | `INFO` | Minimum log level (`DEBUG`, `INFO`, `WARN`, `ERROR`) |
-| `pekko.cluster.distributed-data.enabled` | `false` | Enable the CRDT Distributed Data replicator |
-| `pekko.cluster.distributed-data.gossip-interval` | `2s` | Interval between DData gossip rounds |
-| `gekka.telemetry.exporter.otlp.endpoint` | `""` | OTLP/HTTP collector endpoint for metrics/traces |
-
-### Auto-Enable Logic
-If either `pekko.management.http.hostname` or `pekko.management.http.port` is explicitly defined in your configuration, the Management Server will be enabled automatically (`enabled = true`).
+See **[docs/CONFIG_PATH.md](docs/CONFIG_PATH.md)** for the full configuration reference, including a [Quick Reference — Common Settings](docs/CONFIG_PATH.md#quick-reference--common-settings) table for the keys most workloads need to tune, and the per-module audit of every Pekko `reference.conf` path classified by what gekka does with it at runtime.
 
 ---
 

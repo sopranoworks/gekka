@@ -4112,6 +4112,16 @@ func (c *Cluster) registerBuiltinShutdownTasks() {
 	// ── actor-system-terminate ──────────────────────────────────────────────
 	// Cancel the root context (stops gossip / heartbeat loops) and close all
 	// TCP connections.  This is the last phase.
+	// ── before-actor-system-terminate ───────────────────────────────────────
+	// Sub-plan 8i: wait for every association outbox to drain, bounded by
+	// pekko.remote.artery.advanced.shutdown-flush-timeout. On timeout we
+	// continue to actor-system-terminate, which closes the transport
+	// unconditionally — a stuck outbox cannot prevent process exit.
+	c.cs.AddTask("before-actor-system-terminate", "flush-outbound-queues", func(ctx context.Context) error {
+		_ = core.WaitForOutboundFlush(ctx, c.nm, c.nm.EffectiveShutdownFlushTimeout())
+		return nil
+	})
+
 	c.cs.AddTask("actor-system-terminate", "close-transport", func(_ context.Context) error {
 		if c.cancel != nil {
 			c.cancel()

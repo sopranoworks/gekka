@@ -421,6 +421,15 @@ func (c *Cluster) HandleSystemMessage(remote *gproto_remote.UniqueAddress, env *
 }
 
 // triggerLocalActorDeath notifies all remote watchers that a local actor has terminated.
+//
+// Sub-plan 8i: cross-network DeathWatchNotification emission is delayed by
+// EffectiveDeathWatchNotificationFlushTimeout so prior messages from the
+// dying actor have a chance to flush to the watcher first. The local
+// Terminated dispatch path (driven by SetOnStop in cluster.go) is unaffected
+// — only the remote notification is deferred. If the node is shutting down
+// (c.ctx cancelled) the deferred goroutine returns without emitting; the
+// before-actor-system-terminate flush task already covers any in-flight
+// frames in that case.
 func (c *Cluster) triggerLocalActorDeath(path string, ref ActorRef) {
 	c.localWatchersMu.Lock()
 	nodeWatchers, ok := c.localWatchers[path]
@@ -433,6 +442,18 @@ func (c *Cluster) triggerLocalActorDeath(path string, ref ActorRef) {
 		return
 	}
 
+	go func() {
+		if !core.DeathWatchNotificationFlushDelay(c.ctx, c.nm.EffectiveDeathWatchNotificationFlushTimeout()) {
+			return
+		}
+		c.emitRemoteDeathWatchNotifications(nodeWatchers, ref)
+	}()
+}
+
+// emitRemoteDeathWatchNotifications sends one DeathWatchNotification frame
+// per remote watcher. Extracted from triggerLocalActorDeath in sub-plan 8i so
+// the emission can be invoked after a flush delay.
+func (c *Cluster) emitRemoteDeathWatchNotifications(nodeWatchers map[string][]*gproto_remote.ProtoActorRef, ref ActorRef) {
 	for remoteID, watchers := range nodeWatchers {
 		assoc, ok := c.nm.GetAssociationByRemote(remoteID, 1) // Stream 1 for control
 		if !ok {

@@ -122,6 +122,12 @@ type GekkaAssociation struct {
 	outbox    chan []byte
 	streamId  int32
 
+	// quarantinedSince is the wall-clock time at which this association
+	// was transitioned into the QUARANTINED state. Zero when state is
+	// not QUARANTINED. Read by SweepRemoveQuarantinedAssociation to
+	// expire long-quarantined entries (sub-plan 8h).
+	quarantinedSince time.Time
+
 	lastHeartbeatSentAt time.Time
 	lastRTT             time.Duration
 
@@ -180,6 +186,24 @@ type GekkaAssociation struct {
 
 var _ actor.RemoteAssociation = (*GekkaAssociation)(nil)
 
+// QuarantinedSince returns the wall-clock time at which this association
+// transitioned into the QUARANTINED state, or the zero time if the
+// association has never been quarantined. Sub-plan 8h.
+func (a *GekkaAssociation) QuarantinedSince() time.Time {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.quarantinedSince
+}
+
+// quarantineEntry records the timestamp at which a UID was added to the
+// permanent quarantine registry. Sub-plan 8h:
+// SweepRemoveQuarantinedAssociation reads since to decide when to expire
+// the entry per pekko.remote.artery.advanced.remove-quarantined-association-after.
+type quarantineEntry struct {
+	remote *gproto_remote.UniqueAddress
+	since  time.Time
+}
+
 type NodeManager struct {
 	mu                  sync.RWMutex
 	LocalAddr           *gproto_remote.Address
@@ -196,12 +220,14 @@ type NodeManager struct {
 
 	// quarantinedMu guards quarantinedUIDs.
 	quarantinedMu sync.RWMutex
-	// quarantinedUIDs is a permanent registry of remote node UIDs that have been
-	// quarantined.  Unlike the associations map (which removes the entry upon
-	// quarantine), this registry persists so that a restarting remote node with
-	// the same UID cannot re-associate until the local process restarts.
-	// Value is the UniqueAddress of the remote node at the time of quarantine.
-	quarantinedUIDs map[uint64]*gproto_remote.UniqueAddress
+	// quarantinedUIDs is a registry of remote node UIDs that have been
+	// quarantined. Each entry carries the timestamp at which the UID was
+	// recorded; SweepRemoveQuarantinedAssociation expires entries older
+	// than EffectiveRemoveQuarantinedAssociationAfter so that a peer
+	// that has long since departed can re-associate after the threshold
+	// has elapsed (sub-plan 8h). Until the threshold elapses, the entry
+	// blocks fresh associations carrying the same UID.
+	quarantinedUIDs map[uint64]quarantineEntry
 
 	// mutedMu guards mutedNodes.
 	mutedMu sync.RWMutex
@@ -498,7 +524,7 @@ func NewNodeManager(local *gproto_remote.Address, uid uint64) *NodeManager {
 		pendingReplies:     make(map[string]chan *ArteryMetadata),
 		mutedNodes:         make(map[string]struct{}),
 		udpSrcAssoc:        make(map[string]*GekkaAssociation),
-		quarantinedUIDs:    make(map[uint64]*gproto_remote.UniqueAddress),
+		quarantinedUIDs:    make(map[uint64]quarantineEntry),
 		FlightRec:          NewFlightRecorder(true, LevelLifecycle),
 	}
 }
@@ -946,11 +972,17 @@ func (nm *NodeManager) ResetRestartCounters() {
 }
 
 // SweepIdleOutboundQuarantine quarantines any OUTBOUND associations whose
-// lastSeen timestamp is older than quarantine-idle-outbound-after.  The
-// association is transitioned to QUARANTINED state, its connection is closed,
-// and its UID is recorded in the permanent quarantine registry so the remote
-// cannot re-associate with the same UID.  Returns the number of associations
-// quarantined by this sweep (callers use it to drive metrics/flight events).
+// lastSeen timestamp is older than quarantine-idle-outbound-after. The
+// association is transitioned to QUARANTINED state, its quarantinedSince
+// timestamp is recorded, and its UID is registered in quarantinedUIDs.
+// Returns the number of associations quarantined by this sweep.
+//
+// Sub-plan 8h split-phase semantics: this sweep only marks the assoc as
+// QUARANTINED. The conn is NOT closed and the entry is NOT deleted from
+// the registry — those steps belong to SweepStopQuarantinedAfterIdle and
+// SweepRemoveQuarantinedAssociation respectively. Quarantined entries
+// linger so any in-flight "you are quarantined" notifications can still
+// be delivered to the peer through the existing transport.
 func (nm *NodeManager) SweepIdleOutboundQuarantine() int {
 	threshold := nm.EffectiveQuarantineIdleOutboundAfter()
 	cutoff := time.Now().Add(-threshold)
@@ -958,13 +990,12 @@ func (nm *NodeManager) SweepIdleOutboundQuarantine() int {
 	defer nm.mu.Unlock()
 
 	quarantined := 0
-	for key, assoc := range nm.associations {
+	for _, assoc := range nm.associations {
 		assoc.mu.Lock()
 		role := assoc.role
 		state := assoc.state
 		lastSeen := assoc.lastSeen
 		remote := assoc.remote
-		conn := assoc.conn
 		if role != OUTBOUND || state == QUARANTINED {
 			assoc.mu.Unlock()
 			continue
@@ -974,9 +1005,7 @@ func (nm *NodeManager) SweepIdleOutboundQuarantine() int {
 			continue
 		}
 		assoc.state = QUARANTINED
-		if conn != nil {
-			_ = conn.Close()
-		}
+		assoc.quarantinedSince = time.Now()
 		assoc.mu.Unlock()
 
 		assoc.emitFlight(SeverityWarn, CatQuarantine, "idle_outbound_quarantined", map[string]any{
@@ -985,13 +1014,130 @@ func (nm *NodeManager) SweepIdleOutboundQuarantine() int {
 		})
 		if remote != nil {
 			nm.quarantinedMu.Lock()
-			nm.quarantinedUIDs[remote.GetUid()] = remote
+			nm.quarantinedUIDs[remote.GetUid()] = quarantineEntry{remote: remote, since: time.Now()}
 			nm.quarantinedMu.Unlock()
 		}
-		delete(nm.associations, key)
 		quarantined++
 	}
 	return quarantined
+}
+
+// SweepIdleOutboundStop performs the graceful-stop pass for outbound
+// associations that have been ASSOCIATED but unused longer than
+// pekko.remote.artery.advanced.stop-idle-outbound-after. The
+// association's conn is closed and the entry is deleted from the
+// registry, but the UID is NOT added to quarantinedUIDs — a future Send
+// to the same remote may dial freshly. Returns the number of stopped
+// associations. Sub-plan 8h.
+func (nm *NodeManager) SweepIdleOutboundStop() int {
+	threshold := nm.EffectiveStopIdleOutboundAfter()
+	cutoff := time.Now().Add(-threshold)
+	nm.mu.Lock()
+	defer nm.mu.Unlock()
+
+	stopped := 0
+	for key, assoc := range nm.associations {
+		assoc.mu.Lock()
+		role := assoc.role
+		state := assoc.state
+		lastSeen := assoc.lastSeen
+		conn := assoc.conn
+		if role != OUTBOUND || state != ASSOCIATED || !lastSeen.Before(cutoff) {
+			assoc.mu.Unlock()
+			continue
+		}
+		if conn != nil {
+			_ = conn.Close()
+			assoc.conn = nil
+		}
+		assoc.mu.Unlock()
+		delete(nm.associations, key)
+		assoc.emitFlight(SeverityInfo, CatHandshake, "idle_outbound_stopped", map[string]any{
+			"remote":    assoc.remoteKey(),
+			"threshold": threshold.String(),
+		})
+		stopped++
+	}
+	return stopped
+}
+
+// SweepStopQuarantinedAfterIdle closes the conn of any OUTBOUND
+// QUARANTINED association whose lastSeen timestamp is older than
+// pekko.remote.artery.advanced.stop-quarantined-after-idle. The entry
+// is NOT removed from the registry — that step belongs to
+// SweepRemoveQuarantinedAssociation. Returns the number of conns
+// closed. Sub-plan 8h.
+func (nm *NodeManager) SweepStopQuarantinedAfterIdle() int {
+	threshold := nm.EffectiveStopQuarantinedAfterIdle()
+	cutoff := time.Now().Add(-threshold)
+	nm.mu.RLock()
+	var targets []*GekkaAssociation
+	for _, assoc := range nm.associations {
+		assoc.mu.RLock()
+		eligible := assoc.role == OUTBOUND && assoc.state == QUARANTINED && assoc.conn != nil && assoc.lastSeen.Before(cutoff)
+		assoc.mu.RUnlock()
+		if eligible {
+			targets = append(targets, assoc)
+		}
+	}
+	nm.mu.RUnlock()
+
+	closed := 0
+	for _, assoc := range targets {
+		assoc.mu.Lock()
+		if assoc.conn != nil {
+			_ = assoc.conn.Close()
+			assoc.conn = nil
+			closed++
+		}
+		assoc.mu.Unlock()
+		if closed > 0 {
+			assoc.emitFlight(SeverityInfo, CatQuarantine, "quarantined_idle_stopped", map[string]any{
+				"remote":    assoc.remoteKey(),
+				"threshold": threshold.String(),
+			})
+		}
+	}
+	return closed
+}
+
+// SweepRemoveQuarantinedAssociation expires entries whose
+// quarantinedSince timestamp is older than
+// pekko.remote.artery.advanced.remove-quarantined-association-after.
+// Two phases: (a) drop UIDs from quarantinedUIDs whose entry.since is
+// older than the cutoff so a fresh handshake from the same UID becomes
+// possible; (b) drop QUARANTINED entries from nm.associations whose
+// quarantinedSince is older than the cutoff. Returns the number of UIDs
+// expired. Sub-plan 8h.
+func (nm *NodeManager) SweepRemoveQuarantinedAssociation() int {
+	threshold := nm.EffectiveRemoveQuarantinedAssociationAfter()
+	cutoff := time.Now().Add(-threshold)
+
+	nm.quarantinedMu.Lock()
+	expired := 0
+	for uid, entry := range nm.quarantinedUIDs {
+		if entry.since.IsZero() {
+			continue
+		}
+		if entry.since.Before(cutoff) {
+			delete(nm.quarantinedUIDs, uid)
+			expired++
+		}
+	}
+	nm.quarantinedMu.Unlock()
+
+	nm.mu.Lock()
+	for key, assoc := range nm.associations {
+		assoc.mu.Lock()
+		state := assoc.state
+		since := assoc.quarantinedSince
+		assoc.mu.Unlock()
+		if state == QUARANTINED && !since.IsZero() && since.Before(cutoff) {
+			delete(nm.associations, key)
+		}
+	}
+	nm.mu.Unlock()
+	return expired
 }
 
 // IsQuarantined returns true when uid has been permanently quarantined.
@@ -1006,9 +1152,19 @@ func (nm *NodeManager) IsQuarantined(uid uint64) bool {
 	return ok
 }
 
-// RegisterQuarantinedUID permanently records remote as quarantined.
-// Subsequent connection attempts from that UID will be rejected.
+// RegisterQuarantinedUID records remote as quarantined with the current
+// wall-clock timestamp. The entry remains in the registry until
+// SweepRemoveQuarantinedAssociation expires it after
+// pekko.remote.artery.advanced.remove-quarantined-association-after.
+// Subsequent connection attempts from that UID are rejected until then.
 func (nm *NodeManager) RegisterQuarantinedUID(remote *gproto_remote.UniqueAddress) {
+	nm.RegisterQuarantinedUIDAt(remote, time.Now())
+}
+
+// RegisterQuarantinedUIDAt is the timestamp-bearing variant used by
+// tests that need to seed a registry entry with a custom since value.
+// Sub-plan 8h.
+func (nm *NodeManager) RegisterQuarantinedUIDAt(remote *gproto_remote.UniqueAddress, since time.Time) {
 	if remote == nil {
 		return
 	}
@@ -1017,7 +1173,7 @@ func (nm *NodeManager) RegisterQuarantinedUID(remote *gproto_remote.UniqueAddres
 		return
 	}
 	nm.quarantinedMu.Lock()
-	nm.quarantinedUIDs[uid] = remote
+	nm.quarantinedUIDs[uid] = quarantineEntry{remote: remote, since: since}
 	nm.quarantinedMu.Unlock()
 	slog.Warn("node manager: registered permanently quarantined UID", "uid", uid, "address", remote.GetAddress())
 	if nm.FlightRec != nil {
@@ -1604,7 +1760,7 @@ func (nm *NodeManager) RegisterAssociation(remote *gproto_remote.UniqueAddress, 
 				// with that UID after we drop the connection.
 				if existingRemote != nil {
 					nm.quarantinedMu.Lock()
-					nm.quarantinedUIDs[existingRemote.GetUid()] = existingRemote
+					nm.quarantinedUIDs[existingRemote.GetUid()] = quarantineEntry{remote: existingRemote, since: time.Now()}
 					nm.quarantinedMu.Unlock()
 				}
 				// Notify the remote that we have quarantined it, using the new

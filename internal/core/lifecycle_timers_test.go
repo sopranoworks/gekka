@@ -118,12 +118,15 @@ func TestLifecycleTimers_Overrides(t *testing.T) {
 	}
 }
 
-// TestSweepIdleOutboundQuarantine_RemovesIdleAssociation is a behavior test
-// for quarantine-idle-outbound-after: an OUTBOUND association whose lastSeen
-// timestamp is older than the configured threshold must be transitioned to
-// QUARANTINED by SweepIdleOutboundQuarantine and removed from the registry;
-// its UID must also be registered in the permanent quarantine registry.
-func TestSweepIdleOutboundQuarantine_RemovesIdleAssociation(t *testing.T) {
+// TestSweepIdleOutboundQuarantine_MarksIdleAssociation is a behavior
+// test for quarantine-idle-outbound-after under the sub-plan 8h
+// split-phase contract: an OUTBOUND association whose lastSeen
+// timestamp is older than the configured threshold must be transitioned
+// to QUARANTINED, have its quarantinedSince stamp set, and have its UID
+// registered in the permanent quarantine registry. The entry itself
+// stays in the registry — SweepRemoveQuarantinedAssociation is the one
+// that expires entries, not this sweep.
+func TestSweepIdleOutboundQuarantine_MarksIdleAssociation(t *testing.T) {
 	nm := NewNodeManager(lifecycleTestAddr("127.0.0.1", 2552, "S"), 1)
 	nm.QuarantineIdleOutboundAfter = 50 * time.Millisecond
 
@@ -153,14 +156,20 @@ func TestSweepIdleOutboundQuarantine_RemovesIdleAssociation(t *testing.T) {
 		t.Errorf("SweepIdleOutboundQuarantine quarantined %d, want 1", n)
 	}
 
-	// Post-condition: association removed from the registry.
-	if _, ok := nm.GetAssociation(remote, 1); ok {
-		t.Fatal("expected association to be removed after idle sweep")
+	// Post-condition: association still present (split-phase: the
+	// remove-quarantined sweep deletes; this sweep only marks).
+	if _, ok := nm.GetAssociation(remote, 1); !ok {
+		t.Fatal("expected association to remain in registry after quarantine sweep")
 	}
 
 	// Post-condition: association state transitioned to QUARANTINED.
 	if assoc.GetState() != QUARANTINED {
 		t.Errorf("assoc state = %v, want QUARANTINED", assoc.GetState())
+	}
+
+	// Post-condition: quarantinedSince stamped.
+	if assoc.QuarantinedSince().IsZero() {
+		t.Errorf("expected QuarantinedSince to be non-zero after quarantine sweep")
 	}
 
 	// Post-condition: UID recorded in permanent quarantine registry.

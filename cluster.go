@@ -2460,6 +2460,14 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	// the advertisement scheduler bound to ctx.
 	core.StartCompressionTableManager(ctx, nm, router)
 
+	// Sub-plan 8h: spawn the lifecycle sweep ticker that consumes
+	// pekko.remote.artery.advanced.{stop-idle-outbound-after,
+	// quarantine-idle-outbound-after, stop-quarantined-after-idle,
+	// remove-quarantined-association-after}. The ticker invokes all
+	// four sweep methods on nm at min(thresholds)/4 cadence; bound to
+	// ctx so it exits when the cluster shuts down.
+	core.StartLifecycleSweepers(ctx, nm)
+
 	// Build TLS config when transport is "tls-tcp".
 	var tlsCfg *tls.Config
 	if strings.EqualFold(cfg.Transport, "tls-tcp") {

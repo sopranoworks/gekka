@@ -2451,6 +2451,15 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
+	// Sub-plan 8g: construct CompressionTableManager in production.
+	// Before this call site existed, the four
+	// pekko.remote.artery.advanced.compression.* paths were parsed onto
+	// nm but the consumer (CompressionTableManager) was instantiated
+	// only from tests. StartCompressionTableManager applies the caps
+	// + advertisement intervals, attaches the CTM to nm, and starts
+	// the advertisement scheduler bound to ctx.
+	core.StartCompressionTableManager(ctx, nm, router)
+
 	// Build TLS config when transport is "tls-tcp".
 	var tlsCfg *tls.Config
 	if strings.EqualFold(cfg.Transport, "tls-tcp") {

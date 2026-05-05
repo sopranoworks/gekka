@@ -1106,6 +1106,49 @@ func (nm *NodeManager) CountAssociations() int {
 	return count
 }
 
+// SnapshotAssociatedAddresses returns a snapshot of currently-ASSOCIATED
+// peers' UniqueAddresses. Used by the compression-table-manager
+// production advertisement callback (sub-plan 8g) to enumerate peers
+// without leaking the registry. Skips entries whose state is not
+// ASSOCIATED so that handshake-in-progress and quarantined peers are
+// never advertised to. Each returned UniqueAddress is a fresh value
+// (Address pointer copied from the live association; Uid copied by
+// value into a new proto field) so callers may retain the slice past
+// the lock window.
+func (nm *NodeManager) SnapshotAssociatedAddresses() []*gproto_remote.UniqueAddress {
+	nm.mu.RLock()
+	defer nm.mu.RUnlock()
+	out := make([]*gproto_remote.UniqueAddress, 0, len(nm.associations))
+	seen := make(map[string]struct{}, len(nm.associations))
+	for _, assoc := range nm.associations {
+		assoc.mu.RLock()
+		st := assoc.state
+		remote := assoc.remote
+		assoc.mu.RUnlock()
+		if st != ASSOCIATED || remote == nil {
+			continue
+		}
+		addr := remote.GetAddress()
+		if addr == nil {
+			continue
+		}
+		// De-duplicate by host:port:uid — multiple streams (control +
+		// ordinary + large) share the same peer; we want one advert
+		// per peer per tick.
+		key := fmt.Sprintf("%s:%d#%d", addr.GetHostname(), addr.GetPort(), remote.GetUid())
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		uid := remote.GetUid()
+		out = append(out, &gproto_remote.UniqueAddress{
+			Address: addr,
+			Uid:     &uid,
+		})
+	}
+	return out
+}
+
 // HasQuarantinedAssociation reports whether any known Artery association is in
 // QUARANTINED state.  A quarantined association means the remote node restarted
 // with a different UID — a network-split symptom that makes the local node

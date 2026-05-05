@@ -34,6 +34,16 @@ func laneIndex(recipient string, n int) int {
 //   - the target lane channel is full (saturation: emit CatInboundLaneFull
 //     flight event and dispatch inline; never block the read loop)
 func (assoc *GekkaAssociation) dispatchSharded(ctx context.Context, meta *ArteryMetadata) error {
+	// Inbound coalescence: when this assoc has been merged into a primary
+	// (streamId=2 inbound, second/third TCP from the same peer UID), all
+	// frames flow through the primary's lane fan-out. Sub-plan 8f
+	// outbound half.
+	assoc.mu.RLock()
+	delegate := assoc.delegate
+	assoc.mu.RUnlock()
+	if delegate != nil {
+		return delegate.dispatchSharded(ctx, meta)
+	}
 	if len(assoc.inboundLanes) == 0 {
 		return assoc.dispatch(ctx, meta)
 	}

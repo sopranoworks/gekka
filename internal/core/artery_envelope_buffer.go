@@ -214,7 +214,16 @@ func ParseArteryFrame(data []byte, ctm *CompressionTableManager, remoteUid uint6
 		maxEnd = manifestEnd
 	}
 
-	payload := data[maxEnd:]
+	// Copy the payload because `data` aliases the read loop's reusable
+	// buffer (tcpArteryReadLoop reuses payloadBuf across iterations). With
+	// inbound-lanes (sub-plan 8f) the metadata is sent through a channel
+	// to a lane goroutine that processes it asynchronously; without this
+	// copy the next frame's bytes would overwrite the previous frame's
+	// payload while the lane goroutine is still reading it, corrupting
+	// every async-dispatched message past the first.
+	src := data[maxEnd:]
+	payload := make([]byte, len(src))
+	copy(payload, src)
 
 	return &ArteryMetadata{
 		Sender:          &gproto_remote.ActorRefData{Path: &senderPath},

@@ -84,6 +84,27 @@ const (
 // Association is a type alias for GekkaAssociation for backward compatibility.
 type Association = GekkaAssociation
 
+// outboundLane is one TCP connection in a multi-lane outbound association.
+// Sub-plan 8f outbound half: when EffectiveOutboundLanes() > 1 (or even == 1
+// to match Pekko's default of one TCP per ordinary stream), an OUTBOUND
+// streamId=2 *GekkaAssociation* holds N parallel lanes, each with its own
+// TCP connection, outbox, writer goroutine, and per-lane handshake state.
+// Each lane carries a fraction of the user-message traffic, hashed by
+// recipient actor path. This delivers true Pekko parity for
+// pekko.remote.artery.advanced.outbound-lanes: independent kernel send
+// buffers, no TCP head-of-line blocking across recipients on different
+// lanes, parallel writer goroutines.
+type outboundLane struct {
+	idx           int
+	conn          net.Conn
+	outbox        chan []byte
+	state         AssociationState
+	handshakeDone chan struct{}
+	localUid      uint64
+	remoteUid     uint64
+	writeMu       sync.Mutex // serializes WriteFrame on lane.conn
+}
+
 // GekkaAssociation tracks the state of a single connection.
 type GekkaAssociation struct {
 	mu        sync.RWMutex
@@ -127,6 +148,34 @@ type GekkaAssociation struct {
 	// read goroutine (legacy behavior). See dispatchSharded.
 	inboundLanes   []chan *ArteryMetadata
 	inboundLanesWg sync.WaitGroup
+
+	// lanes is the per-association OUTBOUND lane fan-out for streamId=2
+	// (Ordinary). Populated only on streamId=2 OUTBOUND associations
+	// constructed by EnsureOrdinarySibling. Nil for streamId=1 (control)
+	// and streamId=3 (large) which stay single-conn. Sub-plan 8f outbound
+	// half — pekko.remote.artery.advanced.outbound-lanes.
+	lanes []*outboundLane
+	// inboundConns lists all inbound TCPs that have been coalesced into a
+	// single logical INBOUND streamId=2 association by remote UID. The
+	// initial accept becomes inboundConns[0]; subsequent inbound TCPs from
+	// the same peer UID for streamId=2 attach via handleHandshakeReq's
+	// coalescence path. Sub-plan 8f outbound half.
+	inboundConns []net.Conn
+	// ordinarySibling links a control assoc (streamId=1) to its ordinary
+	// lane assoc (streamId=2) and vice versa. Set by EnsureOrdinarySibling.
+	// outboxFor uses this pointer to redirect user-message traffic from the
+	// control stream onto the ordinary lanes. When nil, user traffic falls
+	// back to the control stream (the convergence-window pre-sibling
+	// behaviour, also the default when outbound-lanes is unset).
+	ordinarySibling     *GekkaAssociation
+	ordinarySiblingOnce sync.Once
+	// delegate, when non-nil, redirects this assoc's dispatch path to the
+	// pointed-to assoc. Used by inbound coalescence: the temporary assoc
+	// constructed for the second/third inbound streamId=2 TCP from the
+	// same peer UID delegates to the primary association so its inbound
+	// lanes machinery handles all frames uniformly. Sub-plan 8f outbound
+	// half (inbound coalescence).
+	delegate *GekkaAssociation
 }
 
 var _ actor.RemoteAssociation = (*GekkaAssociation)(nil)
@@ -1254,6 +1303,147 @@ func (nm *NodeManager) DialRemoteWithRestart(ctx context.Context, target *gproto
 	return nil, fmt.Errorf("outbound restart cap exceeded after %d attempt(s): %w", maxRestarts+1, lastErr)
 }
 
+// dialOrdinaryLane opens a single TCP connection to target, performs the
+// optional TLS upgrade, and writes the streamId=2 (Ordinary) Artery preamble.
+// It does NOT enter a read or write loop — the caller wires the conn into
+// an outboundLane and starts those loops (see EnsureOrdinarySibling).
+// Sub-plan 8f outbound half.
+func (nm *NodeManager) dialOrdinaryLane(ctx context.Context, target *gproto_remote.Address) (net.Conn, error) {
+	addrStr := fmt.Sprintf("%s:%d", target.GetHostname(), target.GetPort())
+	connectTimeout := nm.EffectiveTcpConnectionTimeout()
+
+	var localAddr *net.TCPAddr
+	if src := nm.EffectiveTcpOutboundClientHostname(); src != "" {
+		if ip := net.ParseIP(src); ip != nil {
+			localAddr = &net.TCPAddr{IP: ip}
+		} else if addrs, resolveErr := net.LookupIP(src); resolveErr == nil && len(addrs) > 0 {
+			localAddr = &net.TCPAddr{IP: addrs[0]}
+		} else {
+			slog.Warn("artery: tcp.outbound-client-hostname unresolved", "hostname", src, "error", resolveErr)
+		}
+	}
+
+	d := net.Dialer{Timeout: connectTimeout}
+	if localAddr != nil {
+		d.LocalAddr = localAddr
+	}
+	conn, err := d.DialContext(ctx, "tcp", addrStr)
+	if err != nil {
+		return nil, fmt.Errorf("dial: %w", err)
+	}
+	if tc, ok := conn.(*net.TCPConn); ok {
+		_ = tc.SetNoDelay(true)
+	}
+	var c net.Conn = conn
+	if nm.TLSConfig != nil {
+		serverName := nm.TLSConfig.ServerName
+		if serverName == "" {
+			serverName, _, _ = net.SplitHostPort(addrStr)
+		}
+		tlsCfg := nm.TLSConfig.Clone()
+		tlsCfg.ServerName = serverName
+		tlsConn := tls.Client(conn, tlsCfg)
+		if err := tlsConn.HandshakeContext(ctx); err != nil {
+			_ = conn.Close()
+			return nil, fmt.Errorf("tls handshake: %w", err)
+		}
+		c = tlsConn
+	}
+	// Write the streamId=2 (Ordinary) Pekko/Akka preamble. Both Pekko 1.x
+	// and Akka 2.6.x use the AKKA preamble on the wire.
+	preamble := []byte{'A', 'K', 'K', 'A', 2}
+	if _, err := c.Write(preamble); err != nil {
+		_ = c.Close()
+		return nil, fmt.Errorf("preamble write: %w", err)
+	}
+	return c, nil
+}
+
+// DialRemoteOrdinaryLanes opens N parallel TCP connections to target for
+// streamId=2 (Ordinary), where N = EffectiveOutboundLanes(). Each lane uses
+// per-lane Pekko-style restart-counter gating (sub-plan 8e parity): every
+// failed dial counts against the per-lane restart budget and the dial is
+// retried after EffectiveOutboundRestartBackoff. Returns the conns in
+// lane-index order. On any cap-exceeded error from a lane the helper
+// closes any successfully-opened conns and returns the error to the
+// caller. Sub-plan 8f outbound half.
+func (nm *NodeManager) DialRemoteOrdinaryLanes(ctx context.Context, target *gproto_remote.Address) ([]net.Conn, error) {
+	n := nm.EffectiveOutboundLanes()
+	if n < 1 {
+		n = 1
+	}
+
+	conns := make([]net.Conn, n)
+	errs := make([]error, n)
+	gctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		i := i
+		go func() {
+			defer wg.Done()
+			backoff := nm.EffectiveOutboundRestartBackoff()
+			maxRestarts := nm.EffectiveOutboundMaxRestarts()
+			var lastErr error
+			for attempt := 0; attempt <= maxRestarts; attempt++ {
+				if gctx.Err() != nil {
+					if lastErr != nil {
+						errs[i] = fmt.Errorf("lane %d cancelled after %d attempts: %w", i, attempt, gctx.Err())
+					} else {
+						errs[i] = gctx.Err()
+					}
+					return
+				}
+				c, err := nm.dialOrdinaryLane(gctx, target)
+				if err == nil {
+					conns[i] = c
+					return
+				}
+				lastErr = err
+				if !nm.TryRecordOutboundRestart() {
+					errs[i] = fmt.Errorf("lane %d: outbound restart cap exceeded after %d attempt(s): %w", i, attempt+1, err)
+					cancel()
+					return
+				}
+				if backoff > 0 {
+					t := time.NewTimer(backoff)
+					select {
+					case <-gctx.Done():
+						t.Stop()
+						errs[i] = fmt.Errorf("lane %d cancelled during backoff: %w", i, gctx.Err())
+						return
+					case <-t.C:
+					}
+				}
+			}
+			errs[i] = fmt.Errorf("lane %d: outbound restart cap exceeded after %d attempt(s): %w", i, maxRestarts+1, lastErr)
+			cancel()
+		}()
+	}
+	wg.Wait()
+
+	// On any error: close any successfully-opened conns and surface the
+	// first error.
+	var firstErr error
+	for i := range errs {
+		if errs[i] != nil && firstErr == nil {
+			firstErr = errs[i]
+		}
+	}
+	if firstErr != nil {
+		for i := range conns {
+			if conns[i] != nil {
+				_ = conns[i].Close()
+				conns[i] = nil
+			}
+		}
+		return nil, firstErr
+	}
+	return conns, nil
+}
+
 func (nm *NodeManager) Serializer(id int32) (actor.RemoteSerializer, error) {
 	s, err := nm.SerializerRegistry.GetSerializer(id)
 	if err != nil {
@@ -1519,68 +1709,16 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 		nm.RegisterAssociation(assoc.remote, assoc)
 	}
 
-	// Start background write loop.
-	// Uses the outer ctx (node lifetime), NOT assocCtx, so that the write loop
-	// keeps draining the outbox even after the read loop exits.  In Artery-TCP
-	// the outbound TCP stream is unidirectional: Pekko half-closes its write end
-	// immediately, causing the read loop to get EOF and return, but writes in the
-	// opposite direction are still valid and must continue.
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case msg, ok := <-assoc.outbox:
-				if !ok {
-					return
-				}
-				// Check mute state before writing (catches buffered frames
-				// queued before MuteNode was called). Use assoc.remote under
-				// read lock since it's updated after the handshake.
-				assoc.mu.RLock()
-				remoteAddr := assoc.remote.GetAddress()
-				assoc.mu.RUnlock()
-				if remoteAddr != nil && nm.isNodeMuted(remoteAddr.GetHostname(), remoteAddr.GetPort()) {
-					continue
-				}
-				slog.Debug("artery: sending frame", "total_bytes", len(msg))
-				// UDP path: wrap in Aeron DATA frame and send via UDP socket.
-				assoc.mu.RLock()
-				udpH := assoc.udpHandler
-				udpDst := assoc.udpDst
-				assoc.mu.RUnlock()
-				if udpH != nil && udpDst != nil {
-					if err := udpH.SendFrame(udpDst, AeronStreamControl, msg); err != nil {
-						slog.Warn("aeron-udp: outbox send error", "error", err)
-					}
-					continue
-				}
-				// TCP path: prepend 4-byte length and write to the connection.
-				if err := WriteFrame(assoc.conn, msg); err != nil {
-					slog.Error("artery: write error", "error", err)
-					// Close so the read loop also exits cleanly.
-					_ = assoc.conn.Close()
-					return
-				}
-				// Emit flight recorder events for sent frames.
-				if nm.FlightRec != nil {
-					assoc.mu.RLock()
-					sid := assoc.streamId
-					assoc.mu.RUnlock()
-					if sid == 3 {
-						nm.FlightRec.Emit(assoc.remoteKey(), FlightEvent{
-							Timestamp: time.Now(),
-							Severity:  SeverityInfo,
-							Category:  CatLargeFrame,
-							Message:   "send",
-							Fields:    map[string]any{"size": len(msg)},
-						})
-					}
-					nm.FlightRec.EmitFrame(assoc.remoteKey(), "send", len(msg), 0)
-				}
-			}
-		}
-	}()
+	// Start background write loop. The single-conn path (streamId=1
+	// control, streamId=3 large, and UDP associations) uses an "implicit
+	// lane" backed by assoc.conn / assoc.outbox so the writer logic is
+	// shared with the multi-lane outbound case (sub-plan 8f outbound half).
+	implicitLane := &outboundLane{
+		idx:    0,
+		conn:   conn,
+		outbox: assoc.outbox,
+	}
+	go assoc.startLaneWriter(ctx, implicitLane)
 
 	if role == OUTBOUND && remote != nil {
 		go func() {
@@ -1741,6 +1879,244 @@ func (assoc *GekkaAssociation) Process(ctx context.Context, protocol string) err
 		return TcpArteryOutboundHandler(ctx, assoc.conn, dispatch, assoc.nodeMgr.compressionMgr, remoteUid, assoc.streamId, protocol, maxFrame)
 	}
 	return TcpArteryHandlerWithCallback(ctx, assoc.conn, dispatch, assoc.nodeMgr.compressionMgr, remoteUid, assoc.streamId, maxFrame)
+}
+
+// initiateLaneHandshake writes a HandshakeReq frame on a specific outbound
+// lane TCP connection. Sub-plan 8f outbound half: each lane runs its own
+// handshake exchange independently — gekka writes HandshakeReq on every
+// lane's outbound TCP so the peer's Artery state machine knows our UID for
+// that stream. The peer's HandshakeRsp may arrive on any of gekka's
+// inbound TCPs (Artery TCP is unidirectional per connection); the
+// per-lane handshakeDone channel is signalled when the lane's HandshakeReq
+// has been written successfully.
+func (assoc *GekkaAssociation) initiateLaneHandshake(lane *outboundLane, to *gproto_remote.Address) error {
+	uid := assoc.localUid
+	if lane.localUid != 0 {
+		uid = lane.localUid
+	}
+	req := &gproto_remote.HandshakeReq{
+		From: &gproto_remote.UniqueAddress{
+			Address: assoc.nodeMgr.LocalAddr,
+			Uid:     proto.Uint64(uid),
+		},
+		To: to,
+	}
+	lane.writeMu.Lock()
+	defer lane.writeMu.Unlock()
+	return SendArteryMessageWithAck(lane.conn, int64(uid), actor.ArteryInternalSerializerID, "d", req, req.From, true)
+}
+
+// ProcessConnectionLane runs the per-lane outbound handshake retry loop and
+// the per-lane read loop for an outbound streamId=2 lane. Sub-plan 8f
+// outbound half: factored out of the inline handshake-retry block in
+// ProcessConnection so each lane has its own retry/heartbeat lifecycle.
+//
+// The lane is considered ASSOCIATED once its HandshakeReq has been
+// successfully written; the lane's handshakeDone channel is closed at that
+// point. We do not block the lane's writes on receiving the peer's
+// HandshakeRsp — Pekko/Akka tolerate user frames on any associated stream,
+// and the streamId=2 sibling is created only after the control assoc has
+// already reached ASSOCIATED, so the peer UID is known.
+func (nm *NodeManager) ProcessConnectionLane(ctx context.Context, assoc *GekkaAssociation, lane *outboundLane, to *gproto_remote.Address) {
+	// Initial HandshakeReq.
+	if err := assoc.initiateLaneHandshake(lane, to); err != nil {
+		slog.Debug("artery: lane initiateHandshake error", "lane", lane.idx, "error", err)
+	}
+	// Retry until lane is ASSOCIATED or handshake-timeout expires.
+	retryInterval := nm.EffectiveHandshakeRetryInterval()
+	deadline := time.Now().Add(nm.EffectiveHandshakeTimeout())
+	retryTicker := time.NewTicker(retryInterval)
+	defer retryTicker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-lane.handshakeDone:
+			return
+		case <-retryTicker.C:
+			assoc.mu.RLock()
+			s := lane.state
+			assoc.mu.RUnlock()
+			if s == ASSOCIATED {
+				return
+			}
+			if time.Now().After(deadline) {
+				slog.Warn("artery: lane handshake timed out",
+					"remote", assoc.remoteKey(),
+					"lane", lane.idx,
+					"timeout", nm.EffectiveHandshakeTimeout())
+				return
+			}
+			if err := assoc.initiateLaneHandshake(lane, to); err != nil {
+				slog.Debug("artery: lane handshake retry error", "lane", lane.idx, "error", err)
+			}
+		}
+	}
+}
+
+// runLaneReadLoop drains one outbound lane's inbound bytes (the read side
+// is a no-op in Artery-TCP since outbound TCP is write-only on gekka's
+// side, but a stray byte from the peer constitutes a protocol violation
+// and we want to terminate the lane cleanly when that happens). In
+// practice this loop returns immediately on EOF or context cancellation.
+func (nm *NodeManager) runLaneReadLoop(ctx context.Context, assoc *GekkaAssociation, lane *outboundLane) {
+	dispatch := func(ctx context.Context, meta *ArteryMetadata) error {
+		return assoc.dispatchSharded(ctx, meta)
+	}
+	remoteUid := uint64(0)
+	if assoc.remote != nil {
+		remoteUid = assoc.remote.GetUid()
+	}
+	maxFrame := assoc.effectiveStreamFrameSizeCap()
+	if err := tcpArteryReadLoop(ctx, lane.conn, dispatch, assoc.nodeMgr.compressionMgr, remoteUid, assoc.streamId, int32(maxFrame)); err != nil {
+		slog.Debug("artery: lane read loop ended", "lane", lane.idx, "error", err)
+	}
+}
+
+// EnsureOrdinarySibling creates the streamId=2 ordinary outbound sibling
+// for a control (streamId=1) association. Idempotent: subsequent calls
+// after the sibling is already established return nil immediately.
+//
+// Body: dial N TCP connections (where N = EffectiveOutboundLanes(), default
+// 1), construct a streamId=2 *GekkaAssociation* with the dialed conns
+// wrapped as outboundLanes, register under (host:port, uid, streamId=2),
+// link the sibling pointers both ways, and start one writer + one read +
+// one handshake goroutine per lane. Sub-plan 8f outbound half.
+func (nm *NodeManager) EnsureOrdinarySibling(ctx context.Context, controlAssoc *GekkaAssociation) error {
+	if controlAssoc == nil {
+		return fmt.Errorf("nil control assoc")
+	}
+	controlAssoc.mu.RLock()
+	already := controlAssoc.ordinarySibling != nil
+	role := controlAssoc.role
+	controlAssoc.mu.RUnlock()
+	if already {
+		return nil
+	}
+	// Only OUTBOUND control assocs initiate the sibling dial. INBOUND
+	// control assocs receive their counterpart sibling via the peer's
+	// outbound dial onto our listener.
+	if role != OUTBOUND {
+		return nil
+	}
+	var dialErr error
+	controlAssoc.ordinarySiblingOnce.Do(func() {
+		dialErr = nm.dialOrdinarySibling(ctx, controlAssoc)
+	})
+	return dialErr
+}
+
+func (nm *NodeManager) dialOrdinarySibling(ctx context.Context, controlAssoc *GekkaAssociation) error {
+	controlAssoc.mu.RLock()
+	remote := controlAssoc.remote
+	controlAssoc.mu.RUnlock()
+	if remote == nil || remote.Address == nil {
+		return fmt.Errorf("control assoc has no remote address")
+	}
+	// Skip Aeron-UDP associations: the multi-conn refactor is TCP-only.
+	controlAssoc.mu.RLock()
+	isUDP := controlAssoc.udpHandler != nil
+	controlAssoc.mu.RUnlock()
+	if isUDP {
+		return nil
+	}
+
+	// Dial N TCPs in parallel. Each lane has its own restart budget.
+	conns, err := nm.DialRemoteOrdinaryLanes(ctx, remote.Address)
+	if err != nil {
+		if controlAssoc.nodeMgr != nil && controlAssoc.nodeMgr.FlightRec != nil {
+			controlAssoc.nodeMgr.FlightRec.Emit(controlAssoc.remoteKey(), FlightEvent{
+				Timestamp: time.Now(),
+				Severity:  SeverityWarn,
+				Category:  CatHandshake,
+				Message:   "ordinary_sibling_dial_failed",
+				Fields:    map[string]any{"error": err.Error()},
+			})
+		}
+		return err
+	}
+
+	outboxCap := nm.EffectiveOutboundMessageQueueSize()
+	lanes := make([]*outboundLane, len(conns))
+	for i, c := range conns {
+		lanes[i] = &outboundLane{
+			idx:           i,
+			conn:          c,
+			outbox:        make(chan []byte, outboxCap),
+			state:         INITIATED,
+			handshakeDone: make(chan struct{}),
+			localUid:      nm.localUid,
+			remoteUid:     remote.GetUid(),
+		}
+	}
+
+	ordinaryAssoc := &GekkaAssociation{
+		state:     ASSOCIATED, // sibling inherits assoc-level state from control's already-completed handshake
+		role:      OUTBOUND,
+		nodeMgr:   nm,
+		lastSeen:  time.Now(),
+		Handshake: make(chan struct{}),
+		localUid:  nm.localUid,
+		// outbox is unused for streamId=2 sibling — all writes go on
+		// per-lane outboxes via outboxFor's lane pivot. Allocate a small
+		// buffer so any stray write that lands here doesn't deadlock.
+		outbox:   make(chan []byte, 1),
+		remote:   remote,
+		streamId: 2,
+		lanes:    lanes,
+	}
+	close(ordinaryAssoc.Handshake)
+	// Link siblings both directions.
+	controlAssoc.mu.Lock()
+	controlAssoc.ordinarySibling = ordinaryAssoc
+	controlAssoc.mu.Unlock()
+	ordinaryAssoc.mu.Lock()
+	ordinaryAssoc.ordinarySibling = controlAssoc
+	ordinaryAssoc.mu.Unlock()
+
+	// Register under (host:port, uid, streamId=2).
+	nm.RegisterAssociation(remote, ordinaryAssoc)
+
+	// Start per-lane goroutines: writer, read loop, handshake retry.
+	// Use context.Background() so lanes survive the caller's ctx (the
+	// handshake-completion goroutine that triggered EnsureOrdinarySibling
+	// often passes a short-lived ctx). Lanes terminate when the lane conn
+	// closes (writer/reader exit naturally) or QuarantinePeer cancels them.
+	siblingCtx := context.Background()
+	for _, lane := range lanes {
+		// Mark lane ASSOCIATED proactively. The control handshake has
+		// already completed, so the peer UID is known and any user frame
+		// written on this lane is wire-tolerable. The HandshakeReq is
+		// still sent (below) so the peer's per-stream Artery state
+		// machine acknowledges our UID for streamId=2.
+		go ordinaryAssoc.startLaneWriter(siblingCtx, lane)
+		go nm.runLaneReadLoop(siblingCtx, ordinaryAssoc, lane)
+		go func(l *outboundLane) {
+			nm.ProcessConnectionLane(siblingCtx, ordinaryAssoc, l, remote.Address)
+		}(lane)
+		// Mark the lane ASSOCIATED and signal handshakeDone so any
+		// per-lane gating proceeds. The retry goroutine returns once
+		// it observes ASSOCIATED.
+		ordinaryAssoc.mu.Lock()
+		lane.state = ASSOCIATED
+		ordinaryAssoc.mu.Unlock()
+		select {
+		case <-lane.handshakeDone:
+		default:
+			close(lane.handshakeDone)
+		}
+	}
+
+	if nm.FlightRec != nil {
+		nm.FlightRec.Emit(controlAssoc.remoteKey(), FlightEvent{
+			Timestamp: time.Now(),
+			Severity:  SeverityInfo,
+			Category:  CatHandshake,
+			Message:   "ordinary_sibling_established",
+			Fields:    map[string]any{"lanes": len(lanes)},
+		})
+	}
+	return nil
 }
 
 // effectiveStreamFrameSizeCap returns the maximum-frame-size used by the read
@@ -2239,32 +2615,130 @@ func (assoc *GekkaAssociation) Send(recipient string, payload []byte, serializer
 	}
 }
 
-// udpOrdinaryOutboxFor returns the appropriate outbox channel for serializerId.
-// User messages (non-cluster, non-artery-internal) use the Aeron ordinary stream
-// (stream 2) when available.  Everything else uses the primary outbox (stream 1).
-// For TCP associations udpOrdinaryOutbox is nil, so the primary outbox is always used.
-func (assoc *GekkaAssociation) udpOrdinaryOutboxFor(serializerId int32) chan []byte {
-	if assoc.udpOrdinaryOutbox != nil &&
-		serializerId != ClusterSerializerID &&
-		serializerId != ArteryInternalSerializerID {
-		return assoc.udpOrdinaryOutbox
-	}
-	return assoc.outbox
-}
-
 // outboxFor selects the outbox channel for a (recipient, serializerId) pair.
 // Large-message routing (Round-2 session 29) preempts the ordinary stream
 // when the recipient matches a configured large-message-destinations glob
 // AND the serializer is a user serializer (cluster/artery-internal control
-// traffic always stays on stream 1). Falls through to udpOrdinaryOutboxFor
-// for other user messages.
+// traffic always stays on stream 1). Sub-plan 8f outbound half adds the
+// streamId=2 sibling pivot: when this assoc is the control stream and an
+// ordinary sibling is registered, user-message traffic is partitioned
+// across the sibling's lanes by hash(recipient).
+//
+// IMPORTANT: callers hold assoc.mu (write lock — see Send /
+// SendWithSender). This function therefore does NOT re-lock assoc.mu;
+// taking RLock would deadlock with sync.RWMutex semantics. The sibling
+// pointer is read without locking — it is set once at sibling-registration
+// time and the slice header is stable thereafter (lane outboxes are
+// allocated up front in dialOrdinarySibling).
 func (assoc *GekkaAssociation) outboxFor(recipient string, serializerId int32) chan []byte {
-	if serializerId != ClusterSerializerID && serializerId != ArteryInternalSerializerID {
-		if nm := assoc.nodeMgr; nm != nil && assoc.udpLargeOutbox != nil && nm.IsLargeRecipient(recipient) {
-			return assoc.udpLargeOutbox
+	// Cluster + ArteryInternal: stay on this stream regardless of streamId.
+	if serializerId == ClusterSerializerID || serializerId == ArteryInternalSerializerID {
+		return assoc.outbox
+	}
+	// Aeron-UDP large path: unchanged. UDP transport does not multiplex over
+	// multiple sockets; the multi-conn refactor is TCP-only.
+	if nm := assoc.nodeMgr; nm != nil && assoc.udpLargeOutbox != nil && nm.IsLargeRecipient(recipient) {
+		return assoc.udpLargeOutbox
+	}
+	// Aeron-UDP ordinary path: unchanged.
+	if assoc.udpOrdinaryOutbox != nil {
+		return assoc.udpOrdinaryOutbox
+	}
+	// TCP ordinary path with sibling: route user messages onto an outbound
+	// lane of the streamId=2 sibling. Sub-plan 8f outbound half.
+	if assoc.streamId == 1 {
+		sib := assoc.ordinarySibling
+		if sib != nil {
+			lanes := sib.lanes
+			if len(lanes) > 0 {
+				return lanes[laneIndex(recipient, len(lanes))].outbox
+			}
+		}
+		// Convergence window: streamId=2 sibling not yet registered.
+		// Fall back to control stream — Pekko tolerates user messages on
+		// streamId=1 (this is gekka's pre-amendment behaviour).
+		return assoc.outbox
+	}
+	if assoc.streamId == 2 && len(assoc.lanes) > 0 {
+		return assoc.lanes[laneIndex(recipient, len(assoc.lanes))].outbox
+	}
+	return assoc.outbox
+}
+
+// startLaneWriter is the per-lane TCP/UDP outbox drainer. Sub-plan 8f
+// outbound half: factored out of the inline writer goroutine so both the
+// single-conn (control / large / UDP) path and the multi-lane streamId=2
+// path share the same logic.
+//
+// Uses the outer ctx (node lifetime), not assocCtx, so the write loop keeps
+// draining the outbox even after the read loop exits. In Artery-TCP the
+// outbound TCP stream is unidirectional: Pekko half-closes its write end
+// immediately, causing the read loop to get EOF and return, but writes in
+// the opposite direction are still valid and must continue.
+func (assoc *GekkaAssociation) startLaneWriter(ctx context.Context, lane *outboundLane) {
+	nm := assoc.nodeMgr
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg, ok := <-lane.outbox:
+			if !ok {
+				return
+			}
+			// Check mute state before writing (catches buffered frames
+			// queued before MuteNode was called). Use assoc.remote under
+			// read lock since it's updated after the handshake.
+			assoc.mu.RLock()
+			remoteAddr := assoc.remote.GetAddress()
+			assoc.mu.RUnlock()
+			if remoteAddr != nil && nm != nil && nm.isNodeMuted(remoteAddr.GetHostname(), remoteAddr.GetPort()) {
+				continue
+			}
+			slog.Debug("artery: sending frame", "total_bytes", len(msg), "lane", lane.idx)
+			// UDP path: wrap in Aeron DATA frame and send via UDP socket.
+			assoc.mu.RLock()
+			udpH := assoc.udpHandler
+			udpDst := assoc.udpDst
+			assoc.mu.RUnlock()
+			if udpH != nil && udpDst != nil {
+				if err := udpH.SendFrame(udpDst, AeronStreamControl, msg); err != nil {
+					slog.Warn("aeron-udp: outbox send error", "error", err)
+				}
+				continue
+			}
+			// TCP path: prepend 4-byte length and write to the lane's
+			// connection. writeMu serializes WriteFrame within a single
+			// lane (the channel itself serializes across lanes via
+			// goroutines, but a single lane may be drained from this loop
+			// only — the mutex is defensive against any future fan-out).
+			lane.writeMu.Lock()
+			err := WriteFrame(lane.conn, msg)
+			lane.writeMu.Unlock()
+			if err != nil {
+				slog.Error("artery: write error", "error", err, "lane", lane.idx)
+				if lane.conn != nil {
+					_ = lane.conn.Close()
+				}
+				return
+			}
+			// Emit flight recorder events for sent frames.
+			if nm != nil && nm.FlightRec != nil {
+				assoc.mu.RLock()
+				sid := assoc.streamId
+				assoc.mu.RUnlock()
+				if sid == 3 {
+					nm.FlightRec.Emit(assoc.remoteKey(), FlightEvent{
+						Timestamp: time.Now(),
+						Severity:  SeverityInfo,
+						Category:  CatLargeFrame,
+						Message:   "send",
+						Fields:    map[string]any{"size": len(msg)},
+					})
+				}
+				nm.FlightRec.EmitFrame(assoc.remoteKey(), "send", len(msg), 0)
+			}
 		}
 	}
-	return assoc.udpOrdinaryOutboxFor(serializerId)
 }
 
 func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *ArteryMetadata) error {
@@ -2470,6 +2944,31 @@ func (assoc *GekkaAssociation) handleIdentify(meta *ArteryMetadata, env *gproto_
 	slog.Debug("artery: sent ActorIdentity", "recipient", senderPath, "actorRef", actorRefPath)
 }
 
+// inboundLaneIndexOf returns the lane index of this assoc's conn within
+// either its own inboundConns or its primary's (when delegated). Returns
+// -1 if not found. Used by lane-aware HandshakeRsp routing in
+// handleHandshakeReq. Sub-plan 8f outbound half.
+func (assoc *GekkaAssociation) inboundLaneIndexOf() int {
+	assoc.mu.RLock()
+	myConn := assoc.conn
+	delegate := assoc.delegate
+	conns := assoc.inboundConns
+	assoc.mu.RUnlock()
+	primary := assoc
+	if delegate != nil {
+		primary = delegate
+		primary.mu.RLock()
+		conns = primary.inboundConns
+		primary.mu.RUnlock()
+	}
+	for i, c := range conns {
+		if c == myConn {
+			return i
+		}
+	}
+	return -1
+}
+
 func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeReq) error {
 	slog.Debug("artery: received HandshakeReq", "from", req.From.String(), "role", assoc.role)
 
@@ -2508,7 +3007,80 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 		"uid":    req.GetFrom().GetUid(),
 	})
 
-	assoc.nodeMgr.RegisterAssociation(req.From, assoc)
+	// Sub-plan 8f outbound half — inbound coalescence by (UID, streamId=2).
+	// When peer X opens N inbound streamId=2 TCPs from the same UID, every
+	// TCP after the first attaches to the existing streamId=2 logical
+	// association as an additional entry in inboundConns and sets its
+	// dispatch delegate to the primary so all frames flow through the
+	// single shared inbound-lanes fan-out.
+	//
+	// "Existing streamId=2 assoc" here is found by scanning the registry
+	// for ANY streamId=2 entry whose remote UID matches — INBOUND (an
+	// earlier inbound primary) OR OUTBOUND (gekka's own ordinary sibling
+	// for that peer). The OUTBOUND sibling typically owns the registry
+	// key (RegisterAssociation suppresses INBOUND when OUTBOUND already
+	// occupies the (host:port, uid, streamId) slot), so inbound TCPs
+	// from the peer attach onto the sibling and become the bidirectional
+	// "logical" streamId=2 association.
+	coalesced := false
+	if assoc.role == INBOUND && assoc.streamId == 2 {
+		nm := assoc.nodeMgr
+		nm.mu.RLock()
+		var existing *GekkaAssociation
+		for _, a := range nm.associations {
+			if a == assoc {
+				continue
+			}
+			a.mu.RLock()
+			match := a.streamId == 2 &&
+				a.remote != nil &&
+				a.remote.GetUid() == req.From.GetUid()
+			a.mu.RUnlock()
+			if match {
+				existing = a
+				break
+			}
+		}
+		nm.mu.RUnlock()
+		if existing != nil {
+			existing.mu.Lock()
+			existing.inboundConns = append(existing.inboundConns, assoc.conn)
+			existing.mu.Unlock()
+			assoc.mu.Lock()
+			assoc.delegate = existing
+			assoc.mu.Unlock()
+			if nm.FlightRec != nil {
+				nm.FlightRec.Emit(existing.remoteKey(), FlightEvent{
+					Timestamp: time.Now(),
+					Severity:  SeverityInfo,
+					Category:  CatHandshake,
+					Message:   "inbound_coalesced",
+					Fields:    map[string]any{"conns": len(existing.inboundConns)},
+				})
+			}
+			slog.Debug("artery: inbound coalesced into existing streamId=2 assoc",
+				"remote", existing.remoteKey(),
+				"conns", len(existing.inboundConns))
+			coalesced = true
+			// Skip registration below to avoid overwriting the primary,
+			// but fall through to the HandshakeRsp routing block so the
+			// peer's HandshakeReq still gets a response on the correct
+			// outbound lane.
+		} else {
+			// First INBOUND streamId=2 from this peer UID — becomes
+			// inboundConns[0] of itself (registered as primary below
+			// by the RegisterAssociation call).
+			assoc.mu.Lock()
+			if len(assoc.inboundConns) == 0 {
+				assoc.inboundConns = []net.Conn{assoc.conn}
+			}
+			assoc.mu.Unlock()
+		}
+	}
+
+	if !coalesced {
+		assoc.nodeMgr.RegisterAssociation(req.From, assoc)
+	}
 
 	// Symmetric Handshake: check if there's an outbound association waiting for a Handshake from this same remote node.
 	if assoc.role == INBOUND {
@@ -2590,20 +3162,71 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 		// fallback (needed for unit tests; Pekko may reset the INBOUND but
 		// the async DialRemote above will establish a working OUTBOUND for
 		// subsequent messages).
+		//
+		// Sub-plan 8f outbound half — lane-aware HandshakeRsp routing.
+		// When the inbound HandshakeReq arrived on a streamId=2 INBOUND
+		// TCP at lane index L, prefer routing the response to the OUTBOUND
+		// streamId=2 sibling's lane[L] (matching the lane index on which
+		// the request landed). Falls back to the OUTBOUND control assoc's
+		// outbox (streamId=1) when the sibling is not yet registered or
+		// L >= len(lanes) — Pekko/Akka tolerate HandshakeRsp on streamId=1.
 		{
 			localUA := &gproto_remote.UniqueAddress{Address: assoc.nodeMgr.LocalAddr, Uid: proto.Uint64(assoc.localUid)}
 			rspProto := &gproto_remote.MessageWithAddress{Address: localUA}
 			if rspPayload, err2 := proto.Marshal(rspProto); err2 == nil {
 				if frame, err2 := BuildArteryFrame(int64(assoc.localUid), actor.ArteryInternalSerializerID, "", "", "e", rspPayload, true); err2 == nil {
-					target := outboundToRemote
-					if target != nil {
-						slog.Debug("artery: sending HandshakeRsp via OUTBOUND association")
+					var rspOutbox chan []byte
+					var routed string
+					if outboundToRemote != nil {
+						// Prefer the streamId=1 control outbox for the
+						// "OUTBOUND control" baseline. outboundToRemote
+						// may itself be the streamId=2 sibling — pivot
+						// to its sibling pointer when needed so the
+						// fallback is the control outbox, not the
+						// sibling outbox (which is unused for streamId=2
+						// and would silently swallow the rsp).
+						controlAssoc := outboundToRemote
+						if outboundToRemote.streamId == 2 {
+							outboundToRemote.mu.RLock()
+							p := outboundToRemote.ordinarySibling
+							outboundToRemote.mu.RUnlock()
+							if p != nil {
+								controlAssoc = p
+							}
+						}
+						rspOutbox = controlAssoc.outbox
+						routed = "OUTBOUND control"
+						// If the inbound HandshakeReq came on a
+						// streamId=2 TCP, route the response onto the
+						// matching outbound lane of the streamId=2
+						// sibling (looked up via control's sibling
+						// pointer, which always points at the lanes-
+						// bearing assoc).
+						if assoc.streamId == 2 {
+							laneIdx := assoc.inboundLaneIndexOf()
+							controlAssoc.mu.RLock()
+							sib := controlAssoc.ordinarySibling
+							controlAssoc.mu.RUnlock()
+							if sib != nil {
+								sib.mu.RLock()
+								lanes := sib.lanes
+								sib.mu.RUnlock()
+								if laneIdx >= 0 && laneIdx < len(lanes) {
+									rspOutbox = lanes[laneIdx].outbox
+									routed = "OUTBOUND sibling lane"
+								} else if len(lanes) > 0 {
+									rspOutbox = lanes[0].outbox
+									routed = "OUTBOUND sibling lane[0]"
+								}
+							}
+						}
 					} else {
-						target = assoc
-						slog.Debug("artery: sending HandshakeRsp via INBOUND (fallback)")
+						rspOutbox = assoc.outbox
+						routed = "INBOUND fallback"
 					}
+					slog.Debug("artery: sending HandshakeRsp", "via", routed)
 					select {
-					case target.outbox <- frame:
+					case rspOutbox <- frame:
 					default:
 						slog.Warn("artery: HandshakeRsp outbox full, dropping response")
 					}
@@ -2637,6 +3260,18 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 				"remote": matched.remoteKey(),
 			})
 			nm.RegisterAssociation(req.From, matched)
+			// Sub-plan 8f outbound half: dial the streamId=2 ordinary
+			// sibling once the OUTBOUND control handshake is complete.
+			// On error, log + flight event but do not fail the assoc —
+			// ordinary traffic falls back to the control stream during
+			// the convergence window.
+			if matched.streamId == 1 {
+				go func(c *GekkaAssociation) {
+					if err := nm.EnsureOrdinarySibling(context.Background(), c); err != nil {
+						slog.Debug("artery: EnsureOrdinarySibling error", "remote", c.remoteKey(), "error", err)
+					}
+				}(matched)
+			}
 		}
 
 		return nil
@@ -2746,6 +3381,19 @@ func (assoc *GekkaAssociation) handleHandshakeRsp(mwa *gproto_remote.MessageWith
 
 		// Re-register with full UniqueAddress (including UID from Pekko)
 		assoc.nodeMgr.RegisterAssociation(mwa.Address, matched)
+		// Sub-plan 8f outbound half: dial the streamId=2 ordinary sibling
+		// once the OUTBOUND control handshake is complete. On error log +
+		// flight event but do not fail the control assoc — ordinary
+		// traffic falls back to the control stream during the convergence
+		// window.
+		if matched.streamId == 1 {
+			nm := assoc.nodeMgr
+			go func(c *GekkaAssociation) {
+				if err := nm.EnsureOrdinarySibling(context.Background(), c); err != nil {
+					slog.Debug("artery: EnsureOrdinarySibling error", "remote", c.remoteKey(), "error", err)
+				}
+			}(matched)
+		}
 	} else {
 		slog.Warn("artery: no matching outbound association found for HandshakeRsp")
 	}

@@ -26,9 +26,9 @@ import (
 // failure-detector reaper. It is a separate struct so callers that never
 // register a remote watch pay no allocation / goroutine cost.
 type watchFDState struct {
-	once     sync.Once
-	cancel   context.CancelFunc
-	mu       sync.Mutex
+	once      sync.Once
+	cancel    context.CancelFunc
+	mu        sync.Mutex
 	keyToAddr map[string]cluster.MemberAddress
 }
 
@@ -146,7 +146,6 @@ func watchFDKeyForAssociation(assoc *core.GekkaAssociation) (string, bool) {
 	return fmt.Sprintf("%s:%d-%d", addr.GetHostname(), addr.GetPort(), remote.GetUid()), true
 }
 
-
 // ── Remote Death Watch ────────────────────────────────────────────────────────
 
 func (c *Cluster) watchRemote(watcher ActorRef, target ActorRef) {
@@ -208,31 +207,28 @@ func (c *Cluster) watchRemote(watcher ActorRef, target ActorRef) {
 		AckReplyTo: &gproto_remote.UniqueAddress{
 			Address: c.nm.LocalAddr,
 			Uid:     proto.Uint64(assoc.LocalUid()),
-			},
-			}
-			payload, err := proto.Marshal(env)
-			if err != nil {
-			return
-			}
+		},
+	}
+	payload, err := proto.Marshal(env)
+	if err != nil {
+		return
+	}
 
-			frame, err := core.BuildArteryFrame(
-			int64(assoc.LocalUid()),
-			17, // ArteryInternalSerializerID
-			"",
-			target.Path(),
-			"SystemMessage",
-			payload,
-			true,
-			)
-			if err != nil {
-			return
-			}
+	frame, err := core.BuildArteryFrame(
+		int64(assoc.LocalUid()),
+		17, // ArteryInternalSerializerID
+		"",
+		target.Path(),
+		"SystemMessage",
+		payload,
+		true,
+	)
+	if err != nil {
+		return
+	}
 
-			select {
-			case assoc.Outbox() <- frame:
-
-	default:
-		slog.Debug("artery: outbox full, dropping WATCH system message")
+	if err := assoc.SendSystem(seq, frame); err != nil {
+		slog.Debug("artery: WATCH system message send failed", "error", err, "seq", seq)
 	}
 }
 
@@ -289,30 +285,28 @@ func (c *Cluster) unwatchRemote(watcher ActorRef, target ActorRef) {
 		AckReplyTo: &gproto_remote.UniqueAddress{
 			Address: c.nm.LocalAddr,
 			Uid:     proto.Uint64(assoc.LocalUid()),
-			},
-			}
-			payload, err := proto.Marshal(env)
-			if err != nil {
-			return
-			}
+		},
+	}
+	payload, err := proto.Marshal(env)
+	if err != nil {
+		return
+	}
 
-			frame, err := core.BuildArteryFrame(
-			int64(assoc.LocalUid()),
-			17, // ArteryInternalSerializerID
-			"",
-			target.Path(),
-			"SystemMessage",
-			payload,
-			true,
-			)
-			if err != nil {
-			return
-			}
+	frame, err := core.BuildArteryFrame(
+		int64(assoc.LocalUid()),
+		17, // ArteryInternalSerializerID
+		"",
+		target.Path(),
+		"SystemMessage",
+		payload,
+		true,
+	)
+	if err != nil {
+		return
+	}
 
-			select {
-			case assoc.Outbox() <- frame:
-
-	default:
+	if err := assoc.SendSystem(seq, frame); err != nil {
+		slog.Debug("artery: UNWATCH system message send failed", "error", err, "seq", seq)
 	}
 }
 func (c *Cluster) triggerRemoteNodeDeath(addr cluster.MemberAddress) {
@@ -507,10 +501,8 @@ func (c *Cluster) emitRemoteDeathWatchNotifications(nodeWatchers map[string][]*g
 				continue
 			}
 
-			select {
-			case assoc.Outbox() <- frame:
-			default:
-				slog.Debug("artery: outbox full, dropping Terminated notification")
+			if err := assoc.SendSystem(seq, frame); err != nil {
+				slog.Debug("artery: Terminated notification send failed", "error", err, "seq", seq)
 			}
 		}
 	}

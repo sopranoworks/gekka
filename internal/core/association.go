@@ -182,6 +182,23 @@ type GekkaAssociation struct {
 	// lanes machinery handles all frames uniformly. Sub-plan 8f outbound
 	// half (inbound coalescence).
 	delegate *GekkaAssociation
+
+	// systemOutbox is the per-association sender-side buffer of unacknowledged
+	// system messages (Phase 2 — pekko.remote.artery.advanced.system-message-*).
+	// Populated only on control-stream (streamId=1) associations: system
+	// messages always travel on streamId=1, and GetGekkaAssociationByHost
+	// preferentially returns the control association as the SendSystem target.
+	// Nil for streamId=2 ordinary siblings and streamId=3 large-message
+	// associations. Sized to NodeManager.EffectiveSystemMessageBufferSize().
+	systemOutbox *SystemMessageOutbox
+
+	// lastDeliveredSystemSeq is the highest system-message seq number this
+	// association has dispatched to the SystemMessageCallback. Used by
+	// handleSystemMessage to dedupe resends from the sender's redelivery
+	// ticker: if env.GetSeqNo() <= lastDeliveredSystemSeq, the message is
+	// already delivered locally — we re-ack so the sender prunes its buffer
+	// but skip the dispatch. Guarded by mu.
+	lastDeliveredSystemSeq uint64
 }
 
 var _ actor.RemoteAssociation = (*GekkaAssociation)(nil)
@@ -1865,6 +1882,13 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 		remote:    &gproto_remote.UniqueAddress{Address: remote, Uid: proto.Uint64(0)},
 		streamId:  streamId,
 	}
+	// System-message redelivery (Phase 2): only the control stream
+	// (streamId=1) carries system messages, so only that association
+	// allocates a SystemMessageOutbox and runs the resend ticker.
+	if streamId == 1 {
+		assoc.systemOutbox = NewSystemMessageOutbox(nm.EffectiveSystemMessageBufferSize())
+		go assoc.runSystemRedelivery(ctx)
+	}
 	assoc.emitFlight(SeverityInfo, CatHandshake, "INITIATED", map[string]any{
 		"remote": assoc.remoteKey(),
 		"role":   role,
@@ -2012,6 +2036,111 @@ func (assoc *GekkaAssociation) Remote() *gproto_remote.UniqueAddress {
 
 func (assoc *GekkaAssociation) Outbox() chan []byte {
 	return assoc.outbox
+}
+
+// SystemOutbox returns this association's sender-side buffer of unacked
+// system messages, or nil for non-control streams. Exposed for tests and
+// the Phase 2.3 ack consumer.
+func (assoc *GekkaAssociation) SystemOutbox() *SystemMessageOutbox {
+	return assoc.systemOutbox
+}
+
+// SendSystem buffers an outbound system-message frame for redelivery and
+// pushes it onto the wire. Used by cluster_watch.go and any other site
+// emitting a Pekko SystemMessageEnvelope. The frame is the fully-encoded
+// Artery frame (as produced by BuildArteryFrame) so this method is
+// transport-agnostic.
+//
+// On a non-control association (no systemOutbox), falls back to the
+// fire-and-forget Outbox() write — preserves legacy behaviour for any
+// caller that targets a non-control assoc.
+//
+// Semantics:
+//   - Enqueue first into systemOutbox so the resend ticker (Phase 2.2)
+//     and ack-prune (Phase 2.3) can observe the entry.
+//   - Try-write the frame onto the wire outbox (non-blocking). If the
+//     outbox is full, the entry stays in systemOutbox and the resend
+//     ticker will retry on its next tick.
+//   - When systemOutbox is at capacity, returns ErrSystemOutboxFull
+//     without writing — the caller (Phase 2.4) is expected to escalate
+//     to QUARANTINED. Until 2.4 lands, callers log and drop.
+func (assoc *GekkaAssociation) SendSystem(seqNo uint64, frame []byte) error {
+	if assoc.systemOutbox == nil {
+		// Non-control assoc — preserve fire-and-forget behaviour so
+		// callers targeting a non-streamId=1 association still work.
+		select {
+		case assoc.outbox <- frame:
+			return nil
+		default:
+			return fmt.Errorf("artery: outbox full, system message dropped")
+		}
+	}
+	if err := assoc.systemOutbox.Enqueue(seqNo, frame, time.Now()); err != nil {
+		return err
+	}
+	// Best-effort wire write. On full outbox the entry is still buffered;
+	// the resend ticker will retry. This decouples write back-pressure
+	// from system-message delivery guarantees.
+	select {
+	case assoc.outbox <- frame:
+	default:
+		slog.Debug("artery: outbox full on initial system-message send, will retry via resend ticker",
+			"seqNo", seqNo, "remote", assoc.remoteKey())
+	}
+	return nil
+}
+
+// runSystemRedelivery is the per-association resend loop. Wakes every
+// EffectiveSystemMessageResendInterval(), walks the systemOutbox snapshot,
+// and re-writes any entry whose lastAttempt is older than the resend
+// interval. Frames that just hit the wire (within the current interval)
+// are skipped to avoid duplicate writes when an ack has not yet had time
+// to round-trip.
+//
+// Stops on ctx.Done() (node lifetime). The Phase 2.4 give-up path will
+// also signal stop after escalating to QUARANTINED.
+func (assoc *GekkaAssociation) runSystemRedelivery(ctx context.Context) {
+	if assoc.systemOutbox == nil {
+		return
+	}
+	nm := assoc.nodeMgr
+	if nm == nil {
+		return
+	}
+	interval := nm.EffectiveSystemMessageResendInterval()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			snap := assoc.systemOutbox.Snapshot()
+			if len(snap) == 0 {
+				continue
+			}
+			for _, e := range snap {
+				if now.Sub(e.lastAttempt) < interval {
+					// Sent within the current interval — give the ack a
+					// chance to arrive before resending.
+					continue
+				}
+				select {
+				case assoc.outbox <- e.frame:
+					assoc.systemOutbox.MarkResent(e.seqNo, now)
+					slog.Debug("artery: resent unacked system message",
+						"seqNo", e.seqNo, "remote", assoc.remoteKey(),
+						"first_attempt", e.firstAttempt)
+				default:
+					// Outbox saturated — leave entry in buffer; next tick
+					// will retry. Don't update lastAttempt so the next
+					// tick still considers this entry.
+					slog.Debug("artery: outbox full during system-message resend",
+						"seqNo", e.seqNo, "remote", assoc.remoteKey())
+				}
+			}
+		}
+	}
 }
 
 func (assoc *GekkaAssociation) initiateHandshake(to *gproto_remote.Address) error {
@@ -2524,6 +2653,23 @@ func (assoc *GekkaAssociation) handleSystemMessage(meta *ArteryMetadata) error {
 		if err := assoc.sendSystemAck(env.GetSeqNo(), env.AckReplyTo); err != nil {
 			slog.Debug("artery: failed to send ACK", "seq", env.GetSeqNo(), "error", err)
 		}
+	}
+	// Dedupe resends from the sender's redelivery ticker (Phase 2.2).
+	// Pekko's wire guarantee is at-least-once with receiver-side dedupe by
+	// monotonically-increasing seq. We track the high-water mark per
+	// association: a frame whose seq <= lastDeliveredSystemSeq has already
+	// been dispatched locally — re-ack (above) and skip a duplicate dispatch.
+	if seq := env.GetSeqNo(); seq != 0 {
+		assoc.mu.Lock()
+		if seq <= assoc.lastDeliveredSystemSeq {
+			assoc.mu.Unlock()
+			slog.Debug("artery: dropping duplicate system message",
+				"seq", seq, "lastDelivered", assoc.lastDeliveredSystemSeq,
+				"remote", assoc.remoteKey())
+			return nil
+		}
+		assoc.lastDeliveredSystemSeq = seq
+		assoc.mu.Unlock()
 	}
 	sm := &gproto_remote.SystemMessage{}
 	if err := proto.Unmarshal(env.Message, sm); err != nil {

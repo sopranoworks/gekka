@@ -174,9 +174,9 @@ The keys most users actually tune. All are Pekko-compatible (drop them into your
 | `pekko.remote.artery.untrusted-mode` | `off` | ✅ | Round-2 session 31 — when on, drops `Watch`/`Unwatch`/PossiblyHarmful system messages and `PoisonPill`/`Kill` MiscMessage payloads from remote (top-level and nested in `ActorSelection`); cluster traffic bypasses the gate so gossip/heartbeats are unaffected. First drop per (serializerId, manifest) emits WARN; subsequent drops downgrade to DEBUG |
 | `pekko.remote.artery.trusted-selection-paths` | `[]` | ✅ | Round-2 session 32 — when `untrusted-mode = on`, inbound `ActorSelection` is delivered only when its resolved path is verbatim in this allowlist (URI scheme/authority stripped before comparison). Empty list under untrusted-mode blocks every selection, including `Identify` |
 | `pekko.remote.artery.advanced.maximum-frame-size` | `256 KiB` | ✅ | Configurable via HOCON |
-| `pekko.remote.artery.advanced.buffer-pool-size` | `128` | ⚠️ | Parsed and exposed via `NodeManager.EffectiveBufferPoolSize`; receive-buffer-pool consumer not yet implemented |
+| `pekko.remote.artery.advanced.buffer-pool-size` | `128` | ✅ | Sizes the regular receive buffer pool (`NodeManager.bufferPool`, lazily built by `streamBufferPool` for streams 1/2). Each pool buffer is pre-sized to `maximum-frame-size`. The Artery TCP read loop (`tcpArteryReadLoop`) checks out one buffer on entry and returns it on exit, eliminating per-frame allocations and bounding the steady-state heap footprint. Wired in Phase 3.2 (sub-commit 3add8d0) |
 | `pekko.remote.artery.advanced.maximum-large-frame-size` | `2 MiB` | ✅ | Round-2 session 30 — applied to the inbound read loop when `assoc.streamId == AeronStreamLarge` (stream 3) via `effectiveStreamFrameSizeCap`; streams 1/2 keep `maximum-frame-size` |
-| `pekko.remote.artery.advanced.large-buffer-pool-size` | `32` | ⚠️ | Parsed and exposed via `NodeManager.EffectiveLargeBufferPoolSize`; large-stream buffer-pool consumer not yet implemented |
+| `pekko.remote.artery.advanced.large-buffer-pool-size` | `32` | ✅ | Sizes the large-stream receive buffer pool (`NodeManager.largeBufferPool`, lazily built by `streamBufferPool` for stream 3). Each pool buffer is pre-sized to `maximum-large-frame-size`. The pool is fully independent from the regular pool — a burst of large traffic never drains the ordinary buffers and vice versa. Wired in Phase 3.2 (sub-commit 3add8d0) |
 | `pekko.remote.artery.advanced.outbound-large-message-queue-size` | `256` | ✅ | Recorded on NodeManager (`EffectiveOutboundLargeMessageQueueSize`) for the large-stream outbox |
 | `pekko.remote.artery.advanced.compression.actor-refs.max` | `256` | ✅ | Consumed by `CompressionTableManager.UpdateActorRefTable`; CTM is constructed in production via `core.StartCompressionTableManager` (called from `cluster.NewCluster`) and reachable from the inbound-advert handler at `association.go:2802` (sub-plan 8g) |
 | `pekko.remote.artery.advanced.compression.actor-refs.advertisement-interval` | `1m` | ✅ | Consumed by `CompressionTableManager.StartAdvertisementScheduler` invoked from `core.StartCompressionTableManager` (called from `cluster.NewCluster`); the production advertisement callback fires at this cadence and emits `CompressionTableAdvertisement` to each associated peer (sub-plan 8g) |
@@ -578,12 +578,12 @@ touching the consumer code.
 
 ## Summary
 
-### Symbol counts (post 2026-05-06 perfect-pekko Phase 2 closure)
+### Symbol counts (post 2026-05-07 perfect-pekko Phase 3 closure)
 
 | Symbol | Substantive table rows | Meaning |
 |---|---|---|
-| ✅ | 277 | Parsed AND consumed |
-| ⚠️ | 19 | Forward-compat parsed; consumer deferred (Note states what's deferred) |
+| ✅ | 279 | Parsed AND consumed |
+| ⚠️ | 17 | Forward-compat parsed; consumer deferred (Note states what's deferred) |
 | ☕ | 8 | JVM-only — no equivalent capability in Go runtime |
 | 🚫 | 4 | Go/JVM API-shape incompatibility (FQCN class loading, JCA Provider, JKS rotation) |
 | ❌ | 2 | Not implemented; portable in principle (tracked in `docs/LEFTWORKS.md` §11) |
@@ -649,6 +649,45 @@ on 2026-05-06.
 
 ### Audit history
 
+- **2026-05-07 — Perfect-pekko Phase 3 closure (sub-commits 3.1–3.2,
+  Artery receive buffer pools):** Closes the two ⚠️ rows for the
+  receive-side buffer pools (`buffer-pool-size` row 177 and
+  `large-buffer-pool-size` row 179) by giving them real production
+  consumers. Sub-commit 3.1 (commit `0d36b4e`) adds
+  `internal/core/buffer_pool.go` — a fixed-cap channel-backed pool
+  modelled on Pekko's `EnvelopeBufferPool`. `Get()` returns a buffer
+  pre-sized to `bufferSize` (or allocates fresh on a cold pool, with
+  an atomic `AllocCount` counter for the regression tests); `Put()`
+  drops mis-sized buffers and is non-blocking on a full pool, letting
+  the GC reclaim excess buffers without backpressure. The pool is
+  nil-receiver-safe so call sites that have not been migrated stay
+  byte-for-byte identical to the pre-Phase-3 behaviour. Sub-commit
+  3.2 (commit `3add8d0`) wires the pool into the receive path:
+  `NodeManager` grows lazily-built `bufferPool` and `largeBufferPool`
+  fields plus a `streamBufferPool(streamId)` selector — streams 1
+  (control) and 2 (ordinary) share the regular pool sized to
+  `EffectiveBufferPoolSize × MaxFrameSize`, stream 3 (large) gets its
+  own pool sized to `EffectiveLargeBufferPoolSize ×
+  EffectiveMaximumLargeFrameSize`. The two pools are independent —
+  Pekko parity. `tcpArteryReadLoop` now takes `*BufferPool`, calls
+  `Get()` once on entry and `Put()` once on exit (deferred), and
+  `Process` / `runLaneReadLoop` pass the right per-stream pool from
+  NodeManager. Test additions
+  (`internal/core/buffer_pool_wiring_test.go`) cover (a) per-stream
+  pool selection and lazy-init memoisation, (b) Pekko-default fallback
+  when NodeManager is unconfigured, (c) end-to-end frame roundtrip
+  with `AllocCount` and post-loop pool depth assertions, (d) the
+  steady-load regression guard — eight sequential read loops sharing
+  a 1-buffer pool keep `AllocCount = 1` after warmup, proving the
+  per-frame allocations Phase 3 exists to eliminate are gone, and
+  (e) regular-vs-large pool independence under load. Iron Rule 1 full
+  gate green for both sub-commits: unit workspace, integration
+  `-tags integration -p 1 -count=1 -timeout 600s` (clean on second
+  run; first run hit the previously-documented
+  `TestCluster_GoDominantMixed` cross-suite flake that passes in
+  isolation and on retry, same behaviour observed in Phase 2.x), sbt
+  multi-jvm 3/3. Summary counts: ✅ 277 → 279, ⚠️ 19 → 17. Closes
+  two rows: 177, 179.
 - **2026-05-06 — Perfect-pekko Phase 2 closure (sub-commits 2.1–2.4,
   sender-side system-message redelivery):** Closes the three Artery
   redelivery ⚠️ rows (`system-message-buffer-size`,

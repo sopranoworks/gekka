@@ -530,6 +530,35 @@ type NodeManager struct {
 	// Nil-safe: a nil router treats everything as non-large.
 	// Guarded by mu (read-mostly; replaced via SetLargeMessageDestinations).
 	largeRouter *LargeMessageRouter
+
+	// bufferPool / largeBufferPool are the shared receive-side buffer pools
+	// consumed by tcpArteryReadLoop. They are the gekka analogue of Pekko's
+	// EnvelopeBufferPool — pre-allocated read buffers sized to the stream's
+	// maximum-frame-size, recycled across active read loops to bound the
+	// per-association steady-state heap footprint and eliminate per-frame
+	// allocations.
+	//
+	// bufferPool is shared by streams 1 (control) and 2 (ordinary). Each
+	// buffer is sized to MaxFrameSize (pekko.remote.artery.advanced.maximum-frame-size,
+	// default 256 KiB) and the pool's depth is BufferPoolSize
+	// (pekko.remote.artery.advanced.buffer-pool-size, default 128).
+	//
+	// largeBufferPool is dedicated to stream 3 (large messages). Each buffer
+	// is sized to MaximumLargeFrameSize
+	// (pekko.remote.artery.advanced.maximum-large-frame-size, default 2 MiB)
+	// and the pool's depth is LargeBufferPoolSize
+	// (pekko.remote.artery.advanced.large-buffer-pool-size, default 32).
+	// Independence between the two pools is intentional: a burst of
+	// large-stream traffic must not drain regular-stream buffers and vice
+	// versa.
+	//
+	// Construction is lazy via streamBufferPool() — the pools are built on
+	// first call using the resolved (post-HOCON-load) config values. Both
+	// pools' lifetime is tied to the NodeManager.
+	bufferPool          *BufferPool
+	largeBufferPool     *BufferPool
+	bufferPoolOnce      sync.Once
+	largeBufferPoolOnce sync.Once
 }
 
 func NewNodeManager(local *gproto_remote.Address, uid uint64) *NodeManager {
@@ -919,6 +948,47 @@ func (nm *NodeManager) EffectiveLargeBufferPoolSize() int {
 		return nm.LargeBufferPoolSize
 	}
 	return DefaultLargeBufferPoolSize
+}
+
+// streamBufferPool returns the receive-side buffer pool for the given Artery
+// stream. Streams 1 (control) and 2 (ordinary) share the regular pool sized
+// to maximum-frame-size; stream 3 (large) gets its own pool sized to
+// maximum-large-frame-size. Both pools are lazily constructed on first
+// call so the resolved (post-HOCON-load) config values are used as
+// pool sizes.
+//
+// nm == nil yields a nil pool; callers must remain nil-pool-safe (Get/Put
+// on a nil *BufferPool fall back to per-call allocations, matching the
+// pre-Phase-3 behaviour byte-for-byte).
+func (nm *NodeManager) streamBufferPool(streamId int32) *BufferPool {
+	if nm == nil {
+		return nil
+	}
+	if streamId == AeronStreamLarge {
+		nm.largeBufferPoolOnce.Do(func() {
+			nm.largeBufferPool = NewBufferPool(
+				nm.EffectiveLargeBufferPoolSize(),
+				nm.EffectiveMaximumLargeFrameSize(),
+			)
+		})
+		return nm.largeBufferPool
+	}
+	nm.bufferPoolOnce.Do(func() {
+		// Reuse the same maximum-frame-size resolution the read loop
+		// uses (DefaultMaxFrameSize == 256 KiB on zero) so the pool's
+		// per-buffer size lines up exactly with the read loop's
+		// payload-length cap. Anything bigger trips the cap before the
+		// buffer is consulted, so the pool buffer never has to grow.
+		size := nm.MaxFrameSize
+		if size <= 0 {
+			size = DefaultMaxFrameSize
+		}
+		nm.bufferPool = NewBufferPool(
+			nm.EffectiveBufferPoolSize(),
+			size,
+		)
+	})
+	return nm.bufferPool
 }
 
 // EffectiveOutboundLargeMessageQueueSize returns the configured outbound-large-message-queue-size or the Pekko default.
@@ -2264,10 +2334,11 @@ func (assoc *GekkaAssociation) Process(ctx context.Context, protocol string) err
 		remoteUid = assoc.remote.GetUid()
 	}
 	maxFrame := assoc.effectiveStreamFrameSizeCap()
+	pool := assoc.nodeMgr.streamBufferPool(assoc.streamId)
 	if assoc.role == OUTBOUND {
-		return TcpArteryOutboundHandler(ctx, assoc.conn, dispatch, assoc.nodeMgr.compressionMgr, remoteUid, assoc.streamId, protocol, maxFrame)
+		return TcpArteryOutboundHandler(ctx, assoc.conn, dispatch, assoc.nodeMgr.compressionMgr, remoteUid, assoc.streamId, protocol, pool, maxFrame)
 	}
-	return TcpArteryHandlerWithCallback(ctx, assoc.conn, dispatch, assoc.nodeMgr.compressionMgr, remoteUid, assoc.streamId, maxFrame)
+	return TcpArteryHandlerWithCallback(ctx, assoc.conn, dispatch, assoc.nodeMgr.compressionMgr, remoteUid, assoc.streamId, pool, maxFrame)
 }
 
 // initiateLaneHandshake writes a HandshakeReq frame on a specific outbound
@@ -2357,7 +2428,8 @@ func (nm *NodeManager) runLaneReadLoop(ctx context.Context, assoc *GekkaAssociat
 		remoteUid = assoc.remote.GetUid()
 	}
 	maxFrame := assoc.effectiveStreamFrameSizeCap()
-	if err := tcpArteryReadLoop(ctx, lane.conn, dispatch, assoc.nodeMgr.compressionMgr, remoteUid, assoc.streamId, int32(maxFrame)); err != nil {
+	pool := assoc.nodeMgr.streamBufferPool(assoc.streamId)
+	if err := tcpArteryReadLoop(ctx, lane.conn, dispatch, assoc.nodeMgr.compressionMgr, remoteUid, assoc.streamId, int32(maxFrame), pool); err != nil {
 		slog.Debug("artery: lane read loop ended", "lane", lane.idx, "error", err)
 	}
 }

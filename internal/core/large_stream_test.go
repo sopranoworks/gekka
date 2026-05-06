@@ -30,7 +30,7 @@ func TestAssociation_EffectiveStreamFrameSizeCap_StreamId3(t *testing.T) {
 		Hostname: proto.String("127.0.0.1"),
 		Port:     proto.Uint32(0),
 	}, 1)
-	nm.MaxFrameSize = 64 * 1024              // 64 KiB ordinary cap
+	nm.MaxFrameSize = 64 * 1024                // 64 KiB ordinary cap
 	nm.MaximumLargeFrameSize = 4 * 1024 * 1024 // 4 MiB large cap
 
 	for _, tc := range []struct {
@@ -76,7 +76,7 @@ func TestTcpArteryReadLoop_LargeFrame_AcceptedUnderLargeCap(t *testing.T) {
 	}
 
 	go func() {
-		_ = tcpArteryReadLoop(ctx, server, handler, nil, 0, AeronStreamLarge, largeCap)
+		_ = tcpArteryReadLoop(ctx, server, handler, nil, 0, AeronStreamLarge, largeCap, nil)
 	}()
 
 	// Build a real Artery frame whose payload happens to be ~600 KiB. We use a
@@ -120,7 +120,7 @@ func TestTcpArteryReadLoop_LargeFrame_RejectedAboveCap(t *testing.T) {
 	go func() {
 		errCh <- tcpArteryReadLoop(ctx, server, func(ctx context.Context, meta *ArteryMetadata) error {
 			return nil
-		}, nil, 0, AeronStreamLarge, largeCap)
+		}, nil, 0, AeronStreamLarge, largeCap, nil)
 	}()
 
 	// Write a length header that claims a 2 MiB body (above the 1 MiB cap).

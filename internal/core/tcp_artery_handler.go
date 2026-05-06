@@ -98,12 +98,21 @@ func TcpArteryHandlerWithNodeManager(nm *NodeManager) TcpHandler {
 }
 
 // TcpArteryHandlerWithCallback is an inbound handler that proceeds directly to the read loop with a known streamId.
-func TcpArteryHandlerWithCallback(ctx context.Context, conn net.Conn, handler FrameHandler, ctm *CompressionTableManager, remoteUid uint64, streamId int32, maxFrameSize ...int) error {
+//
+// pool, when non-nil, supplies pre-allocated receive buffers to the read
+// loop (Phase 3 of the perfect-pekko roadmap — buffer-pool-size and
+// large-buffer-pool-size). nil disables pooling and the read loop falls
+// back to per-call allocations, matching the pre-Phase-3 behaviour. Test
+// callers pass nil; production call sites pass NodeManager.streamBufferPool.
+func TcpArteryHandlerWithCallback(ctx context.Context, conn net.Conn, handler FrameHandler, ctm *CompressionTableManager, remoteUid uint64, streamId int32, pool *BufferPool, maxFrameSize ...int) error {
 	limit := resolveMaxFrameSize(maxFrameSize)
-	return tcpArteryReadLoop(ctx, conn, handler, ctm, remoteUid, streamId, limit)
+	return tcpArteryReadLoop(ctx, conn, handler, ctm, remoteUid, streamId, limit, pool)
 }
 
-func TcpArteryOutboundHandler(ctx context.Context, conn net.Conn, handler FrameHandler, ctm *CompressionTableManager, remoteUid uint64, streamId int32, protocol string, maxFrameSize ...int) error {
+// TcpArteryOutboundHandler is the outbound counterpart used by gekka's
+// initiating side of an Artery TCP association. See TcpArteryHandlerWithCallback
+// for the meaning of pool — same semantics here.
+func TcpArteryOutboundHandler(ctx context.Context, conn net.Conn, handler FrameHandler, ctm *CompressionTableManager, remoteUid uint64, streamId int32, protocol string, pool *BufferPool, maxFrameSize ...int) error {
 	// Both Pekko 1.x and Akka 2.6.x use the AKKA preamble on the wire.
 	// Pekko kept the same Artery TCP framing for backwards compatibility;
 	// the "pekko://" vs "akka://" distinction is only in actor-path URIs,
@@ -116,7 +125,7 @@ func TcpArteryOutboundHandler(ctx context.Context, conn net.Conn, handler FrameH
 	}
 
 	limit := resolveMaxFrameSize(maxFrameSize)
-	return tcpArteryReadLoop(ctx, conn, handler, ctm, remoteUid, streamId, limit)
+	return tcpArteryReadLoop(ctx, conn, handler, ctm, remoteUid, streamId, limit, pool)
 }
 
 // resolveMaxFrameSize returns the first element of the variadic slice, or
@@ -128,9 +137,24 @@ func resolveMaxFrameSize(vals []int) int32 {
 	return DefaultMaxFrameSize
 }
 
-func tcpArteryReadLoop(ctx context.Context, conn net.Conn, handler FrameHandler, ctm *CompressionTableManager, remoteUid uint64, streamId int32, maxFrameSize int32) error {
+func tcpArteryReadLoop(ctx context.Context, conn net.Conn, handler FrameHandler, ctm *CompressionTableManager, remoteUid uint64, streamId int32, maxFrameSize int32, pool *BufferPool) error {
 	headerBuf := make([]byte, 4)
-	payloadBuf := make([]byte, 64*1024)
+
+	// payloadBuf is the reusable scratch slice for the current frame. When
+	// pool is non-nil, the buffer is pre-sized to maximum-frame-size and
+	// returned on read-loop exit so the next association on the same
+	// stream gets a recycled buffer. When pool is nil (tests, legacy
+	// callers) Get returns a 64 KiB scratch slice and Put is a no-op,
+	// preserving the pre-Phase-3 behaviour byte-for-byte.
+	pooledBuf := pool.Get()
+	payloadBuf := pooledBuf
+	defer func() {
+		// Only return the *original* pooled buffer to the pool. If the
+		// loop grew payloadBuf (only possible in the nil-pool path),
+		// pooledBuf still points at the original allocation — Put on a
+		// nil pool is a no-op so this is safe either way.
+		pool.Put(pooledBuf)
+	}()
 
 	for {
 		// Respect context cancellation.

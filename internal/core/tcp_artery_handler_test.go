@@ -34,7 +34,7 @@ func TestTcpArteryHandler_Framing(t *testing.T) {
 	}
 
 	go func() {
-		_ = TcpArteryHandlerWithCallback(ctx, server, handler, nil, 0, 1)
+		_ = TcpArteryHandlerWithCallback(ctx, server, handler, nil, 0, 1, nil)
 	}()
 
 	// Build a proper Artery binary frame carrying a user message.
@@ -78,7 +78,7 @@ func TestTcpArteryHandler_InvalidLength(t *testing.T) {
 	ctx := context.Background()
 	errChan := make(chan error, 1)
 	go func() {
-		errChan <- TcpArteryHandlerWithCallback(ctx, server, func(context.Context, *ArteryMetadata) error { return nil }, nil, 0, 1)
+		errChan <- TcpArteryHandlerWithCallback(ctx, server, func(context.Context, *ArteryMetadata) error { return nil }, nil, 0, 1, nil)
 	}()
 
 	// 0xFFFFFFFF > MaxArteryPayloadLength — should trigger length check.
@@ -104,7 +104,7 @@ func TestTcpArteryHandler_Oversized(t *testing.T) {
 	ctx := context.Background()
 	errChan := make(chan error, 1)
 	go func() {
-		errChan <- TcpArteryHandlerWithCallback(ctx, server, func(context.Context, *ArteryMetadata) error { return nil }, nil, 0, 1)
+		errChan <- TcpArteryHandlerWithCallback(ctx, server, func(context.Context, *ArteryMetadata) error { return nil }, nil, 0, 1, nil)
 	}()
 
 	header := make([]byte, 4)

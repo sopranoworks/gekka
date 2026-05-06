@@ -10,15 +10,21 @@ package mailbox
 
 import (
 	"container/list"
+	"fmt"
 	"sync"
+	"time"
 )
 
 func init() {
-	f := unboundedControlAwareFactory{}
-	Register(f,
+	Register(unboundedControlAwareFactory{},
 		"unbounded-control-aware",
 		"org.apache.pekko.dispatch.UnboundedControlAwareMailbox",
 		"akka.dispatch.UnboundedControlAwareMailbox",
+	)
+	Register(boundedControlAwareFactory{},
+		"bounded-control-aware",
+		"org.apache.pekko.dispatch.BoundedControlAwareMailbox",
+		"akka.dispatch.BoundedControlAwareMailbox",
 	)
 }
 
@@ -157,7 +163,193 @@ type unboundedControlAwareMailbox struct {
 	chans *priorityChans
 }
 
-func (m *unboundedControlAwareMailbox) Enqueue(msg any) error  { return m.chans.enqueue(msg) }
-func (m *unboundedControlAwareMailbox) Dequeue() any           { return m.chans.dequeue() }
-func (m *unboundedControlAwareMailbox) NumberOfMessages() int  { return m.chans.numberOfMessages() }
-func (m *unboundedControlAwareMailbox) Close()                 { m.chans.close() }
+func (m *unboundedControlAwareMailbox) Enqueue(msg any) error { return m.chans.enqueue(msg) }
+func (m *unboundedControlAwareMailbox) Dequeue() any          { return m.chans.dequeue() }
+func (m *unboundedControlAwareMailbox) NumberOfMessages() int { return m.chans.numberOfMessages() }
+func (m *unboundedControlAwareMailbox) Close()                { m.chans.close() }
+
+// ── BoundedControlAwareMailbox ──────────────────────────────────────────────
+//
+// Sub-commit 1.5 adds the bounded counterpart of the unbounded control-aware
+// mailbox. It shares the ControlMessage classifier and the drain-first
+// dispatch contract with the unbounded variant, but the underlying storage is
+// two buffered Go channels — one per priority class — rather than the
+// unbounded list+cond used above. The two storage strategies differ enough
+// that they live in parallel structs (priorityChans vs boundedPriorityChans)
+// rather than sharing one.
+//
+// Per-side push-timeout is implemented with select-plus-time.After, mirroring
+// bounded.go. Close uses a dedicated `done` channel guarded by sync.Once; the
+// data channels are never closed (closing a buffered channel with in-flight
+// senders panics), exactly the pattern bounded.go documents.
+
+// NewBoundedControlAwareFactory returns the factory for bounded
+// control-aware mailboxes. Direct callers (tests, custom Props) can use
+// this in lieu of the registry.
+func NewBoundedControlAwareFactory() MailboxFactory { return boundedControlAwareFactory{} }
+
+type boundedControlAwareFactory struct{}
+
+// NewMailbox creates a BoundedControlAwareMailbox with two buffered channels,
+// each sized to cfg.Capacity. Pekko's BoundedControlAwareMailbox uses a
+// single capacity for both queues; gekka follows that convention. cfg.Capacity
+// must be > 0; the factory panics otherwise, matching Pekko's
+// BoundedControlAwareMailbox whose underlying ArrayBlockingQueue rejects
+// non-positive capacity at construction.
+//
+// cfg.PushTimeout is the per-Enqueue timeout applied to whichever side the
+// message is routed to. A zero or negative value means the sender blocks
+// until space opens up or the mailbox closes (Pekko parity with
+// mailbox-push-timeout-time = 0s).
+func (boundedControlAwareFactory) NewMailbox(cfg Config) Mailbox {
+	if cfg.Capacity <= 0 {
+		panic(fmt.Sprintf("mailbox: BoundedControlAwareMailbox requires Capacity > 0, got %d", cfg.Capacity))
+	}
+	return &boundedControlAwareMailbox{
+		chans: &boundedPriorityChans{
+			controlCh:   make(chan any, cfg.Capacity),
+			regularCh:   make(chan any, cfg.Capacity),
+			pushTimeout: cfg.PushTimeout,
+			done:        make(chan struct{}),
+		},
+	}
+}
+
+// boundedPriorityChans is the bounded counterpart of priorityChans. The two
+// queues are buffered Go channels rather than lists; the drain-first
+// dequeue contract is preserved via the canonical "non-blocking control
+// first, then blocking select on either" pattern. Both channels share a
+// single `done` sentinel so Close fires both senders and dequeuers
+// simultaneously without ever closing the data channels.
+type boundedPriorityChans struct {
+	controlCh   chan any
+	regularCh   chan any
+	pushTimeout time.Duration
+	closeOnce   sync.Once
+	done        chan struct{}
+}
+
+// enqueue routes msg by the ControlMessage marker into the matching channel,
+// honouring the configured per-side push-timeout. Returns ErrNilMessage on
+// nil input, ErrMailboxClosed if the mailbox has been closed, and
+// ErrMailboxFull if the timeout elapses before space opens up.
+func (q *boundedPriorityChans) enqueue(msg any) error {
+	if msg == nil {
+		return ErrNilMessage
+	}
+	if _, isCtrl := msg.(ControlMessage); isCtrl {
+		return q.enqueueOn(q.controlCh, msg)
+	}
+	return q.enqueueOn(q.regularCh, msg)
+}
+
+// enqueueOn applies the bounded push-timeout protocol to a single side.
+// Same shape as boundedMailbox.Enqueue: fast non-blocking close check,
+// non-blocking send fast path when space is available, then a timer-armed
+// select that races the send, close, and timeout.
+func (q *boundedPriorityChans) enqueueOn(ch chan any, msg any) error {
+	select {
+	case <-q.done:
+		return ErrMailboxClosed
+	default:
+	}
+
+	if q.pushTimeout <= 0 {
+		select {
+		case ch <- msg:
+			return nil
+		case <-q.done:
+			return ErrMailboxClosed
+		}
+	}
+
+	// Non-blocking fast path so the timer is never armed when space is
+	// already available.
+	select {
+	case ch <- msg:
+		return nil
+	default:
+	}
+
+	timer := time.NewTimer(q.pushTimeout)
+	defer timer.Stop()
+	select {
+	case ch <- msg:
+		return nil
+	case <-q.done:
+		return ErrMailboxClosed
+	case <-timer.C:
+		return ErrMailboxFull
+	}
+}
+
+// dequeue blocks until either channel has a message, then drains the control
+// channel first. Returns nil only when the mailbox is closed and both
+// channels are fully drained.
+//
+// The two-phase select (non-blocking control first, then blocking three-way)
+// is the canonical drain-first dispatch pattern. The non-blocking phase is
+// load-bearing: if both channels have messages by the time Dequeue is
+// called, Go's blocking select would pick uniformly at random. Trying
+// control-only first guarantees deterministic priority for that scenario,
+// which is exactly the case the non-determinism guard test exercises.
+func (q *boundedPriorityChans) dequeue() any {
+	// Drain-first: pending control message takes absolute priority over
+	// anything that may simultaneously be ready on the regular channel.
+	select {
+	case msg := <-q.controlCh:
+		return msg
+	default:
+	}
+
+	select {
+	case msg := <-q.controlCh:
+		return msg
+	case msg := <-q.regularCh:
+		return msg
+	case <-q.done:
+		// Closed — drain residual messages preserving control-first
+		// priority before returning the closed-and-drained sentinel.
+		select {
+		case msg := <-q.controlCh:
+			return msg
+		default:
+		}
+		select {
+		case msg := <-q.regularCh:
+			return msg
+		default:
+			return nil
+		}
+	}
+}
+
+// numberOfMessages is a best-effort snapshot across both buffered channels.
+// Racy under concurrent producers/consumers — same caveat as Pekko's
+// MessageQueue.numberOfMessages.
+func (q *boundedPriorityChans) numberOfMessages() int {
+	return len(q.controlCh) + len(q.regularCh)
+}
+
+// close marks the mailbox closed by signalling the shared done channel.
+// Idempotent; never closes the data channels (which would panic any
+// in-flight sender). Pending Enqueue calls observe the close via select
+// and return ErrMailboxClosed; Dequeue keeps draining residual messages
+// then returns the nil sentinel.
+func (q *boundedPriorityChans) close() {
+	q.closeOnce.Do(func() {
+		close(q.done)
+	})
+}
+
+// boundedControlAwareMailbox is the public Mailbox impl. It wraps a
+// boundedPriorityChans so the actor cell sees the same Mailbox surface as
+// the unbounded variant.
+type boundedControlAwareMailbox struct {
+	chans *boundedPriorityChans
+}
+
+func (m *boundedControlAwareMailbox) Enqueue(msg any) error { return m.chans.enqueue(msg) }
+func (m *boundedControlAwareMailbox) Dequeue() any          { return m.chans.dequeue() }
+func (m *boundedControlAwareMailbox) NumberOfMessages() int { return m.chans.numberOfMessages() }
+func (m *boundedControlAwareMailbox) Close()                { m.chans.close() }

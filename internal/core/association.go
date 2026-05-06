@@ -135,8 +135,8 @@ type GekkaAssociation struct {
 	// transport instead of a TCP connection.  When udpHandler is non-nil the
 	// outbox drainer sends frames via udpHandler.SendFrame rather than
 	// WriteFrame(conn, …).
-	udpHandler        *UdpArteryHandler
-	udpDst            *net.UDPAddr
+	udpHandler *UdpArteryHandler
+	udpDst     *net.UDPAddr
 	// udpOrdinaryOutbox carries user messages destined for Aeron stream 2
 	// (OrdinaryStream).  Control/cluster/artery-internal messages continue to
 	// use the primary outbox (stream 1).  Nil for TCP associations.
@@ -222,14 +222,14 @@ type quarantineEntry struct {
 }
 
 type NodeManager struct {
-	mu                  sync.RWMutex
-	LocalAddr           *gproto_remote.Address
-	associations        map[string]*GekkaAssociation // key: host:port, or UID string
-	localUid            uint64
-	clusterMgr          *cluster.ClusterManager
-	compressionMgr      *CompressionTableManager
-	SerializerRegistry  *SerializationRegistry
-	UserMessageCallback func(ctx context.Context, meta *ArteryMetadata) error
+	mu                    sync.RWMutex
+	LocalAddr             *gproto_remote.Address
+	associations          map[string]*GekkaAssociation // key: host:port, or UID string
+	localUid              uint64
+	clusterMgr            *cluster.ClusterManager
+	compressionMgr        *CompressionTableManager
+	SerializerRegistry    *SerializationRegistry
+	UserMessageCallback   func(ctx context.Context, meta *ArteryMetadata) error
 	SystemMessageCallback func(remote *gproto_remote.UniqueAddress, env *gproto_remote.SystemMessageEnvelope, msg *gproto_remote.SystemMessage) error
 
 	pendingRepliesMu sync.RWMutex
@@ -2061,9 +2061,10 @@ func (assoc *GekkaAssociation) SystemOutbox() *SystemMessageOutbox {
 //   - Try-write the frame onto the wire outbox (non-blocking). If the
 //     outbox is full, the entry stays in systemOutbox and the resend
 //     ticker will retry on its next tick.
-//   - When systemOutbox is at capacity, returns ErrSystemOutboxFull
-//     without writing — the caller (Phase 2.4) is expected to escalate
-//     to QUARANTINED. Until 2.4 lands, callers log and drop.
+//   - When systemOutbox is at capacity, escalates the association to
+//     QUARANTINED (matches Pekko's "buffer-full ⇒ give up" semantics —
+//     Phase 2.4) and returns ErrSystemOutboxFull. The caller logs and
+//     drops; the association is permanently dead at that point.
 func (assoc *GekkaAssociation) SendSystem(seqNo uint64, frame []byte) error {
 	if assoc.systemOutbox == nil {
 		// Non-control assoc — preserve fire-and-forget behaviour so
@@ -2076,6 +2077,9 @@ func (assoc *GekkaAssociation) SendSystem(seqNo uint64, frame []byte) error {
 		}
 	}
 	if err := assoc.systemOutbox.Enqueue(seqNo, frame, time.Now()); err != nil {
+		// ErrSystemOutboxFull — Pekko semantics: the receiver has fallen
+		// behind beyond the buffer window, give up and quarantine.
+		assoc.quarantineForSystemRedelivery("system-message-buffer-full")
 		return err
 	}
 	// Best-effort wire write. On full outbox the entry is still buffered;
@@ -2090,6 +2094,45 @@ func (assoc *GekkaAssociation) SendSystem(seqNo uint64, frame []byte) error {
 	return nil
 }
 
+// quarantineForSystemRedelivery escalates the association to QUARANTINED
+// in response to a Phase-2.4 give-up condition (the resend ticker has
+// exceeded give-up-system-message-after with no ack progress, or the
+// systemOutbox has filled up). Drains the buffer so the runSystemRedelivery
+// loop stops re-emitting frames, sets state = QUARANTINED, closes the
+// underlying connection, and emits a flight-recorder entry consistent
+// with the existing "Quarantined" transition path.
+//
+// Idempotent — repeated calls are no-ops once state is QUARANTINED.
+func (assoc *GekkaAssociation) quarantineForSystemRedelivery(reason string) {
+	assoc.mu.Lock()
+	if assoc.state == QUARANTINED {
+		assoc.mu.Unlock()
+		return
+	}
+	assoc.state = QUARANTINED
+	assoc.quarantinedSince = time.Now()
+	conn := assoc.conn
+	remoteKey := assoc.remoteKey()
+	assoc.mu.Unlock()
+
+	if assoc.systemOutbox != nil {
+		if dropped := assoc.systemOutbox.Drain(); dropped > 0 {
+			slog.Warn("artery: system-message redelivery gave up, dropping unacked frames",
+				"reason", reason, "dropped", dropped, "remote", remoteKey)
+		}
+	}
+	if conn != nil {
+		_ = conn.Close()
+	}
+	assoc.emitFlight(SeverityError, CatQuarantine, "QUARANTINED", map[string]any{
+		"remote": remoteKey,
+		"reason": reason,
+	})
+	if assoc.nodeMgr != nil && assoc.nodeMgr.FlightRec != nil {
+		assoc.nodeMgr.FlightRec.DumpOnQuarantine(remoteKey)
+	}
+}
+
 // runSystemRedelivery is the per-association resend loop. Wakes every
 // EffectiveSystemMessageResendInterval(), walks the systemOutbox snapshot,
 // and re-writes any entry whose lastAttempt is older than the resend
@@ -2097,8 +2140,13 @@ func (assoc *GekkaAssociation) SendSystem(seqNo uint64, frame []byte) error {
 // are skipped to avoid duplicate writes when an ack has not yet had time
 // to round-trip.
 //
-// Stops on ctx.Done() (node lifetime). The Phase 2.4 give-up path will
-// also signal stop after escalating to QUARANTINED.
+// Phase 2.4 give-up: each tick also checks the head entry's firstAttempt
+// against EffectiveGiveUpSystemMessageAfter(). When the deadline has
+// passed without progress (no ack has pruned the head), the association
+// is escalated to QUARANTINED and the loop returns — matching Pekko's
+// "give up system message after" semantics.
+//
+// Stops on ctx.Done() (node lifetime) or after a give-up quarantine.
 func (assoc *GekkaAssociation) runSystemRedelivery(ctx context.Context) {
 	if assoc.systemOutbox == nil {
 		return
@@ -2108,6 +2156,7 @@ func (assoc *GekkaAssociation) runSystemRedelivery(ctx context.Context) {
 		return
 	}
 	interval := nm.EffectiveSystemMessageResendInterval()
+	giveUp := nm.EffectiveGiveUpSystemMessageAfter()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -2115,6 +2164,18 @@ func (assoc *GekkaAssociation) runSystemRedelivery(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case now := <-ticker.C:
+			// Phase 2.4 give-up check: the head entry is always the
+			// longest-pending. If it has been unacked for longer than
+			// give-up-after, escalate to QUARANTINED and stop.
+			if oldest := assoc.systemOutbox.OldestFirstAttempt(); !oldest.IsZero() && now.Sub(oldest) >= giveUp {
+				slog.Warn("artery: give-up-system-message-after exceeded, quarantining",
+					"remote", assoc.remoteKey(),
+					"oldest_first_attempt", oldest,
+					"give_up_after", giveUp)
+				assoc.quarantineForSystemRedelivery("give-up-system-message-after")
+				return
+			}
+
 			snap := assoc.systemOutbox.Snapshot()
 			if len(snap) == 0 {
 				continue

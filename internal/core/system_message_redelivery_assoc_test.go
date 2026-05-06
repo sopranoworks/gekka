@@ -83,7 +83,16 @@ func TestSendSystem_BuffersAndWritesToWire(t *testing.T) {
 }
 
 func TestSendSystem_BufferFullReturnsError(t *testing.T) {
+	// Phase 2.4: SendSystem on a full buffer not only returns
+	// ErrSystemOutboxFull, it also quarantines the association and
+	// drains the buffer (Pekko semantics: buffer-full ⇒ give up).
+	// Provide a dummy conn so the quarantine path's conn.Close() is
+	// safe.
 	assoc, _ := newSystemRedeliveryAssoc(t, 2, 16, 100*time.Millisecond)
+	connA, connB := net.Pipe()
+	t.Cleanup(func() { _ = connA.Close(); _ = connB.Close() })
+	go func() { _, _ = io.Copy(io.Discard, connB) }()
+	assoc.conn = connA
 
 	if err := assoc.SendSystem(1, []byte("a")); err != nil {
 		t.Fatalf("SendSystem(1): %v", err)
@@ -96,9 +105,16 @@ func TestSendSystem_BufferFullReturnsError(t *testing.T) {
 		t.Errorf("SendSystem on full buffer = %v, want ErrSystemOutboxFull", err)
 	}
 
-	// Buffer must remain at capacity (no extra entry).
-	if got := assoc.SystemOutbox().Len(); got != 2 {
-		t.Errorf("SystemOutbox().Len() = %d, want 2", got)
+	// Quarantine drained the buffer.
+	if got := assoc.SystemOutbox().Len(); got != 0 {
+		t.Errorf("SystemOutbox().Len() = %d, want 0 (quarantine drains)", got)
+	}
+	// Association is now QUARANTINED.
+	assoc.mu.RLock()
+	state := assoc.state
+	assoc.mu.RUnlock()
+	if state != QUARANTINED {
+		t.Errorf("after buffer-full, state = %v, want QUARANTINED", state)
 	}
 }
 
@@ -440,6 +456,111 @@ func TestHandleControlMessage_DeliveryAckIgnoredForUnknownPeer(t *testing.T) {
 	}
 	if got := outAssoc.SystemOutbox().Len(); got != 1 {
 		t.Errorf("ack from unknown peer pruned the buffer: Len = %d, want 1 (no-op)", got)
+	}
+}
+
+func TestRunSystemRedelivery_GiveUpQuarantines(t *testing.T) {
+	// Resend ticker every 30ms, give-up after 60ms — so by the second
+	// tick at most, the head entry has exceeded give-up-after and the
+	// loop must quarantine.
+	assoc, nm := newSystemRedeliveryAssoc(t, 16, 16, 30*time.Millisecond)
+	nm.GiveUpSystemMessageAfter = 60 * time.Millisecond
+
+	// Provide a dummy conn so quarantine's conn.Close() is safe.
+	connA, connB := net.Pipe()
+	t.Cleanup(func() { _ = connA.Close(); _ = connB.Close() })
+	go func() { _, _ = io.Copy(io.Discard, connB) }()
+	assoc.conn = connA
+
+	// Pre-populate one entry whose firstAttempt is already past the
+	// deadline. The first tick will observe oldest < now-giveUp and
+	// trigger the quarantine path immediately.
+	old := time.Now().Add(-200 * time.Millisecond)
+	if err := assoc.systemOutbox.Enqueue(1, []byte("x"), old); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	done := make(chan struct{})
+	go func() {
+		assoc.runSystemRedelivery(ctx)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runSystemRedelivery did not return after give-up deadline")
+	}
+
+	// Quarantine side-effects.
+	assoc.mu.RLock()
+	state := assoc.state
+	since := assoc.quarantinedSince
+	assoc.mu.RUnlock()
+	if state != QUARANTINED {
+		t.Errorf("after give-up, state = %v, want QUARANTINED", state)
+	}
+	if since.IsZero() {
+		t.Error("quarantinedSince was not set")
+	}
+	if got := assoc.SystemOutbox().Len(); got != 0 {
+		t.Errorf("after give-up, outbox not drained: Len = %d, want 0", got)
+	}
+}
+
+func TestSendSystem_BufferFullQuarantines(t *testing.T) {
+	assoc, _ := newSystemRedeliveryAssoc(t, 1, 16, 30*time.Millisecond)
+	connA, connB := net.Pipe()
+	t.Cleanup(func() { _ = connA.Close(); _ = connB.Close() })
+	go func() { _, _ = io.Copy(io.Discard, connB) }()
+	assoc.conn = connA
+
+	if err := assoc.SendSystem(1, []byte("a")); err != nil {
+		t.Fatalf("SendSystem(1) on empty buffer: %v", err)
+	}
+
+	// Now SendSystem must return ErrSystemOutboxFull AND quarantine.
+	err := assoc.SendSystem(2, []byte("b"))
+	if !errors.Is(err, ErrSystemOutboxFull) {
+		t.Fatalf("SendSystem on full buffer = %v, want ErrSystemOutboxFull", err)
+	}
+
+	assoc.mu.RLock()
+	state := assoc.state
+	assoc.mu.RUnlock()
+	if state != QUARANTINED {
+		t.Errorf("after buffer-full SendSystem, state = %v, want QUARANTINED", state)
+	}
+	// Drain side-effect: buffer is empty post-quarantine.
+	if got := assoc.SystemOutbox().Len(); got != 0 {
+		t.Errorf("after buffer-full quarantine, outbox not drained: Len = %d, want 0", got)
+	}
+}
+
+func TestQuarantineForSystemRedelivery_Idempotent(t *testing.T) {
+	assoc, _ := newSystemRedeliveryAssoc(t, 4, 4, 30*time.Millisecond)
+	connA, connB := net.Pipe()
+	t.Cleanup(func() { _ = connA.Close(); _ = connB.Close() })
+	go func() { _, _ = io.Copy(io.Discard, connB) }()
+	assoc.conn = connA
+
+	assoc.quarantineForSystemRedelivery("first")
+	first := func() time.Time {
+		assoc.mu.RLock()
+		defer assoc.mu.RUnlock()
+		return assoc.quarantinedSince
+	}()
+	time.Sleep(10 * time.Millisecond)
+	assoc.quarantineForSystemRedelivery("second")
+	second := func() time.Time {
+		assoc.mu.RLock()
+		defer assoc.mu.RUnlock()
+		return assoc.quarantinedSince
+	}()
+	if !first.Equal(second) {
+		t.Errorf("quarantinedSince changed on second call: %v vs %v", first, second)
 	}
 }
 

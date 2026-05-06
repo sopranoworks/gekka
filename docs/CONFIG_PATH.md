@@ -187,12 +187,12 @@ The keys most users actually tune. All are Pekko-compatible (drop them into your
 | `pekko.remote.artery.advanced.inbound-lanes` | `4` | ✅ | Consumed by `ProcessConnection` at association construction; allocates a per-association inbound-lane fan-out (channels + N drain goroutines hashed by recipient path via `dispatchSharded`/`laneIndex`) when the value is > 1 and `streamId != 1`; control-stream traffic and recipient-less frames bypass the lanes for ordering; lane-full saturation surfaces as `CatInboundLaneFull` flight events with inline-dispatch fallback (sub-plan 8f) |
 | `pekko.remote.artery.advanced.outbound-lanes` | `1` | ✅ | Consumed by `EnsureOrdinarySibling` at control-handshake completion; opens N parallel TCP connections per peer for streamId=2 (Ordinary) via `DialRemoteOrdinaryLanes`, each lane with its own outboundLane (conn + outbox + writer goroutine + per-lane handshake state); `outboxFor` pivots streamId=1 user-message traffic onto `sibling.lanes[fnv32(recipient) % N].outbox` once the sibling is registered; siblings linked at control-handshake completion via EnsureOrdinarySibling, outbound default opens 2 TCPs per peer (1 control + 1 ordinary) matching Pekko's outbound-lanes=1 default; control-stream and large-stream remain single-conn; inbound coalescence attaches multiple inbound TCPs from the same peer UID as additional lanes of one logical association via the assoc.delegate dispatch redirect (sub-plan 8f outbound half) |
 | `pekko.remote.artery.advanced.outbound-message-queue-size` | `3072` | ✅ | Sizes each association's outbox channel |
-| `pekko.remote.artery.advanced.system-message-buffer-size` | `20000` | ⚠️ | Parsed and exposed via `NodeManager.EffectiveSystemMessageBufferSize`; sender-side system-message redelivery not yet implemented |
+| `pekko.remote.artery.advanced.system-message-buffer-size` | `20000` | ✅ | Sizes the per-association `SystemMessageOutbox` allocated by `ProcessConnection` for streamId=1 control associations (Phase 2). `(*GekkaAssociation).SendSystem` enqueues unacked system-message frames into this buffer; `runSystemRedelivery` replays them on the resend ticker; `handleControlMessage` "h" prunes them on incoming `SystemMessageDeliveryAck`. When the buffer fills, `quarantineForSystemRedelivery` escalates the association to QUARANTINED |
 | `pekko.remote.artery.advanced.outbound-control-queue-size` | `20000` | ✅ | Sizes each outbound control-stream (streamId=1) association's outbox |
 | `pekko.remote.artery.advanced.handshake-timeout` | `20s` | ✅ | Outbound association gives up after this deadline |
 | `pekko.remote.artery.advanced.handshake-retry-interval` | `1s` | ✅ | Re-sends HandshakeReq at this cadence until ASSOCIATED |
-| `pekko.remote.artery.advanced.system-message-resend-interval` | `1s` | ⚠️ | Parsed and exposed via `NodeManager.EffectiveSystemMessageResendInterval`; sender-side system-message redelivery loop not yet implemented |
-| `pekko.remote.artery.advanced.give-up-system-message-after` | `6h` | ⚠️ | Parsed and exposed via `NodeManager.EffectiveGiveUpSystemMessageAfter`; sender-side give-up timer not yet implemented |
+| `pekko.remote.artery.advanced.system-message-resend-interval` | `1s` | ✅ | Cadence of the per-association `runSystemRedelivery` goroutine (Phase 2). On each tick the loop walks `SystemMessageOutbox.Snapshot()` and re-emits any entry whose `lastAttempt` is older than the interval; entries pruned by an inbound `SystemMessageDeliveryAck` are skipped. Receiver-side dedupe via `lastDeliveredSystemSeq` keeps replays idempotent across genuine duplicates |
+| `pekko.remote.artery.advanced.give-up-system-message-after` | `6h` | ✅ | Deadline enforced by `runSystemRedelivery` (Phase 2). Each tick checks `SystemMessageOutbox.OldestFirstAttempt()` (the longest-pending unacked entry's first-send timestamp) against `now - give-up-system-message-after`; on exceedance `quarantineForSystemRedelivery` is invoked with reason `give-up-system-message-after` to drain the buffer, transition state to QUARANTINED, close the conn, and emit a flight-recorder dump |
 | `pekko.remote.artery.advanced.stop-idle-outbound-after` | `5m` | ✅ | Consumed by `NodeManager.SweepIdleOutboundStop` invoked by `core.StartLifecycleSweepers` (called from `cluster.NewCluster`). Idle ASSOCIATED outbound associations are gracefully closed and removed from the registry without permanent quarantine (sub-plan 8h) |
 | `pekko.remote.artery.advanced.quarantine-idle-outbound-after` | `6h` | ✅ | Consumed by `NodeManager.SweepIdleOutboundQuarantine` invoked by `core.StartLifecycleSweepers`. Idle outbound associations transition to QUARANTINED, register the UID with timestamp, and remain in the registry awaiting the stop/remove sweeps (sub-plan 8h) |
 | `pekko.remote.artery.advanced.stop-quarantined-after-idle` | `3s` | ✅ | Consumed by `NodeManager.SweepStopQuarantinedAfterIdle` invoked by `core.StartLifecycleSweepers`. The conn of QUARANTINED idle outbound associations is closed without deleting the entry (sub-plan 8h) |
@@ -578,12 +578,12 @@ touching the consumer code.
 
 ## Summary
 
-### Symbol counts (post 2026-05-05 portable-pekko milestone)
+### Symbol counts (post 2026-05-06 perfect-pekko Phase 2 closure)
 
 | Symbol | Substantive table rows | Meaning |
 |---|---|---|
-| ✅ | 274 | Parsed AND consumed |
-| ⚠️ | 22 | Forward-compat parsed; consumer deferred (Note states what's deferred) |
+| ✅ | 277 | Parsed AND consumed |
+| ⚠️ | 19 | Forward-compat parsed; consumer deferred (Note states what's deferred) |
 | ☕ | 8 | JVM-only — no equivalent capability in Go runtime |
 | 🚫 | 4 | Go/JVM API-shape incompatibility (FQCN class loading, JCA Provider, JKS rotation) |
 | ❌ | 2 | Not implemented; portable in principle (tracked in `docs/LEFTWORKS.md` §11) |
@@ -649,6 +649,34 @@ on 2026-05-06.
 
 ### Audit history
 
+- **2026-05-06 — Perfect-pekko Phase 2 closure (sub-commits 2.1–2.4,
+  sender-side system-message redelivery):** Closes the three Artery
+  redelivery ⚠️ rows (`system-message-buffer-size`,
+  `system-message-resend-interval`, `give-up-system-message-after`)
+  by wiring the per-association `SystemMessageOutbox` end-to-end.
+  Sub-commit 2.1 (commit `ec032fd`) lands the buffer module — a
+  cumulative-ack ring with `OldestFirstAttempt` for the give-up
+  deadline and a defensive-copy `Snapshot()` for the resend ticker.
+  Sub-commit 2.2 (commit `4834b1d`) wires it into `ProcessConnection`
+  for streamId=1 control associations, refactors `cluster_watch.go`
+  (WATCH/UNWATCH/Terminated) from raw `Outbox()<-frame` writes to
+  `SendSystem(seq, frame)`, starts the `runSystemRedelivery`
+  goroutine, and adds receiver-side seq dedupe via
+  `lastDeliveredSystemSeq` so resends are idempotent. Sub-commit 2.3
+  (commit `df0dbc9`) adds the sender-side ack consumer
+  (`handleControlMessage` "h" case decodes
+  `SystemMessageDeliveryAck`, looks up the outbound assoc by
+  `From.Address`, calls `PruneAcked`). Sub-commit 2.4 (this commit)
+  adds the give-up timer (`runSystemRedelivery` checks
+  `OldestFirstAttempt` against `give-up-system-message-after` on
+  every tick) and the `quarantineForSystemRedelivery` helper that
+  drains the buffer, sets state to QUARANTINED, closes the conn, and
+  emits a flight-recorder dump. `SendSystem` on a full buffer also
+  triggers the same quarantine path (Pekko's "buffer-full ⇒ give
+  up" semantics). Iron Rule 1 full gate green: unit workspace,
+  integration `-tags integration -p 1` 255s root, sbt multi-jvm
+  3/3 197s. Summary counts: ✅ 274 → 277, ⚠️ 22 → 19. Closes three
+  rows: 190, 194, 195.
 - **2026-05-06 — Perfect-pekko Phase 1 closure (sub-commits 1.1–1.6, mailbox
   foundation):** The `actor/mailbox` package now ships four production-ready
   factories — `UnboundedMailbox`, `BoundedMailbox`, `UnboundedControlAwareMailbox`,

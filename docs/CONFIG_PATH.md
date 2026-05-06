@@ -322,7 +322,7 @@ The keys most users actually tune. All are Pekko-compatible (drop them into your
 | `pekko.cluster.distributed-data.pruning-marker-time-to-live` | `6h` | ✅ | `DistributedDataConfig.PruningMarkerTimeToLive` → `PruningManager.SetPruningMarkerTimeToLive` retains tombstones in PruningComplete phase for the TTL (Round-2 session 16) |
 | `pekko.cluster.distributed-data.log-data-size-exceeding` | `10 KiB` | ✅ | `DistributedDataConfig.LogDataSizeExceeding` → `Replicator.LogDataSizeExceeding`; `sendToPeers` emits a slog.Warn when serialized payload exceeds the threshold (Round-2 session 16) |
 | `pekko.cluster.distributed-data.recovery-timeout` | `10s` | ✅ | `DistributedDataConfig.RecoveryTimeout` → `Replicator.WaitForRecovery` blocks until at least one peer is registered or the timeout elapses (Round-2 session 16) |
-| `pekko.cluster.distributed-data.serializer-cache-time-to-live` | `10s` | ⚠️ | Parsed into `DistributedDataConfig.SerializerCacheTimeToLive` and set on `Replicator.SerializerCacheTimeToLive`; per-CRDT serialization cache not yet implemented (field has no readers beyond the setter) |
+| `pekko.cluster.distributed-data.serializer-cache-time-to-live` | `10s` | ✅ | Parsed into `DistributedDataConfig.SerializerCacheTimeToLive` and set on `Replicator.SerializerCacheTimeToLive`. Consumed by `cluster/ddata/serializer_cache.go`: a TTL cache keyed by `(crdt-key, snapshot-fingerprint)` memoizes the JSON-serialized full-state gossip payload across rounds. The six gossip entry points (`gossipCounter` / `gossipSet` / `gossipMap` / `gossipPNCounter` / `gossipORFlag` / `gossipLWWRegister`) route through `Replicator.cachedMarshal`; identical snapshots within the TTL window reuse cached bytes instead of re-marshalling. `SerializerCacheStats()` exposes hit/miss counters; setting the TTL to `0` disables caching (Store becomes a no-op) |
 
 ---
 
@@ -578,12 +578,12 @@ touching the consumer code.
 
 ## Summary
 
-### Symbol counts (post 2026-05-07 perfect-pekko Phase 4 closure)
+### Symbol counts (post 2026-05-07 perfect-pekko Phase 5 closure)
 
 | Symbol | Substantive table rows | Meaning |
 |---|---|---|
-| ✅ | 280 | Parsed AND consumed |
-| ⚠️ | 16 | Forward-compat parsed; consumer deferred (Note states what's deferred) |
+| ✅ | 281 | Parsed AND consumed |
+| ⚠️ | 15 | Forward-compat parsed; consumer deferred (Note states what's deferred) |
 | ☕ | 8 | JVM-only — no equivalent capability in Go runtime |
 | 🚫 | 4 | Go/JVM API-shape incompatibility (FQCN class loading, JCA Provider, JKS rotation) |
 | ❌ | 2 | Not implemented; portable in principle (tracked in `docs/LEFTWORKS.md` §11) |
@@ -648,6 +648,34 @@ tunables, `mailbox.requirements.*`, and the deprecated
 on 2026-05-06.
 
 ### Audit history
+
+- **2026-05-07 — Perfect-pekko Phase 5 closure (DistributedData per-CRDT
+  serializer cache):** Closes the lone ⚠️ row 325
+  (`pekko.cluster.distributed-data.serializer-cache-time-to-live`) by
+  giving `Replicator.SerializerCacheTimeToLive` a real production
+  consumer. New `cluster/ddata/serializer_cache.go` adds a thread-safe
+  TTL cache keyed by `(crdt-key, snapshot-fingerprint)` returning the
+  cached JSON-serialized gossip payload. Each CRDT type has a per-snapshot
+  fingerprint helper (FNV-64a over sorted version-vector / dots /
+  timestamps) cheap enough that the lookup beats `json.Marshal` on
+  unchanged state. The six gossip functions
+  (`gossipCounter` / `gossipSet` / `gossipMap` / `gossipPNCounter` /
+  `gossipORFlag` / `gossipLWWRegister`) route through a new
+  `Replicator.cachedMarshal` chokepoint; on a hit the cached bytes are
+  reused, on a miss the marshal closure runs and the result is stored
+  with the configured TTL. `SerializerCacheStats()` exposes (hits, misses)
+  for tests and operator introspection. Setting
+  `SerializerCacheTimeToLive = 0` disables the cache — Lookup still misses
+  and Store becomes a no-op so the entries map stays empty. Six new tests
+  in `serializer_cache_test.go` cover the primitive (hit/miss/expiry with
+  injected clock), every fingerprint helper's order-independence and
+  content-sensitivity, the gossip-path hit/miss counter trajectory, the
+  TTL eviction path with real time, the version-mutation miss path, the
+  zero-TTL disabled path, and the all-six-CRDT coverage sweep.
+  Iron Rule 1 full gate: `go test ./...` 4m17s, integration retry green
+  (TestAdaptiveShardingRebalance flaked once at 40s, passed in 16s on
+  isolation per known-flake protocol), sbt multi-jvm 3/3 195s. Summary
+  counts: ✅ 280 → 281, ⚠️ 16 → 15.
 
 - **2026-05-07 — Perfect-pekko Phase 4 closure (Multi-DC FD reachability
   margin):** Closes the lone ⚠️ row 280

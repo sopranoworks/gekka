@@ -216,6 +216,13 @@ type Replicator struct {
 	// pekko.cluster.distributed-data.durable.keys.  Only keys matching one
 	// of these patterns trigger DurableStore writes/reads.
 	DurableKeys []string
+
+	// serializerCache memoizes the JSON-serialized full-state gossip payload
+	// for each CRDT keyed by (crdt-key, snapshot fingerprint). Across gossip
+	// rounds within SerializerCacheTimeToLive, repeated identical snapshots
+	// reuse the cached bytes instead of re-marshaling. Wired from
+	// pekko.cluster.distributed-data.serializer-cache-time-to-live.
+	serializerCache *serializerCache
 }
 
 type peerInfo struct {
@@ -245,6 +252,7 @@ func NewReplicator(nodeID string, router *actor.Router) *Replicator {
 		Name:                      "ddataReplicator",
 		stopCh:                    make(chan struct{}),
 		dirtyKeys:                 make(map[string]any),
+		serializerCache:           newSerializerCache(),
 	}
 }
 
@@ -1142,9 +1150,44 @@ func (r *Replicator) gossipDelta(ctx context.Context, msgType, key string, paylo
 	r.sendToPeers(ctx, ReplicatorMsg{Type: msgType, Key: key, Payload: data}, consistency)
 }
 
-func (r *Replicator) gossipCounter(ctx context.Context, key string, c *GCounter, consistency WriteConsistency) {
-	payload, err := json.Marshal(GCounterPayload{State: c.Snapshot()})
+// cachedMarshal is the single chokepoint that consults the per-CRDT
+// serializer cache before falling back to json.Marshal. cacheKey scopes the
+// entry to a particular CRDT type + name (e.g. "gcounter:hits") so different
+// CRDTs sharing a name do not collide. fingerprint identifies the snapshot
+// version; when it matches the cached entry and the entry is within
+// SerializerCacheTimeToLive, the cached bytes are reused. On a miss the
+// caller's marshal closure runs and the result is recorded for later hits.
+//
+// Returning nil bytes signals the marshal closure failed; the caller must
+// treat that the same way it treated the pre-cache json.Marshal error.
+func (r *Replicator) cachedMarshal(cacheKey, fingerprint string, marshal func() ([]byte, error)) []byte {
+	ttl := r.SerializerCacheTimeToLive
+	if ttl > 0 {
+		if data, ok := r.serializerCache.Lookup(cacheKey, fingerprint); ok {
+			return data
+		}
+	}
+	data, err := marshal()
 	if err != nil {
+		return nil
+	}
+	r.serializerCache.Store(cacheKey, fingerprint, data, ttl)
+	return data
+}
+
+// SerializerCacheStats returns (hits, misses) since the Replicator was
+// constructed. Intended for tests and operator introspection — production
+// code paths do not branch on these counters.
+func (r *Replicator) SerializerCacheStats() (uint64, uint64) {
+	return r.serializerCache.Stats()
+}
+
+func (r *Replicator) gossipCounter(ctx context.Context, key string, c *GCounter, consistency WriteConsistency) {
+	state := c.Snapshot()
+	payload := r.cachedMarshal("gcounter:"+key, fingerprintGCounterState(state), func() ([]byte, error) {
+		return json.Marshal(GCounterPayload{State: state})
+	})
+	if payload == nil {
 		return
 	}
 	msg := ReplicatorMsg{Type: "gcounter-gossip", Key: key, Payload: payload}
@@ -1153,8 +1196,10 @@ func (r *Replicator) gossipCounter(ctx context.Context, key string, c *GCounter,
 
 func (r *Replicator) gossipSet(ctx context.Context, key string, s *ORSet, consistency WriteConsistency) {
 	snap := s.Snapshot()
-	payload, err := json.Marshal(snap)
-	if err != nil {
+	payload := r.cachedMarshal("orset:"+key, fingerprintORSetSnapshot(snap), func() ([]byte, error) {
+		return json.Marshal(snap)
+	})
+	if payload == nil {
 		return
 	}
 	msg := ReplicatorMsg{Type: "orset-gossip", Key: key, Payload: payload}
@@ -1162,8 +1207,11 @@ func (r *Replicator) gossipSet(ctx context.Context, key string, s *ORSet, consis
 }
 
 func (r *Replicator) gossipMap(ctx context.Context, key string, m *LWWMap, consistency WriteConsistency) {
-	payload, err := json.Marshal(LWWMapPayload{State: m.Snapshot()})
-	if err != nil {
+	state := m.Snapshot()
+	payload := r.cachedMarshal("lwwmap:"+key, fingerprintLWWMapState(state), func() ([]byte, error) {
+		return json.Marshal(LWWMapPayload{State: state})
+	})
+	if payload == nil {
 		return
 	}
 	msg := ReplicatorMsg{Type: "lwwmap-gossip", Key: key, Payload: payload}
@@ -1171,24 +1219,33 @@ func (r *Replicator) gossipMap(ctx context.Context, key string, m *LWWMap, consi
 }
 
 func (r *Replicator) gossipPNCounter(ctx context.Context, key string, c *PNCounter, consistency WriteConsistency) {
-	payload, err := json.Marshal(PNCounterPayload{c.Snapshot()})
-	if err != nil {
+	snap := c.Snapshot()
+	payload := r.cachedMarshal("pncounter:"+key, fingerprintPNCounterSnapshot(snap), func() ([]byte, error) {
+		return json.Marshal(PNCounterPayload{snap})
+	})
+	if payload == nil {
 		return
 	}
 	r.sendToPeers(ctx, ReplicatorMsg{Type: "pncounter-gossip", Key: key, Payload: payload}, consistency)
 }
 
 func (r *Replicator) gossipORFlag(ctx context.Context, key string, f *ORFlag, consistency WriteConsistency) {
-	payload, err := json.Marshal(f.Snapshot())
-	if err != nil {
+	snap := f.Snapshot()
+	payload := r.cachedMarshal("orflag:"+key, fingerprintORSetSnapshot(snap), func() ([]byte, error) {
+		return json.Marshal(snap)
+	})
+	if payload == nil {
 		return
 	}
 	r.sendToPeers(ctx, ReplicatorMsg{Type: "orflag-gossip", Key: key, Payload: payload}, consistency)
 }
 
 func (r *Replicator) gossipLWWRegister(ctx context.Context, key string, reg *LWWRegister, consistency WriteConsistency) {
-	payload, err := json.Marshal(LWWRegisterPayload{reg.Snapshot()})
-	if err != nil {
+	snap := reg.Snapshot()
+	payload := r.cachedMarshal("lwwregister:"+key, fingerprintLWWRegisterSnapshot(snap), func() ([]byte, error) {
+		return json.Marshal(LWWRegisterPayload{snap})
+	})
+	if payload == nil {
 		return
 	}
 	r.sendToPeers(ctx, ReplicatorMsg{Type: "lwwregister-gossip", Key: key, Payload: payload}, consistency)

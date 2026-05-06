@@ -97,6 +97,23 @@ func (r ActorRef) Tell(msg any, sender ...actor.Ref) {
 	}
 
 	if r.local != nil {
+		// System messages (PoisonPill, Kill) take a separate code path: they
+		// route to the actor's priority systemMailbox and skip Envelope
+		// wrapping. Start's drain-first select dequeues from systemMailbox
+		// ahead of the user mailbox, so the actor can be killed even when
+		// its user mailbox is saturated.
+		if isSystemMessage(msg) {
+			if smb, ok := r.local.(interface {
+				SendSystem(any) bool
+			}); ok {
+				if smb.SendSystem(msg) {
+					return
+				}
+				// Priority channel saturated or closed — fall through to
+				// user mailbox so the message still has a chance to land.
+			}
+		}
+
 		env := actor.Envelope{Payload: msg, Sender: s}
 		// sendCause is empty on success, "mailbox-closed" on panic (closed
 		// channel), or "mailbox-full" when the buffered channel is saturated.
@@ -360,4 +377,17 @@ func ToTyped[T any](ref actor.Ref) typed.TypedActorRef[T] {
 // ToUntyped converts a TypedActorRef[T] to an untyped Ref.
 func ToUntyped[T any](ref typed.TypedActorRef[T]) actor.Ref {
 	return typed.ToUntyped(ref)
+}
+
+// isSystemMessage reports whether msg is a Pekko-style system message that
+// should be routed to the actor's priority mailbox. PoisonPill and Kill are
+// the only user-callable types in the current set; supervisor signals
+// (resumeSignal, restartSignal) live inside the actor package and are
+// dispatched by the supervisor itself.
+func isSystemMessage(msg any) bool {
+	switch msg.(type) {
+	case actor.PoisonPill, actor.Kill:
+		return true
+	}
+	return false
 }

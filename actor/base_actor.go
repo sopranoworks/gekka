@@ -67,8 +67,16 @@ type Actor interface {
 // BaseActor provides a default Mailbox implementation and should be embedded
 // in every user-defined actor struct.  The default buffer size is 256; call
 // NewBaseActorWithSize to override it.
+//
+// In addition to the user-message mailbox, every BaseActor owns a separate
+// systemMailbox channel (priority). Start's dispatch loop drains
+// systemMailbox ahead of mailbox on every iteration via a drain-first select
+// so PoisonPill, Kill, and other system signals cannot be starved by a
+// saturated user mailbox — Pekko's actor-cell-level priority semantics.
 type BaseActor struct {
 	mailbox            chan any
+	systemMailbox      chan any       // priority channel for PoisonPill, Kill, supervisor signals
+	systemCloseOnce    sync.Once      // guards close(systemMailbox)
 	mbSend             func(any) bool // non-nil when a custom mailbox is installed
 	mbClose            func()         // non-nil when a custom mailbox needs special teardown
 	currentSender      Ref             // set for the duration of each Receive call; nil otherwise
@@ -93,6 +101,12 @@ type BaseActor struct {
 	currentMessage      any                   // set during Receive so Stash() can grab it
 	drainDispatch       func(any) bool        // set by Start(); used by drain to re-enter dispatch
 }
+
+// systemMailboxBufferSize is the fixed buffer for the priority channel.
+// 256 slots is large enough that a healthy supervision tree never saturates
+// it — system messages are infrequent compared to user traffic. SendSystem
+// returns false on the rare overflow rather than blocking the caller.
+const systemMailboxBufferSize = 256
 
 // Sender returns the actor reference that sent the currently-processed message.
 //
@@ -187,20 +201,60 @@ func (b *BaseActor) initLog(h slog.Handler, self Ref) {
 	b.actorLog = newActorLogger(h, self, func() Ref { return b.currentSender })
 }
 
-// NewBaseActor returns a BaseActor with a mailbox channel buffered to 256.
+// NewBaseActor returns a BaseActor with a mailbox channel buffered to 256
+// and a separate priority channel for system messages (also buffered).
 func NewBaseActor() BaseActor {
-	return BaseActor{mailbox: make(chan any, 256)}
+	return BaseActor{
+		mailbox:       make(chan any, 256),
+		systemMailbox: make(chan any, systemMailboxBufferSize),
+	}
 }
 
 // NewBaseActorWithSize returns a BaseActor whose mailbox channel is buffered
-// to size.
+// to size. The priority channel for system messages keeps its default size.
 func NewBaseActorWithSize(size int) BaseActor {
-	return BaseActor{mailbox: make(chan any, size)}
+	return BaseActor{
+		mailbox:       make(chan any, size),
+		systemMailbox: make(chan any, systemMailboxBufferSize),
+	}
 }
 
 // Mailbox satisfies the Actor interface and returns the embedded channel.
 func (b *BaseActor) Mailbox() chan any {
 	return b.mailbox
+}
+
+// SystemMailbox returns the priority channel used by Start to dispatch
+// system messages ahead of user messages. The framework routes PoisonPill,
+// Kill, and internal supervisor signals through this channel via SendSystem
+// so they cannot be starved by a saturated user mailbox.
+//
+// User code rarely interacts with this channel directly; see SendSystem for
+// the supported enqueue path.
+func (b *BaseActor) SystemMailbox() chan any {
+	return b.systemMailbox
+}
+
+// SendSystem enqueues msg on the priority channel using a non-blocking
+// send. Returns true on success, false when the system mailbox is full or
+// closed. The buffered channel is sized so healthy supervision trees never
+// reach saturation; a false return signals an unrecoverable backlog and
+// the caller may fall back to the user mailbox if appropriate.
+func (b *BaseActor) SendSystem(msg any) (ok bool) {
+	if b.systemMailbox == nil {
+		return false
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			ok = false // send on closed channel
+		}
+	}()
+	select {
+	case b.systemMailbox <- msg:
+		return true
+	default:
+		return false
+	}
 }
 
 // AddWatcher tracks an actor that is monitoring this actor's lifecycle.
@@ -255,9 +309,15 @@ func (b *BaseActor) triggerStop() {
 
 // initMailbox lazily initialises the mailbox if it was not set via one of the
 // constructors (i.e. the struct was created with a zero-value literal).
+// The priority systemMailbox is initialised here too so every actor — even
+// those constructed via zero-value struct literals — gets system-message
+// priority dispatch.
 func (b *BaseActor) initMailbox() {
 	if b.mailbox == nil {
 		b.mailbox = make(chan any, 256)
+	}
+	if b.systemMailbox == nil {
+		b.systemMailbox = make(chan any, systemMailboxBufferSize)
 	}
 	if b.children == nil {
 		b.children = make(map[string]Ref)
@@ -285,6 +345,11 @@ func (b *BaseActor) Send(msg any) bool {
 // CloseMailbox terminates the mailbox. For the default channel mailbox it
 // closes the underlying channel. For priority mailboxes it signals the drain
 // goroutine to stop (which then closes the channel, ending Start's range loop).
+//
+// The priority systemMailbox is closed independently and idempotently via
+// systemCloseOnce so external callers (e.g. test helpers calling
+// close(child.Mailbox())) and PoisonPill-driven closure both terminate the
+// dispatch loop cleanly.
 func (b *BaseActor) CloseMailbox() {
 	// Cancel any pending receive timeout timer first to prevent the timer
 	// callback from racing with the mailbox close (which would cause a
@@ -295,6 +360,18 @@ func (b *BaseActor) CloseMailbox() {
 	} else {
 		close(b.mailbox)
 	}
+	b.closeSystemMailbox()
+}
+
+// closeSystemMailbox closes the priority channel idempotently. Called by
+// CloseMailbox and exposed for paths that close the user mailbox directly
+// (e.g. close(child.Mailbox()) in tests) so the dispatch loop also drains
+// the system side and exits.
+func (b *BaseActor) closeSystemMailbox() {
+	if b.systemMailbox == nil {
+		return
+	}
+	b.systemCloseOnce.Do(func() { close(b.systemMailbox) })
 }
 
 // baseActor returns the receiver's *BaseActor pointer. Used by InjectMailbox
@@ -631,6 +708,11 @@ func InjectSender(a Actor, sender Ref) {
 // Start runs a dedicated goroutine that reads from a.Mailbox() and calls
 // a.Receive for each message.  The goroutine exits when the channel is closed.
 //
+// Each iteration uses a drain-first select between the priority systemMailbox
+// (PoisonPill, Kill, supervisor signals) and the user mailbox so that system
+// messages always win over user traffic, regardless of which Mailbox impl is
+// configured. This is Pekko's actor-cell-level priority semantics.
+//
 // Call Start once after constructing the actor, before registering it with
 // Cluster.RegisterActor:
 //
@@ -670,6 +752,15 @@ func Start(a Actor) {
 		drainClassicStash()
 	}
 	css, hasClassicStash := any(a).(classicStashSupport)
+
+	// Detect priority system-mailbox support (BaseActor provides it). Actors
+	// that don't expose SystemMailbox fall back to single-channel dispatch
+	// for backward compatibility.
+	type systemMailboxer interface{ SystemMailbox() chan any }
+	var sysCh chan any
+	if smb, ok := any(a).(systemMailboxer); ok {
+		sysCh = smb.SystemMailbox()
+	}
 
 	// Acquire metric instruments once for this actor's lifetime.
 	mailboxGauge, processDuration := initActorMetrics()
@@ -739,6 +830,90 @@ func Start(a Actor) {
 			css.setDrainDispatch(dispatchMsg)
 		}
 
+		// processRaw runs the full per-message pipeline (telemetry, sender
+		// setup, dispatch). Returns:
+		//   - shouldContinue=true → restart inner loop after PreRestart-style
+		//     control signal (resumeSignal/restartSignal).
+		//   - exit=true → goroutine should terminate (PoisonPill or stop).
+		processRaw := func(raw any) (shouldContinue, exit bool) {
+			mailboxGauge.Add(context.Background(), -1, pathAttr)
+
+			switch m := raw.(type) {
+			case resumeSignal:
+				return true, true
+			case restartSignal:
+				a.PreRestart(m.reason, nil)
+				return true, true
+			case Envelope:
+				if hasSS {
+					ss.setSender(m.Sender)
+				}
+				msgCtx := context.Background()
+				if len(m.TraceContext) > 0 {
+					msgCtx = actorTracer().Extract(msgCtx, m.TraceContext)
+				}
+				msgCtx, span := actorTracer().Start(msgCtx, "actor.Receive")
+				span.SetAttribute("actor.path", actorPath)
+				if hasCS {
+					cs.setCurrentCtx(msgCtx)
+				}
+				start := time.Now()
+				if hasClassicStash {
+					css.setCurrentMessage(m.Payload)
+				}
+				if !dispatchMsg(m.Payload) {
+					span.End()
+					if closer, ok := any(a).(interface{ CloseMailbox() }); ok {
+						closer.CloseMailbox()
+					}
+					return false, true
+				}
+				if hasClassicStash {
+					css.setCurrentMessage(nil)
+					css.drainClassicStash()
+				}
+				processDuration.Record(msgCtx, time.Since(start).Seconds(), pathAttr)
+				span.End()
+				if hasCS {
+					cs.setCurrentCtx(context.Background())
+				}
+				if hasSS {
+					ss.setSender(nil)
+				}
+				return false, false
+			default:
+				if hasSS {
+					ss.setSender(nil)
+				}
+				msgCtx, span := actorTracer().Start(context.Background(), "actor.Receive")
+				span.SetAttribute("actor.path", actorPath)
+				if hasCS {
+					cs.setCurrentCtx(msgCtx)
+				}
+				start := time.Now()
+				if hasClassicStash {
+					css.setCurrentMessage(m)
+				}
+				if !dispatchMsg(m) {
+					span.End()
+					if closer, ok := any(a).(interface{ CloseMailbox() }); ok {
+						closer.CloseMailbox()
+					}
+					return false, true
+				}
+				if hasClassicStash {
+					css.setCurrentMessage(nil)
+					css.drainClassicStash()
+				}
+				processDuration.Record(msgCtx, time.Since(start).Seconds(), pathAttr)
+				span.End()
+				if hasCS {
+					cs.setCurrentCtx(context.Background())
+				}
+				return false, false
+			}
+		}
+
 		for {
 			var shouldContinue bool
 			func() {
@@ -763,86 +938,84 @@ func Start(a Actor) {
 					}
 				}()
 
-				for raw := range a.Mailbox() {
-					// ── Telemetry: mailbox size (one message consumed) ─────
-					mailboxGauge.Add(context.Background(), -1, pathAttr)
+				userCh := a.Mailbox()
+				localSysCh := sysCh
 
-					switch m := raw.(type) {
-					case resumeSignal:
-						shouldContinue = true
-						return
-					case restartSignal:
-						a.PreRestart(m.reason, nil)
-						shouldContinue = true
-						return
-					case Envelope:
-						if hasSS {
-							ss.setSender(m.Sender)
-						}
-						// ── Telemetry: extract trace context, start span ───
-						msgCtx := context.Background()
-						if len(m.TraceContext) > 0 {
-							msgCtx = actorTracer().Extract(msgCtx, m.TraceContext)
-						}
-						msgCtx, span := actorTracer().Start(msgCtx, "actor.Receive")
-						span.SetAttribute("actor.path", actorPath)
-						if hasCS {
-							cs.setCurrentCtx(msgCtx)
-						}
-						start := time.Now()
-						if hasClassicStash {
-							css.setCurrentMessage(m.Payload)
-						}
-						if !dispatchMsg(m.Payload) {
-							// PoisonPill: close mailbox to trigger graceful stop
-							span.End()
-							if closer, ok := any(a).(interface{ CloseMailbox() }); ok {
-								closer.CloseMailbox()
+				for {
+					var raw any
+
+					// Drain-first: try the priority channel non-blocking
+					// before any blocking select. Naive 2-case select picks
+					// randomly when both are ready and would let user traffic
+					// starve system messages.
+					if localSysCh != nil {
+						select {
+						case msg, ok := <-localSysCh:
+							if !ok {
+								localSysCh = nil
+							} else {
+								sc, exit := processRaw(msg)
+								if sc {
+									shouldContinue = true
+									return
+								}
+								if exit {
+									return
+								}
+								continue
 							}
+						default:
+						}
+					}
+
+					// Block until either channel produces.
+					if localSysCh == nil {
+						msg, ok := <-userCh
+						if !ok {
 							return
 						}
-						if hasClassicStash {
-							css.setCurrentMessage(nil)
-							css.drainClassicStash()
-						}
-						processDuration.Record(msgCtx, time.Since(start).Seconds(), pathAttr)
-						span.End()
-						if hasCS {
-							cs.setCurrentCtx(context.Background())
-						}
-						if hasSS {
-							ss.setSender(nil)
-						}
-					default:
-						if hasSS {
-							ss.setSender(nil)
-						}
-						// ── Telemetry: untagged message ────────────────────
-						msgCtx, span := actorTracer().Start(context.Background(), "actor.Receive")
-						span.SetAttribute("actor.path", actorPath)
-						if hasCS {
-							cs.setCurrentCtx(msgCtx)
-						}
-						start := time.Now()
-						if hasClassicStash {
-							css.setCurrentMessage(m)
-						}
-						if !dispatchMsg(m) {
-							span.End()
-							if closer, ok := any(a).(interface{ CloseMailbox() }); ok {
-								closer.CloseMailbox()
+						raw = msg
+					} else {
+						select {
+						case msg, ok := <-localSysCh:
+							if !ok {
+								localSysCh = nil
+								continue
 							}
-							return
+							raw = msg
+						case msg, ok := <-userCh:
+							if !ok {
+								// User mailbox closed: drain any remaining
+								// system messages so PoisonPill-driven
+								// shutdowns don't lose tail signals, then exit.
+								for localSysCh != nil {
+									sm, sok := <-localSysCh
+									if !sok {
+										localSysCh = nil
+										return
+									}
+									sc, exit := processRaw(sm)
+									if sc {
+										shouldContinue = true
+										return
+									}
+									if exit {
+										return
+									}
+								}
+								return
+							}
+							raw = msg
 						}
-						if hasClassicStash {
-							css.setCurrentMessage(nil)
-							css.drainClassicStash()
-						}
-						processDuration.Record(msgCtx, time.Since(start).Seconds(), pathAttr)
-						span.End()
-						if hasCS {
-							cs.setCurrentCtx(context.Background())
-						}
+					}
+
+					sc, exit := processRaw(raw)
+					if sc {
+						shouldContinue = true
+						return
+					}
+					if exit {
+						return
 					}
 				}
 			}()

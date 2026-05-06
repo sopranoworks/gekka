@@ -8,7 +8,11 @@
 
 package actor
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/sopranoworks/gekka/actor/mailbox"
+)
 
 // ── PoisonPill / Kill ──────────────────────────────────────────────────────
 
@@ -53,9 +57,12 @@ type ActorIdentity struct {
 
 // ControlMessage is a marker interface for messages that should be processed
 // with priority over normal messages when using a ControlAwareMailbox.
-type ControlMessage interface {
-	IsControlMessage()
-}
+//
+// Sub-commit 1.6 unified this with mailbox.ControlMessage via a Go type alias
+// so the actor and mailbox packages classify messages by the same interface
+// without duplicating the declaration. Existing actors implementing
+// IsControlMessage() satisfy both spellings transparently.
+type ControlMessage = mailbox.ControlMessage
 
 // ReceiveTimeout is a system message delivered to a classic actor when no
 // messages have been received within the configured timeout duration.

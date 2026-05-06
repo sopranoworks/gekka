@@ -20,6 +20,7 @@ import (
 
 	hocon "github.com/sopranoworks/gekka-config"
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/actor/mailbox"
 	"github.com/sopranoworks/gekka/actor/typed"
 	"github.com/sopranoworks/gekka/internal/core"
 	"github.com/sopranoworks/gekka/persistence"
@@ -568,14 +569,94 @@ func (s *localActorSystem) LookupDeployment(path string) (core.DeploymentConfig,
 	return core.DeploymentConfig{}, false
 }
 
+// resolvePhase1Mailbox returns a legacy actor.MailboxFactory bridged from
+// the actor/mailbox package's factory registry, or (nil, nil) when no
+// Phase-1 factory should be installed (caller falls through to dispatcher /
+// default behaviour, preserving the legacy chan-based mailbox).
+//
+// Phase 1.6 selection precedence (after Props.Mailbox is exhausted):
+//  1. Props.MailboxName — explicit user choice.
+//  2. Actor's declared MailboxRequirement → HOCON requirements binding,
+//     falling back to the built-in default for the requirement.
+//  3. HOCON pekko.actor.default-mailbox.mailbox-type.
+//
+// When none of (1), (2), or (3) supplies an opt-in, the legacy
+// BaseActor.mailbox channel is left in place — this is the behaviour the
+// plan calls out as required: "an actor with no Props.WithMailbox and no
+// HOCON binding gets UnboundedMailbox, same FIFO single-channel semantics as
+// today's legacy queue."
+//
+// A non-nil error is returned only when an actor declares a requirement and
+// the resolved factory does not satisfy it; the caller propagates this as
+// a HARD start failure.
+func (s *localActorSystem) resolvePhase1Mailbox(a actor.Actor, props actor.Props) (actor.MailboxFactory, error) {
+	explicit := strings.TrimSpace(props.MailboxName)
+	hasRequirement := mailboxRequirementOf(a) != ""
+	hasDefaultType := strings.TrimSpace(mailbox.GlobalDefaultType()) != ""
+	if explicit == "" && !hasRequirement && !hasDefaultType {
+		// No opt-in — preserve legacy chan-based mailbox.
+		return nil, nil
+	}
+
+	bindings := mailbox.GlobalBindings()
+	defaultType := mailbox.GlobalDefaultType()
+
+	factoryID, _ := mailbox.ResolveForActor(a, explicit, bindings)
+	if factoryID == mailbox.DefaultMailboxID && defaultType != "" && explicit == "" {
+		factoryID = defaultType
+	}
+
+	if err := mailbox.ValidateRequirement(a, factoryID); err != nil {
+		return nil, err
+	}
+
+	factory := mailbox.Resolve(factoryID)
+	if factory == nil {
+		return nil, nil
+	}
+	return actor.NewMailboxBridge(factory, mailbox.GlobalDefaults()), nil
+}
+
+// mailboxRequirementOf reports whether actor a declares any
+// MailboxRequirement. Mirrors mailbox.requirementOf without exporting that
+// internal helper. Currently the only declared requirement is ControlAware;
+// extend the type-assertion list as future requirements are added in
+// follow-up phases.
+func mailboxRequirementOf(a actor.Actor) string {
+	if _, ok := any(a).(mailbox.RequiresControlAwareMessageQueueSemantics); ok {
+		return mailbox.RequirementControlAwareMessageQueueSemanticsID
+	}
+	return ""
+}
+
 // SpawnActor implements internalSystem.
 func (s *localActorSystem) SpawnActor(path string, a actor.Actor, props actor.Props) actor.Ref {
 	ref := ActorRef{fullPath: s.SelfPathURI(path), sys: s, local: a}
 
 	// Apply custom mailbox before the actor goroutine starts.
-	// Priority: Props.Mailbox > dispatcher's mailbox-type from HOCON config.
+	// Priority (sub-commit 1.6 establishes the unified order):
+	//   1. Props.Mailbox (legacy MailboxFactory) — wins.
+	//   2. Props.MailboxName (Phase 1 mailbox.Resolve registry).
+	//   3. Actor's MailboxRequirement → HOCON requirements binding →
+	//      built-in default factory.
+	//   4. Dispatcher's mailbox-type from HOCON.
+	//   5. System default-mailbox.mailbox-type from HOCON, or
+	//      mailbox.DefaultMailboxID ("unbounded").
+	//
+	// Mismatch between an actor's declared MailboxRequirement and the
+	// resolved factory is a HARD ERROR — the actor is not started and the
+	// dispatch-loop goroutine is not created.
 	if props.Mailbox != nil {
 		actor.InjectMailbox(a, props.Mailbox)
+	} else if mf, mfErr := s.resolvePhase1Mailbox(a, props); mfErr != nil {
+		// Hard error per Phase 1.6: a declared requirement that the bound
+		// factory cannot satisfy fails actor start.
+		slog.Error("actor: mailbox requirement validation failed",
+			"path", path,
+			"err", mfErr.Error())
+		return ActorRef{fullPath: s.SelfPathURI(path), sys: s, local: nil}
+	} else if mf != nil {
+		actor.InjectMailbox(a, mf)
 	} else if props.DispatcherKey != "" {
 		if dcfg, ok := actor.GetDispatcherConfig(props.DispatcherKey); ok {
 			if mf := dcfg.ResolveMailbox(); mf != nil {

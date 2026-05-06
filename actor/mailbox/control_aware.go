@@ -26,16 +26,42 @@ func init() {
 		"org.apache.pekko.dispatch.BoundedControlAwareMailbox",
 		"akka.dispatch.BoundedControlAwareMailbox",
 	)
+	// Both control-aware factories satisfy the broader ControlAware
+	// requirement plus their own variant. Sub-commit 1.6 wires this so
+	// actors declaring RequiresControlAwareMessageQueueSemantics validate
+	// against either factory.
+	RegisterCapabilities(
+		[]string{
+			RequirementControlAwareMessageQueueSemanticsID,
+			RequirementUnboundedControlAwareID,
+			AkkaRequirementControlAwareMessageQueueSemanticsID,
+			AkkaRequirementUnboundedControlAwareID,
+		},
+		"unbounded-control-aware",
+		"org.apache.pekko.dispatch.UnboundedControlAwareMailbox",
+		"akka.dispatch.UnboundedControlAwareMailbox",
+	)
+	RegisterCapabilities(
+		[]string{
+			RequirementControlAwareMessageQueueSemanticsID,
+			RequirementBoundedControlAwareID,
+			AkkaRequirementControlAwareMessageQueueSemanticsID,
+			AkkaRequirementBoundedControlAwareID,
+		},
+		"bounded-control-aware",
+		"org.apache.pekko.dispatch.BoundedControlAwareMailbox",
+		"akka.dispatch.BoundedControlAwareMailbox",
+	)
 }
 
 // ControlMessage is the marker interface for messages that should be
 // dispatched ahead of regular user messages by a control-aware mailbox.
 //
-// The shape mirrors actor.ControlMessage exactly — any type that satisfies
-// one satisfies the other. The interface is duplicated here so the mailbox
-// package can classify messages without importing the parent actor package,
-// which would create a cycle once the actor cell wires Mailbox in
-// sub-commit 1.6. The two interfaces will be unified at that point.
+// The mailbox package owns the canonical declaration; sub-commit 1.6 unified
+// the previously-duplicated actor.ControlMessage onto this type via a Go
+// type alias in the actor package. The actor → mailbox import direction
+// (used by the actor cell to consume the Mailbox interface) is the only
+// direction; mailbox does not import actor.
 type ControlMessage interface {
 	IsControlMessage()
 }

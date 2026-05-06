@@ -26,6 +26,7 @@ import (
 
 	hocon "github.com/sopranoworks/gekka-config"
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/actor/mailbox"
 	"github.com/sopranoworks/gekka/actor/typed"
 	"github.com/sopranoworks/gekka/actor/typed/delivery"
 	"github.com/sopranoworks/gekka/actor/typed/receptionist"
@@ -685,12 +686,55 @@ type ClusterConfig struct {
 	// these defaults.
 	CoordinationLease CoordinationLeaseConfig
 
+	// Mailbox holds the parsed pekko.actor.default-mailbox.* defaults plus
+	// the requirements binding map (pekko.actor.mailbox.requirements.*).
+	// Consumed by SpawnActor when no Props.MailboxName is specified — the
+	// chosen factory is the requirements-driven binding, falling back to
+	// MailboxConfig.DefaultType, falling back to "unbounded".
+	//
+	// Phase 1 sub-commit 1.6 wires this into actor construction.
+	Mailbox MailboxConfig
+
 	// HOCON holds the raw parsed configuration. When non-nil, NewCluster calls
 	// SerializationRegistry.LoadFromConfig on it to register any user-defined
 	// serializers declared under pekko.actor.serializers and
 	// pekko.actor.serialization-bindings.
 	// Populated automatically by ParseHOCONString / LoadConfig / NewClusterFromConfig.
 	HOCON *hocon.Config
+}
+
+// MailboxConfig is the in-memory shape of the pekko.actor.default-mailbox.*
+// + pekko.actor.mailbox.requirements.* + pekko.dispatch.{Unbounded,Bounded}ControlAwareMailbox
+// surface, parsed from HOCON.
+//
+// All fields have zero-value defaults that match Pekko: an empty DefaultType
+// resolves to mailbox.DefaultMailboxID ("unbounded"), zero DefaultCapacity
+// means 1000 once a bounded factory is chosen, and zero DefaultPushTimeout
+// means 10s. The parser populates explicit values when HOCON sets them.
+type MailboxConfig struct {
+	// DefaultType is the factory ID resolved from
+	// pekko.actor.default-mailbox.mailbox-type. Both short IDs ("unbounded",
+	// "bounded", "unbounded-control-aware", "bounded-control-aware") and
+	// Pekko/Akka FQCNs are accepted; the registry in actor/mailbox handles
+	// the lookup.
+	DefaultType string
+
+	// DefaultCapacity is the parsed pekko.actor.default-mailbox.mailbox-capacity.
+	// Honoured only by bounded factories.
+	DefaultCapacity int
+
+	// DefaultPushTimeout is the parsed
+	// pekko.actor.default-mailbox.mailbox-push-timeout-time. Honoured only
+	// by bounded factories. Zero means block-forever (Pekko parity).
+	DefaultPushTimeout time.Duration
+
+	// Requirements is the mailbox-requirements binding map. Keys are
+	// requirement IDs (Pekko/Akka FQCNs); values are mailbox factory IDs.
+	// Populated from pekko.actor.mailbox.requirements.<requirement-fqcn> and
+	// from the pekko.dispatch.{Unbounded,Bounded}ControlAwareMailbox dispatch
+	// blocks (whose mailbox-type acts as the binding for the matching
+	// ControlAware variant).
+	Requirements map[string]string
 }
 
 // DiscoveryConfig holds dynamic seed discovery settings.
@@ -4520,15 +4564,61 @@ func (c *Cluster) LookupDeployment(path string) (core.DeploymentConfig, bool) {
 	return c.lookupDeployment(path)
 }
 
+// resolvePhase1Mailbox returns a legacy actor.MailboxFactory bridged from
+// the actor/mailbox package's factory registry, or (nil, nil) when no
+// Phase-1 factory should be installed (caller falls through to dispatcher /
+// default behaviour, preserving the legacy chan-based mailbox). See
+// localActorSystem.resolvePhase1Mailbox for the full precedence and contract;
+// this is the cluster-side mirror.
+func (n *Cluster) resolvePhase1Mailbox(a actor.Actor, props actor.Props) (actor.MailboxFactory, error) {
+	explicit := strings.TrimSpace(props.MailboxName)
+	hasRequirement := mailboxRequirementOf(a) != ""
+	hasDefaultType := strings.TrimSpace(mailbox.GlobalDefaultType()) != ""
+	if explicit == "" && !hasRequirement && !hasDefaultType {
+		return nil, nil
+	}
+
+	bindings := mailbox.GlobalBindings()
+	defaultType := mailbox.GlobalDefaultType()
+
+	factoryID, _ := mailbox.ResolveForActor(a, explicit, bindings)
+	if factoryID == mailbox.DefaultMailboxID && defaultType != "" && explicit == "" {
+		factoryID = defaultType
+	}
+
+	if err := mailbox.ValidateRequirement(a, factoryID); err != nil {
+		return nil, err
+	}
+
+	factory := mailbox.Resolve(factoryID)
+	if factory == nil {
+		return nil, nil
+	}
+	return actor.NewMailboxBridge(factory, mailbox.GlobalDefaults()), nil
+}
+
 // SpawnActor starts a and registers it at path, then returns an ActorRef for
 // that actor.
 func (n *Cluster) SpawnActor(path string, a actor.Actor, props actor.Props) actor.Ref {
 	ref := ActorRef{fullPath: n.SelfPathURI(path), sys: n, local: a}
 
 	// Apply custom mailbox before the actor goroutine starts.
-	// Priority: Props.Mailbox > dispatcher's mailbox-type from HOCON config.
+	// Phase 1.6 selection precedence (mirrors localActorSystem.SpawnActor):
+	//   1. Props.Mailbox (legacy MailboxFactory) — wins.
+	//   2. Props.MailboxName (Phase 1 mailbox.Resolve registry).
+	//   3. Actor's MailboxRequirement → HOCON requirements binding.
+	//   4. HOCON pekko.actor.default-mailbox.mailbox-type.
+	//   5. Dispatcher's mailbox-type.
+	// A bound MailboxRequirement mismatch is a HARD start failure.
 	if props.Mailbox != nil {
 		actor.InjectMailbox(a, props.Mailbox)
+	} else if mf, mfErr := n.resolvePhase1Mailbox(a, props); mfErr != nil {
+		slog.Error("actor: mailbox requirement validation failed",
+			"path", path,
+			"err", mfErr.Error())
+		return ActorRef{fullPath: n.SelfPathURI(path), sys: n, local: nil}
+	} else if mf != nil {
+		actor.InjectMailbox(a, mf)
 	} else if props.DispatcherKey != "" {
 		if dcfg, ok := actor.GetDispatcherConfig(props.DispatcherKey); ok {
 			if mf := dcfg.ResolveMailbox(); mf != nil {

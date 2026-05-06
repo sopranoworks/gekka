@@ -147,12 +147,12 @@ The keys most users actually tune. All are Pekko-compatible (drop them into your
 
 | Path | Pekko Default | Gekka? | Notes |
 |---|---|---|---|
-| `pekko.actor.default-mailbox.mailbox-type` | `UnboundedMailbox` | ❌ | Not implemented — gekka uses a fixed Go-channel-backed mailbox per actor; no pluggable mailbox type yet. Tracked in `docs/LEFTWORKS.md` §11 |
-| `pekko.actor.default-mailbox.mailbox-capacity` | `1000` | ❌ | Not implemented — applies only to bounded mailboxes (currently absent). Tracked in `docs/LEFTWORKS.md` §11 |
-| `pekko.actor.default-mailbox.mailbox-push-timeout-time` | `10s` | ❌ | Not implemented — applies only to bounded mailboxes. Tracked in `docs/LEFTWORKS.md` §11 |
-| `pekko.actor.mailbox.requirements.*` | (binding map) | ❌ | Not implemented — type-class-based mailbox requirements have no analog in Go yet. Tracked in `docs/LEFTWORKS.md` §11 |
-| `pekko.dispatch.UnboundedControlAwareMailbox` (binding) | — | ❌ | **Critical gap.** Control-aware mailboxes prioritise system messages over user messages; without this, watch/terminate/failure handling cannot guarantee the system-priority semantics Pekko/Akka actors rely on. Tracked in `docs/LEFTWORKS.md` §11 |
-| `pekko.dispatch.BoundedControlAwareMailbox` (binding) | — | ❌ | **Critical gap.** Bounded variant of the control-aware mailbox; same priority semantics with a capacity cap. Tracked in `docs/LEFTWORKS.md` §11 |
+| `pekko.actor.default-mailbox.mailbox-type` | `UnboundedMailbox` | ✅ | Parsed at `hocon_config.go:extractMailboxConfig` into `MailboxConfig.DefaultType`; consumed by `localActorSystem.resolvePhase1Mailbox` and `Cluster.resolvePhase1Mailbox` to select the factory from the `actor/mailbox` registry when no `Props.MailboxName` is supplied. Both short ids ("unbounded", "bounded", "unbounded-control-aware", "bounded-control-aware") and Pekko/Akka FQCNs are accepted. |
+| `pekko.actor.default-mailbox.mailbox-capacity` | `1000` | ✅ | Parsed into `MailboxConfig.DefaultCapacity` and forwarded to `mailbox.GlobalDefaults().Capacity`; applied to `BoundedMailbox` and `BoundedControlAwareMailbox` factories at construction time. |
+| `pekko.actor.default-mailbox.mailbox-push-timeout-time` | `10s` | ✅ | Parsed into `MailboxConfig.DefaultPushTimeout` and forwarded to `mailbox.GlobalDefaults().PushTimeout`; applied to `BoundedMailbox` and `BoundedControlAwareMailbox` per-Enqueue timeout protocol. Zero ("0s") means block-forever (Pekko parity). |
+| `pekko.actor.mailbox.requirements.*` | (binding map) | ✅ | Parsed at `hocon_config.go:extractMailboxConfig` into `MailboxConfig.Requirements` (map of requirement-FQCN → mailbox factory id); seeded by `pekko.dispatch.{Unbounded,Bounded}ControlAwareMailbox` blocks. Consumed by `mailbox.ResolveForActor` at SpawnActor time. Actors declare a requirement by implementing `mailbox.RequiresControlAwareMessageQueueSemantics`; mismatch with the bound factory is a HARD start failure. |
+| `pekko.dispatch.UnboundedControlAwareMailbox` (binding) | — | ✅ | Block parsed at `hocon_config.go:extractMailboxConfig`; its `mailbox-type` value is registered into `MailboxConfig.Requirements` for the four ControlAware FQCN keys (Pekko + Akka spellings, plus the broader `ControlAwareMessageQueueSemantics` superclass). Resolves to the gekka `unbounded-control-aware` factory (sub-commit 1.4) at SpawnActor time. |
+| `pekko.dispatch.BoundedControlAwareMailbox` (binding) | — | ✅ | Block parsed at `hocon_config.go:extractMailboxConfig`; its `mailbox-type` value is registered into `MailboxConfig.Requirements` for the BoundedControlAware FQCN keys (Pekko + Akka spellings). Resolves to the gekka `bounded-control-aware` factory (sub-commit 1.5) at SpawnActor time. |
 
 ---
 
@@ -354,7 +354,7 @@ The keys most users actually tune. All are Pekko-compatible (drop them into your
 | `pekko.cluster.sharding.guardian-name` | `"sharding"` | ✅ | `ShardingConfig.GuardianName` — top-level guardian actor under which all sharding regions are spawned |
 | `pekko.cluster.sharding.role` | `""` | ✅ | Filters shard allocation by role |
 | `pekko.cluster.sharding.remember-entities-store` | `"ddata"` | ✅ | Round-2 session 35. `"ddata"` wires `DDataEntityStore` (existing); `"eventsourced"` wires `EventSourcedEntityStore` (new) — both implement `ShardStore` and are selected in `sharding.go` from `cluster.cfg.Sharding.RememberEntitiesStore`. |
-| `pekko.cluster.sharding.passivate-idle-entity-after` | `null` | ❌ | Deprecated in Pekko — replacement `passivation.default-idle-strategy.idle-entity.timeout` is fully ✅ (see sharding section above); gekka does not honor the legacy knob |
+| `pekko.cluster.sharding.passivate-idle-entity-after` | `null` | ✅ | Deprecated alias — Phase 1.6 wires it as a fallback at `hocon_config.go` next to the canonical `passivation.default-idle-strategy.idle-entity.timeout` parse: when only the alias is set it populates the same `Sharding.PassivationIdleTimeout`; when both are set, the canonical key wins. The literal "off" / "false" / "0" disable passivation. |
 | `pekko.cluster.sharding.number-of-shards` | `1000` | ✅ | Wired to coordinator/region |
 | `pekko.cluster.sharding.rebalance-interval` | `10s` | ✅ | Applied to ShardCoordinator.RebalanceInterval |
 | `pekko.cluster.sharding.least-shard-allocation-strategy.rebalance-threshold` | `1` | ✅ | Applied to NewLeastShardAllocationStrategy(threshold) |
@@ -582,11 +582,11 @@ touching the consumer code.
 
 | Symbol | Substantive table rows | Meaning |
 |---|---|---|
-| ✅ | 267 | Parsed AND consumed |
+| ✅ | 274 | Parsed AND consumed |
 | ⚠️ | 22 | Forward-compat parsed; consumer deferred (Note states what's deferred) |
 | ☕ | 8 | JVM-only — no equivalent capability in Go runtime |
 | 🚫 | 4 | Go/JVM API-shape incompatibility (FQCN class loading, JCA Provider, JKS rotation) |
-| ❌ | 9 | Not implemented; portable in principle (tracked in `docs/LEFTWORKS.md` §11) |
+| ❌ | 2 | Not implemented; portable in principle (tracked in `docs/LEFTWORKS.md` §11) |
 
 (Counts exclude the legend lines themselves and this Summary table. `grep -c "| ✅ |"` etc. on the file returns counts +1 because each Summary-table row contributes one match.)
 
@@ -633,28 +633,51 @@ semantics. See `docs/LEFTWORKS.md` §9 for the full JVM-only list.
 ### Not Yet Implemented (❌) — single source of truth
 
 Portable Pekko paths gekka has not bridged. The full list lives in
-`docs/LEFTWORKS.md` §11 ("Future Work — Portable"). Highlights:
+`docs/LEFTWORKS.md` §11 ("Future Work — Portable"). After Phase 1 closed
+the mailbox subsystem (sub-commits 1.1–1.6, 2026-05-06) only the logging
+deferrals remain:
 
-1. **Mailboxes (critical)** — control-aware mailbox bindings,
-   `default-mailbox.*` tunables, and `mailbox.requirements.*`. Without
-   control-aware mailboxes, system-message priority is not guaranteed and
-   the system functions completely differently from Pekko/Akka.
-2. **Typed-API surface** — typed receptionist
-   (`cluster.typed.receptionist.*`). (Sub-plan 1 closed
-   `actor.typed.restart-stash-capacity`, `persistence.typed.log-stashing`,
-   and `ddata.typed.replicator-message-adapter-unexpected-ask-timeout` on
-   2026-04-30.)
-3. **Reliable-delivery (typed)** — Pekko-typed `ProducerController` /
-   `ConsumerController`. Distinct from `at-least-once-delivery.*` (✅).
-4. **Discovery** — `pekko.discovery.config / aggregate / pekko-dns.*`
-   (gekka's k8s extension is the alternative path).
-5. **Logging** — `pekko.loglevel` (honesty-downgraded ✅ → ❌ on
+1. **Logging** — `pekko.loglevel` (honesty-downgraded ✅ → ❌ on
    2026-04-30 — parsed-only) and `pekko.stdout-loglevel`. Both are
    **deferred to the future external-log-server logging cycle**, not the
    immediate post-audit roadmap; the in-process logger is being replaced.
 
+Mailbox subsystem ❌ rows (control-aware mailbox bindings, `default-mailbox.*`
+tunables, `mailbox.requirements.*`, and the deprecated
+`passivate-idle-entity-after` alias) closed by perfect-pekko-compat Phase 1
+on 2026-05-06.
+
 ### Audit history
 
+- **2026-05-06 — Perfect-pekko Phase 1 closure (sub-commits 1.1–1.6, mailbox
+  foundation):** The `actor/mailbox` package now ships four production-ready
+  factories — `UnboundedMailbox`, `BoundedMailbox`, `UnboundedControlAwareMailbox`,
+  `BoundedControlAwareMailbox` — and the actor cell (sub-commit 1.2, commit
+  `b743cd3`) routes system messages through a dedicated priority channel that
+  always drains ahead of the configured user-side mailbox. Sub-commit 1.6
+  (this audit entry) closes the wiring: `hocon_config.go:extractMailboxConfig`
+  parses `pekko.actor.default-mailbox.{mailbox-type, mailbox-capacity,
+  mailbox-push-timeout-time}`, the `pekko.actor.mailbox.requirements.*`
+  binding map (against the 18 known Pekko/Akka MessageQueueSemantics FQCNs),
+  and the `pekko.dispatch.{Unbounded,Bounded}ControlAwareMailbox` blocks; the
+  parsed values are published to a process-level registry via
+  `mailbox.SetGlobalConfig` and consumed at SpawnActor time by both
+  `localActorSystem.resolvePhase1Mailbox` and `Cluster.resolvePhase1Mailbox`.
+  Actors declare requirements via the `mailbox.RequiresControlAwareMessageQueueSemantics`
+  marker interface; mismatch with the bound factory is a HARD start failure
+  (the actor's dispatch goroutine is not created, an error is logged, and the
+  caller receives a non-functional ActorRef). The deprecated
+  `pekko.cluster.sharding.passivate-idle-entity-after` alias is honored as
+  fallback for `passivation.default-idle-strategy.idle-entity.timeout`
+  (canonical wins when both are set; "off" / "false" / "0" disable
+  passivation). `Props.WithMailbox(name)` is the new fluent selector.
+  Default behaviour is preserved: an actor with no `Props.MailboxName`, no
+  `MailboxRequirement`, and no HOCON `default-mailbox.mailbox-type` keeps the
+  legacy `BaseActor.mailbox` 256-cap chan, matching the plan's "must remain
+  identical to today" constraint. Iron Rule 1 full gate green: unit
+  workspace, integration `-tags integration -p 1` 255s root, sbt multi-jvm
+  3/3 195s. Summary counts: ✅ 267 → 274, ❌ 9 → 2. Closes seven rows: 150,
+  151, 152, 153, 154, 155, 357.
 - **2026-05-06 — Perfect-pekko Phase 0 (audit refresh + ssl.* reclassification):**
   Three SSL `ssl.*` rows previously parked at ⚠️ (forward-compat parses with
   deferred consumers) reclassified to 🚫 (Go/JVM API-shape incompatibility),

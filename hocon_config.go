@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/actor/mailbox"
 	"github.com/sopranoworks/gekka/actor/typed/delivery"
 	gcluster "github.com/sopranoworks/gekka/cluster"
 	"github.com/sopranoworks/gekka/internal/core"
@@ -555,6 +556,22 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 	if v, err := cfg.GetString(shardingPrefix + ".passivation.default-idle-strategy.idle-entity.timeout"); err == nil {
 		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
 			nodeCfg.Sharding.PassivationIdleTimeout = d
+		}
+	}
+	// Deprecated alias honoured by Phase 1.6: pekko.cluster.sharding.passivate-idle-entity-after.
+	// Pekko keeps this around for backward compatibility; it resolves to the
+	// same effective timeout as passivation.default-idle-strategy.idle-entity.timeout.
+	// When both are set, the canonical key wins (already parsed above).
+	// "off" / "false" / "0" disable passivation.
+	if v, err := cfg.GetString(shardingPrefix + ".passivate-idle-entity-after"); err == nil && nodeCfg.Sharding.PassivationIdleTimeout == 0 {
+		raw := strings.ToLower(strings.TrimSpace(v))
+		switch raw {
+		case "off", "false", "0":
+			// Disabled — leave at zero.
+		default:
+			if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+				nodeCfg.Sharding.PassivationIdleTimeout = d
+			}
 		}
 	}
 	if v, err := cfg.GetString(shardingPrefix + ".remember-entities"); err == nil {
@@ -2203,11 +2220,152 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 	// ── Dispatcher Configuration ────────────────────────────────────────────
 	extractDispatchers(cfg, prefix)
 
+	// ── Mailbox Configuration ───────────────────────────────────────────────
+	extractMailboxConfig(cfg, prefix, &nodeCfg.Mailbox)
+	// Publish to the package-level registry so SpawnActor (which has no
+	// direct ClusterConfig handle) can resolve requirements bindings and
+	// default capacity/push-timeout.
+	mailbox.SetGlobalConfig(
+		nodeCfg.Mailbox.DefaultType,
+		nodeCfg.Mailbox.DefaultCapacity,
+		nodeCfg.Mailbox.DefaultPushTimeout,
+		nodeCfg.Mailbox.Requirements,
+	)
+
 	// Preserve the raw config so NewCluster can call LoadFromConfig for
 	// user-defined serializers declared under pekko.actor.serializers.
 	nodeCfg.HOCON = cfg
 
 	return nodeCfg, nil
+}
+
+// extractMailboxConfig parses pekko.actor.default-mailbox.*,
+// pekko.actor.mailbox.requirements.*, and the
+// pekko.dispatch.{Unbounded,Bounded}ControlAwareMailbox blocks into out.
+//
+// Phase 1 sub-commit 1.6 closes seven ❌ rows in docs/CONFIG_PATH.md by
+// turning these previously-unparsed paths into a runtime-consumed structure.
+// The defaults match Pekko's reference.conf: mailbox-type ""=>"unbounded",
+// mailbox-capacity 1000, mailbox-push-timeout-time 10s.
+func extractMailboxConfig(cfg *hocon.Config, prefix string, out *MailboxConfig) {
+	if out == nil {
+		return
+	}
+
+	// pekko.actor.default-mailbox.*
+	defaultPath := prefix + ".actor.default-mailbox"
+	if v, err := cfg.GetString(defaultPath + ".mailbox-type"); err == nil {
+		out.DefaultType = strings.TrimSpace(v)
+	}
+	if v, err := cfg.GetInt(defaultPath + ".mailbox-capacity"); err == nil && v > 0 {
+		out.DefaultCapacity = v
+	}
+	if v, err := cfg.GetString(defaultPath + ".mailbox-push-timeout-time"); err == nil {
+		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
+			out.DefaultPushTimeout = d
+		}
+	}
+
+	// pekko.actor.mailbox.requirements.<requirement-fqcn> = <factory-id>
+	//
+	// Quirk: the underlying HOCON library splits FQCN keys on every dot,
+	// so requirements.Keys() returns only the first segment ("org"). Look
+	// up each known requirement FQCN via the full deep path instead. The
+	// list below covers Pekko's standard MessageQueueSemantics surface
+	// plus the Akka spelling aliases.
+	knownRequirements := []string{
+		"org.apache.pekko.dispatch.UnboundedMessageQueueSemantics",
+		"org.apache.pekko.dispatch.BoundedMessageQueueSemantics",
+		"org.apache.pekko.dispatch.MultipleConsumerSemantics",
+		"org.apache.pekko.dispatch.DequeBasedMessageQueueSemantics",
+		"org.apache.pekko.dispatch.UnboundedDequeBasedMessageQueueSemantics",
+		"org.apache.pekko.dispatch.BoundedDequeBasedMessageQueueSemantics",
+		"org.apache.pekko.dispatch.ControlAwareMessageQueueSemantics",
+		"org.apache.pekko.dispatch.UnboundedControlAwareMessageQueueSemantics",
+		"org.apache.pekko.dispatch.BoundedControlAwareMessageQueueSemantics",
+		"akka.dispatch.UnboundedMessageQueueSemantics",
+		"akka.dispatch.BoundedMessageQueueSemantics",
+		"akka.dispatch.MultipleConsumerSemantics",
+		"akka.dispatch.DequeBasedMessageQueueSemantics",
+		"akka.dispatch.UnboundedDequeBasedMessageQueueSemantics",
+		"akka.dispatch.BoundedDequeBasedMessageQueueSemantics",
+		"akka.dispatch.ControlAwareMessageQueueSemantics",
+		"akka.dispatch.UnboundedControlAwareMessageQueueSemantics",
+		"akka.dispatch.BoundedControlAwareMessageQueueSemantics",
+	}
+	for _, req := range knownRequirements {
+		v, err := cfg.GetString(prefix + ".actor.mailbox.requirements." + req)
+		if err != nil {
+			continue
+		}
+		v = strings.TrimSpace(v)
+		if v == "" {
+			continue
+		}
+		if out.Requirements == nil {
+			out.Requirements = map[string]string{}
+		}
+		// Pekko allows the value to be either a factory id (e.g.
+		// "unbounded-control-aware") or a HOCON sub-block path (e.g.
+		// "pekko.dispatch.UnboundedControlAwareMailbox"). In the sub-block
+		// case the actual factory id lives at <path>.mailbox-type — resolve
+		// it now so the binding map stores a directly-resolvable factory id.
+		if subType, subErr := cfg.GetString(v + ".mailbox-type"); subErr == nil && strings.TrimSpace(subType) != "" {
+			out.Requirements[req] = strings.TrimSpace(subType)
+		} else {
+			out.Requirements[req] = v
+		}
+	}
+
+	// pekko.dispatch.{Unbounded,Bounded}ControlAwareMailbox.mailbox-type — these
+	// dispatch blocks are the canonical ControlAware bindings in Pekko's
+	// reference.conf. Their mailbox-type values seed the requirements map
+	// when no explicit pekko.actor.mailbox.requirements.* override exists.
+	dispatchSeed := []struct {
+		blockPath  string
+		reqIDs     []string
+		fallbackID string
+	}{
+		{
+			blockPath: prefix + ".dispatch.UnboundedControlAwareMailbox",
+			reqIDs: []string{
+				"org.apache.pekko.dispatch.UnboundedControlAwareMessageQueueSemantics",
+				"akka.dispatch.UnboundedControlAwareMessageQueueSemantics",
+				"org.apache.pekko.dispatch.ControlAwareMessageQueueSemantics",
+				"akka.dispatch.ControlAwareMessageQueueSemantics",
+			},
+			fallbackID: "unbounded-control-aware",
+		},
+		{
+			blockPath: prefix + ".dispatch.BoundedControlAwareMailbox",
+			reqIDs: []string{
+				"org.apache.pekko.dispatch.BoundedControlAwareMessageQueueSemantics",
+				"akka.dispatch.BoundedControlAwareMessageQueueSemantics",
+			},
+			fallbackID: "bounded-control-aware",
+		},
+	}
+	for _, seed := range dispatchSeed {
+		factoryID := seed.fallbackID
+		if v, err := cfg.GetString(seed.blockPath + ".mailbox-type"); err == nil {
+			if t := strings.TrimSpace(v); t != "" {
+				factoryID = t
+			}
+		} else {
+			// The block does not exist in this HOCON file. Skip seeding
+			// — Pekko's reference.conf is the authoritative source for
+			// the implicit defaults; absent block means absent binding.
+			continue
+		}
+		if out.Requirements == nil {
+			out.Requirements = map[string]string{}
+		}
+		for _, req := range seed.reqIDs {
+			if _, exists := out.Requirements[req]; !exists {
+				out.Requirements[req] = factoryID
+			}
+		}
+	}
 }
 
 // extractDispatchers reads dispatcher definitions from the HOCON config

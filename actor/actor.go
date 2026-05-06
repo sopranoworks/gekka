@@ -116,6 +116,24 @@ type Props struct {
 	// Nil means the default 256-element buffered channel.
 	Mailbox MailboxFactory
 
+	// MailboxName selects a Phase-1 mailbox factory by HOCON id from the
+	// actor/mailbox package registry. Recognised values include the short
+	// ids ("unbounded", "bounded", "unbounded-control-aware",
+	// "bounded-control-aware") and the Pekko/Akka FQCNs
+	// ("org.apache.pekko.dispatch.UnboundedControlAwareMailbox", etc.).
+	//
+	// Resolution precedence at SpawnActor time:
+	//  1. Mailbox field (legacy MailboxFactory) wins if non-nil.
+	//  2. MailboxName wins next.
+	//  3. The actor's declared MailboxRequirement (e.g.
+	//     RequiresControlAwareMessageQueueSemantics) drives the binding via
+	//     the requirements map populated from HOCON.
+	//  4. The system default-mailbox.mailbox-type from HOCON.
+	//  5. The built-in default ("unbounded").
+	//
+	// Use Props.WithMailbox to set this field fluently.
+	MailboxName string
+
 	// Dispatcher selects how the actor's receive loop is scheduled.
 	// DispatcherDefault (zero value) uses a goroutine-per-actor; see the
 	// DispatcherType constants for alternatives.
@@ -125,6 +143,20 @@ type Props struct {
 	// resolved to a DispatcherType at actor spawn time via the system config.
 	// When non-empty it takes precedence over the Dispatcher field.
 	DispatcherKey string
+}
+
+// WithMailbox returns a copy of p with MailboxName set to name. Use this for
+// fluent Props composition:
+//
+//	props := actor.Props{New: ...}.WithMailbox("unbounded-control-aware")
+//	ref, err := system.ActorOf(props, "ctrl-worker")
+//
+// Recognised names mirror Pekko's mailbox-type values: short ids
+// ("unbounded", "bounded", "unbounded-control-aware",
+// "bounded-control-aware") and Pekko/Akka FQCNs.
+func (p Props) WithMailbox(name string) Props {
+	p.MailboxName = name
+	return p
 }
 
 // TerminatedMessage is implemented by actor-stopped notifications.

@@ -167,6 +167,32 @@ func (d *PhiAccrualFailureDetector) IsAvailable() bool {
 	return d.Phi() < d.threshold
 }
 
+// IsAvailableWithMargin returns true when the node is reachable under either
+// of two conditions: (a) the standard φ < threshold check passes, OR (b) the
+// time since the last received heartbeat is still within the supplied margin.
+// The second clause is an additive grace window on top of the threshold-based
+// decision, used by the multi-data-center failure detector to grant cross-DC
+// targets `acceptable-heartbeat-pause` extra tolerance before flipping
+// unreachable. A non-positive margin degrades to plain IsAvailable. Targets
+// that have never sent a heartbeat are reported unavailable regardless of
+// margin (no last-arrival timestamp to compare against).
+func (d *PhiAccrualFailureDetector) IsAvailableWithMargin(margin time.Duration) bool {
+	d.mu.Lock()
+	has := d.hasFirstBeat
+	last := d.lastHeartbeatAt
+	d.mu.Unlock()
+	if !has {
+		return false
+	}
+	if d.Phi() < d.threshold {
+		return true
+	}
+	if margin <= 0 {
+		return false
+	}
+	return time.Since(last) <= margin
+}
+
 // FirstHeartbeatEstimate returns the synthetic first-heartbeat interval the
 // detector was constructed with. Read-only accessor used by the cluster-layer
 // failure detector to expose Pekko's `expected-response-after` calibration on

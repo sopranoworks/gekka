@@ -277,7 +277,7 @@ The keys most users actually tune. All are Pekko-compatible (drop them into your
 | `cross-data-center-connections` | `5` | ✅ | `ClusterConfig.MultiDataCenter.CrossDataCenterConnections` — caps gossip-target nodes per remote DC |
 | `cross-data-center-gossip-probability` | `0.2` | ✅ | |
 | `failure-detector.heartbeat-interval` | `3s` | ✅ | Cross-DC HB cadence; `EffectiveHeartbeatInterval` returns this for cross-DC targets, intra-DC default otherwise (Round-2 session 12) |
-| `failure-detector.acceptable-heartbeat-pause` | `10s` | ⚠️ | Plumbed via `MultiDCFailureDetectorConfig` onto `cm.CrossDCAcceptableHeartbeatPause`; cross-DC reachability-margin consumer not yet implemented |
+| `failure-detector.acceptable-heartbeat-pause` | `10s` | ✅ | `EffectiveAcceptableHeartbeatPause(target)` returns `cm.CrossDCAcceptableHeartbeatPause` for cross-DC targets and 0 otherwise; `IsTargetAvailable` routes cross-DC reachability through `Fd.IsAvailableWithMargin`, granting a φ-above-threshold target an additive grace window equal to this margin before flipping unreachable. Intra-DC behaviour unchanged (perfect-pekko Phase 4) |
 | `failure-detector.expected-response-after` | `1s` | ✅ | `EffectiveExpectedResponseAfter(target)` on `ClusterManager` returns this for cross-DC targets and the intra-DC `ExpectedResponseAfter` otherwise; consumed by `handleHeartbeat`/`handleHeartbeatRsp` via `Fd.HeartbeatWithEstimate`, which seeds the per-node Phi detector's `firstHeartbeatEstimate` (sub-plan 8 group A) |
 
 ### pekko.cluster.split-brain-resolver
@@ -578,12 +578,12 @@ touching the consumer code.
 
 ## Summary
 
-### Symbol counts (post 2026-05-07 perfect-pekko Phase 3 closure)
+### Symbol counts (post 2026-05-07 perfect-pekko Phase 4 closure)
 
 | Symbol | Substantive table rows | Meaning |
 |---|---|---|
-| ✅ | 279 | Parsed AND consumed |
-| ⚠️ | 17 | Forward-compat parsed; consumer deferred (Note states what's deferred) |
+| ✅ | 280 | Parsed AND consumed |
+| ⚠️ | 16 | Forward-compat parsed; consumer deferred (Note states what's deferred) |
 | ☕ | 8 | JVM-only — no equivalent capability in Go runtime |
 | 🚫 | 4 | Go/JVM API-shape incompatibility (FQCN class loading, JCA Provider, JKS rotation) |
 | ❌ | 2 | Not implemented; portable in principle (tracked in `docs/LEFTWORKS.md` §11) |
@@ -649,6 +649,38 @@ on 2026-05-06.
 
 ### Audit history
 
+- **2026-05-07 — Perfect-pekko Phase 4 closure (Multi-DC FD reachability
+  margin):** Closes the lone ⚠️ row 280
+  (`pekko.cluster.multi-data-center.failure-detector.acceptable-heartbeat-pause`)
+  by giving the cross-DC `acceptable-heartbeat-pause` a real consumer.
+  The internal Phi-Accrual detector
+  (`internal/cluster/phi_accrual_detector.go`) gains
+  `IsAvailableWithMargin(margin)` — same φ-vs-threshold check as
+  `IsAvailable`, but additionally returns true when the time since the
+  last heartbeat is still inside `margin`, granting an additive grace
+  window on top of the threshold-based decision. The cluster-level
+  wrapper (`cluster/failure_detector.go`) exposes
+  `IsAvailableWithMargin(nodeKey, margin)`. `ClusterManager` adds
+  `EffectiveAcceptableHeartbeatPause(target)` (cross-DC →
+  `cm.CrossDCAcceptableHeartbeatPause`, intra-DC → 0) and
+  `IsTargetAvailable(nodeKey, target)`, which the two existing reach
+  ability call sites — `CheckReachability` and `GetClusterStats` —
+  now invoke instead of `Fd.IsAvailable`. Intra-DC targets keep
+  byte-identical phi-only semantics. Tests
+  (`cluster/multi_dc_fd_test.go`) cover (a) the wrapper's three states
+  (unseen / fresh / phi-spiked-within-margin / phi-spiked-past-margin),
+  (b) `EffectiveAcceptableHeartbeatPause` returning 0 intra-DC,
+  configured value cross-DC, and 0 when the cross-DC knob is unset,
+  (c) the headline behaviour: under the same physical pause, an
+  intra-DC peer flips unreachable while a cross-DC peer in the same
+  cluster stays reachable until the margin expires, and (d) intra-DC
+  reachability ignores a generous cross-DC margin (parity with plain
+  `IsAvailable`). Iron Rule 1 full gate green: unit workspace, integration
+  `-tags integration -p 1 -count=1 -timeout 600s` (clean on second
+  run; first run hit the previously-documented `TestAdaptiveShardingRebalance`
+  cross-suite flake that passes in isolation and on retry, same
+  behaviour observed in Phase 2.x / 3.x), sbt multi-jvm 3/3. Summary
+  counts: ✅ 279 → 280, ⚠️ 17 → 16. Closes one row: 280.
 - **2026-05-07 — Perfect-pekko Phase 3 closure (sub-commits 3.1–3.2,
   Artery receive buffer pools):** Closes the two ⚠️ rows for the
   receive-side buffer pools (`buffer-pool-size` row 177 and

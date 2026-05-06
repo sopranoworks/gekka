@@ -171,3 +171,21 @@ func (fd *PhiAccrualFailureDetector) IsAvailable(nodeKey string) bool {
 	}
 	return d.IsAvailable()
 }
+
+// IsAvailableWithMargin reports availability with an additive grace window on
+// top of the threshold-based check. A target whose φ has spiked above
+// threshold is still reported available when the time since its last
+// heartbeat is within `margin`. Used by the cluster manager to apply
+// `pekko.cluster.multi-data-center.failure-detector.acceptable-heartbeat-pause`
+// to cross-DC targets so they tolerate a longer pause before flipping
+// unreachable. A non-positive margin degrades to plain IsAvailable; an unseen
+// nodeKey is reported unavailable regardless of margin.
+func (fd *PhiAccrualFailureDetector) IsAvailableWithMargin(nodeKey string, margin time.Duration) bool {
+	fd.mu.RLock()
+	d, ok := fd.detectors[nodeKey]
+	fd.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	return d.IsAvailableWithMargin(margin)
+}

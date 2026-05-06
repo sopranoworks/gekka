@@ -366,7 +366,7 @@ func (cm *ClusterManager) CheckConfigCompat(remoteConfig string) bool {
 	remoteIsSBR := strings.Contains(remoteDP, "SplitBrainResolverProvider")
 	remoteIsEmpty := remoteDP == "" || remoteDP == `""`
 
-	localIsSBR := true  // we always advertise SBR
+	localIsSBR := true // we always advertise SBR
 	_ = localDP
 
 	if remoteIsEmpty && !localIsSBR {
@@ -2614,8 +2614,11 @@ func (cm *ClusterManager) CheckReachability() {
 			log.Printf("Cluster: failure-detector phi for %s:%d = %.4f (threshold=%.1f)", a.GetHostname(), a.GetPort(), phi, cm.Fd.threshold)
 		}
 
-		// Pekko Cluster logic: update ObserverReachability
-		if !cm.Fd.IsAvailable(key) {
+		// Pekko Cluster logic: update ObserverReachability.
+		// Cross-DC targets get an additive `acceptable-heartbeat-pause` grace
+		// window via IsTargetAvailable; intra-DC targets use the standard
+		// phi-only IsAvailable check.
+		if !cm.IsTargetAvailable(key, a) {
 			// Mark as UNREACHABLE
 			slog.Debug("cluster: failure detector marked node UNREACHABLE", "key", key, "phi", phi)
 			if cm.MissEmitter != nil {
@@ -3192,7 +3195,7 @@ func (cm *ClusterManager) computeClusterStats() CurrentClusterStats {
 				continue
 			}
 			key := fmt.Sprintf("%s:%d-%d", ua.GetAddress().GetHostname(), ua.GetAddress().GetPort(), ua.GetUid())
-			if !cm.Fd.IsAvailable(key) {
+			if !cm.IsTargetAvailable(key, ua.GetAddress()) {
 				stats.Unreachable++
 			}
 		}
@@ -3393,6 +3396,36 @@ func (cm *ClusterManager) EffectiveExpectedResponseAfter(target *gproto_cluster.
 		return cm.ExpectedResponseAfter
 	}
 	return 1 * time.Second
+}
+
+// EffectiveAcceptableHeartbeatPause returns the failure-detector
+// `acceptable-heartbeat-pause` margin to apply when evaluating reachability
+// of target. Cross-DC targets receive `CrossDCAcceptableHeartbeatPause` (when
+// non-zero); intra-DC targets receive 0 (no margin — the standard phi-only
+// reachability check stands). Consumed by IsTargetAvailable to grant
+// cross-DC nodes a longer tolerance before flipping unreachable, matching
+// `pekko.cluster.multi-data-center.failure-detector.acceptable-heartbeat-pause`.
+func (cm *ClusterManager) EffectiveAcceptableHeartbeatPause(target *gproto_cluster.Address) time.Duration {
+	if cm.CrossDCAcceptableHeartbeatPause > 0 && cm.IsCrossDC(target) {
+		return cm.CrossDCAcceptableHeartbeatPause
+	}
+	return 0
+}
+
+// IsTargetAvailable reports reachability for nodeKey, routing cross-DC
+// targets through the margin-aware failure-detector check so they tolerate
+// up to `CrossDCAcceptableHeartbeatPause` of accrued φ above threshold
+// before being marked unreachable. Intra-DC targets keep the unchanged
+// phi-only IsAvailable semantics.
+func (cm *ClusterManager) IsTargetAvailable(nodeKey string, target *gproto_cluster.Address) bool {
+	if cm.Fd == nil {
+		return false
+	}
+	margin := cm.EffectiveAcceptableHeartbeatPause(target)
+	if margin > 0 {
+		return cm.Fd.IsAvailableWithMargin(nodeKey, margin)
+	}
+	return cm.Fd.IsAvailable(nodeKey)
 }
 
 // GetFailureDetector returns the internal failure detector.

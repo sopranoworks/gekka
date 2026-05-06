@@ -319,6 +319,130 @@ func TestHandleSystemMessage_DedupesByLastDeliveredSeq(t *testing.T) {
 	}
 }
 
+func TestHandleControlMessage_DeliveryAckPrunesSenderBuffer(t *testing.T) {
+	// Set up two associations on the same NodeManager:
+	//   - outAssoc: OUTBOUND streamId=1 to a peer; this is where we
+	//     buffer outbound SystemMessages and where the ack must prune.
+	//   - inAssoc:  INBOUND  streamId=1 from the same peer; this is the
+	//     assoc that handleControlMessage runs on when the ack arrives.
+	// GetGekkaAssociationByHost(peerHost, peerPort) preferentially
+	// returns the OUTBOUND streamId=1 assoc, so the prune routes to
+	// outAssoc.systemOutbox even though the ack is dispatched on inAssoc.
+	outAssoc, nm := newSystemRedeliveryAssoc(t, 16, 16, 100*time.Millisecond)
+	peerHost := outAssoc.remote.GetAddress().GetHostname()
+	peerPort := outAssoc.remote.GetAddress().GetPort()
+
+	// Register outAssoc so GetGekkaAssociationByHost can find it.
+	nm.RegisterAssociation(outAssoc.remote, outAssoc)
+	outAssoc.mu.Lock()
+	outAssoc.state = ASSOCIATED
+	outAssoc.mu.Unlock()
+
+	// Pre-populate outAssoc.systemOutbox with three buffered entries.
+	for _, seq := range []uint64{10, 11, 12} {
+		if err := outAssoc.systemOutbox.Enqueue(seq, []byte{byte(seq)}, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := outAssoc.SystemOutbox().Len(); got != 3 {
+		t.Fatalf("setup: outbox Len = %d, want 3", got)
+	}
+
+	// inAssoc is the INBOUND on which the ack arrives. Same peer.
+	inAssoc := &GekkaAssociation{
+		state:    ASSOCIATED,
+		role:     INBOUND,
+		nodeMgr:  nm,
+		streamId: 1,
+		outbox:   make(chan []byte, 4),
+		remote: &gproto_remote.UniqueAddress{
+			Address: &gproto_remote.Address{
+				Protocol: proto.String("pekko"),
+				System:   proto.String("Peer"),
+				Hostname: proto.String(peerHost),
+				Port:     proto.Uint32(peerPort),
+			},
+			Uid: proto.Uint64(99),
+		},
+	}
+
+	// Build an inbound SystemMessageDeliveryAck frame with cumulative
+	// ack of seq=11. After dispatch, outAssoc.systemOutbox should drop
+	// {10, 11} and keep {12}.
+	ack := &gproto_remote.SystemMessageDeliveryAck{
+		SeqNo: proto.Uint64(11),
+		From: &gproto_remote.UniqueAddress{
+			Address: &gproto_remote.Address{
+				Protocol: proto.String("pekko"),
+				System:   proto.String("Peer"),
+				Hostname: proto.String(peerHost),
+				Port:     proto.Uint32(peerPort),
+			},
+			Uid: proto.Uint64(99),
+		},
+	}
+	ackBytes, err := proto.Marshal(ack)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := &ArteryMetadata{
+		SerializerId:    17,
+		MessageManifest: []byte("h"),
+		Payload:         ackBytes,
+	}
+
+	if err := inAssoc.handleControlMessage(context.Background(), meta); err != nil {
+		t.Fatalf("handleControlMessage(ack): %v", err)
+	}
+
+	if got := outAssoc.SystemOutbox().Len(); got != 1 {
+		t.Errorf("after cumulative ack(11), outbox Len = %d, want 1 (only seq=12 remains)", got)
+	}
+	snap := outAssoc.SystemOutbox().Snapshot()
+	if len(snap) != 1 || snap[0].seqNo != 12 {
+		t.Errorf("after cumulative ack(11), remaining entry = %+v, want seqNo=12", snap)
+	}
+}
+
+func TestHandleControlMessage_DeliveryAckIgnoredForUnknownPeer(t *testing.T) {
+	outAssoc, _ := newSystemRedeliveryAssoc(t, 16, 16, 100*time.Millisecond)
+	// Note: outAssoc is NOT registered with the NodeManager, so
+	// GetGekkaAssociationByHost will not find it for the ack's
+	// From address. The handler must no-op without panicking.
+	if err := outAssoc.systemOutbox.Enqueue(5, []byte("x"), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	ack := &gproto_remote.SystemMessageDeliveryAck{
+		SeqNo: proto.Uint64(5),
+		From: &gproto_remote.UniqueAddress{
+			Address: &gproto_remote.Address{
+				Protocol: proto.String("pekko"),
+				System:   proto.String("Stranger"),
+				Hostname: proto.String("203.0.113.99"),
+				Port:     proto.Uint32(2552),
+			},
+			Uid: proto.Uint64(99),
+		},
+	}
+	ackBytes, err := proto.Marshal(ack)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := &ArteryMetadata{
+		SerializerId:    17,
+		MessageManifest: []byte("h"),
+		Payload:         ackBytes,
+	}
+
+	if err := outAssoc.handleControlMessage(context.Background(), meta); err != nil {
+		t.Fatalf("handleControlMessage(ack from unknown peer): %v", err)
+	}
+	if got := outAssoc.SystemOutbox().Len(); got != 1 {
+		t.Errorf("ack from unknown peer pruned the buffer: Len = %d, want 1 (no-op)", got)
+	}
+}
+
 func TestRunSystemRedelivery_StopsOnContextCancel(t *testing.T) {
 	assoc, _ := newSystemRedeliveryAssoc(t, 16, 16, 20*time.Millisecond)
 

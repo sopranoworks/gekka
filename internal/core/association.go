@@ -3195,6 +3195,38 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 		slog.Debug("artery: received compression table ack", "manifest", manifest, "version", ack.GetVersion(), "from", ack.GetFrom())
 		return nil
 
+	case "h": // SystemMessageDeliveryAck — Phase 2.3 sender-side ack consumer.
+		// The receiver of a SystemMessage replies with a cumulative ack
+		// carrying the highest seqNo it has delivered. Prune every entry
+		// in the matching association's systemOutbox with seqNo <= ack.SeqNo
+		// so the resend ticker stops re-emitting them and the give-up
+		// timer's deadline (Phase 2.4) advances.
+		//
+		// The ack arrives on our INBOUND streamId=1 connection (the peer's
+		// OUTBOUND back to us). The systemOutbox we need to prune lives
+		// on our OUTBOUND streamId=1 association to the same peer — look
+		// it up by host:port from ack.From.Address.
+		ack := &gproto_remote.SystemMessageDeliveryAck{}
+		if err := proto.Unmarshal(meta.Payload, ack); err != nil {
+			return fmt.Errorf("failed to unmarshal SystemMessageDeliveryAck: %w", err)
+		}
+		fromAddr := ack.GetFrom().GetAddress()
+		if fromAddr == nil {
+			slog.Debug("artery: SystemMessageDeliveryAck missing From.Address; cannot prune", "seq", ack.GetSeqNo())
+			return nil
+		}
+		outAssoc, ok := assoc.nodeMgr.GetGekkaAssociationByHost(fromAddr.GetHostname(), fromAddr.GetPort())
+		if !ok || outAssoc == nil || outAssoc.systemOutbox == nil {
+			slog.Debug("artery: no outbound association for SystemMessageDeliveryAck source",
+				"seq", ack.GetSeqNo(), "host", fromAddr.GetHostname(), "port", fromAddr.GetPort())
+			return nil
+		}
+		if pruned := outAssoc.systemOutbox.PruneAcked(ack.GetSeqNo()); pruned > 0 {
+			slog.Debug("artery: pruned acked system messages",
+				"seq", ack.GetSeqNo(), "count", pruned, "remote", outAssoc.remoteKey())
+		}
+		return nil
+
 	default:
 		if meta.SerializerId == 6 {
 			// MessageContainerSerializer (ID=6) wraps ActorSelectionMessage.

@@ -230,6 +230,16 @@ type ClusterConfig struct {
 	// Fallback: gekka.logging.level (deprecated).
 	LogLevel string `hocon:"pekko.loglevel"`
 
+	// StdoutLogLevel is the minimum logging level for the stdout leg of the
+	// composite slog handler. Pekko semantics: governs the stdout transport
+	// only — the main log channel keeps emitting at LogLevel even when
+	// stdout-loglevel == "OFF". Per Pekko reference.conf this defaults to
+	// "WARNING". Accepts "OFF", "ERROR", "WARNING" (alias "WARN"), "INFO",
+	// "DEBUG"; the value is held as a raw string and parsed by
+	// logger.ParseLevel at Install time.
+	// Corresponds to pekko.stdout-loglevel; akka.stdout-loglevel is an alias.
+	StdoutLogLevel string `hocon:"pekko.stdout-loglevel"`
+
 	// LogDeadLetters controls how many dead letters are logged.
 	// 0 = off, positive N = log first N then suppress, negative = unlimited.
 	// Corresponds to pekko.log-dead-letters. Default: 10.

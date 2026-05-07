@@ -155,6 +155,17 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		}
 	}
 
+	// Stdout log level: pekko.stdout-loglevel (or akka.stdout-loglevel),
+	// default "WARNING" per Pekko reference.conf when both are absent.
+	if nodeCfg.StdoutLogLevel == "" {
+		if v, err := cfg.GetString(prefix + ".stdout-loglevel"); err == nil {
+			nodeCfg.StdoutLogLevel = strings.TrimSpace(v)
+		}
+	}
+	if nodeCfg.StdoutLogLevel == "" {
+		nodeCfg.StdoutLogLevel = "WARNING"
+	}
+
 	// Dead letter logging: pekko.log-dead-letters (default: 10)
 	nodeCfg.LogDeadLetters = 10 // default
 	if v, err := cfg.GetString(prefix + ".log-dead-letters"); err == nil {

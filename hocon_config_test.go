@@ -4948,3 +4948,53 @@ pekko.cluster.typed.receptionist.write-consistency = "garbage"
 		}
 	})
 }
+
+// TestParseHOCON_StdoutLogLevel_Pekko verifies that pekko.stdout-loglevel is
+// parsed verbatim into ClusterConfig.StdoutLogLevel.
+//
+// A3.1 of docs/superpowers/plans/2026-05-07-slog-logging-foundation.md.
+func TestParseHOCON_StdoutLogLevel_Pekko(t *testing.T) {
+	const hocon = `
+pekko.stdout-loglevel = "WARNING"
+`
+	cfg, err := parseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.StdoutLogLevel, "WARNING"; got != want {
+		t.Errorf("StdoutLogLevel = %q, want %q", got, want)
+	}
+}
+
+// TestParseHOCON_StdoutLogLevel_AkkaAlias verifies that the legacy
+// akka.stdout-loglevel key is honored when no pekko.* equivalent is set.
+func TestParseHOCON_StdoutLogLevel_AkkaAlias(t *testing.T) {
+	const hocon = `
+akka.stdout-loglevel = "OFF"
+akka.remote.artery.canonical.hostname = "127.0.0.1"
+akka.remote.artery.canonical.port = 2552
+`
+	cfg, err := parseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.StdoutLogLevel, "OFF"; got != want {
+		t.Errorf("StdoutLogLevel = %q, want %q", got, want)
+	}
+}
+
+// TestParseHOCON_StdoutLogLevel_DefaultWarning verifies the Pekko reference.conf
+// default of "WARNING" when both pekko.* and akka.* keys are absent.
+func TestParseHOCON_StdoutLogLevel_DefaultWarning(t *testing.T) {
+	const hocon = `
+pekko.remote.artery.canonical.hostname = "127.0.0.1"
+pekko.remote.artery.canonical.port = 2552
+`
+	cfg, err := parseHOCONString(hocon)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.StdoutLogLevel, "WARNING"; got != want {
+		t.Errorf("StdoutLogLevel = %q, want %q (Pekko reference.conf default)", got, want)
+	}
+}

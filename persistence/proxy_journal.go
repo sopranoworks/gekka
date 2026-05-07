@@ -211,7 +211,19 @@ func newProxyJournalFromConfig(cfg hocon.Config) (Journal, error) {
 		startTarget = false
 	}
 	if !startTarget {
-		return nil, fmt.Errorf("persistence: proxy journal with start-target-journal=off requires Artery cross-process transport (not yet implemented in gekka)")
+		address := strings.TrimSpace(safeGetString(cfg, "target-journal-address"))
+		if address == "" {
+			return nil, fmt.Errorf("persistence: proxy journal with start-target-journal=off requires 'target-journal-address' under pekko.persistence.journal.proxy")
+		}
+		transport := CurrentProxyTransport()
+		if transport == nil {
+			return nil, fmt.Errorf("persistence: proxy journal with start-target-journal=off requires a registered ProxyTransport (gekka.NewCluster wires one automatically; programmatic users call persistence.RegisterProxyTransport)")
+		}
+		requestTimeout := defaultProxyRequestTimeout
+		if d, ok := safeGetDuration(cfg, "request-timeout"); ok && d > 0 {
+			requestTimeout = d
+		}
+		return NewRemoteJournal(transport, address, requestTimeout), nil
 	}
 
 	return NewProxyJournal(target, initTimeout)

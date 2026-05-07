@@ -202,7 +202,19 @@ func newProxySnapshotStoreFromConfig(cfg hocon.Config) (SnapshotStore, error) {
 		startTarget = false
 	}
 	if !startTarget {
-		return nil, fmt.Errorf("persistence: proxy snapshot store with start-target-snapshot-store=off requires Artery cross-process transport (not yet implemented in gekka)")
+		address := strings.TrimSpace(safeGetString(cfg, "target-snapshot-store-address"))
+		if address == "" {
+			return nil, fmt.Errorf("persistence: proxy snapshot store with start-target-snapshot-store=off requires 'target-snapshot-store-address' under pekko.persistence.snapshot-store.proxy")
+		}
+		transport := CurrentProxyTransport()
+		if transport == nil {
+			return nil, fmt.Errorf("persistence: proxy snapshot store with start-target-snapshot-store=off requires a registered ProxyTransport (gekka.NewCluster wires one automatically; programmatic users call persistence.RegisterProxyTransport)")
+		}
+		requestTimeout := defaultProxyRequestTimeout
+		if d, ok := safeGetDuration(cfg, "request-timeout"); ok && d > 0 {
+			requestTimeout = d
+		}
+		return NewRemoteSnapshotStore(transport, address, requestTimeout), nil
 	}
 
 	return NewProxySnapshotStore(target, initTimeout)

@@ -3173,6 +3173,11 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	nm.SerializerRegistry.RegisterManifest("F", reflect.TypeFor[*stream.SinkRef](), stream.StreamRefSerializerID)
 	nm.SerializerRegistry.RegisterManifest("G", reflect.TypeFor[*stream.OnSubscribeHandshake](), stream.StreamRefSerializerID)
 
+	// Wire the persistence-proxy transport so HOCON-driven off-mode
+	// ProxyJournal / ProxySnapshotStore instances created after this
+	// point can route through the cluster's Artery layer.
+	installPersistenceProxyTransport(cluster)
+
 	return cluster, nil
 }
 
@@ -4222,6 +4227,7 @@ func (c *Cluster) GracefulShutdown(ctx context.Context) error {
 func (c *Cluster) Shutdown() error {
 	atomic.StoreInt32(&c.shuttingDown, 1)
 	c.stopWatchFDReaper()
+	uninstallPersistenceProxyTransport(c)
 	if c.cancel != nil {
 		c.cancel()
 	}

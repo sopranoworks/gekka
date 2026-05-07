@@ -480,13 +480,17 @@ The keys most users actually tune. All are Pekko-compatible (drop them into your
 | `pekko.persistence.journal.auto-start-journals` | `[]` | ✅ | Eagerly instantiates journal providers via `persistence.AutoStartJournals` |
 | `pekko.persistence.journal.proxy.target-journal-plugin-id` | (required) | ✅ | Round-2 session 36 — registry name of the real journal the proxy delegates to (`persistence/proxy_journal.go`). |
 | `pekko.persistence.journal.proxy.init-timeout` | `10s` | ✅ | Round-2 session 36 — first-use resolution retry budget (100 ms tick). |
-| `pekko.persistence.journal.proxy.start-target-journal` | `on` | ⚠️ | Round-2 session 36 — only `on` (in-process) is implemented; `off` is rejected at construction time pending Artery cross-process transport. |
+| `pekko.persistence.journal.proxy.start-target-journal` | `on` | ✅ | Perfect-pekko Phase 9 (2026-05-07) — both modes implemented. `on` resolves the target via the local plugin registry; `off` requires `target-journal-address` and routes every operation through the registered `persistence.ProxyTransport` (`gekka.NewCluster` wires a `Cluster.Ask`-backed transport automatically). Server side: `gekka.ServePersistenceProxyJournal(cluster, j)` hosts the target Journal at `persistence.RemoteJournalPathSuffix` (`/system/persistence/journal-target`). |
+| `pekko.persistence.journal.proxy.target-journal-address` | `""` | ✅ | Perfect-pekko Phase 9 — full Pekko URI of the remote journal-target actor when `start-target-journal = off` (e.g. `pekko://Sys@host:port/system/persistence/journal-target`); rejected with a clear error when missing. |
+| `pekko.persistence.journal.proxy.request-timeout` | `30s` | ✅ | Perfect-pekko Phase 9 — per-request RPC budget for `off` mode; an expiry surfaces as a journal-call failure so the persistent actor's failure handler runs instead of the call hanging. Defaults to 30 s when unset; non-positive collapses to the default. |
 | `pekko.persistence.snapshot-store.plugin` | `""` | ✅ | |
 | `pekko.persistence.snapshot-store.auto-start-snapshot-stores` | `[]` | ✅ | Eagerly instantiates snapshot-store providers |
 | `pekko.persistence.snapshot-store.auto-migrate-manifest` | `"pekko"` | ✅ | Manifest used when migrating legacy snapshot envelopes |
 | `pekko.persistence.snapshot-store.proxy.target-snapshot-store-plugin-id` | (required) | ✅ | Round-2 session 37 — registry name of the real snapshot store the proxy delegates to (`persistence/proxy_snapshot.go`). |
 | `pekko.persistence.snapshot-store.proxy.init-timeout` | `10s` | ✅ | Round-2 session 37 — first-use resolution retry budget (100 ms tick). |
-| `pekko.persistence.snapshot-store.proxy.start-target-snapshot-store` | `on` | ⚠️ | Round-2 session 37 — only `on` (in-process) is implemented; `off` is rejected at construction time pending Artery cross-process transport. |
+| `pekko.persistence.snapshot-store.proxy.start-target-snapshot-store` | `on` | ✅ | Perfect-pekko Phase 9 (2026-05-07) — both modes implemented. `on` resolves the target via the local plugin registry; `off` requires `target-snapshot-store-address` and routes every operation through the registered `persistence.ProxyTransport`. Server side: `gekka.ServePersistenceProxySnapshot(cluster, s)` hosts the target SnapshotStore at `persistence.RemoteSnapshotPathSuffix` (`/system/persistence/snapshot-target`). |
+| `pekko.persistence.snapshot-store.proxy.target-snapshot-store-address` | `""` | ✅ | Perfect-pekko Phase 9 — full Pekko URI of the remote snapshot-target actor when `start-target-snapshot-store = off` (e.g. `pekko://Sys@host:port/system/persistence/snapshot-target`); rejected with a clear error when missing. |
+| `pekko.persistence.snapshot-store.proxy.request-timeout` | `30s` | ✅ | Perfect-pekko Phase 9 — per-request RPC budget for `off` mode; an expiry surfaces as a snapshot-store failure. Defaults to 30 s when unset; non-positive collapses to the default. |
 | `pekko.persistence.state-plugin-fallback.recovery-timeout` | `30s` | ✅ | Cap for durable-state plugin fallback recovery |
 | `pekko.persistence.journal-plugin-fallback.circuit-breaker.max-failures` | `10` | ✅ | Round-2 session 38 — consecutive failures that trip the journal breaker (`persistence/circuit_breaker.go`). |
 | `pekko.persistence.journal-plugin-fallback.circuit-breaker.call-timeout` | `10s` | ✅ | Round-2 session 38 — per-call deadline; expiries count as failures. |
@@ -578,12 +582,12 @@ touching the consumer code.
 
 ## Summary
 
-### Symbol counts (post 2026-05-07 perfect-pekko Phase 8 closure)
+### Symbol counts (post 2026-05-07 perfect-pekko Phase 9 closure)
 
 | Symbol | Substantive table rows | Meaning |
 |---|---|---|
-| ✅ | 294 | Parsed AND consumed |
-| ⚠️ | 2 | Forward-compat parsed; consumer deferred (Note states what's deferred) |
+| ✅ | 300 | Parsed AND consumed |
+| ⚠️ | 0 | Forward-compat parsed; consumer deferred (Note states what's deferred) |
 | ☕ | 8 | JVM-only — no equivalent capability in Go runtime |
 | 🚫 | 4 | Go/JVM API-shape incompatibility (FQCN class loading, JCA Provider, JKS rotation) |
 | ❌ | 2 | Not implemented; portable in principle (tracked in `docs/LEFTWORKS.md` §11) |
@@ -648,6 +652,61 @@ tunables, `mailbox.requirements.*`, and the deprecated
 on 2026-05-06.
 
 ### Audit history
+
+- **2026-05-07 — Perfect-pekko Phase 9 closure (Persistence plugin
+  proxy cross-process mode):** Closes the final two ⚠️ rows in
+  pekko-persistence — 483 (`journal.proxy.start-target-journal`) and
+  489 (`snapshot-store.proxy.start-target-snapshot-store`). The
+  `off`-mode setting now wires up an end-to-end Artery RPC path so the
+  persistent actor can live in a different process than its target
+  journal / snapshot store. New file `persistence/proxy_transport.go`
+  introduces a byte-in / byte-out `ProxyTransport` interface
+  (`Ask(ctx, targetAddress, payload, timeout) ([]byte, error)`), a
+  `RegisterProxyTransport` global hook, gob-encoded `rpcRequest` /
+  `rpcResponse` envelopes covering all four journal ops (write,
+  delete-to, replay, highest-sequence) and all four snapshot ops
+  (load, save, delete-by-metadata, delete-by-criteria), and the
+  pure-function dispatchers `ServeJournalRequest` /
+  `ServeSnapshotRequest` that callers run on the target side. Two new
+  client implementations — `RemoteJournal` and `RemoteSnapshotStore` —
+  satisfy the existing `Journal` / `SnapshotStore` interfaces by
+  serialising every call through the transport and decoding the
+  reply; non-zero `request-timeout` per call surfaces a transport
+  expiry as a journal/snapshot failure (so the persistent actor's
+  failure handler runs instead of the call hanging). HOCON wiring in
+  `proxy_journal.go` / `proxy_snapshot.go` accepts
+  `start-target-journal = off` (resp. `start-target-snapshot-store =
+  off`) when both `target-*-address` and a registered transport are
+  present, and emits clear errors otherwise. New file
+  `cluster_persistence_proxy.go` ships the production transport
+  (`PersistenceProxyTransport.Ask` wraps `Cluster.Ask`), the two
+  server-actor helpers `ServePersistenceProxyJournal(cluster, j)` and
+  `ServePersistenceProxySnapshot(cluster, s)` (registered at the
+  exported well-known path constants `RemoteJournalPathSuffix` /
+  `RemoteSnapshotPathSuffix`), and an auto-install hook called from
+  `NewCluster` — `Cluster.Shutdown` releases the registration only if
+  it still owns the slot, so test-suite restarts do not trample on
+  later transports. Two server actors share an `extractRPCPayload`
+  helper that handles both the deserialised-`[]byte` envelope shape
+  (the cluster's serializer registry resolves Artery serializerId 4)
+  and the raw `*IncomingMessage` shape (for unresolved serializers).
+  Six new HOCON rows added — `target-journal-address`,
+  `target-snapshot-store-address`, and `request-timeout` for both
+  proxy sides — all classified ✅ with their consumer documented in
+  the row Note. Tests: 10 unit (in-memory transport — write/replay/
+  highest/delete journal roundtrip + timeout + remote-error
+  propagation; load/save/delete/delete-by-criteria snapshot roundtrip;
+  off-mode HOCON wiring asserting registry transport + address
+  requirements for both proxies) and 3 integration (two-Cluster cross-
+  process journal write+highest+replay roundtrip, two-Cluster cross-
+  process snapshot save+load with backing-store cross-check, and
+  target-process death surfaces an error on the next request inside
+  the configured `request-timeout`). Iron Rule 1 full gate: `go test
+  ./...` green, `go test -tags integration -p 1 -count=1 -timeout
+  600s ./...` green, sbt multi-jvm 3/3 green. Summary counts: ✅ 294
+  → 300, ⚠️ 2 → 0. After Phase 9 the only remaining non-✅ portable
+  rows are the two ❌ logging deferrals (rows 125 / 126) which Phase
+  10 closes alongside the external-log-server replacement.
 
 - **2026-05-07 — Perfect-pekko Phase 8 closure (Sharding coordinator
   read/write-majority-plus):** Closes two ⚠️ rows in cluster-sharding —

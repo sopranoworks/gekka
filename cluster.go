@@ -40,6 +40,7 @@ import (
 	"github.com/sopranoworks/gekka/discovery"
 	"github.com/sopranoworks/gekka/internal/core"
 	"github.com/sopranoworks/gekka/internal/management"
+	"github.com/sopranoworks/gekka/logger"
 	"github.com/sopranoworks/gekka/persistence"
 	persistencetyped "github.com/sopranoworks/gekka/persistence/typed"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
@@ -2182,6 +2183,10 @@ type Cluster struct {
 
 	clusterWatcherRef ActorRef
 	logHandler        slog.Handler // nil = use slog.Default().Handler()
+	// uninstallLogger reverses the logger.Install call made at the end of
+	// NewCluster. Shutdown invokes it; install.go's version-aware semantics
+	// make it a no-op when a subsequent Install has superseded it.
+	uninstallLogger func()
 	onMessage         func(ctx context.Context, msg *IncomingMessage) error
 	deployments       map[string]core.DeploymentConfig // keyed by actor path; nil = no deployments
 
@@ -2256,6 +2261,28 @@ func applyDiscoveredSeeds(cfg *ClusterConfig, scheme, system string) error {
 // NewCluster creates, wires, and starts a Cluster. The TCP listener is bound
 // immediately; call node.Addr() to discover the assigned port when ClusterConfig.Port == 0.
 func NewCluster(cfg ClusterConfig) (*Cluster, error) {
+	// A4: validate Pekko log levels before any side effects so a malformed
+	// pekko.loglevel / pekko.stdout-loglevel surfaces as a clean NewCluster
+	// error rather than a partially-initialised cluster. Empty strings are
+	// defaulted at this call site (per project plan B2.2) — INFO for the main
+	// leg, WARNING for the stdout leg — matching Pekko's reference.conf.
+	mainLogLevelStr := cfg.LogLevel
+	if mainLogLevelStr == "" {
+		mainLogLevelStr = "INFO"
+	}
+	stdoutLogLevelStr := cfg.StdoutLogLevel
+	if stdoutLogLevelStr == "" {
+		stdoutLogLevelStr = "WARNING"
+	}
+	mainLogLevel, err := logger.ParseLevel(mainLogLevelStr)
+	if err != nil {
+		return nil, fmt.Errorf("gekka: log level: %w", err)
+	}
+	stdoutLogLevel, err := logger.ParseLevel(stdoutLogLevelStr)
+	if err != nil {
+		return nil, fmt.Errorf("gekka: stdout log level: %w", err)
+	}
+
 	scheme, system, host, port := cfg.resolve()
 
 	// pekko.log-config-on-start — dump the resolved cluster configuration
@@ -3187,6 +3214,22 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	// ProxyJournal / ProxySnapshotStore instances created after this
 	// point can route through the cluster's Artery layer.
 	installPersistenceProxyTransport(cluster)
+
+	// A4: install the slog logging foundation. Reads pekko.loglevel and
+	// pekko.stdout-loglevel (already validated at the top of NewCluster)
+	// and threads ClusterConfig.LogHandler through as the main-leg slog
+	// handler. The returned uninstall fn is invoked by Cluster.Shutdown.
+	uninstallLogger, ierr := logger.Install(logger.Options{
+		Main:        cfg.LogHandler,
+		MainLevel:   mainLogLevel,
+		StdoutLevel: stdoutLogLevel,
+	})
+	if ierr != nil {
+		cancel()
+		_ = server.Shutdown()
+		return nil, fmt.Errorf("gekka: logger install: %w", ierr)
+	}
+	cluster.uninstallLogger = uninstallLogger
 
 	return cluster, nil
 }
@@ -4243,6 +4286,13 @@ func (c *Cluster) Shutdown() error {
 	}
 	if c.durable != nil {
 		_ = c.durable.Close()
+	}
+	// A4: revert the logger.Install performed by NewCluster. install.go's
+	// version-aware uninstall is a no-op when a subsequent Install has
+	// superseded this one, so calling it unconditionally here is safe even
+	// when multiple Cluster instances are created and torn down in sequence.
+	if c.uninstallLogger != nil {
+		c.uninstallLogger()
 	}
 	if c.server != nil {
 		return c.server.Shutdown()

@@ -465,12 +465,25 @@ func StartSharding[Command any, Event any, State any](
 		rebalanceInterval = cluster.cfg.Sharding.RebalanceInterval
 	}
 
+	// Snapshot the two coordinator-state quorum overrides into local
+	// scope so the props closure (defined before shardSettings is
+	// constructed) can wire them onto the coordinator.  Plumbing the
+	// remaining ShardSettings fields is unnecessary today — the
+	// coordinator only consumes these two knobs (via WriteConsistency /
+	// ReadConsistency).
+	coordWriteMajorityPlus := settings.CoordinatorWriteMajorityPlus
+	coordReadMajorityPlus := settings.CoordinatorReadMajorityPlus
+
 	coordinatorProps := actor.Props{
 		New: func() actor.Actor {
 			c := sharding.NewShardCoordinator(strategy)
 			if rebalanceInterval > 0 {
 				c.RebalanceInterval = rebalanceInterval
 			}
+			c.SetShardSettings(sharding.ShardSettings{
+				CoordinatorWriteMajorityPlus: coordWriteMajorityPlus,
+				CoordinatorReadMajorityPlus:  coordReadMajorityPlus,
+			})
 			sharding.RegisterCoordinator(typeName, c)
 			return c
 		},

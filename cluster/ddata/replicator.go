@@ -73,19 +73,89 @@ type LWWRegisterPayload struct {
 }
 
 // Consistency levels for Write operations.
-type WriteConsistency int
+//
+// WriteConsistency is comparable: the package-level vars WriteLocal,
+// WriteAll and WriteMajority are the canonical zero-plus values. Callers
+// that need the Pekko "majority + N" variant build values via the
+// WriteMajorityPlus(n) / ReadMajorityPlus(n) factories. The plus field is
+// only meaningful when mode == modeMajority; for other modes the gossip
+// fan-out is unaffected.
+type WriteConsistency struct {
+	mode writeMode
+	// plus is the additional number of nodes (above natural majority) that
+	// a "majority-plus" write must reach. Zero collapses to plain
+	// WriteMajority. math.MaxInt is the "all" sentinel — selectGossipTargets
+	// clamps the resulting quorum at the cluster size.
+	plus int
+}
+
+type writeMode uint8
 
 const (
-	WriteLocal WriteConsistency = iota
-	WriteAll
+	modeLocal writeMode = iota
+	modeAll
+	modeMajority
+)
+
+var (
+	// WriteLocal performs the operation locally and gossip-disseminates on
+	// the next periodic round. It does not trigger an immediate fan-out.
+	WriteLocal = WriteConsistency{mode: modeLocal}
+
+	// WriteAll triggers an immediate fan-out to every known peer.
+	WriteAll = WriteConsistency{mode: modeAll}
+
 	// WriteMajority is best-effort today: gekka has no quorum-acknowledged
 	// write op, so it shares the gossip-on-write semantics of WriteAll. The
-	// distinct enum value lets configuration paths (e.g.,
+	// distinct value lets configuration paths (e.g.
 	// pekko.cluster.typed.receptionist.write-consistency = "majority") parse
 	// faithfully and select an observably different code path; future cycles
 	// can refine the gossip layer without re-shaping the API.
-	WriteMajority
+	WriteMajority = WriteConsistency{mode: modeMajority}
 )
+
+// WriteMajorityPlus returns a WriteConsistency that requires a write to
+// reach (natural majority + n) nodes. n=0 collapses to plain WriteMajority.
+// math.MaxInt encodes Pekko's "all" sentinel and clamps the resulting
+// quorum at the cluster size. Negative values are treated as zero.
+//
+// Mirrors Pekko's WriteMajorityPlus(timeout, additional, minCap) — gekka
+// does not yet expose per-call timeouts, so the timeout parameter is
+// elided.
+func WriteMajorityPlus(n int) WriteConsistency {
+	if n < 0 {
+		n = 0
+	}
+	return WriteConsistency{mode: modeMajority, plus: n}
+}
+
+// ReadMajorityPlus returns a WriteConsistency suitable for use on the
+// read-side coordinator-state path. Read fan-out is not currently
+// observable separately from write fan-out (no quorum-acked reads), so
+// the returned value mirrors WriteMajorityPlus(n). The distinct factory
+// keeps call sites self-documenting and lines up with Pekko's
+// ReadMajorityPlus.
+func ReadMajorityPlus(n int) WriteConsistency {
+	return WriteMajorityPlus(n)
+}
+
+// MajorityPlusFromConsistency exposes the +N portion of a "majority-plus"
+// consistency for callers that need to size a quorum directly (e.g. the
+// sharding coordinator wiring its EffectiveMajorityQuorumPlus calls).
+// Returns 0 for non-majority consistencies.
+func MajorityPlusFromConsistency(c WriteConsistency) int {
+	if c.mode != modeMajority {
+		return 0
+	}
+	return c.plus
+}
+
+// shouldGossip reports whether a non-Local consistency was requested —
+// i.e. the caller wants an immediate fan-out instead of waiting for the
+// next periodic gossip round.
+func (c WriteConsistency) shouldGossip() bool {
+	return c.mode != modeLocal
+}
 
 // defaultFullStateEvery is the baseline cadence of full-state gossip when
 // DeltaCRDT is enabled and no delta-size cap has fired. Full-state rounds
@@ -432,7 +502,7 @@ func (r *Replicator) IncrementCounter(key string, delta uint64, consistency Writ
 	c := r.GCounter(key)
 	c.Increment(r.nodeID, delta)
 	r.persistCounter(key, c)
-	if consistency == WriteAll || consistency == WriteMajority {
+	if consistency.shouldGossip() {
 		r.gossipCounter(context.Background(), key, c, consistency)
 	}
 }
@@ -442,7 +512,7 @@ func (r *Replicator) AddToSet(key, element string, consistency WriteConsistency)
 	s := r.ORSet(key)
 	s.Add(r.nodeID, element)
 	r.persistORSet(key, s)
-	if consistency == WriteAll || consistency == WriteMajority {
+	if consistency.shouldGossip() {
 		r.gossipSet(context.Background(), key, s, consistency)
 	}
 }
@@ -452,7 +522,7 @@ func (r *Replicator) RemoveFromSet(key, element string, consistency WriteConsist
 	s := r.ORSet(key)
 	s.Remove(element)
 	r.persistORSet(key, s)
-	if consistency == WriteAll || consistency == WriteMajority {
+	if consistency.shouldGossip() {
 		r.gossipSet(context.Background(), key, s, consistency)
 	}
 }
@@ -462,7 +532,7 @@ func (r *Replicator) PutInMap(key, itemKey string, value any, consistency WriteC
 	m := r.LWWMap(key)
 	m.Put(itemKey, value)
 	r.persistLWWMap(key, m)
-	if consistency == WriteAll || consistency == WriteMajority {
+	if consistency.shouldGossip() {
 		r.gossipMap(context.Background(), key, m, consistency)
 	}
 }
@@ -1093,11 +1163,32 @@ func (r *Replicator) gossipAll(ctx context.Context) {
 // (and is itself clamped to the total node count). numPeers is the count
 // of remote replicator peers known to this Replicator; total = numPeers+1.
 func (r *Replicator) EffectiveMajorityQuorum(numPeers int) int {
+	return r.EffectiveMajorityQuorumPlus(numPeers, 0)
+}
+
+// EffectiveMajorityQuorumPlus returns the minimum number of cluster
+// members (including self) that must observe a WriteMajorityPlus(plus) /
+// ReadMajorityPlus(plus) operation. plus is the additional headroom on
+// top of natural majority — Pekko's "majority + N" semantics. plus may be
+// math.MaxInt to encode the "all" sentinel; the helper clamps the
+// resulting quorum at total in that case (overflow-safe). MajorityMinCap
+// still applies as a floor. numPeers is the count of remote replicator
+// peers known to this Replicator; total = numPeers+1.
+func (r *Replicator) EffectiveMajorityQuorumPlus(numPeers, plus int) int {
 	total := numPeers + 1
 	if total <= 0 {
 		return 1
 	}
 	majority := total/2 + 1
+	if plus > 0 {
+		// Overflow-safe addition: when plus would push us past total, clamp
+		// at total directly. total - majority is non-negative.
+		if plus > total-majority {
+			majority = total
+		} else {
+			majority += plus
+		}
+	}
 	floor := r.MajorityMinCap
 	if floor > total {
 		floor = total
@@ -1112,10 +1203,10 @@ func (r *Replicator) EffectiveMajorityQuorum(numPeers int) int {
 // gossip message of the given consistency level. Peers are first ordered
 // by PreferOldest (insertion order if true; reversed otherwise — the
 // membership-integration layer is expected to AddPeer in upNumber order).
-// For WriteMajority, the ordered list is truncated to
-// EffectiveMajorityQuorum(n)-1 peers (self counts toward the quorum, so
-// the gossip fan-out is one less). For all other consistency levels the
-// full ordered list is returned.
+// For WriteMajority and WriteMajorityPlus(n), the ordered list is
+// truncated to EffectiveMajorityQuorumPlus(numPeers, n)-1 peers (self
+// counts toward the quorum, so the gossip fan-out is one less). For all
+// other consistency levels the full ordered list is returned.
 func (r *Replicator) selectGossipTargets(peers []peerInfo, consistency WriteConsistency) []peerInfo {
 	if len(peers) == 0 {
 		return peers
@@ -1128,10 +1219,10 @@ func (r *Replicator) selectGossipTargets(peers []peerInfo, consistency WriteCons
 			ordered[len(peers)-1-i] = p
 		}
 	}
-	if consistency != WriteMajority {
+	if consistency.mode != modeMajority {
 		return ordered
 	}
-	quorum := r.EffectiveMajorityQuorum(len(peers))
+	quorum := r.EffectiveMajorityQuorumPlus(len(peers), consistency.plus)
 	fanout := quorum - 1
 	if fanout < 0 {
 		fanout = 0

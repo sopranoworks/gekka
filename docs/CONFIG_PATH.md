@@ -389,8 +389,8 @@ The keys most users actually tune. All are Pekko-compatible (drop them into your
 | `pekko.cluster.sharding.entity-recovery-strategy` | `"all"` | ✅ | `"all"` spawns all remembered entities at once; `"constant"` paces recovery in batches (Round-2 session 14) |
 | `pekko.cluster.sharding.entity-recovery-constant-rate-strategy.frequency` | `100ms` | ✅ | Delay between batches under the `"constant"` strategy (Round-2 session 14) |
 | `pekko.cluster.sharding.entity-recovery-constant-rate-strategy.number-of-entities` | `5` | ✅ | Batch size under the `"constant"` strategy (Round-2 session 14) |
-| `pekko.cluster.sharding.coordinator-state.write-majority-plus` | `3` | ⚠️ | Plumbed onto `ShardSettings.CoordinatorWriteMajorityPlus` (`"all"` maps to `math.MaxInt`); DData write-majority consumer not yet implemented |
-| `pekko.cluster.sharding.coordinator-state.read-majority-plus` | `5` | ⚠️ | Plumbed onto `ShardSettings.CoordinatorReadMajorityPlus` (`"all"` maps to `math.MaxInt`); DData read-majority consumer not yet implemented |
+| `pekko.cluster.sharding.coordinator-state.write-majority-plus` | `3` | ✅ | `ShardCoordinator.WriteConsistency()` returns `ddata.WriteMajorityPlus(n)`; `Replicator.EffectiveMajorityQuorumPlus`/`selectGossipTargets` size the gossip fan-out at `ceil(total/2) + n` (clamped to total); `"all"` maps to `math.MaxInt` and clamps at cluster size |
+| `pekko.cluster.sharding.coordinator-state.read-majority-plus` | `5` | ✅ | `ShardCoordinator.ReadConsistency()` returns `ddata.ReadMajorityPlus(n)` (mirrors write semantics); same quorum-sizing path |
 | `pekko.cluster.sharding.verbose-debug-logging` | `off` | ✅ | Gates fine-grained per-message DEBUG log lines via Shard.vdebug (Round-2 session 15) |
 | `pekko.cluster.sharding.fail-on-invalid-entity-state-transition` | `off` | ✅ | When `on`, Shard panics on invalid handoff transitions; otherwise logs WARN (Round-2 session 15) |
 | `pekko.cluster.sharding.passivation.default-idle-strategy.idle-entity.interval` | `default` (= timeout/2) | ✅ | Overrides idle-entity scan cadence; `"default"` leaves the timeout/2 fallback (Round-2 session 15) |
@@ -578,12 +578,12 @@ touching the consumer code.
 
 ## Summary
 
-### Symbol counts (post 2026-05-07 perfect-pekko Phase 7 closure)
+### Symbol counts (post 2026-05-07 perfect-pekko Phase 8 closure)
 
 | Symbol | Substantive table rows | Meaning |
 |---|---|---|
-| ✅ | 292 | Parsed AND consumed |
-| ⚠️ | 4 | Forward-compat parsed; consumer deferred (Note states what's deferred) |
+| ✅ | 294 | Parsed AND consumed |
+| ⚠️ | 2 | Forward-compat parsed; consumer deferred (Note states what's deferred) |
 | ☕ | 8 | JVM-only — no equivalent capability in Go runtime |
 | 🚫 | 4 | Go/JVM API-shape incompatibility (FQCN class loading, JCA Provider, JKS rotation) |
 | ❌ | 2 | Not implemented; portable in principle (tracked in `docs/LEFTWORKS.md` §11) |
@@ -648,6 +648,51 @@ tunables, `mailbox.requirements.*`, and the deprecated
 on 2026-05-06.
 
 ### Audit history
+
+- **2026-05-07 — Perfect-pekko Phase 8 closure (Sharding coordinator
+  read/write-majority-plus):** Closes two ⚠️ rows in cluster-sharding —
+  392 (`coordinator-state.write-majority-plus`) and 393
+  (`coordinator-state.read-majority-plus`). `cluster/ddata/replicator.go`
+  refactors `WriteConsistency` from an `int` enum into a comparable struct
+  carrying `mode` (local / all / majority) and an optional `plus` field;
+  the existing `WriteLocal` / `WriteAll` / `WriteMajority` package-level
+  values keep their identifier-level API surface (now struct vars). New
+  factories `WriteMajorityPlus(n)` / `ReadMajorityPlus(n)` return
+  `mode=majority, plus=n`; negatives coerce to zero, `math.MaxInt`
+  encodes Pekko's "all" sentinel. New helper
+  `EffectiveMajorityQuorumPlus(numPeers, plus)` extends the existing
+  natural-majority computation with overflow-safe `+N` headroom (the
+  `plus > total - majority` guard avoids `math.MaxInt` overflow before
+  clamping at `total`); `EffectiveMajorityQuorum` now delegates to it
+  with `plus=0`. `selectGossipTargets` reads `consistency.mode` instead
+  of equality with `WriteMajority` and sizes the fan-out via the new
+  `Plus` helper, so `WriteMajority`, `WriteMajorityPlus(n)`, and
+  `ReadMajorityPlus(n)` all flow through the same truncation logic. The
+  four `IncrementCounter` / `AddToSet` / `RemoveFromSet` / `PutInMap`
+  call sites swap their `consistency == WriteAll || consistency == WriteMajority`
+  predicate for `consistency.shouldGossip()` so any non-Local consistency
+  (including the new `*Plus(n)` variants) triggers an immediate fan-out.
+  `cluster/sharding/coordinator.go` adds a `settings ShardSettings` field
+  plus `SetShardSettings` / `WriteConsistency()` / `ReadConsistency()`
+  methods that translate the configured `CoordinatorWriteMajorityPlus` /
+  `CoordinatorReadMajorityPlus` into ddata `WriteMajorityPlus(n)` /
+  `ReadMajorityPlus(n)` values; defaults (zero) collapse to plain
+  `ddata.WriteMajority`. Both spawn paths
+  (`sharding.go` `Spawn[Command]` and `cluster/sharding/cluster_sharding.go`
+  `StartSharding`) wire the resolved `ShardSettings` onto the coordinator
+  inside the props closure. Tests: 7 ddata tests
+  (`TestWriteMajorityPlus_ZeroEqualsWriteMajority`,
+  `TestEffectiveMajorityQuorumPlus_AddsAdditional`,
+  `TestEffectiveMajorityQuorumPlus_AllSentinelClampsToTotal`,
+  `TestEffectiveMajorityQuorumPlus_RespectsMinCap`,
+  `TestSelectGossipTargets_WriteMajorityPlus_Fanout`,
+  `TestSelectGossipTargets_WriteMajorityPlus_AllSentinel`,
+  `TestSelectGossipTargets_ReadMajorityPlus_MatchesWrite`,
+  `TestSelectGossipTargets_WriteMajorityPlusGossipTriggers`) and 4
+  coordinator tests (defaults-to-majority, applies-plus, all-sentinel,
+  quorum-sizing-integration). Iron Rule 1 full gate: `go test ./...`
+  green, `go test -tags integration -p 1 -count=1 -timeout 600s ./...`
+  green, sbt multi-jvm 3/3 195 s. Summary counts: ✅ 292 → 294, ⚠️ 4 → 2.
 
 - **2026-05-07 — Perfect-pekko Phase 7 closure (Sharding lifecycle
   timers + ddata durable filter):** Closes six ⚠️ rows in cluster-sharding —

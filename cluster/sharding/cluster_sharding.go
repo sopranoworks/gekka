@@ -145,9 +145,11 @@ func StartSharding(
 	// Wrapping it in ClusterSingletonManager ensures exactly one instance is
 	// alive in the cluster at any time (always on the oldest eligible node).
 	typeName := cfg.TypeName // capture for closure
+	coordSettings := cfg.Settings
 	coordProps := actor.Props{
 		New: func() actor.Actor {
 			c := NewShardCoordinator(strategy)
+			c.SetShardSettings(coordSettings)
 			RegisterCoordinator(typeName, c)
 			return c
 		},

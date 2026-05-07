@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/cluster/ddata"
 )
 
 // ── Package-level coordinator registry ───────────────────────────────────────
@@ -72,6 +73,12 @@ type ShardCoordinator struct {
 	// goroutine (e.g. the HTTP Management API handler).
 	snapshotMu sync.RWMutex
 	snapshot   map[ShardId]string
+
+	// settings carries the resolved per-coordinator ShardSettings — only the
+	// CoordinatorWriteMajorityPlus / CoordinatorReadMajorityPlus knobs are
+	// consumed today (via WriteConsistency / ReadConsistency).  Set via
+	// SetShardSettings before PreStart fires.
+	settings ShardSettings
 }
 
 func NewShardCoordinator(strategy ShardAllocationStrategy) *ShardCoordinator {
@@ -84,6 +91,36 @@ func NewShardCoordinator(strategy ShardAllocationStrategy) *ShardCoordinator {
 		forcedTarget:        make(map[ShardId]string),
 		snapshot:            make(map[ShardId]string),
 	}
+}
+
+// SetShardSettings records the resolved per-coordinator settings.  The
+// coordinator only consumes the CoordinatorWriteMajorityPlus /
+// CoordinatorReadMajorityPlus knobs today (via WriteConsistency /
+// ReadConsistency); the wider field set is stored verbatim so future
+// settings can land without re-shaping the constructor.  Safe to call
+// before PreStart; concurrent re-configuration is not supported.
+func (c *ShardCoordinator) SetShardSettings(s ShardSettings) {
+	c.settings = s
+}
+
+// WriteConsistency returns the ddata write consistency the coordinator
+// must use when persisting coordinator state.  Maps
+// ShardSettings.CoordinatorWriteMajorityPlus into a
+// ddata.WriteMajorityPlus(n) value: zero collapses to plain WriteMajority,
+// math.MaxInt encodes Pekko's "all" sentinel.  Negative values are coerced
+// to zero by the factory.  Mirrors Pekko's coordinator-state
+// write-majority-plus semantics.
+func (c *ShardCoordinator) WriteConsistency() ddata.WriteConsistency {
+	return ddata.WriteMajorityPlus(c.settings.CoordinatorWriteMajorityPlus)
+}
+
+// ReadConsistency returns the ddata read consistency the coordinator must
+// use when fetching coordinator state.  Maps
+// ShardSettings.CoordinatorReadMajorityPlus into a
+// ddata.ReadMajorityPlus(n) value, with the same zero / "all" semantics as
+// WriteConsistency.
+func (c *ShardCoordinator) ReadConsistency() ddata.WriteConsistency {
+	return ddata.ReadMajorityPlus(c.settings.CoordinatorReadMajorityPlus)
 }
 
 // AllocationSnapshot returns a point-in-time copy of the shard → region

@@ -64,6 +64,13 @@ type Shard struct {
 	// (Round-2 session 25.)
 	accessCount map[EntityId]uint64
 
+	// lfuAccessesSinceAging is the per-Shard tally of LFU increments
+	// observed since the last halving pass over accessCount. Phase 6.2
+	// reads this to decide when to halve every per-entity counter under
+	// the dynamic-aging knob.  Stays zero when dynamic-aging is off so
+	// the field's existence is free for the steady-state LFU path.
+	lfuAccessesSinceAging uint64
+
 	// composite holds the W-TinyLFU state when PassivationStrategy is the
 	// composite ("default-strategy") family.  Owned by the shard, mutated
 	// only from Receive (single-threaded), so no synchronisation is
@@ -497,6 +504,15 @@ func (s *Shard) handleEnvelope(m ShardingEnvelope) {
 	// have no per-message bookkeeping so they skip this step.
 	if isLFUStrategy(s.settings.PassivationStrategy) {
 		s.accessCount[m.EntityId]++
+		// Phase 6.2: dynamic-aging decays the per-entity counters every
+		// `lfuAgingThreshold()` increments so a long-lived shard does
+		// not freeze its eviction picks against early-skewed history.
+		if s.settings.PassivationLFUDynamicAging {
+			s.lfuAccessesSinceAging++
+			if s.lfuAccessesSinceAging >= s.lfuAgingThreshold() {
+				s.ageLFUFrequencies()
+			}
+		}
 	}
 
 	// Limit-based eviction only needs to run when the population grew,
@@ -672,6 +688,35 @@ func (s *Shard) passivationLimit() int {
 		limit = 100000
 	}
 	return limit
+}
+
+// Phase 6.2 — LFU dynamic-aging support.
+//
+// ageLFUFrequencies halves every per-entity entry in accessCount and
+// resets the aging accumulator.  Counters at zero stay zero (>>1 == 0)
+// and counters at one collapse to zero — the latter is intentional so
+// long-cold entities are demoted to the natural eviction baseline once
+// per aging window.  Idempotent on an empty map; safe to call from any
+// passivation branch.
+func (s *Shard) ageLFUFrequencies() {
+	for id, c := range s.accessCount {
+		s.accessCount[id] = c >> 1
+	}
+	s.lfuAccessesSinceAging = 0
+}
+
+// lfuAgingThreshold returns the number of LFU increments that must
+// accumulate before ageLFUFrequencies() fires automatically.  Anchored
+// to the active-entity-limit so a 1k-entity shard ages at a similar
+// frequency-budget granularity as a 1M-entity one, with a floor of 64
+// so unit tests using small limits still see decay within a small
+// envelope batch.
+func (s *Shard) lfuAgingThreshold() uint64 {
+	limit := s.passivationLimit()
+	if limit < 64 {
+		limit = 64
+	}
+	return uint64(limit)
 }
 
 // checkIdleEntities scans all entities for idle timeout and passivates them.

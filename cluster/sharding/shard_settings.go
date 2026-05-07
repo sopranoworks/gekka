@@ -306,6 +306,17 @@ type ShardSettings struct {
 	//   pekko.cluster.sharding.passivation.strategy-defaults.admission.frequency-sketch.reset-multiplier
 	PassivationFrequencySketchResetMultiplier float64
 
+	// PassivationLFUDynamicAging, when true, periodically halves every
+	// per-entity access counter so the LFU strategy reacts to genuine
+	// workload shifts instead of ossifying on whichever entity won the
+	// early ramp-up. Aging fires every PassivationActiveEntityLimit LFU
+	// increments (clamped to a minimum of 64 so tiny test limits still
+	// see a meaningful cadence).  Pekko default: off.
+	//
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.passivation.least-frequently-used-strategy.dynamic-aging
+	PassivationLFUDynamicAging bool
+
 	// Lease, when non-nil, is acquired by every Shard before it becomes
 	// active and released on shard handoff/stop.  Plumbed by StartSharding
 	// from pekko.cluster.sharding.use-lease + LeaseRetryInterval.

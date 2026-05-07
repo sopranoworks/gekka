@@ -218,6 +218,14 @@ type ShardingSettings struct {
 	// active-entity-limit.  Pekko default: 10.0.
 	PassivationFrequencySketchResetMultiplier float64
 
+	// PassivationLFUDynamicAging mirrors Pekko's
+	// pekko.cluster.sharding.passivation.least-frequently-used-strategy.dynamic-aging.
+	// When true the LFU strategy halves every per-entity counter every
+	// (active-entity-limit) increments so a long-lived shard never
+	// freezes its eviction picks against early-skewed history.  Pekko
+	// default: false.
+	PassivationLFUDynamicAging bool
+
 	// EventSourcedMaxUpdatesPerWrite caps the number of buffered
 	// EntityStarted/EntityStopped events that are coalesced into a single
 	// journal write under the eventsourced remember-entities backend.
@@ -303,6 +311,9 @@ func StartSharding[Command any, Event any, State any](
 		}
 		if settings.PassivationFrequencySketchResetMultiplier == 0 && cluster.cfg.Sharding.PassivationFrequencySketchResetMultiplier > 0 {
 			settings.PassivationFrequencySketchResetMultiplier = cluster.cfg.Sharding.PassivationFrequencySketchResetMultiplier
+		}
+		if !settings.PassivationLFUDynamicAging && cluster.cfg.Sharding.PassivationLFUDynamicAging {
+			settings.PassivationLFUDynamicAging = true
 		}
 		// Round-2 session 13 — retry/backoff (part 1).
 		if settings.RetryInterval == 0 && cluster.cfg.Sharding.RetryInterval > 0 {
@@ -560,6 +571,7 @@ func StartSharding[Command any, Event any, State any](
 		PassivationFrequencySketchCounterBits:      settings.PassivationFrequencySketchCounterBits,
 		PassivationFrequencySketchWidthMultiplier:  settings.PassivationFrequencySketchWidthMultiplier,
 		PassivationFrequencySketchResetMultiplier:  settings.PassivationFrequencySketchResetMultiplier,
+		PassivationLFUDynamicAging:                 settings.PassivationLFUDynamicAging,
 		EventSourcedMaxUpdatesPerWrite:             settings.EventSourcedMaxUpdatesPerWrite,
 	}
 

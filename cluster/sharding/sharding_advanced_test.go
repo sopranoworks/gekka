@@ -513,6 +513,100 @@ func TestLFUPassivation_EvictsRarestEntity(t *testing.T) {
 	}
 }
 
+// Phase 6.2 — LFU dynamic-aging halves every per-entity access counter
+// when the configured aging threshold is crossed.  Without this the LFU
+// strategy ossifies on whichever entity won the early ramp-up and stops
+// reacting to genuine workload shifts.
+func TestLFU_DynamicAging_HalvesCounters(t *testing.T) {
+	shard, _ := newTestShard(t, "TestType", "shard-0", ShardSettings{
+		PassivationStrategy:          LFUStrategyName,
+		PassivationActiveEntityLimit: 100,
+		PassivationLFUDynamicAging:   true,
+	})
+	shard.PreStart()
+
+	// Build distinct frequencies so the halving is observable on more
+	// than just the trivial 0/1 boundary.
+	for range 10 {
+		sendEnvelope(shard, "hot", "msg")
+	}
+	for range 4 {
+		sendEnvelope(shard, "warm", "msg")
+	}
+	sendEnvelope(shard, "cold", "msg")
+
+	// Sanity check before aging.
+	if got, want := shard.accessCount["hot"], uint64(10); got != want {
+		t.Fatalf("setup: hot=%d, want %d", got, want)
+	}
+
+	shard.ageLFUFrequencies()
+
+	if got, want := shard.accessCount["hot"], uint64(5); got != want {
+		t.Errorf("after aging: hot=%d, want %d", got, want)
+	}
+	if got, want := shard.accessCount["warm"], uint64(2); got != want {
+		t.Errorf("after aging: warm=%d, want %d", got, want)
+	}
+	if got, want := shard.accessCount["cold"], uint64(0); got != want {
+		t.Errorf("after aging: cold=%d, want %d", got, want)
+	}
+}
+
+// Without the dynamic-aging flag set, the threshold-triggered auto-aging
+// path is dormant and accessCount grows unbounded across the threshold.
+// Locks in Pekko's "off by default" semantics so an operator never sees
+// surprise frequency decay without opting in.
+func TestLFU_DynamicAging_DisabledByDefault(t *testing.T) {
+	shard, _ := newTestShard(t, "TestType", "shard-0", ShardSettings{
+		PassivationStrategy:          LFUStrategyName,
+		PassivationActiveEntityLimit: 4, // small threshold → easy to cross
+		// PassivationLFUDynamicAging intentionally unset → false.
+	})
+	shard.PreStart()
+
+	sendEnvelope(shard, "e1", "msg")
+	for range 100 {
+		sendEnvelope(shard, "e1", "msg")
+	}
+
+	// 1 spawn + 100 follow-ups = 101 increments; without aging the count
+	// must reach exactly that.  If the auto-aging path fires anyway the
+	// count would be ≤ 50.
+	if got, want := shard.accessCount["e1"], uint64(101); got != want {
+		t.Errorf("aging fired with flag off: e1=%d, want %d", got, want)
+	}
+}
+
+// With dynamic-aging on, accumulating enough accesses must auto-fire the
+// halving loop without an explicit ageLFUFrequencies() call from the
+// caller — that's the production path the Shard actor walks.
+func TestLFU_DynamicAging_AutoTriggersAtThreshold(t *testing.T) {
+	const limit = 32
+	shard, _ := newTestShard(t, "TestType", "shard-0", ShardSettings{
+		PassivationStrategy:          LFUStrategyName,
+		PassivationActiveEntityLimit: limit,
+		PassivationLFUDynamicAging:   true,
+	})
+	shard.PreStart()
+
+	// Pile on enough accesses to definitely cross at least one threshold
+	// (threshold ≤ active-entity-limit per the implementation contract).
+	const total = 4 * limit
+	for range total {
+		sendEnvelope(shard, "e1", "msg")
+	}
+
+	// After at least one aging halving, the accessCount must be strictly
+	// less than the total increments — proves the auto-trigger fired.
+	if got := shard.accessCount["e1"]; got >= uint64(total) {
+		t.Errorf("auto-aging did not fire: e1=%d, want < %d", got, total)
+	}
+	if got := shard.accessCount["e1"]; got == 0 {
+		t.Error("auto-aging zeroed counter; halving must preserve some signal")
+	}
+}
+
 // TestPassivation_NonLRUStrategiesIgnoreLastActivityWhenIdle ensures
 // MRU/LFU don't accidentally inherit the LRU eviction loop — a
 // regression of the dispatch switch would silently route their evicts

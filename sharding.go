@@ -226,6 +226,23 @@ type ShardingSettings struct {
 	// default: false.
 	PassivationLFUDynamicAging bool
 
+	// PassivationWindowMinimumProportion lower-bounds the dynamic
+	// admission-window size when the hill-climbing optimizer is active.
+	// Pekko default: 0.01.  Ignored unless PassivationWindowOptimizer
+	// is "hill-climbing".
+	PassivationWindowMinimumProportion float64
+
+	// PassivationWindowMaximumProportion upper-bounds the dynamic
+	// admission-window size when the hill-climbing optimizer is active.
+	// Pekko default: 1.0 (no upper bound).
+	PassivationWindowMaximumProportion float64
+
+	// PassivationWindowOptimizer selects the dynamic resize policy for
+	// the composite strategy's admission window.  "hill-climbing" enables
+	// the adaptive resizer; any other value (including empty or "off")
+	// freezes the window at the seed proportion.
+	PassivationWindowOptimizer string
+
 	// EventSourcedMaxUpdatesPerWrite caps the number of buffered
 	// EntityStarted/EntityStopped events that are coalesced into a single
 	// journal write under the eventsourced remember-entities backend.
@@ -314,6 +331,15 @@ func StartSharding[Command any, Event any, State any](
 		}
 		if !settings.PassivationLFUDynamicAging && cluster.cfg.Sharding.PassivationLFUDynamicAging {
 			settings.PassivationLFUDynamicAging = true
+		}
+		if settings.PassivationWindowMinimumProportion == 0 && cluster.cfg.Sharding.PassivationWindowMinimumProportion > 0 {
+			settings.PassivationWindowMinimumProportion = cluster.cfg.Sharding.PassivationWindowMinimumProportion
+		}
+		if settings.PassivationWindowMaximumProportion == 0 && cluster.cfg.Sharding.PassivationWindowMaximumProportion > 0 {
+			settings.PassivationWindowMaximumProportion = cluster.cfg.Sharding.PassivationWindowMaximumProportion
+		}
+		if settings.PassivationWindowOptimizer == "" && cluster.cfg.Sharding.PassivationWindowOptimizer != "" {
+			settings.PassivationWindowOptimizer = cluster.cfg.Sharding.PassivationWindowOptimizer
 		}
 		// Round-2 session 13 — retry/backoff (part 1).
 		if settings.RetryInterval == 0 && cluster.cfg.Sharding.RetryInterval > 0 {
@@ -572,6 +598,9 @@ func StartSharding[Command any, Event any, State any](
 		PassivationFrequencySketchWidthMultiplier:  settings.PassivationFrequencySketchWidthMultiplier,
 		PassivationFrequencySketchResetMultiplier:  settings.PassivationFrequencySketchResetMultiplier,
 		PassivationLFUDynamicAging:                 settings.PassivationLFUDynamicAging,
+		PassivationWindowMinimumProportion:         settings.PassivationWindowMinimumProportion,
+		PassivationWindowMaximumProportion:         settings.PassivationWindowMaximumProportion,
+		PassivationWindowOptimizer:                 settings.PassivationWindowOptimizer,
 		EventSourcedMaxUpdatesPerWrite:             settings.EventSourcedMaxUpdatesPerWrite,
 	}
 

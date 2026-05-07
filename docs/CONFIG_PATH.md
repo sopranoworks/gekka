@@ -337,18 +337,18 @@ The keys most users actually tune. All are Pekko-compatible (drop them into your
 | `pekko.cluster.sharding.passivation.least-recently-used-strategy.replacement.policy` | `"least-recently-used"` | ✅ | Round-2 session 24. `ShardingConfig.PassivationReplacementPolicy`. |
 | `pekko.cluster.sharding.passivation.most-recently-used-strategy.active-entity-limit` | `100000` | ✅ | Round-2 session 25. Active strategy limit reaches `ShardingConfig.PassivationActiveEntityLimit`; the eviction loop picks the freshest entity. |
 | `pekko.cluster.sharding.passivation.least-frequently-used-strategy.active-entity-limit` | `100000` | ✅ | Round-2 session 25. Active strategy limit reaches `ShardingConfig.PassivationActiveEntityLimit`; the eviction loop picks the entity with the lowest cumulative access count, ties broken by oldest activity. |
-| `pekko.cluster.sharding.passivation.least-frequently-used-strategy.dynamic-aging` | `off` | ⚠️ | Parsed into `ShardingConfig.PassivationLFUDynamicAging` (Round-2 session 25); frequency-aging loop not yet implemented |
+| `pekko.cluster.sharding.passivation.least-frequently-used-strategy.dynamic-aging` | `off` | ✅ | Phase 6.2 wires the flag through `ShardingSettings`/`ShardSettings` into `Shard.lfuAccessesSinceAging`. When true, `Shard.ageLFUFrequencies()` halves every per-entity counter every `lfuAgingThreshold()` LFU increments (anchored to `active-entity-limit`, floor 64). |
 | `pekko.cluster.sharding.passivation.strategy = default-strategy` | `"default-idle-strategy"` | ✅ | Round-2 session 26. Selects the W-TinyLFU composite strategy implemented in `cluster/sharding/passivation_composite.go`. The plan-internal alias `"composite-strategy"` is normalised at parse time so configs that use either convention reach the same code path. |
 | `pekko.cluster.sharding.passivation.default-strategy.active-entity-limit` | `100000` | ✅ | Round-2 session 26. Active strategy limit reaches `ShardingConfig.PassivationActiveEntityLimit`; the composite strategy splits it between admission-window and main areas via `PassivationWindowProportion`. |
 | `pekko.cluster.sharding.passivation.default-strategy.admission.window.policy` | `"least-recently-used"` | ✅ | Round-2 session 26. `ShardingConfig.PassivationWindowPolicy`. Currently only `"least-recently-used"` is honoured at runtime; non-empty values activate the admission window. |
-| `pekko.cluster.sharding.passivation.default-strategy.admission.window.optimizer` | `"hill-climbing"` | ⚠️ | Parsed for forward-compat with Pekko configs (Round-2 session 26); adaptive resizing loop not yet implemented |
+| `pekko.cluster.sharding.passivation.default-strategy.admission.window.optimizer` | `"hill-climbing"` | ✅ | Phase 6.3 wires the optimizer through `ShardingSettings.PassivationWindowOptimizer` into `compositeStrategy`. `"hill-climbing"` activates the adaptive resizer (instrumented in `OnAccess`, fires every `optimizerInterval` accesses); any other value freezes `windowProportion` at the seed. |
 | `pekko.cluster.sharding.passivation.default-strategy.admission.filter` | `"frequency-sketch"` | ✅ | Round-2 session 26. `ShardingConfig.PassivationFilter`. Recognised values: `"frequency-sketch"` (admission filter active), `"off"` / `"none"` (composite degrades to LRU window + LRU main with no admission gate). |
 | `pekko.cluster.sharding.passivation.default-strategy.replacement.policy` | `"least-recently-used"` | ✅ | Round-2 session 26. Per-strategy override for `ShardingConfig.PassivationReplacementPolicy`; wins over the LRU-strategy block when both are present. |
 | `pekko.cluster.sharding.passivation.strategy-defaults.admission.window.proportion` | `0.01` | ✅ | Round-2 session 26. Admission-window size as a fraction of the active-entity-limit. `default-strategy.admission.window.proportion` overrides per-strategy. |
-| `pekko.cluster.sharding.passivation.strategy-defaults.admission.window.minimum-proportion` | `0.01` | ⚠️ | Parsed (Round-2 session 26); consumer is the hill-climbing optimizer, not yet implemented |
-| `pekko.cluster.sharding.passivation.strategy-defaults.admission.window.maximum-proportion` | `1.0` | ⚠️ | Parsed (Round-2 session 26); consumer is the hill-climbing optimizer, not yet implemented |
+| `pekko.cluster.sharding.passivation.strategy-defaults.admission.window.minimum-proportion` | `0.01` | ✅ | Phase 6.3 wires this into `compositeStrategy.windowMinProp` via `ShardingConfig.PassivationWindowMinimumProportion`; the hill-climbing optimizer reverses direction at this floor. |
+| `pekko.cluster.sharding.passivation.strategy-defaults.admission.window.maximum-proportion` | `1.0` | ✅ | Phase 6.3 wires this into `compositeStrategy.windowMaxProp` via `ShardingConfig.PassivationWindowMaximumProportion`; the hill-climbing optimizer reverses direction at this ceiling. |
 | `pekko.cluster.sharding.passivation.strategy-defaults.admission.frequency-sketch.depth` | `4` | ✅ | Round-2 session 26. Count-min-sketch row count; threaded into `cluster/sharding/passivation_admission.go`. |
-| `pekko.cluster.sharding.passivation.strategy-defaults.admission.frequency-sketch.counter-bits` | `4` | ⚠️ | Round-2 session 26. Pekko documents 2/4/8/16/32/64; gekka stores 4-bit counters regardless. Parsed for forward-compat. |
+| `pekko.cluster.sharding.passivation.strategy-defaults.admission.frequency-sketch.counter-bits` | `4` | ✅ | Phase 6.1 wires `cfg.frequencySketchCounterBits` into `countMinSketch.maxCount` via `resolveCounterBits` (clamps to [2,8]; values >8 fold down because cells are uint8). Saturation cap = `(1 << bits) - 1`; default 4 → 0x0F preserves the prior behaviour. |
 | `pekko.cluster.sharding.passivation.strategy-defaults.admission.frequency-sketch.width-multiplier` | `4` | ✅ | Round-2 session 26. Sketch width = active-entity-limit × multiplier (rounded up to a power of two, clamped to 64). |
 | `pekko.cluster.sharding.passivation.strategy-defaults.admission.frequency-sketch.reset-multiplier` | `10.0` | ✅ | Round-2 session 26. Triggers the sketch's halving reset every (active-entity-limit × multiplier) accesses. |
 | `pekko.cluster.sharding.guardian-name` | `"sharding"` | ✅ | `ShardingConfig.GuardianName` — top-level guardian actor under which all sharding regions are spawned |
@@ -578,12 +578,12 @@ touching the consumer code.
 
 ## Summary
 
-### Symbol counts (post 2026-05-07 perfect-pekko Phase 5 closure)
+### Symbol counts (post 2026-05-07 perfect-pekko Phase 6 closure)
 
 | Symbol | Substantive table rows | Meaning |
 |---|---|---|
-| ✅ | 281 | Parsed AND consumed |
-| ⚠️ | 15 | Forward-compat parsed; consumer deferred (Note states what's deferred) |
+| ✅ | 286 | Parsed AND consumed |
+| ⚠️ | 10 | Forward-compat parsed; consumer deferred (Note states what's deferred) |
 | ☕ | 8 | JVM-only — no equivalent capability in Go runtime |
 | 🚫 | 4 | Go/JVM API-shape incompatibility (FQCN class loading, JCA Provider, JKS rotation) |
 | ❌ | 2 | Not implemented; portable in principle (tracked in `docs/LEFTWORKS.md` §11) |
@@ -648,6 +648,40 @@ tunables, `mailbox.requirements.*`, and the deprecated
 on 2026-05-06.
 
 ### Audit history
+
+- **2026-05-07 — Perfect-pekko Phase 6 closure (Sharding passivation
+  hill-climbing optimizer):** Closes five ⚠️ rows in cluster-sharding —
+  340 (`least-frequently-used-strategy.dynamic-aging`), 344
+  (`default-strategy.admission.window.optimizer`), 348/349
+  (`strategy-defaults.admission.window.{minimum,maximum}-proportion`),
+  351 (`strategy-defaults.admission.frequency-sketch.counter-bits`).
+  Sub-commit 6.1 wires `frequency-sketch.counter-bits` into
+  `countMinSketch.maxCount` via a new `resolveCounterBits` clamp (2..8;
+  zero falls back to the historical 4-bit default; >8 folds down because
+  cells are uint8). Sub-commit 6.2 plumbs
+  `least-frequently-used-strategy.dynamic-aging` from `ShardingConfig`
+  through `ShardingSettings`/`ShardSettings` into `Shard`; when enabled,
+  `Shard.ageLFUFrequencies()` halves every per-entity counter every
+  `lfuAgingThreshold()` LFU increments (anchored to active-entity-limit
+  with a floor of 64 so unit tests using small limits still see decay
+  within a small envelope batch).  Sub-commit 6.3 adds the hill-climbing
+  window optimizer to `compositeStrategy`: `OnAccess` now tallies hit /
+  miss counts; every `optimizerInterval` accesses `runOptimizer` adjusts
+  `windowProportion` by `optimizerStepSize` in the current direction,
+  reverses on a hit-rate regression, and clamps to
+  `[windowMinProp, windowMaxProp]`.  HOCON parses
+  `default-strategy.admission.window.{minimum-proportion,maximum-proportion,optimizer}`
+  with strategy-defaults.* / default-strategy.* precedence; `WindowProportion()`
+  / `OptimizerCycles()` accessors expose the runtime state to tests.
+  Tests: 4 sketch tests for counter-bits parameterization (sweep + clamp +
+  composite-wired + saturation-default), 3 LFU dynamic-aging tests
+  (manual-halve, disabled-by-default, auto-trigger-at-threshold), 4
+  optimizer tests (bounds-respected, off-keeps-proportion, adapts-to-workload,
+  out-of-range-bounds-sanitised), 2 HOCON round-trip tests
+  (strategy-defaults parse + default-strategy precedence override).
+  Iron Rule 1 full gate: `go test ./...` green per sub-commit, integration
+  green on retry (TestAdaptiveShardingRebalance known flake protocol), sbt
+  multi-jvm 3/3 196s.  Summary counts: ✅ 281 → 286, ⚠️ 15 → 10.
 
 - **2026-05-07 — Perfect-pekko Phase 5 closure (DistributedData per-CRDT
   serializer cache):** Closes the lone ⚠️ row 325

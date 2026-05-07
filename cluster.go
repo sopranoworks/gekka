@@ -1734,6 +1734,15 @@ type ShardingConfig struct {
 	// total accesses.  Pekko default: 10.0.
 	PassivationFrequencySketchResetMultiplier float64
 
+	// Phase 6.3 — composite hill-climbing optimizer knobs.  These mirror
+	// HOCON paths under passivation.strategy-defaults.admission.window.*
+	// and passivation.default-strategy.admission.window.*; ShardingConfig
+	// holds the cluster-wide default that ShardingSettings can override
+	// on a per-region basis.
+	PassivationWindowMinimumProportion float64
+	PassivationWindowMaximumProportion float64
+	PassivationWindowOptimizer         string
+
 	// AdaptiveRebalancing, when enabled, rebalances shards based on real-time
 	// node metrics (CPU, Memory, Mailbox size).
 	AdaptiveRebalancing AdaptiveRebalancingConfig

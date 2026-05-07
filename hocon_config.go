@@ -712,6 +712,34 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 	if f, ok := parseFloat(shardingPrefix + ".passivation.strategy-defaults.admission.frequency-sketch.reset-multiplier"); ok {
 		nodeCfg.Sharding.PassivationFrequencySketchResetMultiplier = f
 	}
+	// Phase 6.3 — hill-climbing window optimizer parameters.  The
+	// strategy-defaults.* keys carry the cluster-wide default; the
+	// default-strategy.* keys override per-strategy and win when both
+	// are present.
+	for _, path := range []string{
+		shardingPrefix + ".passivation.strategy-defaults.admission.window.minimum-proportion",
+		shardingPrefix + ".passivation.default-strategy.admission.window.minimum-proportion",
+	} {
+		if f, ok := parseFloat(path); ok {
+			nodeCfg.Sharding.PassivationWindowMinimumProportion = f
+		}
+	}
+	for _, path := range []string{
+		shardingPrefix + ".passivation.strategy-defaults.admission.window.maximum-proportion",
+		shardingPrefix + ".passivation.default-strategy.admission.window.maximum-proportion",
+	} {
+		if f, ok := parseFloat(path); ok {
+			nodeCfg.Sharding.PassivationWindowMaximumProportion = f
+		}
+	}
+	for _, path := range []string{
+		shardingPrefix + ".passivation.strategy-defaults.admission.window.optimizer",
+		shardingPrefix + ".passivation.default-strategy.admission.window.optimizer",
+	} {
+		if v, err := cfg.GetString(path); err == nil {
+			nodeCfg.Sharding.PassivationWindowOptimizer = strings.TrimSpace(v)
+		}
+	}
 	if v, err := cfg.GetString(shardingPrefix + ".rebalance-interval"); err == nil {
 		if d, parseErr := parseHOCONDuration(strings.TrimSpace(v)); parseErr == nil {
 			nodeCfg.Sharding.RebalanceInterval = d

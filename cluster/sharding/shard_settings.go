@@ -317,6 +317,33 @@ type ShardSettings struct {
 	//   pekko.cluster.sharding.passivation.least-frequently-used-strategy.dynamic-aging
 	PassivationLFUDynamicAging bool
 
+	// PassivationWindowMinimumProportion lower-bounds the dynamic
+	// admission-window size when the hill-climbing optimizer is active.
+	// Pekko default: 0.01.  Ignored when PassivationWindowOptimizer is
+	// not "hill-climbing".
+	//
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.passivation.strategy-defaults.admission.window.minimum-proportion
+	PassivationWindowMinimumProportion float64
+
+	// PassivationWindowMaximumProportion upper-bounds the dynamic
+	// admission-window size when the hill-climbing optimizer is active.
+	// Pekko default: 1.0 (no upper bound).
+	//
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.passivation.strategy-defaults.admission.window.maximum-proportion
+	PassivationWindowMaximumProportion float64
+
+	// PassivationWindowOptimizer selects the dynamic resize policy for
+	// the composite strategy's admission window. Recognised values:
+	// "hill-climbing" (Pekko default) — adapt windowProportion based on
+	// observed hit rate; any other value (including "off" or empty)
+	// freezes the window at the seed proportion.
+	//
+	// Equivalent HOCON key:
+	//   pekko.cluster.sharding.passivation.default-strategy.admission.window.optimizer
+	PassivationWindowOptimizer string
+
 	// Lease, when non-nil, is acquired by every Shard before it becomes
 	// active and released on shard handoff/stop.  Plumbed by StartSharding
 	// from pekko.cluster.sharding.use-lease + LeaseRetryInterval.

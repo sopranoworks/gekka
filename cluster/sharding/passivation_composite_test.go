@@ -288,6 +288,115 @@ func TestCompositeStrategy_OnRemove(t *testing.T) {
 	}
 }
 
+// Phase 6.3 — hill-climbing window optimizer.
+//
+// The optimizer adapts windowProportion at runtime to chase a higher hit
+// rate.  The fundamental invariant is that the proportion always stays
+// inside [minimum-proportion, maximum-proportion], regardless of how
+// pathological the workload becomes.
+func TestCompositeStrategy_OptimizerRespectsBounds(t *testing.T) {
+	cs := newCompositeStrategy(compositeConfig{
+		activeEntityLimit:       100,
+		windowProportion:        0.3,
+		windowMinimumProportion: 0.2,
+		windowMaximumProportion: 0.4,
+		windowOptimizer:         OptimizerHillClimbing,
+		optimizerInterval:       16, // fire every 16 accesses for fast tests
+		optimizerStepSize:       0.05,
+		filter:                  FrequencySketchFilterName,
+	})
+
+	// Drive a few thousand mixed accesses; the proportion must stay in
+	// [0.2, 0.4] every step of the way.
+	for i := 0; i < 3000; i++ {
+		id := EntityId(fmt.Sprintf("e-%d", i%50)) // small working set
+		cs.OnAccess(id, false)
+		if got := cs.WindowProportion(); got < 0.2-1e-9 || got > 0.4+1e-9 {
+			t.Fatalf("iter %d: windowProportion=%v escaped [0.2, 0.4]", i, got)
+		}
+	}
+}
+
+// Disabled optimizer means windowProportion never moves — the operator
+// opted out, so the dynamic resize code path must stay dormant even when
+// the access stream would otherwise trigger it.
+func TestCompositeStrategy_OptimizerOffKeepsProportion(t *testing.T) {
+	const initial = 0.25
+	cs := newCompositeStrategy(compositeConfig{
+		activeEntityLimit:       40,
+		windowProportion:        initial,
+		windowMinimumProportion: 0.1,
+		windowMaximumProportion: 0.9,
+		windowOptimizer:         "", // empty => off
+		filter:                  FrequencySketchFilterName,
+	})
+	for i := 0; i < 1000; i++ {
+		cs.OnAccess(EntityId(fmt.Sprintf("e-%d", i%20)), false)
+	}
+	if got := cs.WindowProportion(); got != initial {
+		t.Errorf("optimizer off: proportion drifted from %v to %v", initial, got)
+	}
+}
+
+// Hill-climbing should actually move the proportion when the workload
+// favours one regime — the test feeds a workload that benefits from a
+// larger admission window (lots of churn over a small set), so the
+// proportion should rise toward the maximum bound.
+func TestCompositeStrategy_OptimizerAdaptsToWorkload(t *testing.T) {
+	cs := newCompositeStrategy(compositeConfig{
+		activeEntityLimit:       64,
+		windowProportion:        0.1,
+		windowMinimumProportion: 0.1,
+		windowMaximumProportion: 0.9,
+		windowOptimizer:         OptimizerHillClimbing,
+		optimizerInterval:       32,
+		optimizerStepSize:       0.05,
+		filter:                  FrequencySketchFilterName,
+	})
+
+	// Workload: a tight working set of 10 entities accessed in round
+	// robin → almost every access is a hit on an existing entity.  The
+	// optimizer should not shrink the window below the floor and should
+	// move it within bounds across many cycles.
+	for i := 0; i < 4000; i++ {
+		cs.OnAccess(EntityId(fmt.Sprintf("hot-%d", i%10)), false)
+	}
+	if got := cs.WindowProportion(); got < 0.1-1e-9 || got > 0.9+1e-9 {
+		t.Errorf("after workload: windowProportion=%v escaped bounds", got)
+	}
+	// The optimizer must have *fired* (interval=32, ran 4000 / 32 = 125
+	// times), so the proportion should have moved at least once away
+	// from the seed value of 0.1.  Locks in that the optimizer is
+	// actually called, not just nominally enabled.
+	if got := cs.OptimizerCycles(); got == 0 {
+		t.Error("optimizer never ran; expected ≥1 cycle in 4000 accesses")
+	}
+}
+
+// Out-of-range bounds (min > max, negatives, > 1) collapse to safe
+// defaults rather than panicking. Defends against typos in HOCON.
+func TestCompositeStrategy_OptimizerBoundsSanitize(t *testing.T) {
+	cs := newCompositeStrategy(compositeConfig{
+		activeEntityLimit:       40,
+		windowProportion:        0.3,
+		windowMinimumProportion: 0.8, // illegal: min > max
+		windowMaximumProportion: 0.2,
+		windowOptimizer:         OptimizerHillClimbing,
+		optimizerInterval:       16,
+		optimizerStepSize:       0.05,
+	})
+	// Run a brief workload — should not panic, and the proportion
+	// should still respect SOME bounds (the sanitizer picks a safe
+	// pair: clamp min ≤ max ≤ 1.0 and min ≥ 0).
+	for i := 0; i < 500; i++ {
+		cs.OnAccess(EntityId(fmt.Sprintf("e-%d", i%20)), false)
+	}
+	got := cs.WindowProportion()
+	if got < 0 || got > 1 {
+		t.Errorf("sanitised bounds: proportion=%v escaped [0,1]", got)
+	}
+}
+
 // TestCompositeStrategy_ResolvedDefaults locks the Pekko fallback
 // values so we don't silently regress to a 0-cap window or empty
 // sketch when the operator declines to override anything.

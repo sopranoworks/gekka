@@ -143,6 +143,9 @@ func NewShard(
 			frequencySketchCounterBits:   settings.PassivationFrequencySketchCounterBits,
 			frequencySketchWidthMult:     settings.PassivationFrequencySketchWidthMultiplier,
 			frequencySketchResetMultpler: settings.PassivationFrequencySketchResetMultiplier,
+			windowMinimumProportion:      settings.PassivationWindowMinimumProportion,
+			windowMaximumProportion:      settings.PassivationWindowMaximumProportion,
+			windowOptimizer:              settings.PassivationWindowOptimizer,
 		})
 	}
 	return s

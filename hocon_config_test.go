@@ -4401,6 +4401,81 @@ pekko {
 	}
 }
 
+// Phase 6.3 — hill-climbing window optimizer parameters round-trip from
+// HOCON into ShardingConfig. Covers the strategy-defaults.* path (cluster
+// default) and confirms each leaf — minimum-proportion, maximum-proportion,
+// optimizer — lands on its dedicated field.
+func TestHOCON_Passivation_HillClimbingOptimizer(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    sharding.passivation {
+      strategy = "default-strategy"
+      strategy-defaults.admission.window {
+        minimum-proportion = 0.05
+        maximum-proportion = 0.6
+        optimizer          = "hill-climbing"
+      }
+    }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.Sharding.PassivationWindowMinimumProportion, 0.05; got != want {
+		t.Errorf("PassivationWindowMinimumProportion = %v, want %v", got, want)
+	}
+	if got, want := cfg.Sharding.PassivationWindowMaximumProportion, 0.6; got != want {
+		t.Errorf("PassivationWindowMaximumProportion = %v, want %v", got, want)
+	}
+	if got, want := cfg.Sharding.PassivationWindowOptimizer, "hill-climbing"; got != want {
+		t.Errorf("PassivationWindowOptimizer = %q, want %q", got, want)
+	}
+}
+
+// The default-strategy.* keys must override strategy-defaults.* — Pekko's
+// per-strategy precedence rule.  Without this guarantee an operator who
+// sets a per-strategy override sees their value silently dropped under
+// the inherited default.
+func TestHOCON_Passivation_HillClimbingOptimizerOverride(t *testing.T) {
+	cfg, err := parseHOCONString(`
+pekko {
+  remote.artery { canonical { hostname = "127.0.0.1", port = 2552 } }
+  cluster {
+    seed-nodes = []
+    sharding.passivation {
+      strategy = "default-strategy"
+      strategy-defaults.admission.window {
+        minimum-proportion = 0.10
+        maximum-proportion = 0.50
+        optimizer          = "off"
+      }
+      default-strategy.admission.window {
+        minimum-proportion = 0.20
+        maximum-proportion = 0.90
+        optimizer          = "hill-climbing"
+      }
+    }
+  }
+}
+`)
+	if err != nil {
+		t.Fatalf("parseHOCONString: %v", err)
+	}
+	if got, want := cfg.Sharding.PassivationWindowMinimumProportion, 0.20; got != want {
+		t.Errorf("min-proportion override: got %v, want %v", got, want)
+	}
+	if got, want := cfg.Sharding.PassivationWindowMaximumProportion, 0.90; got != want {
+		t.Errorf("max-proportion override: got %v, want %v", got, want)
+	}
+	if got, want := cfg.Sharding.PassivationWindowOptimizer, "hill-climbing"; got != want {
+		t.Errorf("optimizer override: got %q, want %q", got, want)
+	}
+}
+
 // TestHOCON_Passivation_ActiveStrategyLimitWins guards the priority
 // rule: when multiple strategy blocks set active-entity-limit, the one
 // matching the active strategy is the source of truth.  Without this,

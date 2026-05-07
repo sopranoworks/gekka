@@ -34,6 +34,14 @@ type ShardRegion struct {
 	handoffInProgress map[ShardId]struct{} // shards being rebalanced away
 	drainPending      map[ShardId]struct{} // shards awaiting ShardDrainResponse
 
+	// pendingSince records, per-shard, the timestamp of the FIRST message
+	// buffered while the shard's home is unknown.  shard-region-query-timeout
+	// uses this to expire stale per-shard pending queues on retry ticks: if
+	// the coordinator never replies with a ShardHome before the timeout, the
+	// queued messages are dropped (and the entry cleared) so a degraded
+	// coordinator does not let pendingMessages grow unbounded.
+	pendingSince map[ShardId]time.Time
+
 	// handoffDone is closed by Receive when a HandoffComplete message arrives
 	// from the coordinator.  PostStop blocks on this channel (with a timeout)
 	// to ensure the coordinator has released all locally-owned shards before
@@ -60,6 +68,7 @@ func NewShardRegion(
 		shards:             make(map[ShardId]actor.Ref),
 		shardHomePaths:     make(map[ShardId]string),
 		pendingMessages:    make(map[ShardId][]actor.Envelope),
+		pendingSince:       make(map[ShardId]time.Time),
 		handoffInProgress:  make(map[ShardId]struct{}),
 		drainPending:       make(map[ShardId]struct{}),
 		handoffDone:        make(chan struct{}),
@@ -113,17 +122,32 @@ func (r *ShardRegion) scheduleRetryTick() {
 }
 
 // retryPendingHomes re-asks the coordinator for every shard with buffered
-// messages whose home is still unknown.
+// messages whose home is still unknown.  shard-region-query-timeout: if the
+// per-shard pending queue is older than the configured timeout, the entry
+// is dropped instead of being re-asked.  This keeps a degraded coordinator
+// from allowing pendingMessages to grow without bound when no ShardHome
+// reply will ever arrive.
 func (r *ShardRegion) retryPendingHomes() {
 	if r.coordinator == nil {
 		return
 	}
+	timeout := r.shardSettings.ShardRegionQueryTimeout
+	now := time.Now()
 	for sid, queue := range r.pendingMessages {
 		if len(queue) == 0 {
 			continue
 		}
 		if home, ok := r.shardHomePaths[sid]; ok && home != "" {
 			continue
+		}
+		if timeout > 0 {
+			if since, tracked := r.pendingSince[sid]; tracked && now.Sub(since) >= timeout {
+				r.Log().Warn("shard-region-query-timeout: dropping stale pending queue",
+					"shardId", sid, "queueLen", len(queue), "age", now.Sub(since), "timeout", timeout)
+				delete(r.pendingMessages, sid)
+				delete(r.pendingSince, sid)
+				continue
+			}
 		}
 		r.Log().Debug("retry-interval: re-asking coordinator for shard home",
 			"shardId", sid, "queueLen", len(queue))
@@ -179,6 +203,9 @@ func (r *ShardRegion) Receive(msg any) {
 	case ShardHome:
 		r.Log().Debug("Received ShardHome", "shardId", m.ShardId, "region", m.RegionPath)
 		r.shardHomePaths[m.ShardId] = m.RegionPath
+		// shard-region-query-timeout bookkeeping: clear the timestamp the
+		// retry-tick uses to age out stale pending queues.
+		delete(r.pendingSince, m.ShardId)
 		// Deliver pending messages
 		if msgs, ok := r.pendingMessages[m.ShardId]; ok {
 			r.Log().Debug("Delivering pending messages", "shardId", m.ShardId, "count", len(msgs))
@@ -355,6 +382,12 @@ func (r *ShardRegion) deliverMessageWithSender(shardId ShardId, envelope Shardin
 		}
 		r.Log().Debug("Requesting shard home", "shardId", shardId)
 		r.pendingMessages[shardId] = append(queue, actor.Envelope{Payload: envelope, Sender: sender})
+		// shard-region-query-timeout: track the first-buffered timestamp per
+		// shard so the retry-tick can age out queues whose ShardHome reply
+		// never arrives.  Subsequent appends keep the original timestamp.
+		if _, tracked := r.pendingSince[shardId]; !tracked {
+			r.pendingSince[shardId] = time.Now()
+		}
 		if r.coordinator != nil {
 			r.coordinator.Tell(GetShardHome{ShardId: shardId}, r.Self())
 		}

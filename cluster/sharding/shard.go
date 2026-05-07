@@ -42,6 +42,13 @@ type checkPassivationMsg struct{}
 // recovery strategy: each tick spawns the next batch of remembered entities.
 type entityRecoveryTickMsg struct{}
 
+// entityRestartBackoffElapsedMsg is delivered to the Shard once
+// EntityRestartBackoff has elapsed since an entity actor terminated
+// unexpectedly while RememberEntities was on.  The handler re-spawns the
+// entity from the remembered set so messages stalled on the home cache
+// can be delivered again.
+type entityRestartBackoffElapsedMsg struct{ EntityId EntityId }
+
 // ── Shard ─────────────────────────────────────────────────────────────────────
 
 // Shard manages entities within a shard.
@@ -227,9 +234,15 @@ func (s *Shard) PreStart() {
 }
 
 // recoverFromJournal replays EntityStarted/EntityStopped events to rebuild
-// the active entity set and re-spawns surviving entities.
+// the active entity set and re-spawns surviving entities.  Bounded by
+// waiting-for-state-timeout so a hung journal backend cannot block PreStart
+// indefinitely; on timeout, recovery aborts with a logged warning and the
+// Shard starts with an empty active set (the cluster's regular delivery
+// loop will respawn entities on demand).
 func (s *Shard) recoverFromJournal() {
-	ctx := context.Background()
+	timeout := s.resolveWaitingForStateTimeout()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 
 	// Read highest sequence number so we know where we are.
 	highest, err := s.journal.ReadHighestSequenceNr(ctx, s.persistenceId, 0)
@@ -268,15 +281,34 @@ func (s *Shard) recoverFromJournal() {
 // recoverFromStore replays the ShardStore's entity set and re-spawns every
 // entity it contains.  Unlike recoverFromJournal, passivated entities are NOT
 // filtered out — the store is a live set that only shrinks on explicit
-// termination.
+// termination.  Bounded by waiting-for-state-timeout via a goroutine guard
+// (ShardStore is a context-less interface) so a hung backend cannot stall
+// PreStart.  On timeout the recovery aborts with a logged warning and the
+// Shard starts with an empty active set.
 func (s *Shard) recoverFromStore() {
-	ids, err := s.store.GetEntities(s.shardId)
-	if err != nil {
-		s.Log().Error("remember-entities: failed to read entities from store",
-			"shardId", s.shardId, "error", err)
+	timeout := s.resolveWaitingForStateTimeout()
+	type result struct {
+		ids []EntityId
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		ids, err := s.store.GetEntities(s.shardId)
+		done <- result{ids: ids, err: err}
+	}()
+	select {
+	case r := <-done:
+		if r.err != nil {
+			s.Log().Error("remember-entities: failed to read entities from store",
+				"shardId", s.shardId, "error", r.err)
+			return
+		}
+		s.applyEntityRecoveryStrategy(r.ids, "store")
+	case <-time.After(timeout):
+		s.Log().Warn("waiting-for-state-timeout: store recovery timed out",
+			"shardId", s.shardId, "timeout", timeout)
 		return
 	}
-	s.applyEntityRecoveryStrategy(ids, "store")
 }
 
 // applyEntityRecoveryStrategy spawns the recovered entity set according to
@@ -470,6 +502,11 @@ func (s *Shard) Receive(msg any) {
 		// Constant-rate recovery: spawn the next batch and re-arm if more
 		// entities remain.
 		s.drainEntityRecoveryBatch()
+
+	case entityRestartBackoffElapsedMsg:
+		// entity-restart-backoff has elapsed; respawn the entity from the
+		// remembered set so further envelopes can be delivered again.
+		s.respawnAfterBackoff(m.EntityId)
 	}
 }
 
@@ -603,10 +640,22 @@ func (s *Shard) handlePassivate(entity actor.Ref) {
 	}
 }
 
-// handleTerminated processes an actor.TerminatedMessage for an entity that was
-// explicitly stopped (e.g., by the actor system or a supervising parent).
-// Unlike passivation, this permanently removes the entity from the ShardStore
-// so it is not re-spawned after a shard restart.
+// handleTerminated processes an actor.TerminatedMessage for an entity actor
+// that stopped while still tracked.  Behavior splits on whether
+// entity-restart-backoff is configured:
+//
+//   - RememberEntities AND EntityRestartBackoff > 0: the entity stays in the
+//     remembered set and a respawn is scheduled after EntityRestartBackoff
+//     (Pekko's entity-restart-backoff semantic).  Treats the termination as
+//     unexpected — the entity owner did not request removal — so subsequent
+//     envelopes can be delivered after the restart.
+//   - Otherwise: legacy behavior — the entity is dropped from the store and
+//     not re-spawned (mirrors the pre-Phase-7 Shard contract used by
+//     existing remember-entities deletion tests).
+//
+// Note: explicit passivation removes the entity from s.entities *before* the
+// actor system delivers TerminatedMessage, so the loop below skips that case
+// and only the still-tracked-termination path runs here.
 func (s *Shard) handleTerminated(terminated actor.Ref) {
 	for id, ref := range s.entities {
 		if ref.Path() == terminated.Path() {
@@ -616,6 +665,19 @@ func (s *Shard) handleTerminated(terminated actor.Ref) {
 			if s.composite != nil {
 				s.composite.OnRemove(id)
 			}
+
+			if s.settings.RememberEntities && s.settings.EntityRestartBackoff > 0 {
+				// entity-restart-backoff: keep the remembered set intact and
+				// schedule a respawn after the configured delay.  The store
+				// already has the entity from the original spawn, so no
+				// AddEntity call is needed here.
+				s.scheduleEntityRestartBackoff(id)
+				s.Log().Info("entity terminated; restart scheduled",
+					"entityId", id, "backoff", s.settings.EntityRestartBackoff)
+				return
+			}
+
+			// Legacy / explicit-removal path: drop the entity entirely.
 			if s.store != nil {
 				if err := s.store.RemoveEntity(s.shardId, id); err != nil {
 					s.Log().Error("remember-entities: store.RemoveEntity failed",
@@ -627,6 +689,80 @@ func (s *Shard) handleTerminated(terminated actor.Ref) {
 			return
 		}
 	}
+}
+
+// scheduleEntityRestartBackoff arms a one-shot timer that delivers
+// entityRestartBackoffElapsedMsg{EntityId} to this Shard after
+// EntityRestartBackoff elapses.  Mirrors the timer pattern used by
+// schedulePassivationCheck and scheduleEntityRecoveryTick.
+func (s *Shard) scheduleEntityRestartBackoff(id EntityId) {
+	delay := s.resolveEntityRestartBackoff()
+	self := s.Self()
+	if self == nil {
+		return
+	}
+	time.AfterFunc(delay, func() {
+		self.Tell(entityRestartBackoffElapsedMsg{EntityId: id})
+	})
+}
+
+// resolveWaitingForStateTimeout returns the configured
+// WaitingForStateTimeout, falling back to Pekko's 2s default when the field
+// is unset.  Bounds the recovery state-load (recoverFromStore /
+// recoverFromJournal) so a hung backend cannot block PreStart indefinitely.
+func (s *Shard) resolveWaitingForStateTimeout() time.Duration {
+	if s.settings.WaitingForStateTimeout > 0 {
+		return s.settings.WaitingForStateTimeout
+	}
+	return 2 * time.Second
+}
+
+// resolveUpdatingStateTimeout returns the configured UpdatingStateTimeout,
+// falling back to Pekko's 5s default when the field is unset.  Bounds the
+// remember-entities state-write path (journal AsyncWriteMessages) so a
+// stalled backend cannot stall the Shard mailbox indefinitely.
+func (s *Shard) resolveUpdatingStateTimeout() time.Duration {
+	if s.settings.UpdatingStateTimeout > 0 {
+		return s.settings.UpdatingStateTimeout
+	}
+	return 5 * time.Second
+}
+
+// resolveEntityRestartBackoff returns the configured EntityRestartBackoff,
+// falling back to Pekko's 10s default when the field is unset.  Centralised
+// so the HOCON-loaded code path and unit tests share the same rule.  Note
+// that handleTerminated only invokes the backoff scheduler when the
+// configured value is strictly > 0, preserving the legacy "explicit
+// removal" path for tests that leave the field at its zero value.
+func (s *Shard) resolveEntityRestartBackoff() time.Duration {
+	if s.settings.EntityRestartBackoff > 0 {
+		return s.settings.EntityRestartBackoff
+	}
+	return 10 * time.Second
+}
+
+// respawnAfterBackoff brings a remembered entity back online after
+// entity-restart-backoff has elapsed.  No-op when the entity has already
+// been respawned (e.g. by an envelope arriving before the timer fired) or
+// when RememberEntities turned off in the meantime.
+func (s *Shard) respawnAfterBackoff(id EntityId) {
+	if !s.settings.RememberEntities {
+		return
+	}
+	if _, alreadyAlive := s.entities[id]; alreadyAlive {
+		return
+	}
+	entity, err := s.entityCreator(s.System(), id)
+	if err != nil {
+		s.Log().Error("entity-restart-backoff: respawn failed",
+			"entityId", id, "error", err)
+		return
+	}
+	s.entities[id] = entity
+	if s.settings.PassivationIdleTimeout > 0 {
+		s.lastActivity[id] = time.Now()
+	}
+	s.Log().Info("entity-restart-backoff: entity respawned", "entityId", id)
 }
 
 // checkLRUEviction evicts the least-recently-used entity when the active
@@ -783,7 +919,9 @@ func (s *Shard) persistEntityStopped(entityId EntityId) {
 // appendPersistEvent enqueues a remember-entities event. When
 // EventSourcedMaxUpdatesPerWrite > 0 the event is buffered and flushed once the
 // buffer reaches the cap; otherwise it is written immediately, matching the
-// legacy one-event-per-write behavior.
+// legacy one-event-per-write behavior.  The single-write path is bounded by
+// updating-state-timeout so a hung journal cannot stall the Shard's mailbox
+// indefinitely.
 func (s *Shard) appendPersistEvent(payload any) {
 	if !s.settings.RememberEntities || s.journal == nil {
 		return
@@ -796,7 +934,7 @@ func (s *Shard) appendPersistEvent(payload any) {
 	}
 	cap := s.settings.EventSourcedMaxUpdatesPerWrite
 	if cap <= 0 {
-		_ = s.journal.AsyncWriteMessages(context.Background(), []persistence.PersistentRepr{repr})
+		s.writeJournalWithTimeout([]persistence.PersistentRepr{repr})
 		return
 	}
 	s.pendingPersist = append(s.pendingPersist, repr)
@@ -806,14 +944,41 @@ func (s *Shard) appendPersistEvent(payload any) {
 }
 
 // flushPendingPersist writes any buffered remember-entities events as a single
-// batch. Safe to call when the buffer is empty.
+// batch. Safe to call when the buffer is empty.  The batch write is bounded
+// by updating-state-timeout (see writeJournalWithTimeout).
 func (s *Shard) flushPendingPersist() {
 	if len(s.pendingPersist) == 0 || s.journal == nil {
 		return
 	}
 	batch := s.pendingPersist
 	s.pendingPersist = nil
-	_ = s.journal.AsyncWriteMessages(context.Background(), batch)
+	s.writeJournalWithTimeout(batch)
+}
+
+// writeJournalWithTimeout invokes journal.AsyncWriteMessages bounded by
+// updating-state-timeout.  When the deadline elapses the call returns to
+// the Shard with a logged warning; the persisted batch is dropped (the
+// remember-entities log will diverge from the live entity set, which is
+// acceptable per Pekko's "best-effort" remember-entities contract under
+// backend pressure).
+func (s *Shard) writeJournalWithTimeout(batch []persistence.PersistentRepr) {
+	timeout := s.resolveUpdatingStateTimeout()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- s.journal.AsyncWriteMessages(ctx, batch)
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			s.Log().Error("remember-entities: journal write failed",
+				"shardId", s.shardId, "error", err)
+		}
+	case <-ctx.Done():
+		s.Log().Warn("updating-state-timeout: journal write timed out",
+			"shardId", s.shardId, "timeout", timeout, "batchSize", len(batch))
+	}
 }
 
 // PostStop flushes any buffered remember-entities events and releases the

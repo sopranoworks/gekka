@@ -47,7 +47,7 @@ func TestIsCompositeStrategy(t *testing.T) {
 // estimate strictly above the lower-frequency one.  Anything else and the
 // W-TinyLFU admission filter would route entities backward.
 func TestCountMinSketch_FrequencyOrdering(t *testing.T) {
-	cs := newCountMinSketch(4, 256, 0)
+	cs := newCountMinSketch(4, 256, 0, 0) // counterBits = 0 → default 4-bit
 	for i := 0; i < 50; i++ {
 		cs.Increment("hot")
 	}
@@ -65,7 +65,7 @@ func TestCountMinSketch_FrequencyOrdering(t *testing.T) {
 // halved so newer touches dominate.  Without this the sketch would
 // gradually saturate and lose discrimination.
 func TestCountMinSketch_ResetHalvesCounters(t *testing.T) {
-	cs := newCountMinSketch(2, 64, 8) // reset every 8 accesses
+	cs := newCountMinSketch(2, 64, 8, 0) // reset every 8 accesses; counterBits = default 4-bit
 	for i := 0; i < 8; i++ {
 		cs.Increment("k")
 	}
@@ -80,12 +80,83 @@ func TestCountMinSketch_ResetHalvesCounters(t *testing.T) {
 // regressing into wrap-around.  Hammer one key past the saturation point
 // and the estimate must stay pinned at 0x0F.
 func TestCountMinSketch_CounterSaturation(t *testing.T) {
-	cs := newCountMinSketch(2, 64, 0)
+	cs := newCountMinSketch(2, 64, 0, 0) // counterBits = 0 → default 4-bit
 	for i := 0; i < 100; i++ {
 		cs.Increment("k")
 	}
 	if got := cs.Estimate("k"); got != frequencySketchMaxCount {
 		t.Errorf("expected saturated counter (%d), got %d", frequencySketchMaxCount, got)
+	}
+}
+
+// Phase 6.1 — counter-bits actually parameterizes the saturation cap.
+// 2-bit counters saturate at 3, 4-bit at 15, 8-bit at 255.  The cap is
+// observable via Estimate so the admission filter can use a wider counter
+// when the operator asks for one in HOCON.
+func TestCountMinSketch_CounterBitsParameterization(t *testing.T) {
+	cases := []struct {
+		bits   int
+		wantTo uint8 // saturation ceiling reached after enough increments
+	}{
+		{2, 3},
+		{3, 7},
+		{4, 15},
+		{5, 31},
+		{6, 63},
+		{7, 127},
+		{8, 255},
+	}
+	for _, tc := range cases {
+		cs := newCountMinSketch(2, 64, 0, tc.bits)
+		// Increment past any plausible cap.
+		for i := 0; i < 1000; i++ {
+			cs.Increment("k")
+		}
+		if got := cs.Estimate("k"); got != tc.wantTo {
+			t.Errorf("bits=%d: saturated estimate = %d, want %d", tc.bits, got, tc.wantTo)
+		}
+	}
+}
+
+// Out-of-range counter-bits values clamp to the supported [2,8] range so a
+// stray HOCON value like 16/32/64 does not panic; gekka stores cells as
+// uint8 so anything above 8 collapses to 8-bit.
+func TestCountMinSketch_CounterBitsClamped(t *testing.T) {
+	// Below the supported floor → clamps to 2-bit.
+	low := newCountMinSketch(2, 64, 0, 1)
+	for i := 0; i < 100; i++ {
+		low.Increment("k")
+	}
+	if got := low.Estimate("k"); got != 3 {
+		t.Errorf("bits=1 clamped: saturated estimate = %d, want 3", got)
+	}
+	// Above the uint8 ceiling → clamps to 8-bit (Pekko's 16/32/64 values).
+	high := newCountMinSketch(2, 64, 0, 64)
+	for i := 0; i < 1000; i++ {
+		high.Increment("k")
+	}
+	if got := high.Estimate("k"); got != 255 {
+		t.Errorf("bits=64 clamped: saturated estimate = %d, want 255", got)
+	}
+}
+
+// Composite-level wiring: a counter-bits override on the compositeConfig
+// must propagate into the shared sketch so the admission filter actually
+// honours the configured saturation point.
+func TestCompositeStrategy_CounterBitsHonoured(t *testing.T) {
+	cs := newCompositeStrategy(compositeConfig{
+		activeEntityLimit:          16,
+		filter:                     FrequencySketchFilterName,
+		frequencySketchCounterBits: 2, // saturation = 3
+	})
+	if cs.sketch == nil {
+		t.Fatal("expected sketch to be constructed")
+	}
+	for i := 0; i < 100; i++ {
+		cs.sketch.Increment("k")
+	}
+	if got := cs.sketch.Estimate("k"); got != 3 {
+		t.Errorf("composite-wired 2-bit saturation = %d, want 3", got)
 	}
 }
 

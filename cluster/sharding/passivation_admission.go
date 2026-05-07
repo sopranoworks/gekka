@@ -33,9 +33,10 @@ import (
 // entities under the strategy.
 
 const (
-	// frequencySketchMaxCount is the per-counter saturation point for the
-	// 4-bit cells.  Touching an entity past this point keeps the counter
-	// pinned at 0x0F until the next reset.
+	// frequencySketchMaxCount is the default per-counter saturation point —
+	// 4-bit cells, matching Pekko's reference.conf default. Sketches built
+	// with a non-default counter-bits value override this on a per-instance
+	// basis via countMinSketch.maxCount.
 	frequencySketchMaxCount uint8 = 0x0F
 
 	// frequencySketchMinWidth is the minimum width of each sketch row,
@@ -43,6 +44,15 @@ const (
 	// smaller value.  Prevents pathological collisions on tiny test
 	// limits (active-entity-limit = 4 still gets 64 columns).
 	frequencySketchMinWidth = 64
+
+	// frequencySketchMinCounterBits / frequencySketchMaxCounterBits cap
+	// the supported counter-bits range. uint8 cells make 8 the natural
+	// ceiling; 2 is the smallest meaningful range (0..3) below which the
+	// admission filter loses all discrimination.  Pekko documents
+	// 2/4/8/16/32/64 — the upper three values clamp here without panicking
+	// because gekka cannot store >8 bits per cell without doubling memory.
+	frequencySketchMinCounterBits = 2
+	frequencySketchMaxCounterBits = 8
 )
 
 // countMinSketch is a fixed-width count-min sketch that estimates per-key
@@ -56,13 +66,37 @@ type countMinSketch struct {
 	seeds      []uint32
 	resetEvery uint64
 	accesses   uint64
+	// maxCount is the per-cell saturation ceiling derived from the
+	// configured counter-bits.  Held per instance so different sketches
+	// can run with different precision under a single binary.
+	maxCount uint8
+}
+
+// resolveCounterBits clamps the operator-supplied counter-bits to the
+// supported [frequencySketchMinCounterBits, frequencySketchMaxCounterBits]
+// range.  Zero / negative input collapses to the Pekko default (4-bit) so
+// existing call sites that don't yet thread the parameter keep their
+// historical saturation behaviour.
+func resolveCounterBits(bits int) int {
+	if bits <= 0 {
+		return 4
+	}
+	if bits < frequencySketchMinCounterBits {
+		return frequencySketchMinCounterBits
+	}
+	if bits > frequencySketchMaxCounterBits {
+		return frequencySketchMaxCounterBits
+	}
+	return bits
 }
 
 // newCountMinSketch constructs a sketch sized to (depth × width').  width is
 // rounded up to the next power of two and clamped to frequencySketchMinWidth.
 // resetEvery is the total access count after which every counter is halved;
-// pass 0 to disable the reset.
-func newCountMinSketch(depth, width int, resetEvery uint64) *countMinSketch {
+// pass 0 to disable the reset.  counterBits selects the per-cell saturation
+// cap as `(1 << bits) - 1`; values outside [2,8] clamp into range and 0
+// falls back to the historical 4-bit default.
+func newCountMinSketch(depth, width int, resetEvery uint64, counterBits int) *countMinSketch {
 	if depth <= 0 {
 		depth = 4
 	}
@@ -73,6 +107,7 @@ func newCountMinSketch(depth, width int, resetEvery uint64) *countMinSketch {
 	for w < width {
 		w <<= 1
 	}
+	bits := resolveCounterBits(counterBits)
 	cs := &countMinSketch{
 		depth:      depth,
 		width:      w,
@@ -80,6 +115,7 @@ func newCountMinSketch(depth, width int, resetEvery uint64) *countMinSketch {
 		counters:   make([][]uint8, depth),
 		seeds:      make([]uint32, depth),
 		resetEvery: resetEvery,
+		maxCount:   uint8((uint16(1) << uint(bits)) - 1),
 	}
 	for i := 0; i < depth; i++ {
 		cs.counters[i] = make([]uint8, w)
@@ -95,7 +131,7 @@ func newCountMinSketch(depth, width int, resetEvery uint64) *countMinSketch {
 func (cs *countMinSketch) Increment(key string) {
 	for i := 0; i < cs.depth; i++ {
 		idx := cs.hash(key, cs.seeds[i])
-		if cs.counters[i][idx] < frequencySketchMaxCount {
+		if cs.counters[i][idx] < cs.maxCount {
 			cs.counters[i][idx]++
 		}
 	}
@@ -108,7 +144,7 @@ func (cs *countMinSketch) Increment(key string) {
 
 // Estimate returns the conservative (minimum-of-rows) frequency for key.
 func (cs *countMinSketch) Estimate(key string) uint8 {
-	var min uint8 = frequencySketchMaxCount
+	min := cs.maxCount
 	for i := 0; i < cs.depth; i++ {
 		idx := cs.hash(key, cs.seeds[i])
 		if cs.counters[i][idx] < min {

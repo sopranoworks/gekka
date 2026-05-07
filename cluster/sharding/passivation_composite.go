@@ -148,7 +148,7 @@ func newCompositeStrategy(cfg compositeConfig) *compositeStrategy {
 	if cfg.filter == FrequencySketchFilterName {
 		width := cfg.activeEntityLimit * cfg.frequencySketchWidthMult
 		resetEvery := uint64(float64(cfg.activeEntityLimit) * cfg.frequencySketchResetMultpler)
-		cs.sketch = newCountMinSketch(cfg.frequencySketchDepth, width, resetEvery)
+		cs.sketch = newCountMinSketch(cfg.frequencySketchDepth, width, resetEvery, cfg.frequencySketchCounterBits)
 	}
 	return cs
 }

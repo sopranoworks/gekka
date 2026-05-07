@@ -2870,7 +2870,17 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 		// still proceed in volatile mode.
 		if cfg.DistributedData.DurableEnabled {
 			repl.DurableEnabled = true
-			repl.DurableKeys = append(repl.DurableKeys[:0], cfg.DistributedData.DurableKeys...)
+			// Phase 7.3: merge the sharding-side durable.keys list (Pekko's
+			// pekko.cluster.sharding.distributed-data.durable.keys, default
+			// ["shard-*"]) into the parent durable.keys filter so writes for
+			// shard-prefixed keys are persisted even when the parent list
+			// covers only non-sharding key globs.  Pekko reaches the same
+			// effect by giving sharding its own DData replicator; gekka shares
+			// one replicator so the two glob lists must be unioned here.
+			repl.DurableKeys = mergeShardingDurableKeys(
+				cfg.DistributedData.DurableKeys,
+				cfg.Sharding.DistributedData.DurableKeys,
+			)
 			store, derr := ddata.OpenBoltDurableStore(ddata.BoltDurableStoreOptions{
 				Dir:                 cfg.DistributedData.DurableLmdbDir,
 				MapSize:             cfg.DistributedData.DurableLmdbMapSize,
@@ -4742,4 +4752,40 @@ func (c *Cluster) GetMailboxLengths() map[string]int {
 // GetClusterPressure implements actor.ClusterMetricsProvider.
 func (c *Cluster) GetClusterPressure() map[string]actor.NodePressure {
 	return c.mg.ClusterPressure()
+}
+
+// mergeShardingDurableKeys returns the dedup-merged union of the parent
+// distributed-data.durable.keys list and the sharding-side
+// pekko.cluster.sharding.distributed-data.durable.keys list.  Phase 7.3
+// of the perfect-pekko-compat roadmap: gekka shares one Replicator across
+// the cluster, so the sharding subsystem's durable-key globs must be
+// unioned into the parent filter rather than maintained on a separate
+// replicator as Pekko does.  An unset (empty) sharding list defaults to
+// ["shard-*"] to match Pekko's reference.conf default for that path.
+//
+// Empty / whitespace-only patterns from either list are dropped so a
+// sloppy HOCON value cannot accidentally match every key.
+func mergeShardingDurableKeys(parent, sharding []string) []string {
+	defaulted := sharding
+	if len(defaulted) == 0 {
+		defaulted = []string{"shard-*"}
+	}
+	seen := make(map[string]struct{}, len(parent)+len(defaulted))
+	merged := make([]string, 0, len(parent)+len(defaulted))
+	add := func(src []string) {
+		for _, k := range src {
+			k = strings.TrimSpace(k)
+			if k == "" {
+				continue
+			}
+			if _, dup := seen[k]; dup {
+				continue
+			}
+			seen[k] = struct{}{}
+			merged = append(merged, k)
+		}
+	}
+	add(parent)
+	add(defaulted)
+	return merged
 }

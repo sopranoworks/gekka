@@ -371,7 +371,7 @@ The keys most users actually tune. All are Pekko-compatible (drop them into your
 | `pekko.cluster.sharding.distributed-data.majority-min-cap` | `5` | ✅ | Sharding override applied to `cluster.repl.MajorityMinCap`; consumed by `Replicator.sendToPeers` via `EffectiveMajorityQuorum` to size WriteMajority gossip targets (sub-plan 8b) |
 | `pekko.cluster.sharding.distributed-data.max-delta-elements` | `5` | ✅ | Sharding override merged onto `cluster.repl.MaxDeltaElements` (smaller-wins); consumed by `Replicator.gossipAll` periodic-gossip path as the per-round delta-batch cap (sub-plan 8b) |
 | `pekko.cluster.sharding.distributed-data.prefer-oldest` | `on` | ✅ | Sharding override OR-merged onto `cluster.repl.PreferOldest`; consumed by `Replicator.selectGossipTargets` to order WriteMajority/WriteAll gossip targets (sub-plan 8b) |
-| `pekko.cluster.sharding.distributed-data.durable.keys` | `["shard-*"]` | ⚠️ | Parsed into `ShardingConfig.DistributedData.DurableKeys`; the parent `distributed-data.durable.keys` is fully ✅, but the sharding-specific filter is not yet wired into the durable store |
+| `pekko.cluster.sharding.distributed-data.durable.keys` | `["shard-*"]` | ✅ | Sharding-side glob list merged into the shared Replicator's `DurableKeys` filter at `NewCluster` time (`mergeShardingDurableKeys`); empty list defaults to `["shard-*"]` (Pekko reference.conf default) so out-of-the-box any `shard-*` key is persisted whenever the parent `distributed-data.durable.enabled = on` (perfect-pekko Phase 7.3) |
 | `pekko.cluster.sharding.coordinator-singleton.role` | `""` | ✅ | Applied to coordinator singleton-proxy when override = off |
 | `pekko.cluster.sharding.coordinator-singleton.singleton-name` | `"singleton"` | ✅ | Sharding override applied to `ClusterSingletonManager.WithSingletonName` at the coordinator manager (`sharding.go` top-level + `cluster/sharding/cluster_sharding.go`); also applied to `ClusterSingletonProxy.WithSingletonName` so the proxy resolves the renamed singleton child (sub-plan 8c) |
 | `pekko.cluster.sharding.coordinator-singleton.hand-over-retry-interval` | `1s` | ✅ | Sharding override applied to `ClusterSingletonManager.WithHandOverRetryInterval` at the coordinator manager; consumed by `manager.acquireLease` retry path (`cluster/singleton/manager.go:247`) (sub-plan 8c) |
@@ -379,13 +379,13 @@ The keys most users actually tune. All are Pekko-compatible (drop them into your
 | `pekko.cluster.sharding.coordinator-singleton-role-override` | `on` | ✅ | When `on`, sharding.role wins over coordinator-singleton.role |
 | `pekko.cluster.sharding.retry-interval` | `2s` | ✅ | ShardRegion ticker re-tells GetShardHome for shards with unknown home (Round-2 session 13) |
 | `pekko.cluster.sharding.buffer-size` | `100000` | ✅ | Caps per-shard pendingMessages while awaiting ShardHome; further messages are dropped (Round-2 session 13) |
-| `pekko.cluster.sharding.shard-start-timeout` | `10s` | ⚠️ | Plumbed onto `ShardSettings.ShardStartTimeout`; Shard-startup timeout consumer not yet implemented (field is declared but unread) |
+| `pekko.cluster.sharding.shard-start-timeout` | `10s` | ✅ | `Shard.PreStart` resolves the timeout (10 s default) and passes it to `acquireLeaseUntil`; on deadline expiry the Shard sets `startupFailed = true`, logs a warning, and `handleEnvelope` drops subsequent messages so a stalled startup cannot serve half-initialised state (perfect-pekko Phase 7.1) |
 | `pekko.cluster.sharding.shard-failure-backoff` | `10s` | ✅ | Region delays clearing the cached home after a Shard terminates (Round-2 session 13) |
-| `pekko.cluster.sharding.entity-restart-backoff` | `10s` | ⚠️ | Plumbed onto `ShardSettings.EntityRestartBackoff`; entity-restart-backoff consumer not yet implemented (field is declared but unread) |
+| `pekko.cluster.sharding.entity-restart-backoff` | `10s` | ✅ | When `RememberEntities && EntityRestartBackoff > 0`, `Shard.handleTerminated` schedules `entityRestartBackoffElapsedMsg{EntityId}` after the configured delay instead of forgetting the entity; `respawnAfterBackoff` re-creates the entity (idempotent against early re-deliveries). `EntityRestartBackoff = 0` preserves the legacy "explicit removal" path used by older remember-entities deletion tests (perfect-pekko Phase 7.2) |
 | `pekko.cluster.sharding.coordinator-failure-backoff` | `5s` | ✅ | Region delays re-registration with the coordinator after termination (Round-2 session 13) |
-| `pekko.cluster.sharding.waiting-for-state-timeout` | `2s` | ⚠️ | Plumbed onto ShardSettings; consumed by the DData coordinator-state path when present (Round-2 session 14) |
-| `pekko.cluster.sharding.updating-state-timeout` | `5s` | ⚠️ | Plumbed onto ShardSettings; consumed by DData updates / remember-entities writes when present (Round-2 session 14) |
-| `pekko.cluster.sharding.shard-region-query-timeout` | `3s` | ⚠️ | Plumbed onto ShardSettings; consumed by region-level query handlers as added (Round-2 session 14) |
+| `pekko.cluster.sharding.waiting-for-state-timeout` | `2s` | ✅ | `Shard.recoverFromJournal` wraps `ReadHighestSequenceNr` / `ReplayMessages` in `context.WithTimeout(WaitingForStateTimeout)`; `recoverFromStore` guards `ShardStore.GetEntities` with a goroutine + `select` deadline (the interface is context-less). On expiry the recovery aborts with a logged warning and the Shard starts with an empty active set rather than blocking PreStart on a hung backend (perfect-pekko Phase 7.2) |
+| `pekko.cluster.sharding.updating-state-timeout` | `5s` | ✅ | `Shard.writeJournalWithTimeout` centralises journal `AsyncWriteMessages` calls (both per-event and `EventSourcedMaxUpdatesPerWrite` batched paths) under `context.WithTimeout(UpdatingStateTimeout)` + goroutine guard so a stalled journal cannot stall the Shard's mailbox; on expiry the write is dropped with a logged warning (perfect-pekko Phase 7.2) |
+| `pekko.cluster.sharding.shard-region-query-timeout` | `3s` | ✅ | `ShardRegion` tracks `pendingSince` per shard at first buffer; `retryPendingHomes` drops queues older than `ShardRegionQueryTimeout` instead of re-asking the coordinator forever, so a degraded coordinator cannot let `pendingMessages` grow without bound; cleared on `ShardHome` delivery (perfect-pekko Phase 7.2) |
 | `pekko.cluster.sharding.entity-recovery-strategy` | `"all"` | ✅ | `"all"` spawns all remembered entities at once; `"constant"` paces recovery in batches (Round-2 session 14) |
 | `pekko.cluster.sharding.entity-recovery-constant-rate-strategy.frequency` | `100ms` | ✅ | Delay between batches under the `"constant"` strategy (Round-2 session 14) |
 | `pekko.cluster.sharding.entity-recovery-constant-rate-strategy.number-of-entities` | `5` | ✅ | Batch size under the `"constant"` strategy (Round-2 session 14) |
@@ -578,12 +578,12 @@ touching the consumer code.
 
 ## Summary
 
-### Symbol counts (post 2026-05-07 perfect-pekko Phase 6 closure)
+### Symbol counts (post 2026-05-07 perfect-pekko Phase 7 closure)
 
 | Symbol | Substantive table rows | Meaning |
 |---|---|---|
-| ✅ | 286 | Parsed AND consumed |
-| ⚠️ | 10 | Forward-compat parsed; consumer deferred (Note states what's deferred) |
+| ✅ | 292 | Parsed AND consumed |
+| ⚠️ | 4 | Forward-compat parsed; consumer deferred (Note states what's deferred) |
 | ☕ | 8 | JVM-only — no equivalent capability in Go runtime |
 | 🚫 | 4 | Go/JVM API-shape incompatibility (FQCN class loading, JCA Provider, JKS rotation) |
 | ❌ | 2 | Not implemented; portable in principle (tracked in `docs/LEFTWORKS.md` §11) |
@@ -648,6 +648,47 @@ tunables, `mailbox.requirements.*`, and the deprecated
 on 2026-05-06.
 
 ### Audit history
+
+- **2026-05-07 — Perfect-pekko Phase 7 closure (Sharding lifecycle
+  timers + ddata durable filter):** Closes six ⚠️ rows in cluster-sharding —
+  374 (`distributed-data.durable.keys`), 382 (`shard-start-timeout`),
+  384 (`entity-restart-backoff`), 386 (`waiting-for-state-timeout`),
+  387 (`updating-state-timeout`), 388 (`shard-region-query-timeout`).
+  Sub-commit 7.1 wires `shard-start-timeout` into `Shard.PreStart`:
+  `acquireLeaseUntil` honours the deadline (clamping retries to
+  remaining time so a 5 s `LeaseRetryDelay` never overshoots a sub-second
+  cap), and on expiry the Shard sets `startupFailed = true` so
+  `handleEnvelope` drops further envelopes.  Sub-commit 7.2 wires the
+  remaining four lifecycle paths: `entity-restart-backoff` schedules
+  `entityRestartBackoffElapsedMsg{EntityId}` on unexpected entity
+  termination when `RememberEntities && EntityRestartBackoff > 0`
+  (legacy "explicit removal" preserved for `Backoff = 0`);
+  `waiting-for-state-timeout` bounds `recoverFromJournal` (via
+  `context.WithTimeout`) and `recoverFromStore` (via goroutine + select
+  guard, since `ShardStore` is context-less); `updating-state-timeout`
+  bounds journal `AsyncWriteMessages` calls under `writeJournalWithTimeout`;
+  `shard-region-query-timeout` ages out per-shard pending queues in
+  `retryPendingHomes` via a new `pendingSince` map so a degraded
+  coordinator cannot let `pendingMessages` grow unbounded.  Sub-commit
+  7.3 wires the sharding-side durable-keys filter: `mergeShardingDurableKeys`
+  unions `cfg.DistributedData.DurableKeys` with
+  `cfg.Sharding.DistributedData.DurableKeys` (defaulting the latter to
+  `["shard-*"]` per Pekko reference.conf when unset) and dedupes overlap
+  before assigning the merged list to `repl.DurableKeys` — necessary
+  because gekka shares one Replicator across the cluster while Pekko gives
+  sharding its own.  Tests: 5 shard-start-timeout tests
+  (caps-lease-loop, default, override, no-lease, drops-envelopes-after-failure),
+  4 entity-restart-backoff tests (respawns-after-delay,
+  remember-off-removes-as-before, default-delay, spacing-measured),
+  5 timeout-audit tests (waiting-for-state bounds journal recovery,
+  bounds store recovery, updating-state bounds journal write,
+  timeout-defaults, region query-timeout drops stale pending),
+  4 sharding-durable-keys merge tests (merged-into-replicator,
+  defaults-to-shard-star-when-unset, no-merge-when-durable-disabled,
+  dedupes-overlap).  Iron Rule 1 full gate: `go test ./...` green per
+  sub-commit, integration green (FourNodeClusterSpec known flake retried
+  once on Phase 7.3 per protocol), sbt multi-jvm 3/3 196 s.  Summary
+  counts: ✅ 286 → 292, ⚠️ 10 → 4.
 
 - **2026-05-07 — Perfect-pekko Phase 6 closure (Sharding passivation
   hill-climbing optimizer):** Closes five ⚠️ rows in cluster-sharding —

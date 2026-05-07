@@ -108,6 +108,14 @@ type Shard struct {
 	// leaseHeld tracks whether settings.Lease (if any) is currently acquired
 	// by this Shard.  Set on Acquire and cleared on Release / loss callback.
 	leaseHeld bool
+
+	// startupFailed is set by PreStart when ShardStartTimeout elapses before
+	// startup (lease acquire, remember-entities recovery) completes.  Once
+	// true, Receive drops incoming ShardingEnvelope messages so a region
+	// holding a stale home cache does not spawn entities on a Shard that
+	// never finished initialising.  Mirrors Pekko's "Shard start timeout"
+	// failure path on org.apache.pekko.cluster.sharding.Shard.
+	startupFailed bool
 }
 
 // NewShard creates a Shard for the given type/shard identifiers.
@@ -160,12 +168,27 @@ func NewShard(
 //     re-spawned unconditionally, including those that were passivated.
 //   - Journal path (ShardSettings.Journal): event-sourced; only entities
 //     that were active (not passivated) at the time of shutdown are recovered.
+//
+// The whole sequence is bounded by ShardStartTimeout (default 10s, mirroring
+// pekko.cluster.sharding.shard-start-timeout). When the deadline elapses
+// before lease acquisition or recovery finishes, the Shard logs a warning,
+// sets startupFailed=true, and skips the remaining startup steps.  The
+// Receive handler then drops incoming envelopes so half-initialised state
+// is never observed.
 func (s *Shard) PreStart() {
+	timeout := s.resolveShardStartTimeout()
+	deadline := time.Now().Add(timeout)
+
 	// ── Coordination Lease ────────────────────────────────────────────────
 	// When ShardSettings.Lease is configured, block on Acquire before
 	// becoming active so two replicas of the same shard never run at once
 	// (e.g. across an SBR-induced split).
-	s.acquireLease()
+	if !s.acquireLeaseUntil(deadline) {
+		s.startupFailed = true
+		s.Log().Warn("shard-start-timeout: deadline exceeded during lease acquire",
+			"shardId", s.shardId, "timeout", timeout)
+		return
+	}
 
 	// ── Remember Entities ─────────────────────────────────────────────────
 	if s.settings.RememberEntities {
@@ -452,6 +475,14 @@ func (s *Shard) Receive(msg any) {
 
 // handleEnvelope routes a ShardingEnvelope to its entity, spawning if needed.
 func (s *Shard) handleEnvelope(m ShardingEnvelope) {
+	// shard-start-timeout: a Shard whose PreStart timed out must not spawn
+	// entities or accept work.  Drop the envelope with a debug log; the
+	// region's failure-backoff path will eventually re-resolve the home.
+	if s.startupFailed {
+		s.vdebug("shard startup failed; dropping envelope",
+			"shardId", s.shardId, "entityId", m.EntityId)
+		return
+	}
 	// During handoff, buffer messages for later replay rather than delivering.
 	if s.inHandoff {
 		s.handoffStash = append(s.handoffStash, m)
@@ -799,14 +830,17 @@ func (s *Shard) PostStop() {
 	s.releaseLease()
 }
 
-// acquireLease blocks on settings.Lease.Acquire until it succeeds.  When
-// Acquire returns false or errors, the call sleeps for LeaseRetryDelay and
-// retries — mirroring Pekko's Shard.acquireLease loop.  Returns immediately
-// when no lease is configured.
-func (s *Shard) acquireLease() {
+// acquireLeaseUntil blocks on settings.Lease.Acquire until it succeeds or
+// the supplied deadline elapses.  When Acquire returns false or errors,
+// the call sleeps for LeaseRetryDelay and retries — mirroring Pekko's
+// Shard.acquireLease loop.  Returns true when the lease is held, false when
+// the deadline is hit before acquisition (the Shard's caller is expected to
+// flag startup failure in that case).  Returns true immediately when no
+// lease is configured.
+func (s *Shard) acquireLeaseUntil(deadline time.Time) bool {
 	l := s.settings.Lease
 	if l == nil {
-		return
+		return true
 	}
 	delay := s.settings.LeaseRetryDelay
 	if delay <= 0 {
@@ -823,11 +857,35 @@ func (s *Shard) acquireLease() {
 		}
 		if ok {
 			s.leaseHeld = true
-			return
+			return true
 		}
-		s.Log().Info("shard lease acquire retrying", "shard", s.shardId, "delay", delay)
-		time.Sleep(delay)
+		// Stop retrying once the shard-start-timeout deadline has passed.
+		// Sleep at most until the deadline so the loop never overruns the
+		// cap: a 5s default LeaseRetryDelay would otherwise stretch a
+		// 1s ShardStartTimeout to 5s on the first failed acquire.
+		now := time.Now()
+		if !now.Before(deadline) {
+			return false
+		}
+		remaining := deadline.Sub(now)
+		sleepFor := delay
+		if sleepFor > remaining {
+			sleepFor = remaining
+		}
+		s.Log().Info("shard lease acquire retrying", "shard", s.shardId, "delay", sleepFor)
+		time.Sleep(sleepFor)
 	}
+}
+
+// resolveShardStartTimeout returns the configured ShardStartTimeout, falling
+// back to Pekko's 10s default when the field is unset.  Centralised so the
+// PreStart deadline calculation and the unit-test resolver share the same
+// rule.
+func (s *Shard) resolveShardStartTimeout() time.Duration {
+	if s.settings.ShardStartTimeout > 0 {
+		return s.settings.ShardStartTimeout
+	}
+	return 10 * time.Second
 }
 
 // releaseLease releases settings.Lease when this Shard currently holds it.

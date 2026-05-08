@@ -17,17 +17,20 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/sopranoworks/gekka/logger"
 )
 
-// captureSlog redirects slog output to a buffer and returns a restore func.
+// captureSlog redirects logger.Default() output to a buffer and returns a
+// restore func. The handler is a TextHandler so substring assertions on the
+// returned buffer match the printed message and key=value attrs.
 func captureSlog(t *testing.T, level slog.Level) (*bytes.Buffer, func()) {
 	t.Helper()
 	var mu sync.Mutex
 	buf := &bytes.Buffer{}
-	prev := slog.Default()
 	h := slog.NewTextHandler(syncWriter{w: buf, mu: &mu}, &slog.HandlerOptions{Level: level})
-	slog.SetDefault(slog.New(h))
-	return buf, func() { slog.SetDefault(prev) }
+	restore := logger.SetDefaultForTest(slog.New(h))
+	return buf, restore
 }
 
 type syncWriter struct {

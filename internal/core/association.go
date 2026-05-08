@@ -13,7 +13,6 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"strings"
 	"sync"
@@ -22,6 +21,7 @@ import (
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/cluster"
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
+	"github.com/sopranoworks/gekka/logger"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -609,10 +609,10 @@ func (nm *NodeManager) IsLargeRecipient(recipient string) bool {
 // emit noisy warnings for already-handled quarantine cases.
 func (nm *NodeManager) EmitHarmlessQuarantineEvent(msg string, attrs ...any) {
 	if nm.PropagateHarmlessQuarantineEvents {
-		slog.Warn(msg, attrs...)
+		logger.Default().Warn(msg, attrs...)
 		return
 	}
-	slog.Debug(msg, attrs...)
+	logger.Default().Debug(msg, attrs...)
 }
 
 // recordOversizedFrame logs a warning when an outbound payload exceeds
@@ -636,7 +636,7 @@ func (nm *NodeManager) recordOversizedFrame(serializerId int32, manifest string,
 	}
 	nm.frameSizeMaxByType[key] = size
 	nm.frameSizeMu.Unlock()
-	slog.Warn("artery: frame size exceeds threshold",
+	logger.Default().Warn("artery: frame size exceeds threshold",
 		"serializerId", serializerId,
 		"manifest", manifest,
 		"payload_bytes", size,
@@ -687,14 +687,14 @@ func (nm *NodeManager) recordUntrustedDrop(serializerId int32, manifest, reason,
 	}
 	nm.frameSizeMu.Unlock()
 	if first {
-		slog.Warn("artery: untrusted-mode dropping inbound message",
+		logger.Default().Warn("artery: untrusted-mode dropping inbound message",
 			"reason", reason,
 			"serializerId", serializerId,
 			"manifest", manifest,
 			"recipient", recipientPath,
 			"sender", senderPath)
 	} else {
-		slog.Debug("artery: untrusted-mode dropping inbound message",
+		logger.Default().Debug("artery: untrusted-mode dropping inbound message",
 			"reason", reason,
 			"serializerId", serializerId,
 			"manifest", manifest,
@@ -1262,7 +1262,7 @@ func (nm *NodeManager) RegisterQuarantinedUIDAt(remote *gproto_remote.UniqueAddr
 	nm.quarantinedMu.Lock()
 	nm.quarantinedUIDs[uid] = quarantineEntry{remote: remote, since: since}
 	nm.quarantinedMu.Unlock()
-	slog.Warn("node manager: registered permanently quarantined UID", "uid", uid, "address", remote.GetAddress())
+	logger.Default().Warn("node manager: registered permanently quarantined UID", "uid", uid, "address", remote.GetAddress())
 	if nm.FlightRec != nil {
 		key := fmt.Sprintf("%s:%d", remote.GetAddress().GetHostname(), remote.GetAddress().GetPort())
 		nm.FlightRec.Emit(key, FlightEvent{
@@ -1295,7 +1295,7 @@ func (nm *NodeManager) MuteNode(host string, port uint32) {
 	nm.mutedMu.Lock()
 	nm.mutedNodes[key] = struct{}{}
 	nm.mutedMu.Unlock()
-	slog.Info("node manager: muted node", "address", key)
+	logger.Default().Info("node manager: muted node", "address", key)
 }
 
 // UnmuteNode reverses a previous MuteNode call. Safe to call even if the node
@@ -1305,7 +1305,7 @@ func (nm *NodeManager) UnmuteNode(host string, port uint32) {
 	nm.mutedMu.Lock()
 	delete(nm.mutedNodes, key)
 	nm.mutedMu.Unlock()
-	slog.Info("node manager: unmuted node", "address", key)
+	logger.Default().Info("node manager: unmuted node", "address", key)
 }
 
 // isNodeMuted returns true when host:port has been muted.
@@ -1422,7 +1422,7 @@ func (nm *NodeManager) RoutePendingReply(path string, meta *ArteryMetadata) bool
 	select {
 	case ch <- meta:
 	default:
-		slog.Warn("node manager: Ask reply channel full, dropping", "path", path)
+		logger.Default().Warn("node manager: Ask reply channel full, dropping", "path", path)
 	}
 	return true
 }
@@ -1494,7 +1494,7 @@ func (nm *NodeManager) DialRemote(ctx context.Context, target *gproto_remote.Add
 		} else if addrs, resolveErr := net.LookupIP(src); resolveErr == nil && len(addrs) > 0 {
 			localAddr = &net.TCPAddr{IP: addrs[0]}
 		} else {
-			slog.Warn("artery: tcp.outbound-client-hostname unresolved", "hostname", src, "error", resolveErr)
+			logger.Default().Warn("artery: tcp.outbound-client-hostname unresolved", "hostname", src, "error", resolveErr)
 		}
 	}
 
@@ -1605,7 +1605,7 @@ func (nm *NodeManager) dialOrdinaryLane(ctx context.Context, target *gproto_remo
 		} else if addrs, resolveErr := net.LookupIP(src); resolveErr == nil && len(addrs) > 0 {
 			localAddr = &net.TCPAddr{IP: addrs[0]}
 		} else {
-			slog.Warn("artery: tcp.outbound-client-hostname unresolved", "hostname", src, "error", resolveErr)
+			logger.Default().Warn("artery: tcp.outbound-client-hostname unresolved", "hostname", src, "error", resolveErr)
 		}
 	}
 
@@ -1823,11 +1823,11 @@ func (nm *NodeManager) RegisterAssociation(remote *gproto_remote.UniqueAddress, 
 			if strings.HasPrefix(k, hostPortKey) && !strings.Contains(k, fmt.Sprintf("-%d-s", remote.GetUid())) {
 				// Skip early registrations (UID=0 placeholders).
 				if strings.Contains(k, "-0-s") {
-					slog.Debug("node manager: existing early registration found for host-port", "key", k, "hostPort", hostPortKey)
+					logger.Default().Debug("node manager: existing early registration found for host-port", "key", k, "hostPort", hostPortKey)
 					continue
 				}
 
-				slog.Warn("node manager: detected node restart, quarantining old association", "hostPort", hostPortKey, "oldKey", k)
+				logger.Default().Warn("node manager: detected node restart, quarantining old association", "hostPort", hostPortKey, "oldKey", k)
 				existing.mu.Lock()
 				existingRemote := existing.remote
 				existing.state = QUARANTINED
@@ -1868,14 +1868,14 @@ func (nm *NodeManager) RegisterAssociation(remote *gproto_remote.UniqueAddress, 
 			existingIsOutbound := existing.role == OUTBOUND
 			existing.mu.RUnlock()
 			if existingIsOutbound {
-				slog.Debug("node manager: INBOUND skipping registration — OUTBOUND already exists", "key", newKey)
+				logger.Default().Debug("node manager: INBOUND skipping registration — OUTBOUND already exists", "key", newKey)
 				return
 			}
 		}
 	}
 
 	nm.associations[newKey] = assoc
-	slog.Debug("node manager: registered association", "key", newKey)
+	logger.Default().Debug("node manager: registered association", "key", newKey)
 }
 
 // ProcessConnection is the unified entry point for both inbound and outbound connections.
@@ -1903,7 +1903,7 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 			}
 			streamId = int32(rest[1])
 			protocol = "pekko"
-			slog.Info("artery: INBOUND Pekko preamble read", "streamId", streamId)
+			logger.Default().Info("artery: INBOUND Pekko preamble read", "streamId", streamId)
 		} else {
 			// Artery 1.0 (Akka): AKKA (4) + streamId (1) = 5 bytes total
 			// magic3 already consumed "AKK"
@@ -1916,7 +1916,7 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 			}
 			streamId = int32(next[1])
 			protocol = "akka"
-			slog.Info("artery: INBOUND Akka preamble read", "streamId", streamId)
+			logger.Default().Info("artery: INBOUND Akka preamble read", "streamId", streamId)
 		}
 
 		// Validate protocol against accepted list
@@ -1989,7 +1989,7 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 							return
 						}
 						if err := assoc.dispatch(assocCtx, meta); err != nil {
-							slog.Debug("artery: lane dispatch error", "error", err)
+							logger.Default().Debug("artery: lane dispatch error", "error", err)
 						}
 					}
 				}
@@ -2018,7 +2018,7 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 			// Give handler a moment to start and send magic header
 			time.Sleep(200 * time.Millisecond)
 			if err := assoc.initiateHandshake(remote); err != nil {
-				slog.Error("artery: initiateHandshake error", "error", err)
+				logger.Default().Error("artery: initiateHandshake error", "error", err)
 			}
 
 			// Retry loop: re-send HandshakeReq at handshake-retry-interval
@@ -2042,7 +2042,7 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 						break retryLoop
 					}
 					if time.Now().After(deadline) {
-						slog.Warn("artery: handshake timed out",
+						logger.Default().Warn("artery: handshake timed out",
 							"remote", assoc.remoteKey(),
 							"timeout", nm.EffectiveHandshakeTimeout())
 						assoc.emitFlight(SeverityWarn, CatHandshake, "TIMEOUT", map[string]any{
@@ -2053,7 +2053,7 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 						return
 					}
 					if err := assoc.initiateHandshake(remote); err != nil {
-						slog.Debug("artery: handshake retry error", "error", err)
+						logger.Default().Debug("artery: handshake retry error", "error", err)
 					}
 				}
 			}
@@ -2082,7 +2082,7 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 					assoc.mu.RUnlock()
 					if isAssociated && remoteUID != 0 {
 						if err := SendArteryHeartbeat(assoc); err != nil {
-							slog.Debug("artery: failed to send heartbeat", "error", err)
+							logger.Default().Debug("artery: failed to send heartbeat", "error", err)
 						}
 					}
 				}
@@ -2158,7 +2158,7 @@ func (assoc *GekkaAssociation) SendSystem(seqNo uint64, frame []byte) error {
 	select {
 	case assoc.outbox <- frame:
 	default:
-		slog.Debug("artery: outbox full on initial system-message send, will retry via resend ticker",
+		logger.Default().Debug("artery: outbox full on initial system-message send, will retry via resend ticker",
 			"seqNo", seqNo, "remote", assoc.remoteKey())
 	}
 	return nil
@@ -2187,7 +2187,7 @@ func (assoc *GekkaAssociation) quarantineForSystemRedelivery(reason string) {
 
 	if assoc.systemOutbox != nil {
 		if dropped := assoc.systemOutbox.Drain(); dropped > 0 {
-			slog.Warn("artery: system-message redelivery gave up, dropping unacked frames",
+			logger.Default().Warn("artery: system-message redelivery gave up, dropping unacked frames",
 				"reason", reason, "dropped", dropped, "remote", remoteKey)
 		}
 	}
@@ -2238,7 +2238,7 @@ func (assoc *GekkaAssociation) runSystemRedelivery(ctx context.Context) {
 			// longest-pending. If it has been unacked for longer than
 			// give-up-after, escalate to QUARANTINED and stop.
 			if oldest := assoc.systemOutbox.OldestFirstAttempt(); !oldest.IsZero() && now.Sub(oldest) >= giveUp {
-				slog.Warn("artery: give-up-system-message-after exceeded, quarantining",
+				logger.Default().Warn("artery: give-up-system-message-after exceeded, quarantining",
 					"remote", assoc.remoteKey(),
 					"oldest_first_attempt", oldest,
 					"give_up_after", giveUp)
@@ -2259,14 +2259,14 @@ func (assoc *GekkaAssociation) runSystemRedelivery(ctx context.Context) {
 				select {
 				case assoc.outbox <- e.frame:
 					assoc.systemOutbox.MarkResent(e.seqNo, now)
-					slog.Debug("artery: resent unacked system message",
+					logger.Default().Debug("artery: resent unacked system message",
 						"seqNo", e.seqNo, "remote", assoc.remoteKey(),
 						"first_attempt", e.firstAttempt)
 				default:
 					// Outbox saturated — leave entry in buffer; next tick
 					// will retry. Don't update lastAttempt so the next
 					// tick still considers this entry.
-					slog.Debug("artery: outbox full during system-message resend",
+					logger.Default().Debug("artery: outbox full during system-message resend",
 						"seqNo", e.seqNo, "remote", assoc.remoteKey())
 				}
 			}
@@ -2380,7 +2380,7 @@ func (assoc *GekkaAssociation) initiateLaneHandshake(lane *outboundLane, to *gpr
 func (nm *NodeManager) ProcessConnectionLane(ctx context.Context, assoc *GekkaAssociation, lane *outboundLane, to *gproto_remote.Address) {
 	// Initial HandshakeReq.
 	if err := assoc.initiateLaneHandshake(lane, to); err != nil {
-		slog.Debug("artery: lane initiateHandshake error", "lane", lane.idx, "error", err)
+		logger.Default().Debug("artery: lane initiateHandshake error", "lane", lane.idx, "error", err)
 	}
 	// Retry until lane is ASSOCIATED or handshake-timeout expires.
 	retryInterval := nm.EffectiveHandshakeRetryInterval()
@@ -2401,14 +2401,14 @@ func (nm *NodeManager) ProcessConnectionLane(ctx context.Context, assoc *GekkaAs
 				return
 			}
 			if time.Now().After(deadline) {
-				slog.Warn("artery: lane handshake timed out",
+				logger.Default().Warn("artery: lane handshake timed out",
 					"remote", assoc.remoteKey(),
 					"lane", lane.idx,
 					"timeout", nm.EffectiveHandshakeTimeout())
 				return
 			}
 			if err := assoc.initiateLaneHandshake(lane, to); err != nil {
-				slog.Debug("artery: lane handshake retry error", "lane", lane.idx, "error", err)
+				logger.Default().Debug("artery: lane handshake retry error", "lane", lane.idx, "error", err)
 			}
 		}
 	}
@@ -2430,7 +2430,7 @@ func (nm *NodeManager) runLaneReadLoop(ctx context.Context, assoc *GekkaAssociat
 	maxFrame := assoc.effectiveStreamFrameSizeCap()
 	pool := assoc.nodeMgr.streamBufferPool(assoc.streamId)
 	if err := tcpArteryReadLoop(ctx, lane.conn, dispatch, assoc.nodeMgr.compressionMgr, remoteUid, assoc.streamId, int32(maxFrame), pool); err != nil {
-		slog.Debug("artery: lane read loop ended", "lane", lane.idx, "error", err)
+		logger.Default().Debug("artery: lane read loop ended", "lane", lane.idx, "error", err)
 	}
 }
 
@@ -2621,7 +2621,7 @@ func (assoc *GekkaAssociation) dispatch(ctx context.Context, meta *ArteryMetadat
 
 	if meta.SeqNo != 0 && meta.AckReplyTo != nil {
 		if err := assoc.sendSystemAck(meta.SeqNo, meta.AckReplyTo); err != nil {
-			slog.Debug("artery: failed to send ACK", "seq", meta.SeqNo, "error", err)
+			logger.Default().Debug("artery: failed to send ACK", "seq", meta.SeqNo, "error", err)
 		}
 	}
 
@@ -2715,7 +2715,7 @@ func (assoc *GekkaAssociation) dispatch(ctx context.Context, meta *ArteryMetadat
 		if err != nil {
 			// Non-fatal: unknown serializer or manifest collision should not
 			// kill the TCP connection.  Log and drop the message.
-			slog.Debug("artery: selection failed to deserialize inner message (dropping)", "error", err)
+			logger.Default().Debug("artery: selection failed to deserialize inner message (dropping)", "error", err)
 			return nil
 		}
 
@@ -2784,7 +2784,7 @@ func (assoc *GekkaAssociation) handleSystemMessage(meta *ArteryMetadata) error {
 	}
 	if env.GetSeqNo() != 0 && env.AckReplyTo != nil {
 		if err := assoc.sendSystemAck(env.GetSeqNo(), env.AckReplyTo); err != nil {
-			slog.Debug("artery: failed to send ACK", "seq", env.GetSeqNo(), "error", err)
+			logger.Default().Debug("artery: failed to send ACK", "seq", env.GetSeqNo(), "error", err)
 		}
 	}
 	// Dedupe resends from the sender's redelivery ticker (Phase 2.2).
@@ -2796,7 +2796,7 @@ func (assoc *GekkaAssociation) handleSystemMessage(meta *ArteryMetadata) error {
 		assoc.mu.Lock()
 		if seq <= assoc.lastDeliveredSystemSeq {
 			assoc.mu.Unlock()
-			slog.Debug("artery: dropping duplicate system message",
+			logger.Default().Debug("artery: dropping duplicate system message",
 				"seq", seq, "lastDelivered", assoc.lastDeliveredSystemSeq,
 				"remote", assoc.remoteKey())
 			return nil
@@ -2808,7 +2808,7 @@ func (assoc *GekkaAssociation) handleSystemMessage(meta *ArteryMetadata) error {
 	if err := proto.Unmarshal(env.Message, sm); err != nil {
 		return fmt.Errorf("failed to unmarshal inner SystemMessage: %w", err)
 	}
-	slog.Debug("artery: received system message", "type", sm.GetType())
+	logger.Default().Debug("artery: received system message", "type", sm.GetType())
 
 	if assoc.nodeMgr.SystemMessageCallback != nil {
 		return assoc.nodeMgr.SystemMessageCallback(assoc.remote, env, sm)
@@ -2848,7 +2848,7 @@ func (assoc *GekkaAssociation) handleUserMessage(meta *ArteryMetadata) error {
 		if meta.Sender != nil {
 			sender = meta.Sender.GetPath()
 		}
-		slog.Debug("artery: received user message",
+		logger.Default().Debug("artery: received user message",
 			"recipient", recipient,
 			"sender", sender,
 			"serializerId", meta.SerializerId,
@@ -2861,7 +2861,7 @@ func (assoc *GekkaAssociation) handleUserMessage(meta *ArteryMetadata) error {
 		if err == nil {
 			meta.DeserializedMessage = obj
 		} else {
-			slog.Debug("artery: failed to deserialize payload",
+			logger.Default().Debug("artery: failed to deserialize payload",
 				"serializerId", meta.SerializerId,
 				"manifest", meta.MessageManifest,
 				"error", err)
@@ -2913,7 +2913,7 @@ func (assoc *GekkaAssociation) SendWithSender(recipient, senderPath string, payl
 	if err != nil {
 		return err
 	}
-	slog.Debug("artery: SendWithSender frame", "total_bytes", len(frame), "sender", senderPath, "recipient", recipient)
+	logger.Default().Debug("artery: SendWithSender frame", "total_bytes", len(frame), "sender", senderPath, "recipient", recipient)
 
 	assoc.mu.Lock()
 	defer assoc.mu.Unlock()
@@ -2964,19 +2964,19 @@ func (assoc *GekkaAssociation) SendQuarantined(to *gproto_remote.UniqueAddress) 
 	}
 	payload, err := proto.Marshal(msg)
 	if err != nil {
-		slog.Warn("artery: failed to marshal Quarantined", "error", err)
+		logger.Default().Warn("artery: failed to marshal Quarantined", "error", err)
 		return
 	}
 	frame, err := BuildArteryFrame(int64(assoc.localUid), actor.ArteryInternalSerializerID, "", "", "Quarantined", payload, true)
 	if err != nil {
-		slog.Warn("artery: failed to build Quarantined frame", "error", err)
+		logger.Default().Warn("artery: failed to build Quarantined frame", "error", err)
 		return
 	}
 	select {
 	case assoc.outbox <- frame:
-		slog.Info("artery: sent Quarantined frame", "to", to)
+		logger.Default().Info("artery: sent Quarantined frame", "to", to)
 	default:
-		slog.Warn("artery: outbox full, Quarantined frame dropped", "to", to)
+		logger.Default().Warn("artery: outbox full, Quarantined frame dropped", "to", to)
 	}
 }
 
@@ -3057,11 +3057,11 @@ func (assoc *GekkaAssociation) Send(recipient string, payload []byte, serializer
 	if err != nil {
 		return err
 	}
-	slog.Debug("artery: sending frame", "total_bytes", len(frame), "remote_uid", assoc.remote.GetUid(), "serializerId", serializerId, "manifest", manifest)
+	logger.Default().Debug("artery: sending frame", "total_bytes", len(frame), "remote_uid", assoc.remote.GetUid(), "serializerId", serializerId, "manifest", manifest)
 
 	// pekko.remote.artery.log-sent-messages — DEBUG outbound logging.
 	if assoc.nodeMgr != nil && assoc.nodeMgr.LogSentMessages {
-		slog.Debug("artery: sending user message",
+		logger.Default().Debug("artery: sending user message",
 			"recipient", recipient,
 			"sender", sender,
 			"serializerId", serializerId,
@@ -3079,7 +3079,7 @@ func (assoc *GekkaAssociation) Send(recipient string, payload []byte, serializer
 	defer assoc.mu.Unlock()
 
 	if assoc.state != ASSOCIATED {
-		slog.Debug("artery: buffering message", "state", assoc.state)
+		logger.Default().Debug("artery: buffering message", "state", assoc.state)
 		assoc.pending = append(assoc.pending, frame)
 		return nil
 	}
@@ -3172,7 +3172,7 @@ func (assoc *GekkaAssociation) startLaneWriter(ctx context.Context, lane *outbou
 			if remoteAddr != nil && nm != nil && nm.isNodeMuted(remoteAddr.GetHostname(), remoteAddr.GetPort()) {
 				continue
 			}
-			slog.Debug("artery: sending frame", "total_bytes", len(msg), "lane", lane.idx)
+			logger.Default().Debug("artery: sending frame", "total_bytes", len(msg), "lane", lane.idx)
 			// UDP path: wrap in Aeron DATA frame and send via UDP socket.
 			assoc.mu.RLock()
 			udpH := assoc.udpHandler
@@ -3180,7 +3180,7 @@ func (assoc *GekkaAssociation) startLaneWriter(ctx context.Context, lane *outbou
 			assoc.mu.RUnlock()
 			if udpH != nil && udpDst != nil {
 				if err := udpH.SendFrame(udpDst, AeronStreamControl, msg); err != nil {
-					slog.Warn("aeron-udp: outbox send error", "error", err)
+					logger.Default().Warn("aeron-udp: outbox send error", "error", err)
 				}
 				continue
 			}
@@ -3193,7 +3193,7 @@ func (assoc *GekkaAssociation) startLaneWriter(ctx context.Context, lane *outbou
 			err := WriteFrame(lane.conn, msg)
 			lane.writeMu.Unlock()
 			if err != nil {
-				slog.Error("artery: write error", "error", err, "lane", lane.idx)
+				logger.Default().Error("artery: write error", "error", err, "lane", lane.idx)
 				if lane.conn != nil {
 					_ = lane.conn.Close()
 				}
@@ -3221,7 +3221,7 @@ func (assoc *GekkaAssociation) startLaneWriter(ctx context.Context, lane *outbou
 
 func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *ArteryMetadata) error {
 	manifest := string(meta.MessageManifest)
-	slog.Debug("artery: handling control message", "manifest", manifest)
+	logger.Default().Debug("artery: handling control message", "manifest", manifest)
 	switch manifest {
 	case "d": // HandshakeReq
 		req := &gproto_remote.HandshakeReq{}
@@ -3241,7 +3241,7 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 		// ArteryHeartbeat is a Scala singleton with an empty payload.
 		// Reply immediately with ArteryHeartbeatRsp containing our local UID so
 		// Pekko's RemoteWatcher does not mark the Go node as unreachable.
-		slog.Debug("artery: ArteryHeartbeat received — replying with ArteryHeartbeatRsp", "uid", assoc.localUid)
+		logger.Default().Debug("artery: ArteryHeartbeat received — replying with ArteryHeartbeatRsp", "uid", assoc.localUid)
 		rsp := &gproto_remote.ArteryHeartbeatRsp{Uid: proto.Uint64(assoc.localUid)}
 		payload, err := proto.Marshal(rsp)
 		if err != nil {
@@ -3254,7 +3254,7 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 		select {
 		case assoc.outbox <- frame:
 		default:
-			slog.Debug("artery: ArteryHeartbeatRsp outbox full, dropping response")
+			logger.Default().Debug("artery: ArteryHeartbeatRsp outbox full, dropping response")
 		}
 		return nil
 
@@ -3266,9 +3266,9 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 		assoc.mu.Lock()
 		if !assoc.lastHeartbeatSentAt.IsZero() {
 			assoc.lastRTT = time.Since(assoc.lastHeartbeatSentAt)
-			slog.Debug("artery: ArteryHeartbeatRsp received", "uid", hb.GetUid(), "rtt", assoc.lastRTT)
+			logger.Default().Debug("artery: ArteryHeartbeatRsp received", "uid", hb.GetUid(), "rtt", assoc.lastRTT)
 		} else {
-			slog.Debug("artery: ArteryHeartbeatRsp received", "uid", hb.GetUid())
+			logger.Default().Debug("artery: ArteryHeartbeatRsp received", "uid", hb.GetUid())
 		}
 		assoc.mu.Unlock()
 		assoc.emitFlight(SeverityInfo, CatHeartbeat, "RTT", map[string]any{
@@ -3299,7 +3299,7 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 		if err := proto.Unmarshal(meta.Payload, quar); err != nil {
 			return err
 		}
-		slog.Warn("artery: received Quarantined", "from", quar.From, "to", quar.To)
+		logger.Default().Warn("artery: received Quarantined", "from", quar.From, "to", quar.To)
 		// Register the sender UID permanently so we also refuse future re-association from them.
 		if assoc.nodeMgr != nil {
 			assoc.nodeMgr.RegisterQuarantinedUID(quar.From)
@@ -3325,7 +3325,7 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 		if err := proto.Unmarshal(meta.Payload, ack); err != nil {
 			return err
 		}
-		slog.Debug("artery: received compression table ack", "manifest", manifest, "version", ack.GetVersion(), "from", ack.GetFrom())
+		logger.Default().Debug("artery: received compression table ack", "manifest", manifest, "version", ack.GetVersion(), "from", ack.GetFrom())
 		return nil
 
 	case "h": // SystemMessageDeliveryAck — Phase 2.3 sender-side ack consumer.
@@ -3345,17 +3345,17 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 		}
 		fromAddr := ack.GetFrom().GetAddress()
 		if fromAddr == nil {
-			slog.Debug("artery: SystemMessageDeliveryAck missing From.Address; cannot prune", "seq", ack.GetSeqNo())
+			logger.Default().Debug("artery: SystemMessageDeliveryAck missing From.Address; cannot prune", "seq", ack.GetSeqNo())
 			return nil
 		}
 		outAssoc, ok := assoc.nodeMgr.GetGekkaAssociationByHost(fromAddr.GetHostname(), fromAddr.GetPort())
 		if !ok || outAssoc == nil || outAssoc.systemOutbox == nil {
-			slog.Debug("artery: no outbound association for SystemMessageDeliveryAck source",
+			logger.Default().Debug("artery: no outbound association for SystemMessageDeliveryAck source",
 				"seq", ack.GetSeqNo(), "host", fromAddr.GetHostname(), "port", fromAddr.GetPort())
 			return nil
 		}
 		if pruned := outAssoc.systemOutbox.PruneAcked(ack.GetSeqNo()); pruned > 0 {
-			slog.Debug("artery: pruned acked system messages",
+			logger.Default().Debug("artery: pruned acked system messages",
 				"seq", ack.GetSeqNo(), "count", pruned, "remote", outAssoc.remoteKey())
 		}
 		return nil
@@ -3376,7 +3376,7 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 					assoc.mu.RLock()
 					remote := assoc.remote
 					assoc.mu.RUnlock()
-					slog.Debug("artery: forwarding actorSelection cluster message", "manifest", innerManifest)
+					logger.Default().Debug("artery: forwarding actorSelection cluster message", "manifest", innerManifest)
 					return assoc.nodeMgr.clusterMgr.HandleIncomingClusterMessage(
 						ctx, env.GetEnclosedMessage(), innerManifest, ToClusterUniqueAddress(remote), meta.Sender.GetPath())
 				}
@@ -3390,7 +3390,7 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 			}
 			return nil
 		}
-		slog.Debug("artery: unidentified control message", "manifest", manifest, "serializerId", meta.SerializerId)
+		logger.Default().Debug("artery: unidentified control message", "manifest", manifest, "serializerId", meta.SerializerId)
 		return nil
 	}
 }
@@ -3401,7 +3401,7 @@ func (assoc *GekkaAssociation) handleIdentify(meta *ArteryMetadata, env *gproto_
 	// Decode the Identify proto from the enclosed message.
 	identify := &gproto_remote.Identify{}
 	if err := proto.Unmarshal(env.GetEnclosedMessage(), identify); err != nil {
-		slog.Debug("artery: failed to decode Identify", "error", err)
+		logger.Default().Debug("artery: failed to decode Identify", "error", err)
 		return
 	}
 
@@ -3422,7 +3422,7 @@ func (assoc *GekkaAssociation) handleIdentify(meta *ArteryMetadata, env *gproto_
 
 	identityBytes, err := proto.Marshal(identity)
 	if err != nil {
-		slog.Warn("artery: failed to marshal ActorIdentity", "error", err)
+		logger.Default().Warn("artery: failed to marshal ActorIdentity", "error", err)
 		return
 	}
 
@@ -3433,7 +3433,7 @@ func (assoc *GekkaAssociation) handleIdentify(meta *ArteryMetadata, env *gproto_
 		senderPath = meta.Sender.GetPath()
 	}
 	if senderPath == "" {
-		slog.Debug("artery: Identify has no sender, cannot reply")
+		logger.Default().Debug("artery: Identify has no sender, cannot reply")
 		return
 	}
 
@@ -3442,16 +3442,16 @@ func (assoc *GekkaAssociation) handleIdentify(meta *ArteryMetadata, env *gproto_
 	remoteAddr := assoc.remote.GetAddress()
 	outAssoc, ok := assoc.nodeMgr.GetGekkaAssociationByHost(remoteAddr.GetHostname(), remoteAddr.GetPort())
 	if !ok {
-		slog.Warn("artery: no outbound association for ActorIdentity reply")
+		logger.Default().Warn("artery: no outbound association for ActorIdentity reply")
 		return
 	}
 
 	// Use SendWithSender to properly frame the reply with the actor ref as sender.
 	if err := outAssoc.SendWithSender(senderPath, actorRefPath, identityBytes, MiscMessageSerializerID, "B"); err != nil {
-		slog.Warn("artery: failed to send ActorIdentity", "error", err)
+		logger.Default().Warn("artery: failed to send ActorIdentity", "error", err)
 		return
 	}
-	slog.Debug("artery: sent ActorIdentity", "recipient", senderPath, "actorRef", actorRefPath)
+	logger.Default().Debug("artery: sent ActorIdentity", "recipient", senderPath, "actorRef", actorRefPath)
 }
 
 // inboundLaneIndexOf returns the lane index of this assoc's conn within
@@ -3480,7 +3480,7 @@ func (assoc *GekkaAssociation) inboundLaneIndexOf() int {
 }
 
 func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeReq) error {
-	slog.Debug("artery: received HandshakeReq", "from", req.From.String(), "role", assoc.role)
+	logger.Default().Debug("artery: received HandshakeReq", "from", req.From.String(), "role", assoc.role)
 
 	// Validate that the 'To' address matches our local node (Pekko protocol requirement).
 	if toSys := req.GetTo().GetSystem(); toSys != "" {
@@ -3568,7 +3568,7 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 					Fields:    map[string]any{"conns": len(existing.inboundConns)},
 				})
 			}
-			slog.Debug("artery: inbound coalesced into existing streamId=2 assoc",
+			logger.Default().Debug("artery: inbound coalesced into existing streamId=2 assoc",
 				"remote", existing.remoteKey(),
 				"conns", len(existing.inboundConns))
 			coalesced = true
@@ -3622,7 +3622,7 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 			}
 			a.mu.RUnlock()
 
-			slog.Debug("artery: handleHandshakeReq candidate", "key", k, "role", a.role, "state", a.state, "host", aHost, "port", aPort, "match", hostMatch)
+			logger.Default().Debug("artery: handleHandshakeReq candidate", "key", k, "role", a.role, "state", a.state, "host", aHost, "port", aPort, "match", hostMatch)
 
 			if isOutbound && hostMatch {
 				if outboundToRemote == nil {
@@ -3630,7 +3630,7 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 				}
 				if isWaiting && matched == nil {
 					matched = a
-					slog.Debug("artery: handleHandshakeReq matched association", "key", k)
+					logger.Default().Debug("artery: handleHandshakeReq matched association", "key", k)
 				}
 			}
 		}
@@ -3662,7 +3662,7 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 			dialKey := fmt.Sprintf("%s:%d", fromAddr.GetHostname(), fromAddr.GetPort())
 			if !nm.pendingDials[dialKey] {
 				nm.pendingDials[dialKey] = true
-				slog.Info("artery: no OUTBOUND to remote — initiating reverse outbound",
+				logger.Default().Info("artery: no OUTBOUND to remote — initiating reverse outbound",
 					"host", fromAddr.GetHostname(), "port", fromAddr.GetPort())
 				go nm.DialRemoteWithRestart(context.Background(), fromAddr)
 			}
@@ -3734,11 +3734,11 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 						rspOutbox = assoc.outbox
 						routed = "INBOUND fallback"
 					}
-					slog.Debug("artery: sending HandshakeRsp", "via", routed)
+					logger.Default().Debug("artery: sending HandshakeRsp", "via", routed)
 					select {
 					case rspOutbox <- frame:
 					default:
-						slog.Warn("artery: HandshakeRsp outbox full, dropping response")
+						logger.Default().Warn("artery: HandshakeRsp outbox full, dropping response")
 					}
 				}
 			}
@@ -3748,7 +3748,7 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 		// the same remote (e.g. both nodes dialled each other simultaneously),
 		// complete it directly without waiting for an extra round-trip.
 		if matched != nil {
-			slog.Info("artery: completing matching OUTBOUND association")
+			logger.Default().Info("artery: completing matching OUTBOUND association")
 			matched.mu.Lock()
 			matched.remote = req.From
 			matched.state = ASSOCIATED
@@ -3761,7 +3761,7 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 				select {
 				case matched.outbox <- msg:
 				default:
-					slog.Warn("artery: outbox full, dropping pending frame during handshake flush")
+					logger.Default().Warn("artery: outbox full, dropping pending frame during handshake flush")
 				}
 			}
 			matched.pending = nil
@@ -3778,7 +3778,7 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 			if matched.streamId == 1 {
 				go func(c *GekkaAssociation) {
 					if err := nm.EnsureOrdinarySibling(context.Background(), c); err != nil {
-						slog.Debug("artery: EnsureOrdinarySibling error", "remote", c.remoteKey(), "error", err)
+						logger.Default().Debug("artery: EnsureOrdinarySibling error", "remote", c.remoteKey(), "error", err)
 					}
 				}(matched)
 			}
@@ -3793,7 +3793,7 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 		select {
 		case assoc.outbox <- msg:
 		default:
-			slog.Warn("artery: outbox full, dropping pending frame during handshake flush")
+			logger.Default().Warn("artery: outbox full, dropping pending frame during handshake flush")
 		}
 	}
 	assoc.pending = nil
@@ -3811,17 +3811,17 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 	if err != nil {
 		return err
 	}
-	slog.Debug("artery: sending HandshakeRsp (e)", "uid", assoc.localUid)
+	logger.Default().Debug("artery: sending HandshakeRsp (e)", "uid", assoc.localUid)
 	select {
 	case assoc.outbox <- frame:
 	default:
-		slog.Warn("artery: outbox full, dropping HandshakeRsp frame")
+		logger.Default().Warn("artery: outbox full, dropping HandshakeRsp frame")
 	}
 	return nil
 }
 
 func (assoc *GekkaAssociation) handleHandshakeRsp(mwa *gproto_remote.MessageWithAddress) error {
-	slog.Debug("artery: received HandshakeRsp", "from", mwa.Address.String())
+	logger.Default().Debug("artery: received HandshakeRsp", "from", mwa.Address.String())
 
 	assoc.nodeMgr.mu.RLock()
 	// Create a list of candidates to avoid holding nodeMgr lock while locking individuals
@@ -3849,14 +3849,14 @@ func (assoc *GekkaAssociation) handleHandshakeRsp(mwa *gproto_remote.MessageWith
 				return h
 			}
 			match = normalize(aHost) == normalize(mHost) && aPort == mPort
-			slog.Debug("artery: handleHandshakeRsp candidate", "match", match, "host", aHost, "port", aPort)
+			logger.Default().Debug("artery: handleHandshakeRsp candidate", "match", match, "host", aHost, "port", aPort)
 		} else {
-			slog.Debug("artery: handleHandshakeRsp candidate", "match", false, "hasRemote", a.remote != nil, "hasMwaAddr", mwa.Address != nil)
+			logger.Default().Debug("artery: handleHandshakeRsp candidate", "match", false, "hasRemote", a.remote != nil, "hasMwaAddr", mwa.Address != nil)
 		}
 		a.mu.RUnlock()
 
 		if isOutbound && isWaiting && match {
-			slog.Info("artery: found matching outbound association", "state", a.state)
+			logger.Default().Info("artery: found matching outbound association", "state", a.state)
 			matched = a
 			break
 		}
@@ -3880,7 +3880,7 @@ func (assoc *GekkaAssociation) handleHandshakeRsp(mwa *gproto_remote.MessageWith
 			select {
 			case matched.outbox <- msg:
 			default:
-				slog.Warn("artery: outbox full, dropping pending frame during handshakeRsp flush")
+				logger.Default().Warn("artery: outbox full, dropping pending frame during handshakeRsp flush")
 			}
 		}
 		matched.pending = nil
@@ -3900,12 +3900,12 @@ func (assoc *GekkaAssociation) handleHandshakeRsp(mwa *gproto_remote.MessageWith
 			nm := assoc.nodeMgr
 			go func(c *GekkaAssociation) {
 				if err := nm.EnsureOrdinarySibling(context.Background(), c); err != nil {
-					slog.Debug("artery: EnsureOrdinarySibling error", "remote", c.remoteKey(), "error", err)
+					logger.Default().Debug("artery: EnsureOrdinarySibling error", "remote", c.remoteKey(), "error", err)
 				}
 			}(matched)
 		}
 	} else {
-		slog.Warn("artery: no matching outbound association found for HandshakeRsp")
+		logger.Default().Warn("artery: no matching outbound association found for HandshakeRsp")
 	}
 
 	return nil
@@ -3997,11 +3997,11 @@ func (nm *NodeManager) GetOrCreateUDPAssociation(src *net.UDPAddr, udpH *UdpArte
 	go func() {
 		for frame := range assoc.outbox {
 			if err := udpH.SendFrame(src, AeronStreamControl, frame); err != nil {
-				slog.Warn("aeron-udp: inbound assoc outbox error", "src", src, "error", err)
+				logger.Default().Warn("aeron-udp: inbound assoc outbox error", "src", src, "error", err)
 			}
 		}
 	}()
 
-	slog.Info("aeron-udp: new inbound UDP association created", "src", src)
+	logger.Default().Info("aeron-udp: new inbound UDP association created", "src", src)
 	return assoc
 }

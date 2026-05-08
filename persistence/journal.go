@@ -10,8 +10,8 @@ package persistence
 
 import (
 	"context"
-	"log"
 
+	"github.com/sopranoworks/gekka/logger"
 	"github.com/sopranoworks/gekka/telemetry"
 )
 
@@ -132,7 +132,7 @@ func (a *AdaptedJournal) ReplayMessages(ctx context.Context, persistenceId strin
 		if err != nil {
 			// In case of error, we still pass the original or log it?
 			// Pekko usually fails the recovery.
-			log.Printf("AdaptedJournal: fromJournal error for %s: %v", persistenceId, err)
+			logger.Default().Error("AdaptedJournal: fromJournal error", "persistenceId", persistenceId, "err", err)
 			return
 		}
 		m.Payload = transformed

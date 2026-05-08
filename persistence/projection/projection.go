@@ -12,9 +12,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log"
 
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/logger"
 	"github.com/sopranoworks/gekka/persistence/query"
 	"github.com/sopranoworks/gekka/stream"
 	"github.com/sopranoworks/gekka/telemetry"
@@ -100,7 +100,7 @@ func (r *projectionRunner) Run(ctx context.Context) error {
 		return fmt.Errorf("projection %q: failed to create source: %w", r.name, err)
 	}
 
-	log.Printf("Projection %q: starting from offset %v", r.name, offset)
+	logger.Default().Info("Projection: starting", "name", r.name, "offset", offset)
 
 	// 3. Process stream.
 	return r.runManual(ctx, src)
@@ -163,7 +163,7 @@ func (r *exactlyOnceProjectionRunner) Run(ctx context.Context) error {
 		return fmt.Errorf("projection %q: failed to create source: %w", r.name, err)
 	}
 
-	log.Printf("ExactlyOnceProjection %q: starting from offset %v", r.name, offset)
+	logger.Default().Info("ExactlyOnceProjection: starting", "name", r.name, "offset", offset)
 
 	return r.runExactlyOnce(ctx, src)
 }

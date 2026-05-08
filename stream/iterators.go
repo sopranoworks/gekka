@@ -9,9 +9,10 @@
 package stream
 
 import (
-	"log"
 	"sync"
 	"time"
+
+	"github.com/sopranoworks/gekka/logger"
 )
 
 // ─── funcIterator ─────────────────────────────────────────────────────────
@@ -535,7 +536,7 @@ type logIterator[T any] struct {
 func (l *logIterator[T]) next() (T, bool, error) {
 	elem, ok, err := l.upstream.next()
 	if ok && err == nil {
-		log.Printf("[stream] %s: %v", l.name, elem)
+		logger.Default().Info("[stream] element", "name", l.name, "elem", elem)
 	}
 	return elem, ok, err
 }

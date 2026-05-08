@@ -13,11 +13,12 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/sopranoworks/gekka/logger"
 )
 
 // TcpHandler is called for each accepted TCP connection.
@@ -31,9 +32,6 @@ type TcpServerConfig struct {
 
 	// Handler is required.
 	Handler TcpHandler
-
-	// Optional.
-	Logger *log.Logger
 
 	// TLSConfig enables TLS when non-nil. The caller is responsible for
 	// building the *tls.Config (typically via BuildTLSConfig).
@@ -77,9 +75,6 @@ func NewTcpServer(cfg TcpServerConfig) (*TcpServer, error) {
 	}
 	if cfg.Handler == nil {
 		return nil, errors.New("gekka: TcpServer requires Handler")
-	}
-	if cfg.Logger == nil {
-		cfg.Logger = log.Default()
 	}
 	return &TcpServer{
 		cfg:   cfg,
@@ -300,9 +295,7 @@ func (s *TcpServer) applyTCPOptions(conn net.Conn) {
 }
 
 func (s *TcpServer) logf(format string, args ...any) {
-	if s.cfg.Logger != nil {
-		s.cfg.Logger.Printf("TcpServer: "+format, args...)
-	}
+	logger.Default().Debug(fmt.Sprintf("TcpServer: "+format, args...))
 }
 
 type tcpTimeoutConn struct {

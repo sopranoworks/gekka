@@ -13,9 +13,10 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"time"
+
+	"github.com/sopranoworks/gekka/logger"
 )
 
 type TcpClientConfig struct {
@@ -23,9 +24,6 @@ type TcpClientConfig struct {
 
 	// Handler is required.
 	Handler TcpHandler
-
-	// Optional.
-	Logger *log.Logger
 
 	// TLSConfig enables TLS when non-nil. When set, the dialed connection is
 	// wrapped with tls.Client and a handshake is performed before calling Handler.
@@ -56,9 +54,6 @@ func NewTcpClient(cfg TcpClientConfig) (*TcpClient, error) {
 	}
 	if cfg.Handler == nil {
 		return nil, errors.New("gekka: TcpClient requires Handler")
-	}
-	if cfg.Logger == nil {
-		cfg.Logger = log.Default()
 	}
 	return &TcpClient{
 		cfg: cfg,
@@ -139,7 +134,5 @@ func (c *TcpClient) Connect(ctx context.Context) error {
 }
 
 func (c *TcpClient) logf(format string, args ...any) {
-	if c.cfg.Logger != nil {
-		c.cfg.Logger.Printf("TcpClient: "+format, args...)
-	}
+	logger.Default().Debug(fmt.Sprintf("TcpClient: "+format, args...))
 }

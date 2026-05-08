@@ -11,12 +11,12 @@ package core
 import (
 	"context"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
+	"github.com/sopranoworks/gekka/logger"
 )
 
 // CompressionTableManager holds mapping tables for ActorRef and ClassManifest strings to integer IDs.
@@ -158,16 +158,16 @@ func (ctm *CompressionTableManager) UpdateActorRefTable(originUid uint64, versio
 	defer ctm.mu.Unlock()
 
 	if ctm.actorRefsMax > 0 && len(keys) > ctm.actorRefsMax {
-		log.Printf("CompressionTableManager: rejected ActorRef table update for originUid %d — %d keys exceeds cap %d", originUid, len(keys), ctm.actorRefsMax)
+		logger.Default().Warn("CompressionTableManager: rejected ActorRef table update — keys exceeds cap", "originUid", originUid, "keys", len(keys), "cap", ctm.actorRefsMax)
 		return
 	}
 
 	existing, ok := ctm.actorRefTable[originUid]
 	if !ok || version > existing.Version {
 		ctm.actorRefTable[originUid] = newCompressionTable(version, keys, values)
-		log.Printf("CompressionTableManager: updated ActorRef table for originUid %d to version %d (keys: %d)", originUid, version, len(keys))
+		logger.Default().Info("CompressionTableManager: updated ActorRef table", "originUid", originUid, "version", version, "keys", len(keys))
 	} else {
-		log.Printf("CompressionTableManager: ignored ActorRef table update for originUid %d (version %d <= %d)", originUid, version, existing.Version)
+		logger.Default().Debug("CompressionTableManager: ignored ActorRef table update", "originUid", originUid, "incomingVersion", version, "existingVersion", existing.Version)
 	}
 }
 
@@ -178,16 +178,16 @@ func (ctm *CompressionTableManager) UpdateManifestTable(originUid uint64, versio
 	defer ctm.mu.Unlock()
 
 	if ctm.manifestsMax > 0 && len(keys) > ctm.manifestsMax {
-		log.Printf("CompressionTableManager: rejected Manifest table update for originUid %d — %d keys exceeds cap %d", originUid, len(keys), ctm.manifestsMax)
+		logger.Default().Warn("CompressionTableManager: rejected Manifest table update — keys exceeds cap", "originUid", originUid, "keys", len(keys), "cap", ctm.manifestsMax)
 		return
 	}
 
 	existing, ok := ctm.manifestTable[originUid]
 	if !ok || version > existing.Version {
 		ctm.manifestTable[originUid] = newCompressionTable(version, keys, values)
-		log.Printf("CompressionTableManager: updated Manifest table for originUid %d to version %d (keys: %d)", originUid, version, len(keys))
+		logger.Default().Info("CompressionTableManager: updated Manifest table", "originUid", originUid, "version", version, "keys", len(keys))
 	} else {
-		log.Printf("CompressionTableManager: ignored Manifest table update for originUid %d (version %d <= %d)", originUid, version, existing.Version)
+		logger.Default().Debug("CompressionTableManager: ignored Manifest table update", "originUid", originUid, "incomingVersion", version, "existingVersion", existing.Version)
 	}
 }
 

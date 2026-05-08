@@ -12,9 +12,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"sync/atomic"
 	"time"
+
+	"github.com/sopranoworks/gekka/logger"
 )
 
 // ReplayFilterMode controls how the replay filter reacts to a
@@ -216,18 +217,18 @@ func (f *FilteringJournal) ReplayMessages(ctx context.Context, persistenceId str
 			callback(repr)
 		case ReplayFilterWarn:
 			if anomaly {
-				log.Printf("ReplayFilter[%s]: %s (mode=warn, passthrough)", persistenceId, message)
+				logger.Default().Warn("ReplayFilter anomaly (mode=warn, passthrough)", "persistenceId", persistenceId, "message", message)
 			}
 			callback(repr)
 		case ReplayFilterRepairByDiscardOld:
 			if anomaly {
 				if state.lastDiscarded {
 					if f.cfg.Debug {
-						log.Printf("ReplayFilter[%s]: discarding old writer event seq=%d (mode=repair-by-discard-old)", persistenceId, repr.SequenceNr)
+						logger.Default().Debug("ReplayFilter: discarding old writer event (mode=repair-by-discard-old)", "persistenceId", persistenceId, "seq", repr.SequenceNr)
 					}
 					return
 				}
-				log.Printf("ReplayFilter[%s]: %s (mode=repair-by-discard-old)", persistenceId, message)
+				logger.Default().Warn("ReplayFilter anomaly (mode=repair-by-discard-old)", "persistenceId", persistenceId, "message", message)
 			}
 			callback(repr)
 		default:

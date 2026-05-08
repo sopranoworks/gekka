@@ -85,3 +85,12 @@ func setDefaultLoggerForTest(l *slog.Logger) func() {
 		defaultLogger.Store(prev)
 	}
 }
+
+// SetDefaultForTest atomically replaces the package default logger and
+// returns a function that restores the previous default. Intended for
+// tests in dependent packages that need to capture structured log output
+// without triggering Install's composite-handler lifecycle. The override
+// bypasses the composite handler and its LevelVars while active.
+func SetDefaultForTest(l *slog.Logger) (restore func()) {
+	return setDefaultLoggerForTest(l)
+}

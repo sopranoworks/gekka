@@ -14,7 +14,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"log/slog"
 	"math/rand"
 
@@ -27,6 +26,7 @@ import (
 	"github.com/sopranoworks/gekka/actor"
 	icluster "github.com/sopranoworks/gekka/internal/cluster"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
+	"github.com/sopranoworks/gekka/logger"
 
 	"google.golang.org/protobuf/proto"
 )
@@ -374,7 +374,7 @@ func (cm *ClusterManager) CheckConfigCompat(remoteConfig string) bool {
 	}
 	if !remoteIsEmpty && !remoteIsSBR {
 		// Remote has a non-SBR downing provider — incompatible
-		log.Printf("Cluster: config compat check failed: remote downing-provider-class=%q", remoteDP)
+		logger.Default().Warn("Cluster: config compat check failed", slog.String("remoteDowningProviderClass", remoteDP))
 		return false
 	}
 	return true
@@ -569,7 +569,7 @@ func (cm *ClusterManager) JoinCluster(ctx context.Context, seedHost string, seed
 	system := cm.LocalAddress.GetAddress().GetSystem()
 	path := cm.ClusterCorePath(system, seedHost, seedPort)
 	if cm.LogInfo {
-		log.Printf("Cluster: initiating join to seed node %s", path)
+		logger.Default().Info("Cluster: initiating join to seed node", slog.String("path", path))
 	}
 
 	// Send a minimal config so the remote's JoinConfigCompatCheckCluster.check
@@ -618,7 +618,7 @@ func (cm *ClusterManager) JoinCluster(ctx context.Context, seedHost string, seed
 				return
 			case <-deadline:
 				if !cm.WelcomeReceived.Load() {
-					log.Printf("Cluster: join seed nodes timed out after %v, shutting down", cm.ShutdownAfterUnsuccessfulJoinSeedNodes)
+					logger.Default().Error("Cluster: join seed nodes timed out, shutting down", slog.Duration("after", cm.ShutdownAfterUnsuccessfulJoinSeedNodes))
 					if cm.ShutdownCallback != nil {
 						cm.ShutdownCallback()
 					}
@@ -628,14 +628,14 @@ func (cm *ClusterManager) JoinCluster(ctx context.Context, seedHost string, seed
 			case <-seedDeadline:
 				seedDeadline = nil // fire only once
 				if !cm.WelcomeReceived.Load() {
-					log.Printf("Cluster: seed node %s:%d did not respond within %v (seed-node-timeout)", seedHost, seedPort, seedTimeout)
+					logger.Default().Warn("Cluster: seed node did not respond within seed-node-timeout", slog.String("host", seedHost), slog.Int("port", int(seedPort)), slog.Duration("timeout", seedTimeout))
 				}
 			case <-ticker.C:
 				if cm.WelcomeReceived.Load() {
 					return
 				}
 				if cm.LogInfo {
-					log.Printf("Cluster: retrying InitJoin to %s", path)
+					logger.Default().Info("Cluster: retrying InitJoin", slog.String("path", path))
 				}
 				_ = cm.Router(ctx, path, initJoin)
 			}
@@ -756,7 +756,7 @@ func (cm *ClusterManager) ProceedJoin(ctx context.Context, actorPath string) err
 		join.AppVersion = &v
 	}
 	if cm.LogInfo {
-		log.Printf("Cluster: sending Join to %s", actorPath)
+		logger.Default().Info("Cluster: sending Join", slog.String("path", actorPath))
 	}
 	return cm.Router(ctx, actorPath, join)
 }
@@ -830,12 +830,12 @@ func (cm *ClusterManager) DownMember(addr MemberAddress) {
 			m.Status = gproto_cluster.MemberStatus_Down.Enum()
 			cm.incrementVersionWithLockHeld()
 			if cm.LogInfo {
-				log.Printf("SBR: marked %s:%d as Down", addr.Host, addr.Port)
+				logger.Default().Info("SBR: marked member as Down", slog.String("host", addr.Host), slog.Int("port", int(addr.Port)))
 			}
 			return
 		}
 	}
-	log.Printf("SBR: DownMember: address %s:%d not found in gossip", addr.Host, addr.Port)
+	logger.Default().Warn("SBR: DownMember: address not found in gossip", slog.String("host", addr.Host), slog.Int("port", int(addr.Port)))
 }
 
 // WaitForSelfRemoved polls the gossip state every 200 ms until this node's
@@ -895,7 +895,7 @@ func (cm *ClusterManager) HandleIncomingClusterMessage(ctx context.Context, payl
 			if err := proto.Unmarshal(payload, ij); err == nil && ij.GetCurrentConfig() != "" {
 				if !cm.CheckConfigCompat(ij.GetCurrentConfig()) {
 					raddr := remoteAddr.GetAddress()
-					log.Printf("Cluster: rejecting InitJoin from %s:%d — configuration incompatible", raddr.GetHostname(), raddr.GetPort())
+					logger.Default().Warn("Cluster: rejecting InitJoin — configuration incompatible", slog.String("host", raddr.GetHostname()), slog.Int("port", int(raddr.GetPort())))
 					replyPath := senderPath
 					if replyPath == "" {
 						replyPath = cm.ClusterCorePath(raddr.GetSystem(), raddr.GetHostname(), raddr.GetPort())
@@ -1034,7 +1034,7 @@ func (cm *ClusterManager) handleJoin(payload []byte, manifest string) error {
 	}
 	joiningNode := join.GetNode()
 	if cm.LogInfo {
-		log.Printf("Cluster: received Join from %v", joiningNode)
+		logger.Default().Info("Cluster: received Join", slog.String("from", fmt.Sprintf("%v", joiningNode)))
 	}
 
 	// Add the joining node to our gossip state as Joining, then send Welcome with
@@ -1056,7 +1056,7 @@ func (cm *ClusterManager) handleJoin(payload []byte, manifest string) error {
 	path := cm.ClusterCorePath(system, addr.GetHostname(), addr.GetPort())
 
 	if cm.LogInfo {
-		log.Printf("Cluster: sending Welcome to %s", path)
+		logger.Default().Info("Cluster: sending Welcome", slog.String("path", path))
 	}
 	return cm.Router(context.Background(), path, welcome)
 }
@@ -1269,7 +1269,7 @@ func (cm *ClusterManager) markMemberLeavingLocked(leaveAddr *gproto_cluster.Addr
 				m.Status = gproto_cluster.MemberStatus_Leaving.Enum()
 				cm.incrementVersionWithLockHeld()
 				if cm.LogInfo {
-					log.Printf("Cluster: marked %s:%d as Leaving", leaveAddr.GetHostname(), leaveAddr.GetPort())
+					logger.Default().Info("Cluster: marked member as Leaving", slog.String("host", leaveAddr.GetHostname()), slog.Int("port", int(leaveAddr.GetPort())))
 				}
 				// publishEvent is safe while holding cm.Mu — it only acquires cm.SubMu.
 				cm.publishEvent(MemberLeft{Member: MemberAddress{
@@ -1295,7 +1295,7 @@ func (cm *ClusterManager) handleWelcome(payload []byte, manifest string) error {
 		return err
 	}
 	if cm.LogInfo {
-		log.Printf("Cluster: welcomed by %v", welcome.GetFrom())
+		logger.Default().Info("Cluster: welcomed by peer", slog.String("from", fmt.Sprintf("%v", welcome.GetFrom())))
 	}
 
 	err = cm.processIncomingGossip(welcome.Gossip, welcome.From)
@@ -1317,7 +1317,7 @@ func (cm *ClusterManager) handleGossipEnvelope(payload []byte, manifest string) 
 		return err
 	}
 	if cm.LogInfoVerbose {
-		log.Printf("Cluster: received GossipEnvelope from %v", envelope.GetFrom())
+		logger.Default().Debug("Cluster: received GossipEnvelope", slog.String("from", fmt.Sprintf("%v", envelope.GetFrom())))
 	}
 
 	// Pekko GZIP-compresses GossipEnvelope.serializedGossip
@@ -1448,7 +1448,7 @@ func (cm *ClusterManager) processIncomingGossip(gossip *gproto_cluster.Gossip, r
 		if cm.compareResolvedClocks(m1Chk, m2Chk) == ClockAfter {
 			cm.Mu.Unlock()
 			if cm.LogInfoVerbose {
-				log.Printf("Cluster: discarding stale gossip (TTL %v exceeded)", ttl)
+				logger.Default().Debug("Cluster: discarding stale gossip (TTL exceeded)", slog.Duration("ttl", ttl))
 			}
 			return nil
 		}
@@ -1462,7 +1462,7 @@ func (cm *ClusterManager) processIncomingGossip(gossip *gproto_cluster.Gossip, r
 	if ordering == ClockBefore {
 		// Incoming is newer — diff before replacing so we can emit events.
 		if cm.LogInfoVerbose {
-			log.Printf("Cluster: received newer Gossip, replacing local state")
+			logger.Default().Debug("Cluster: received newer Gossip, replacing local state")
 		}
 		events = diffGossipMembers(cm.State, gossip)
 		cm.State = gossip
@@ -1478,7 +1478,7 @@ func (cm *ClusterManager) processIncomingGossip(gossip *gproto_cluster.Gossip, r
 	} else if ordering == ClockConcurrent {
 		// Merge concurrent states: union of members, pairwise-max vector clock.
 		if cm.LogInfoVerbose {
-			log.Printf("Cluster: received concurrent Gossip, merging")
+			logger.Default().Debug("Cluster: received concurrent Gossip, merging")
 		}
 		merged := cm.mergeGossipStates(cm.State, gossip)
 		events = diffGossipMembers(cm.State, merged)
@@ -1612,11 +1612,11 @@ func (cm *ClusterManager) maybeSendExitingConfirmed() {
 	}
 
 	if cm.LogInfo {
-		log.Printf("Cluster: local node is Exiting — sending ExitingConfirmed to %d Up members", len(targets))
+		logger.Default().Info("Cluster: local node is Exiting — sending ExitingConfirmed", slog.Int("upMembers", len(targets)))
 	}
 	for _, t := range targets {
 		if err := cm.Router(context.Background(), t.path, confirmation); err != nil {
-			log.Printf("Cluster: ExitingConfirmed to %s failed: %v", t.path, err)
+			logger.Default().Error("Cluster: ExitingConfirmed failed", slog.String("path", t.path), slog.Any("err", err))
 		}
 	}
 }
@@ -1744,9 +1744,9 @@ func (cm *ClusterManager) CheckConvergenceLocked() bool {
 
 	if cm.LogInfoVerbose {
 		if len(upMembers) == 0 {
-			log.Printf("Cluster: convergence check passed (all %d Up/Leaving members in Seen set)", len(cm.State.Members))
+			logger.Default().Debug("Cluster: convergence check passed (all Up/Leaving members in Seen set)", slog.Int("members", len(cm.State.Members)))
 		} else {
-			log.Printf("Cluster: convergence check failed (%d members not yet in Seen set)", len(upMembers))
+			logger.Default().Debug("Cluster: convergence check failed (members not yet in Seen set)", slog.Int("missingFromSeen", len(upMembers)))
 		}
 	}
 
@@ -2352,7 +2352,7 @@ func (cm *ClusterManager) promoteDCMembers(dc string) {
 		}
 		changed = true
 		if cm.LogInfo {
-			log.Printf("DC-Leader[%s]: transitioned member %s:%d Joining → Up", dc, ma.Host, ma.Port)
+			logger.Default().Info("DC-Leader: transitioned member Joining → Up", slog.String("dc", dc), slog.String("host", ma.Host), slog.Int("port", int(ma.Port)))
 		}
 	}
 	if changed {
@@ -2380,7 +2380,7 @@ func (cm *ClusterManager) performLeaderActions() {
 
 	if isLeader {
 		if cm.LogInfoVerbose {
-			log.Printf("Leader: performing leader actions (members=%d)", len(cm.State.Members))
+			logger.Default().Debug("Leader: performing leader actions", slog.Int("members", len(cm.State.Members)))
 		}
 		cm.Mu.Lock()
 		var events []ClusterDomainEvent
@@ -2410,7 +2410,7 @@ func (cm *ClusterManager) performLeaderActions() {
 					// Clear WeaklyUp tracking for this member.
 					delete(cm.joiningFirstSeen, m.GetAddressIndex())
 					if cm.LogInfo {
-						log.Printf("Leader: transitioned member %s:%d Joining → Up (upNumber=%d)", ma.Host, ma.Port, m.GetUpNumber())
+						logger.Default().Info("Leader: transitioned member Joining → Up", slog.String("host", ma.Host), slog.Int("port", int(ma.Port)), slog.Int("upNumber", int(m.GetUpNumber())))
 					}
 				} else if cm.AllowWeaklyUpMembers > 0 && meetsMinMembers {
 					// WeaklyUp promotion: if convergence is not achieved within
@@ -2428,7 +2428,7 @@ func (cm *ClusterManager) performLeaderActions() {
 						changed = true
 						delete(cm.joiningFirstSeen, addrIdx)
 						if cm.LogInfo {
-							log.Printf("Leader: transitioned member %s:%d Joining → WeaklyUp (convergence timeout %v)", ma.Host, ma.Port, cm.AllowWeaklyUpMembers)
+							logger.Default().Info("Leader: transitioned member Joining → WeaklyUp (convergence timeout)", slog.String("host", ma.Host), slog.Int("port", int(ma.Port)), slog.Duration("timeout", cm.AllowWeaklyUpMembers))
 						}
 					}
 				}
@@ -2443,7 +2443,7 @@ func (cm *ClusterManager) performLeaderActions() {
 					}
 					changed = true
 					if cm.LogInfo {
-						log.Printf("Leader: transitioned member %s:%d WeaklyUp → Up (convergence achieved)", ma.Host, ma.Port)
+						logger.Default().Info("Leader: transitioned member WeaklyUp → Up (convergence achieved)", slog.String("host", ma.Host), slog.Int("port", int(ma.Port)))
 					}
 				}
 			case gproto_cluster.MemberStatus_Leaving:
@@ -2451,7 +2451,7 @@ func (cm *ClusterManager) performLeaderActions() {
 				events = append(events, MemberExited{Member: ma})
 				changed = true
 				if cm.LogInfo {
-					log.Printf("Leader: transitioned member %s:%d Leaving → Exiting", ma.Host, ma.Port)
+					logger.Default().Info("Leader: transitioned member Leaving → Exiting", slog.String("host", ma.Host), slog.Int("port", int(ma.Port)))
 				}
 			case gproto_cluster.MemberStatus_Exiting:
 				m.Status = gproto_cluster.MemberStatus_Removed.Enum()
@@ -2463,7 +2463,7 @@ func (cm *ClusterManager) performLeaderActions() {
 				// Record tombstone for pruning.
 				cm.recordTombstoneLocked(ma.Host, ma.Port)
 				if cm.LogInfo {
-					log.Printf("Leader: transitioned member %s:%d Exiting → Removed", ma.Host, ma.Port)
+					logger.Default().Info("Leader: transitioned member Exiting → Removed", slog.String("host", ma.Host), slog.Int("port", int(ma.Port)))
 				}
 			case gproto_cluster.MemberStatus_Down:
 				// Enforce down-removal-margin: delay the Down → Removed
@@ -2478,7 +2478,7 @@ func (cm *ClusterManager) performLeaderActions() {
 					if !ok {
 						cm.downedAt[addrIdx] = time.Now()
 						if cm.LogInfoVerbose {
-							log.Printf("Leader: member %s:%d Down, removal delayed by %v", ma.Host, ma.Port, cm.DownRemovalMargin)
+							logger.Default().Debug("Leader: member Down, removal delayed", slog.String("host", ma.Host), slog.Int("port", int(ma.Port)), slog.Duration("downRemovalMargin", cm.DownRemovalMargin))
 						}
 						continue
 					}
@@ -2496,7 +2496,7 @@ func (cm *ClusterManager) performLeaderActions() {
 				// Record tombstone for pruning.
 				cm.recordTombstoneLocked(ma.Host, ma.Port)
 				if cm.LogInfo {
-					log.Printf("Leader: transitioned member %s:%d Down → Removed", ma.Host, ma.Port)
+					logger.Default().Info("Leader: transitioned member Down → Removed", slog.String("host", ma.Host), slog.Int("port", int(ma.Port)))
 				}
 			}
 		}
@@ -2576,7 +2576,7 @@ func (cm *ClusterManager) pruneGossipTombstonesLocked() {
 			key := fmt.Sprintf("%s:%d", addr.GetHostname(), addr.GetPort())
 			if _, shouldPrune := pruneSet[key]; shouldPrune && m.GetStatus() == gproto_cluster.MemberStatus_Removed {
 				if cm.LogInfoVerbose {
-					log.Printf("Cluster: pruning tombstone for %s (age > %v)", key, ttl)
+					logger.Default().Debug("Cluster: pruning tombstone (age exceeded)", slog.String("key", key), slog.Duration("ttl", ttl))
 				}
 				continue
 			}
@@ -2611,7 +2611,7 @@ func (cm *ClusterManager) CheckReachability() {
 		phi := cm.Fd.Phi(key)
 
 		if cm.LogInfoVerbose {
-			log.Printf("Cluster: failure-detector phi for %s:%d = %.4f (threshold=%.1f)", a.GetHostname(), a.GetPort(), phi, cm.Fd.threshold)
+			logger.Default().Debug("Cluster: failure-detector phi", slog.String("host", a.GetHostname()), slog.Int("port", int(a.GetPort())), slog.Float64("phi", phi), slog.Float64("threshold", cm.Fd.threshold))
 		}
 
 		// Pekko Cluster logic: update ObserverReachability.
@@ -2673,14 +2673,16 @@ func (cm *ClusterManager) checkInternalSBR() {
 
 	action := cm.SBRStrategy.Decide(allMembers, unreachableMembers)
 	if cm.LogInfo {
-		log.Printf("SBR(internal): action=%v reachable=%d total=%d",
-			action, len(allMembers)-len(unreachableMembers), len(allMembers))
+		logger.Default().Info("SBR(internal): decision",
+			slog.Any("action", action),
+			slog.Int("reachable", len(allMembers)-len(unreachableMembers)),
+			slog.Int("total", len(allMembers)))
 	}
 
 	if action == icluster.Down {
-		log.Printf("SBR(internal): downing self — partition below static quorum")
+		logger.Default().Warn("SBR(internal): downing self — partition below static quorum")
 		if err := cm.LeaveCluster(); err != nil {
-			log.Printf("SBR(internal): LeaveCluster error: %v", err)
+			logger.Default().Error("SBR(internal): LeaveCluster error", slog.Any("err", err))
 		}
 	}
 }
@@ -2772,7 +2774,7 @@ func (cm *ClusterManager) updateReachability(addrIdx int32, status gproto_cluste
 		}
 	}
 	if localIdx == -1 {
-		log.Printf("Cluster: could not find local address in AllAddresses, using index 0 as fallback")
+		logger.Default().Warn("Cluster: could not find local address in AllAddresses, using index 0 as fallback")
 		localIdx = 0
 	}
 
@@ -2950,9 +2952,10 @@ func (cm *ClusterManager) gossipTick(runLeaderActions bool) {
 	targetAddr := addresses[addrIdx]
 
 	if cm.LogInfoVerbose {
-		log.Printf("Cluster: gossip target selected %s:%d (candidates=%d)",
-			targetAddr.GetAddress().GetHostname(), targetAddr.GetAddress().GetPort(),
-			len(candidates))
+		logger.Default().Debug("Cluster: gossip target selected",
+			slog.String("host", targetAddr.GetAddress().GetHostname()),
+			slog.Int("port", int(targetAddr.GetAddress().GetPort())),
+			slog.Int("candidates", len(candidates)))
 	}
 
 	// Cross-DC gossip throttling: skip foreign-DC targets according to
@@ -3285,10 +3288,10 @@ func (cm *ClusterManager) StartHeartbeat(target *gproto_cluster.Address) {
 				if cm.Router != nil {
 					if err := cm.Router(context.Background(), path, hb); err != nil {
 						if cm.LogInfoVerbose {
-							log.Printf("Cluster: failed to send heartbeat to %s:%d: %v", target.GetHostname(), target.GetPort(), err)
+							logger.Default().Debug("Cluster: failed to send heartbeat", slog.String("host", target.GetHostname()), slog.Int("port", int(target.GetPort())), slog.Any("err", err))
 						}
 					} else if cm.LogInfoVerbose {
-						log.Printf("Cluster: heartbeat sent to %s:%d (seq=%d)", target.GetHostname(), target.GetPort(), seq)
+						logger.Default().Debug("Cluster: heartbeat sent", slog.String("host", target.GetHostname()), slog.Int("port", int(target.GetPort())), slog.Int64("seq", seq))
 					}
 				}
 			}

@@ -11,13 +11,14 @@ package cluster
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"reflect"
 	"sync/atomic"
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
+	"github.com/sopranoworks/gekka/logger"
 )
 
 // ── eventChanRef — bridges actor.Ref to a Go channel ─────────────────────────
@@ -136,7 +137,7 @@ type SBRManager struct {
 func NewSBRManager(cm *ClusterManager, cfg SBRConfig) *SBRManager {
 	strat, err := NewStrategy(cfg)
 	if err != nil {
-		log.Printf("SBR: strategy init error: %v — SBR disabled", err)
+		logger.Default().Error("SBR: strategy init error — SBR disabled", slog.Any("err", err))
 		return nil
 	}
 	if strat == nil {
@@ -279,7 +280,7 @@ func (m *SBRManager) Start(ctx context.Context) {
 				// down it immediately without waiting for stable-after.
 				if m.infra != nil {
 					if m.infra.PodStatus(ctx, addr) == InfraDead {
-						log.Printf("SBR: infra confirms %s is dead — downing immediately", addr)
+						logger.Default().Info("SBR: infra confirms member is dead — downing immediately", slog.String("address", addr.String()))
 						m.downFn(addr)
 						delete(m.unreachableSince, key)
 						if !m.hasUnreachable() {
@@ -290,13 +291,13 @@ func (m *SBRManager) Start(ctx context.Context) {
 					}
 				}
 
-				log.Printf("SBR: unreachable %s — starting stable-after timer (%s)", addr, m.cfg.StableAfter)
+				logger.Default().Warn("SBR: unreachable — starting stable-after timer", slog.String("address", addr.String()), slog.Duration("stableAfter", m.cfg.StableAfter))
 				resetStableTimer()
 
 			case ReachableMember:
 				delete(m.unreachableSince, e.Member.String())
 				if !m.hasUnreachable() {
-					log.Printf("SBR: all members reachable — cancelling stable-after timer")
+					logger.Default().Info("SBR: all members reachable — cancelling stable-after timer")
 					stopStableTimer()
 					stopUnstableTimer()
 				}
@@ -308,7 +309,7 @@ func (m *SBRManager) Start(ctx context.Context) {
 			// If unreachable members remain after the strategy decision,
 			// start the unstable timer as a last-resort safety net.
 			if m.hasUnreachable() && unstableDuration > 0 {
-				log.Printf("SBR: unreachable members remain after decision — starting down-all-when-unstable timer (%s)", unstableDuration)
+				logger.Default().Warn("SBR: unreachable members remain after decision — starting down-all-when-unstable timer", slog.Duration("unstable", unstableDuration))
 				stopUnstableTimer()
 				unstableTimer = time.NewTimer(unstableDuration)
 			}
@@ -316,7 +317,7 @@ func (m *SBRManager) Start(ctx context.Context) {
 		case <-unstableC:
 			unstableTimer = nil
 			if m.hasUnreachable() {
-				log.Printf("SBR: down-all-when-unstable timer fired — downing ALL members")
+				logger.Default().Warn("SBR: down-all-when-unstable timer fired — downing ALL members")
 				m.downAllUnstable(ctx)
 			}
 
@@ -341,8 +342,9 @@ func (m *SBRManager) checkAutoDown(ctx context.Context) {
 			continue
 		}
 		if now.Sub(since) >= m.cfg.AutoDownUnreachableAfter {
-			log.Printf("SBR: auto-down-unreachable-after (%s) elapsed for %s — executing strategy",
-				m.cfg.AutoDownUnreachableAfter, u.Address)
+			logger.Default().Warn("SBR: auto-down-unreachable-after elapsed — executing strategy",
+				slog.Duration("after", m.cfg.AutoDownUnreachableAfter),
+				slog.String("address", u.Address.String()))
 			m.decide(ctx)
 			return // decide handles all unreachable members at once
 		}
@@ -356,7 +358,7 @@ func (m *SBRManager) downAllUnstable(_ context.Context) {
 	reachable, unreachable := m.classifyMembers()
 	// Down all unreachable members.
 	for _, u := range unreachable {
-		log.Printf("SBR: down-all-when-unstable: downing unreachable %s", u.Address)
+		logger.Default().Warn("SBR: down-all-when-unstable: downing unreachable", slog.String("address", u.Address.String()))
 		m.downFn(u.Address)
 	}
 	// Down all reachable members (except self — handled by leaveFn below).
@@ -365,13 +367,13 @@ func (m *SBRManager) downAllUnstable(_ context.Context) {
 		if r.Address == self {
 			continue
 		}
-		log.Printf("SBR: down-all-when-unstable: downing reachable %s", r.Address)
+		logger.Default().Warn("SBR: down-all-when-unstable: downing reachable", slog.String("address", r.Address.String()))
 		m.downFn(r.Address)
 	}
 	// Down self last.
-	log.Printf("SBR: down-all-when-unstable: downing self (%s)", self)
+	logger.Default().Warn("SBR: down-all-when-unstable: downing self", slog.String("address", self.String()))
 	if err := m.leaveFn(); err != nil {
-		log.Printf("SBR: down-all-when-unstable: LeaveCluster error: %v", err)
+		logger.Default().Error("SBR: down-all-when-unstable: LeaveCluster error", slog.Any("err", err))
 	}
 }
 
@@ -387,7 +389,7 @@ func (m *SBRManager) hasUnreachable() bool {
 func (m *SBRManager) decide(ctx context.Context) {
 	reachable, unreachable := m.classifyMembers()
 	if len(unreachable) == 0 {
-		log.Printf("SBR: stable-after elapsed but no unreachable members — no action")
+		logger.Default().Info("SBR: stable-after elapsed but no unreachable members — no action")
 		return
 	}
 
@@ -396,7 +398,7 @@ func (m *SBRManager) decide(ctx context.Context) {
 		var remaining []Member
 		for _, u := range unreachable {
 			if m.infra.PodStatus(ctx, u.Address) == InfraDead {
-				log.Printf("SBR: decide: infra confirms %s dead — downing", u.Address)
+				logger.Default().Info("SBR: decide: infra confirms member dead — downing", slog.String("address", u.Address.String()))
 				m.downFn(u.Address)
 				delete(m.unreachableSince, u.Address.String())
 			} else {
@@ -413,19 +415,19 @@ func (m *SBRManager) decide(ctx context.Context) {
 	self := memberAddressFromUA(m.cm.LocalAddress)
 	decision := m.strategy.Decide(self, reachable, unreachable)
 
-	log.Printf("SBR: decision — downSelf=%v downMembers=%d", decision.DownSelf, len(decision.DownMembers))
+	logger.Default().Info("SBR: decision", slog.Bool("downSelf", decision.DownSelf), slog.Int("downMembers", len(decision.DownMembers)))
 
 	// Always down remote members first so the rest of the cluster converges
 	// before this node leaves (important for DownAll where both sides act).
 	for _, dm := range decision.DownMembers {
-		log.Printf("SBR: downing member %s", dm.Address)
+		logger.Default().Info("SBR: downing member", slog.String("address", dm.Address.String()))
 		m.downFn(dm.Address)
 	}
 
 	if decision.DownSelf {
-		log.Printf("SBR: downing self (%s)", self)
+		logger.Default().Warn("SBR: downing self", slog.String("address", self.String()))
 		if err := m.leaveFn(); err != nil {
-			log.Printf("SBR: LeaveCluster error: %v", err)
+			logger.Default().Error("SBR: LeaveCluster error", slog.Any("err", err))
 		}
 	}
 }

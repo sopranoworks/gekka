@@ -12,7 +12,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,6 +21,7 @@ import (
 
 	"github.com/sopranoworks/gekka/actor"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
+	"github.com/sopranoworks/gekka/logger"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -471,18 +472,16 @@ func TestShutdownAfterUnsuccessfulJoinSeedNodes_NoCallbackWhenWelcomeReceived(t 
 	}
 }
 
-// captureLog redirects the global logger to a buffer for the duration of fn,
-// then restores it and returns the captured output.
+// captureLog routes logger.Default() through a JSON handler over a buffer
+// at Debug level for the duration of fn, then restores the previous default
+// logger and returns the captured output. Substring assertions against the
+// returned string match the slog "msg" field, which preserves the message
+// text passed to logger.Default().<Level>(...).
 func captureLog(fn func()) string {
 	var buf bytes.Buffer
-	old := log.Writer()
-	oldFlags := log.Flags()
-	log.SetOutput(&buf)
-	log.SetFlags(0) // no timestamps for easier matching
-	defer func() {
-		log.SetOutput(old)
-		log.SetFlags(oldFlags)
-	}()
+	h := slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+	restore := logger.SetDefaultForTest(slog.New(h))
+	defer restore()
 	fn()
 	return buf.String()
 }

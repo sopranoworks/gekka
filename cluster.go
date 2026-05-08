@@ -1306,7 +1306,7 @@ func (c ActorDebugConfig) LogActorReceive(actorPath string, msg any) {
 	if !c.Receive {
 		return
 	}
-	slog.Debug("actor: received message",
+	logger.Default().Debug("actor: received message",
 		"actor", actorPath,
 		"message_type", fmt.Sprintf("%T", msg))
 }
@@ -1318,7 +1318,7 @@ func (c ActorDebugConfig) LogActorAutoreceive(actorPath, msgKind string) {
 	if !c.Autoreceive {
 		return
 	}
-	slog.Debug("actor: auto-received system message",
+	logger.Default().Debug("actor: auto-received system message",
 		"actor", actorPath,
 		"kind", msgKind)
 }
@@ -1330,7 +1330,7 @@ func (c ActorDebugConfig) LogActorLifecycle(actorPath, event string) {
 	if !c.Lifecycle {
 		return
 	}
-	slog.Debug("actor: lifecycle event",
+	logger.Default().Debug("actor: lifecycle event",
 		"actor", actorPath,
 		"event", event)
 }
@@ -1342,7 +1342,7 @@ func (c ActorDebugConfig) LogActorFSM(actorPath string, attrs ...any) {
 		return
 	}
 	all := append([]any{"actor", actorPath}, attrs...)
-	slog.Debug("actor: FSM event", all...)
+	logger.Default().Debug("actor: FSM event", all...)
 }
 
 // LogActorEventStream emits a DEBUG message for event-stream subscribe or
@@ -1351,7 +1351,7 @@ func (c ActorDebugConfig) LogActorEventStream(action string, channel any) {
 	if !c.EventStream {
 		return
 	}
-	slog.Debug("actor: event-stream event",
+	logger.Default().Debug("actor: event-stream event",
 		"action", action,
 		"channel", fmt.Sprintf("%v", channel))
 }
@@ -1362,7 +1362,7 @@ func (c ActorDebugConfig) LogActorUnhandled(actorPath string, msg any) {
 	if !c.Unhandled {
 		return
 	}
-	slog.Debug("actor: unhandled message",
+	logger.Default().Debug("actor: unhandled message",
 		"actor", actorPath,
 		"message_type", fmt.Sprintf("%T", msg))
 }
@@ -1374,7 +1374,7 @@ func (c ActorDebugConfig) LogRouterMisconfiguration(deploymentPath, reason strin
 	if !c.RouterMisconfiguration {
 		return
 	}
-	slog.Warn("actor: router misconfigured",
+	logger.Default().Warn("actor: router misconfigured",
 		"deployment_path", deploymentPath,
 		"reason", reason)
 }
@@ -2288,7 +2288,7 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	// at INFO so operators can confirm which layer (reference vs.
 	// application) is active.
 	if cfg.LogConfigOnStart {
-		slog.Info("gekka: resolved cluster configuration", "config", fmt.Sprintf("%+v", cfg))
+		logger.Default().Info("gekka: resolved cluster configuration", "config", fmt.Sprintf("%+v", cfg))
 	}
 
 	// Dynamic seed discovery (v0.9.0)
@@ -2923,7 +2923,7 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 				WriteBehindInterval: cfg.DistributedData.DurableLmdbWriteBehindInterval,
 			})
 			if derr != nil {
-				slog.Warn("gekka: durable DData backend disabled", "err", derr,
+				logger.Default().Warn("gekka: durable DData backend disabled", "err", derr,
 					"dir", cfg.DistributedData.DurableLmdbDir)
 				repl.DurableEnabled = false
 			} else {
@@ -4697,7 +4697,7 @@ func (n *Cluster) SpawnActor(path string, a actor.Actor, props actor.Props) acto
 	if props.Mailbox != nil {
 		actor.InjectMailbox(a, props.Mailbox)
 	} else if mf, mfErr := n.resolvePhase1Mailbox(a, props); mfErr != nil {
-		slog.Error("actor: mailbox requirement validation failed",
+		logger.Default().Error("actor: mailbox requirement validation failed",
 			"path", path,
 			"err", mfErr.Error())
 		return ActorRef{fullPath: n.SelfPathURI(path), sys: n, local: nil}

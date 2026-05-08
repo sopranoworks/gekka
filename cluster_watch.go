@@ -11,7 +11,6 @@ package gekka
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"sync"
 	"time"
 
@@ -19,6 +18,7 @@ import (
 	"github.com/sopranoworks/gekka/cluster"
 	"github.com/sopranoworks/gekka/internal/core"
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
+	"github.com/sopranoworks/gekka/logger"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -113,7 +113,7 @@ func (c *Cluster) reapUnreachableWatched() {
 		if !ok {
 			continue
 		}
-		slog.Debug("watch-fd: remote node unreachable, triggering Terminated", "key", key, "host", addr.Host, "port", addr.Port)
+		logger.Default().Debug("watch-fd: remote node unreachable, triggering Terminated", "key", key, "host", addr.Host, "port", addr.Port)
 		c.triggerRemoteNodeDeath(addr)
 	}
 }
@@ -167,7 +167,7 @@ func (c *Cluster) watchRemote(watcher ActorRef, target ActorRef) {
 	// Send WATCH system message to remote node
 	assoc, ok := c.nm.GetGekkaAssociationByHost(ap.Address.Host, uint32(ap.Address.Port))
 	if !ok {
-		slog.Debug("artery: cannot send WATCH, no association for remote", "host", ap.Address.Host, "port", ap.Address.Port)
+		logger.Default().Debug("artery: cannot send WATCH, no association for remote", "host", ap.Address.Host, "port", ap.Address.Port)
 		return
 	}
 
@@ -228,7 +228,7 @@ func (c *Cluster) watchRemote(watcher ActorRef, target ActorRef) {
 	}
 
 	if err := assoc.SendSystem(seq, frame); err != nil {
-		slog.Debug("artery: WATCH system message send failed", "error", err, "seq", seq)
+		logger.Default().Debug("artery: WATCH system message send failed", "error", err, "seq", seq)
 	}
 }
 
@@ -306,7 +306,7 @@ func (c *Cluster) unwatchRemote(watcher ActorRef, target ActorRef) {
 	}
 
 	if err := assoc.SendSystem(seq, frame); err != nil {
-		slog.Debug("artery: UNWATCH system message send failed", "error", err, "seq", seq)
+		logger.Default().Debug("artery: UNWATCH system message send failed", "error", err, "seq", seq)
 	}
 }
 func (c *Cluster) triggerRemoteNodeDeath(addr cluster.MemberAddress) {
@@ -387,7 +387,7 @@ func (c *Cluster) HandleSystemMessage(remote *gproto_remote.UniqueAddress, env *
 		}
 		nodeWatchers[remoteID] = append(nodeWatchers[remoteID], watcher)
 		c.localWatchersMu.Unlock()
-		slog.Debug("artery: registered remote watcher", "watchee", targetPath, "watcher", watcher.GetPath(), "remote", remoteID)
+		logger.Default().Debug("artery: registered remote watcher", "watchee", targetPath, "watcher", watcher.GetPath(), "remote", remoteID)
 
 	case gproto_remote.SystemMessage_UNWATCH:
 		data := sm.GetWatchData()
@@ -409,7 +409,7 @@ func (c *Cluster) HandleSystemMessage(remote *gproto_remote.UniqueAddress, env *
 			}
 		}
 		c.localWatchersMu.Unlock()
-		slog.Debug("artery: removed remote watcher", "watchee", targetPath, "watcher", watcherPath, "remote", remoteID)
+		logger.Default().Debug("artery: removed remote watcher", "watchee", targetPath, "watcher", watcherPath, "remote", remoteID)
 	}
 	return nil
 }
@@ -451,7 +451,7 @@ func (c *Cluster) emitRemoteDeathWatchNotifications(nodeWatchers map[string][]*g
 	for remoteID, watchers := range nodeWatchers {
 		assoc, ok := c.nm.GetAssociationByRemote(remoteID, 1) // Stream 1 for control
 		if !ok {
-			slog.Debug("artery: cannot send Terminated, no association for remote", "remote", remoteID)
+			logger.Default().Debug("artery: cannot send Terminated, no association for remote", "remote", remoteID)
 			continue
 		}
 
@@ -502,7 +502,7 @@ func (c *Cluster) emitRemoteDeathWatchNotifications(nodeWatchers map[string][]*g
 			}
 
 			if err := assoc.SendSystem(seq, frame); err != nil {
-				slog.Debug("artery: Terminated notification send failed", "error", err, "seq", seq)
+				logger.Default().Debug("artery: Terminated notification send failed", "error", err, "seq", seq)
 			}
 		}
 	}

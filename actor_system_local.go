@@ -23,6 +23,7 @@ import (
 	"github.com/sopranoworks/gekka/actor/mailbox"
 	"github.com/sopranoworks/gekka/actor/typed"
 	"github.com/sopranoworks/gekka/internal/core"
+	"github.com/sopranoworks/gekka/logger"
 	"github.com/sopranoworks/gekka/persistence"
 	"github.com/sopranoworks/gekka/stream"
 	"github.com/sopranoworks/gekka/telemetry"
@@ -119,10 +120,10 @@ func NewActorSystem(name string, config ...*hocon.Config) (ActorSystem, error) {
 	// Log active providers; mark fallbacks so operators know no explicit config was found.
 	logProvider := func(component, plugin string, isFallback bool) {
 		if isFallback {
-			slog.Info("gekka: provider selected (fallback to built-in default)",
+			logger.Default().Info("gekka: provider selected (fallback to built-in default)",
 				"system", name, "component", component, "plugin", plugin)
 		} else {
-			slog.Info("gekka: provider selected",
+			logger.Default().Info("gekka: provider selected",
 				"system", name, "component", component, "plugin", plugin)
 		}
 	}
@@ -651,7 +652,7 @@ func (s *localActorSystem) SpawnActor(path string, a actor.Actor, props actor.Pr
 	} else if mf, mfErr := s.resolvePhase1Mailbox(a, props); mfErr != nil {
 		// Hard error per Phase 1.6: a declared requirement that the bound
 		// factory cannot satisfy fails actor start.
-		slog.Error("actor: mailbox requirement validation failed",
+		logger.Default().Error("actor: mailbox requirement validation failed",
 			"path", path,
 			"err", mfErr.Error())
 		return ActorRef{fullPath: s.SelfPathURI(path), sys: s, local: nil}

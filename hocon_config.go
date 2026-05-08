@@ -10,7 +10,6 @@ package gekka
 
 import (
 	"fmt"
-	"log/slog"
 	"math"
 	"os"
 	"sort"
@@ -23,6 +22,7 @@ import (
 	"github.com/sopranoworks/gekka/actor/typed/delivery"
 	gcluster "github.com/sopranoworks/gekka/cluster"
 	"github.com/sopranoworks/gekka/internal/core"
+	"github.com/sopranoworks/gekka/logger"
 
 	hocon "github.com/sopranoworks/gekka-config"
 )
@@ -2072,7 +2072,7 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		if v, err := cfg.GetString(deprecatedPrefix + ".enabled"); err == nil {
 			v = strings.ToLower(strings.TrimSpace(v))
 			if v == "true" || v == "on" {
-				slog.Warn("config: gekka.cluster.discovery is deprecated, use pekko.management.cluster.bootstrap instead")
+				logger.Default().Warn("config: gekka.cluster.discovery is deprecated, use pekko.management.cluster.bootstrap instead")
 				nodeCfg.Discovery.Enabled = true
 			}
 		}

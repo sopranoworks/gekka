@@ -14,19 +14,20 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/sopranoworks/gekka/logger"
 )
 
-// captureSlogDebug redirects slog to a buffer at DEBUG level for the duration
-// of the test and returns the buffer plus a restore function.
+// captureSlogDebug redirects logger.Default() to a buffer at DEBUG level for
+// the duration of the test and returns the buffer plus a restore function.
 func captureSlogDebug(t *testing.T) (*bytes.Buffer, func()) {
 	t.Helper()
 	var mu sync.Mutex
 	buf := &bytes.Buffer{}
-	prev := slog.Default()
 	w := lockedWriter{w: buf, mu: &mu}
 	h := slog.NewTextHandler(w, &slog.HandlerOptions{Level: slog.LevelDebug})
-	slog.SetDefault(slog.New(h))
-	return buf, func() { slog.SetDefault(prev) }
+	restore := logger.SetDefaultForTest(slog.New(h))
+	return buf, restore
 }
 
 type lockedWriter struct {
@@ -132,16 +133,15 @@ func TestActorDebug_LogRouterMisconfiguration(t *testing.T) {
 	for _, on := range []bool{false, true} {
 		var mu sync.Mutex
 		buf := &bytes.Buffer{}
-		prev := slog.Default()
 		// WARN-level handler so we verify the elevated severity.
 		h := slog.NewTextHandler(lockedWriter{w: buf, mu: &mu}, &slog.HandlerOptions{Level: slog.LevelWarn})
-		slog.SetDefault(slog.New(h))
+		restore := logger.SetDefaultForTest(slog.New(h))
 		ActorDebugConfig{RouterMisconfiguration: on}.LogRouterMisconfiguration("/user/router", "missing routees")
 		emitted := strings.Contains(buf.String(), "actor: router misconfigured")
 		if emitted != on {
 			t.Errorf("flag=%v: emitted=%v want=%v (output=%q)", on, emitted, on, buf.String())
 		}
-		slog.SetDefault(prev)
+		restore()
 	}
 }
 
@@ -153,10 +153,9 @@ func TestActorDebug_LogRouterMisconfiguration(t *testing.T) {
 func TestNewCluster_LogConfigOnStart_Dumps(t *testing.T) {
 	var mu sync.Mutex
 	buf := &bytes.Buffer{}
-	prev := slog.Default()
 	h := slog.NewTextHandler(lockedWriter{w: buf, mu: &mu}, &slog.HandlerOptions{Level: slog.LevelInfo})
-	slog.SetDefault(slog.New(h))
-	defer slog.SetDefault(prev)
+	restore := logger.SetDefaultForTest(slog.New(h))
+	defer restore()
 
 	cfg := ClusterConfig{
 		Host:             "127.0.0.1",
@@ -184,10 +183,9 @@ func TestNewCluster_LogConfigOnStart_Dumps(t *testing.T) {
 func TestNewCluster_LogConfigOnStart_Off(t *testing.T) {
 	var mu sync.Mutex
 	buf := &bytes.Buffer{}
-	prev := slog.Default()
 	h := slog.NewTextHandler(lockedWriter{w: buf, mu: &mu}, &slog.HandlerOptions{Level: slog.LevelInfo})
-	slog.SetDefault(slog.New(h))
-	defer slog.SetDefault(prev)
+	restore := logger.SetDefaultForTest(slog.New(h))
+	defer restore()
 
 	cfg := ClusterConfig{
 		Host:       "127.0.0.1",

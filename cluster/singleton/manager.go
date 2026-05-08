@@ -10,13 +10,14 @@ package singleton
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/cluster"
 	icluster "github.com/sopranoworks/gekka/internal/cluster"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
+	"github.com/sopranoworks/gekka/logger"
 )
 
 // ClusterSingletonManager hosts a singleton actor on the oldest cluster node.
@@ -154,7 +155,7 @@ func (m *ClusterSingletonManager) PreStart() {
 func (m *ClusterSingletonManager) PostStop() {
 	m.cm.Unsubscribe(m.Self())
 	if m.singletonRef != nil {
-		log.Printf("ClusterSingletonManager: stopping singleton on shutdown")
+		logger.Default().Info("ClusterSingletonManager: stopping singleton on shutdown")
 		m.System().Stop(m.singletonRef)
 		m.singletonRef = nil
 	}
@@ -202,17 +203,19 @@ func (m *ClusterSingletonManager) maybeSpawnOrStop() {
 			}
 			ref, err := m.System().ActorOf(m.singletonProps, m.singletonName)
 			if err != nil {
-				log.Printf("ClusterSingletonManager: failed to spawn singleton: %v", err)
+				logger.Default().Error("ClusterSingletonManager: failed to spawn singleton",
+					slog.Any("err", err))
 				m.releaseLease()
 				return
 			}
 			m.singletonRef = ref
 			m.System().Watch(m.Self(), ref)
-			log.Printf("ClusterSingletonManager: singleton spawned at %s", ref.Path())
+			logger.Default().Info("ClusterSingletonManager: singleton spawned",
+				slog.String("path", ref.Path()))
 		}
 	} else {
 		if m.singletonRef != nil {
-			log.Printf("ClusterSingletonManager: stopping singleton — no longer oldest node")
+			logger.Default().Info("ClusterSingletonManager: stopping singleton — no longer oldest node")
 			m.System().Stop(m.singletonRef)
 			m.singletonRef = nil
 			m.releaseLease()
@@ -233,7 +236,8 @@ func (m *ClusterSingletonManager) acquireLease() bool {
 
 	ctx := context.Background()
 	ok, err := m.lease.Acquire(ctx, func(err error) {
-		log.Printf("ClusterSingletonManager: lease lost: %v", err)
+		logger.Default().Error("ClusterSingletonManager: lease lost",
+			slog.Any("err", err))
 		// On lease loss, stop the singleton.
 		if m.singletonRef != nil {
 			m.System().Stop(m.singletonRef)
@@ -246,11 +250,13 @@ func (m *ClusterSingletonManager) acquireLease() bool {
 		if retryDelay == 0 {
 			retryDelay = m.handOverRetryInterval
 		}
-		log.Printf("ClusterSingletonManager: lease acquisition failed, retrying in %s", retryDelay)
+		logger.Default().Warn("ClusterSingletonManager: lease acquisition failed, retrying",
+			slog.Duration("retryDelay", retryDelay))
 		time.Sleep(retryDelay)
 		ok, err = m.lease.Acquire(ctx, nil)
 		if err != nil || !ok {
-			log.Printf("ClusterSingletonManager: lease acquisition retry failed: %v", err)
+			logger.Default().Error("ClusterSingletonManager: lease acquisition retry failed",
+				slog.Any("err", err))
 			return false
 		}
 	}
@@ -264,7 +270,8 @@ func (m *ClusterSingletonManager) releaseLease() {
 		return
 	}
 	if _, err := m.lease.Release(context.Background()); err != nil {
-		log.Printf("ClusterSingletonManager: lease release failed: %v", err)
+		logger.Default().Error("ClusterSingletonManager: lease release failed",
+			slog.Any("err", err))
 	}
 	m.leaseHeld = false
 }

@@ -11,12 +11,13 @@ package singleton
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/sopranoworks/gekka/cluster"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
+	"github.com/sopranoworks/gekka/logger"
 )
 
 // bufferedMessage holds a message that was sent while the singleton location
@@ -168,7 +169,8 @@ func (p *ClusterSingletonProxy) bufferMessage(msg bufferedMessage) {
 	}
 	if len(p.buffer) >= p.bufferSize {
 		// Drop oldest — matches Pekko's ClusterSingletonProxy warning behavior
-		log.Printf("WARNING: Singleton proxy buffer is full (%d). Dropping oldest message.", p.bufferSize)
+		logger.Default().Warn("ClusterSingletonProxy: Singleton proxy buffer is full, dropping oldest message",
+			slog.Int("bufferSize", p.bufferSize))
 		p.buffer = p.buffer[1:]
 	}
 	p.buffer = append(p.buffer, msg)

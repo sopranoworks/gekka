@@ -12,13 +12,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/logger"
 )
 
 // SubscriptionID uniquely identifies a key-change subscription.
@@ -921,7 +921,8 @@ func (r *Replicator) HandleIncoming(data []byte) error {
 		}
 		c := r.GCounter(msg.Key)
 		c.MergeState(p.State)
-		log.Printf("Replicator: merged GCounter[%s], value=%d", msg.Key, c.Value())
+		logger.Default().Info("Replicator: merged GCounter",
+			slog.String("key", msg.Key), slog.Uint64("value", c.Value()))
 		r.persistCounter(msg.Key, c)
 		r.notifySubscribers(msg.Key, c)
 
@@ -932,7 +933,8 @@ func (r *Replicator) HandleIncoming(data []byte) error {
 		}
 		s := r.ORSet(msg.Key)
 		s.MergeSnapshot(snap)
-		log.Printf("Replicator: merged ORSet[%s], elements=%v", msg.Key, s.Elements())
+		logger.Default().Info("Replicator: merged ORSet",
+			slog.String("key", msg.Key), slog.Any("elements", s.Elements()))
 		r.persistORSet(msg.Key, s)
 		r.notifySubscribers(msg.Key, s)
 
@@ -943,7 +945,8 @@ func (r *Replicator) HandleIncoming(data []byte) error {
 		}
 		m := r.LWWMap(msg.Key)
 		m.Merge(p.State)
-		log.Printf("Replicator: merged LWWMap[%s], keys=%d", msg.Key, len(m.Entries()))
+		logger.Default().Info("Replicator: merged LWWMap",
+			slog.String("key", msg.Key), slog.Int("keys", len(m.Entries())))
 		r.persistLWWMap(msg.Key, m)
 		r.notifySubscribers(msg.Key, m)
 
@@ -954,7 +957,8 @@ func (r *Replicator) HandleIncoming(data []byte) error {
 		}
 		c := r.PNCounter(msg.Key)
 		c.MergeSnapshot(p.PNCounterSnapshot)
-		log.Printf("Replicator: merged PNCounter[%s], value=%d", msg.Key, c.Value())
+		logger.Default().Info("Replicator: merged PNCounter",
+			slog.String("key", msg.Key), slog.Int64("value", c.Value()))
 		r.persistPNCounter(msg.Key, c)
 		r.notifySubscribers(msg.Key, c)
 
@@ -965,7 +969,8 @@ func (r *Replicator) HandleIncoming(data []byte) error {
 		}
 		f := r.ORFlag(msg.Key)
 		f.MergeSnapshot(snap)
-		log.Printf("Replicator: merged ORFlag[%s], value=%v", msg.Key, f.Value())
+		logger.Default().Info("Replicator: merged ORFlag",
+			slog.String("key", msg.Key), slog.Bool("value", f.Value()))
 		r.persistORFlag(msg.Key, f)
 		r.notifySubscribers(msg.Key, f)
 
@@ -976,7 +981,9 @@ func (r *Replicator) HandleIncoming(data []byte) error {
 		}
 		reg := r.LWWRegister(msg.Key)
 		reg.MergeSnapshot(p.LWWRegisterSnapshot)
-		log.Printf("Replicator: merged LWWRegister[%s], value=%v", msg.Key, func() any { v, _ := reg.Get(); return v }())
+		regValue, _ := reg.Get()
+		logger.Default().Info("Replicator: merged LWWRegister",
+			slog.String("key", msg.Key), slog.Any("value", regValue))
 		r.persistLWWRegister(msg.Key, reg)
 		r.notifySubscribers(msg.Key, reg)
 
@@ -989,7 +996,8 @@ func (r *Replicator) HandleIncoming(data []byte) error {
 		}
 		c := r.GCounter(msg.Key)
 		c.MergeCounterDelta(d)
-		log.Printf("Replicator: merged GCounter delta[%s], value=%d", msg.Key, c.Value())
+		logger.Default().Info("Replicator: merged GCounter delta",
+			slog.String("key", msg.Key), slog.Uint64("value", c.Value()))
 		r.persistCounter(msg.Key, c)
 		r.notifySubscribers(msg.Key, c)
 
@@ -1000,7 +1008,8 @@ func (r *Replicator) HandleIncoming(data []byte) error {
 		}
 		s := r.ORSet(msg.Key)
 		s.MergeORSetDelta(d)
-		log.Printf("Replicator: merged ORSet delta[%s], elements=%v", msg.Key, s.Elements())
+		logger.Default().Info("Replicator: merged ORSet delta",
+			slog.String("key", msg.Key), slog.Any("elements", s.Elements()))
 		r.persistORSet(msg.Key, s)
 		r.notifySubscribers(msg.Key, s)
 
@@ -1011,7 +1020,8 @@ func (r *Replicator) HandleIncoming(data []byte) error {
 		}
 		m := r.LWWMap(msg.Key)
 		m.MergeLWWMapDelta(d)
-		log.Printf("Replicator: merged LWWMap delta[%s], keys=%d", msg.Key, len(m.Entries()))
+		logger.Default().Info("Replicator: merged LWWMap delta",
+			slog.String("key", msg.Key), slog.Int("keys", len(m.Entries())))
 		r.persistLWWMap(msg.Key, m)
 		r.notifySubscribers(msg.Key, m)
 
@@ -1345,7 +1355,8 @@ func (r *Replicator) gossipLWWRegister(ctx context.Context, key string, reg *LWW
 func (r *Replicator) sendToPeers(ctx context.Context, msg ReplicatorMsg, consistency WriteConsistency) {
 	data, err := json.Marshal(msg)
 	if err != nil {
-		log.Printf("Replicator: marshal error: %v", err)
+		logger.Default().Error("Replicator: marshal error",
+			slog.Any("err", err))
 		return
 	}
 	if threshold := r.LogDataSizeExceeding; threshold > 0 && len(data) > threshold {
@@ -1362,7 +1373,8 @@ func (r *Replicator) sendToPeers(ctx context.Context, msg ReplicatorMsg, consist
 	targets := r.selectGossipTargets(peersSnap, consistency)
 	for _, p := range targets {
 		if err := r.router.Send(ctx, p.path, data); err != nil {
-			log.Printf("Replicator: send to %s failed: %v", p.path, err)
+			logger.Default().Warn("Replicator: send to peer failed",
+				slog.String("path", p.path), slog.Any("err", err))
 		}
 	}
 }

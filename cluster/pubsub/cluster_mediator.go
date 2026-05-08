@@ -10,9 +10,11 @@ package pubsub
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/sopranoworks/gekka/logger"
 )
 
 // ClusterMediatorConfig holds configuration for the ClusterMediator.
@@ -184,7 +186,8 @@ func (cm *ClusterMediator) Publish(ctx context.Context, topic string, msg any) e
 	pub := Publish{Topic: topic, Msg: msg}
 	for _, peer := range peers {
 		if err := cm.sender(ctx, peer, pub); err != nil {
-			log.Printf("pubsub: failed to publish to peer %s: %v", peer, err)
+			logger.Default().Warn("pubsub: failed to publish to peer",
+				slog.String("peer", peer), slog.Any("err", err))
 		}
 	}
 	return nil
@@ -219,7 +222,8 @@ func (cm *ClusterMediator) SendOne(ctx context.Context, topic string, msg any) e
 	sendMsg := SendToOneSubscriber{Msg: msg}
 	for _, peer := range cm.lister() {
 		if err := cm.sender(ctx, peer, sendMsg); err != nil {
-			log.Printf("pubsub: failed to send to peer %s: %v", peer, err)
+			logger.Default().Warn("pubsub: failed to send to peer",
+				slog.String("peer", peer), slog.Any("err", err))
 		}
 	}
 
@@ -317,7 +321,8 @@ func (cm *ClusterMediator) gossipRound(ctx context.Context) {
 
 	for _, peer := range peers {
 		if err := cm.sender(ctx, peer, status); err != nil {
-			log.Printf("pubsub: gossip to %s failed: %v", peer, err)
+			logger.Default().Warn("pubsub: gossip to peer failed",
+				slog.String("peer", peer), slog.Any("err", err))
 		}
 	}
 }
@@ -371,6 +376,7 @@ func (cm *ClusterMediator) sendDelta(ctx context.Context, peer string) {
 	}
 
 	if err := cm.sender(ctx, peer, delta); err != nil {
-		log.Printf("pubsub: send delta to %s failed: %v", peer, err)
+		logger.Default().Warn("pubsub: send delta to peer failed",
+			slog.String("peer", peer), slog.Any("err", err))
 	}
 }

@@ -11,11 +11,12 @@ package singleton
 import (
 	"bytes"
 	"context"
-	"log"
-	"os"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/sopranoworks/gekka/logger"
 )
 
 // ── #12: singleton-identification-interval config flow ──────────────────────
@@ -111,10 +112,11 @@ func TestProxy_BufferOverflow_WarningLog(t *testing.T) {
 		stopCh:                 make(chan struct{}),
 	}
 
-	// Capture log output
+	// Capture log output via slog handler over a buffer.
 	var buf bytes.Buffer
-	log.SetOutput(&buf)
-	defer log.SetOutput(os.Stderr)
+	h := slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+	restore := logger.SetDefaultForTest(slog.New(h))
+	defer restore()
 
 	// Fill buffer to capacity (no overflow yet)
 	proxy.bufferMessage(bufferedMessage{ctx: context.Background(), msg: "a"})

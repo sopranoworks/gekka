@@ -11,12 +11,12 @@ package client
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/cluster"
+	"github.com/sopranoworks/gekka/logger"
 )
 
 // ── Internal receptionist messages ───────────────────────────────────────────
@@ -111,14 +111,14 @@ func NewClusterReceptionist(cm *cluster.ClusterManager, cfg ReceptionistConfig, 
 
 // PreStart starts the periodic client-heartbeat checker.
 func (r *ClusterReceptionist) PreStart() {
-	slog.Info("ClusterReceptionist: starting", "name", r.cfg.Name, "role", r.cfg.Role)
+	logger.Default().Info("ClusterReceptionist: starting", "name", r.cfg.Name, "role", r.cfg.Role)
 	go r.heartbeatChecker()
 }
 
 // PostStop halts the heartbeat checker goroutine.
 func (r *ClusterReceptionist) PostStop() {
 	close(r.stopCheck)
-	slog.Info("ClusterReceptionist: stopped")
+	logger.Default().Info("ClusterReceptionist: stopped")
 }
 
 // heartbeatChecker runs in a background goroutine and periodically evicts
@@ -165,19 +165,19 @@ func (r *ClusterReceptionist) Receive(msg any) {
 		r.servicesMu.Lock()
 		r.services[m.path] = m.ref
 		r.servicesMu.Unlock()
-		slog.Debug("ClusterReceptionist: registered service", "path", m.path)
+		logger.Default().Debug("ClusterReceptionist: registered service", "path", m.path)
 
 	case unregisterService:
 		r.servicesMu.Lock()
 		delete(r.services, m.path)
 		r.servicesMu.Unlock()
-		slog.Debug("ClusterReceptionist: unregistered service", "path", m.path)
+		logger.Default().Debug("ClusterReceptionist: unregistered service", "path", m.path)
 
 	case checkClientHeartbeats:
 		r.evictStaleClients()
 
 	default:
-		slog.Debug("ClusterReceptionist: unknown message", "type", fmt.Sprintf("%T", msg))
+		logger.Default().Debug("ClusterReceptionist: unknown message", "type", fmt.Sprintf("%T", msg))
 	}
 }
 
@@ -196,7 +196,7 @@ func (r *ClusterReceptionist) handleHeartbeat() {
 			senderPath:   senderPath,
 			lastHeartbeat: time.Now(),
 		}
-		slog.Debug("ClusterReceptionist: new client registered", "path", senderPath)
+		logger.Default().Debug("ClusterReceptionist: new client registered", "path", senderPath)
 	}
 	r.clientsMu.Unlock()
 
@@ -267,7 +267,7 @@ func (r *ClusterReceptionist) handleSend(m Send) {
 		ctx, cancel := r.tunnelContext()
 		defer cancel()
 		if err := r.router.Send(ctx, fullPath, m.Msg); err != nil {
-			slog.Warn("ClusterReceptionist: Send failed", "path", m.Path, "err", err)
+			logger.Default().Warn("ClusterReceptionist: Send failed", "path", m.Path, "err", err)
 		}
 	}
 }
@@ -315,7 +315,7 @@ func (r *ClusterReceptionist) handleSendToAll(m SendToAll) {
 				m.Path,
 			)
 			if err := r.router.Send(ctx, fullPath, m.Msg); err != nil {
-				slog.Debug("ClusterReceptionist: SendToAll node failed", "path", fullPath, "err", err)
+				logger.Default().Debug("ClusterReceptionist: SendToAll node failed", "path", fullPath, "err", err)
 			}
 		}
 	}
@@ -336,7 +336,7 @@ func (r *ClusterReceptionist) handlePublish(m Publish) {
 		localAddr.GetPort(),
 	)
 	if err := r.router.Send(context.TODO(), mediatorPath, m); err != nil {
-		slog.Warn("ClusterReceptionist: Publish failed", "topic", m.Topic, "err", err)
+		logger.Default().Warn("ClusterReceptionist: Publish failed", "topic", m.Topic, "err", err)
 	}
 }
 
@@ -348,7 +348,7 @@ func (r *ClusterReceptionist) evictStaleClients() {
 	defer r.clientsMu.Unlock()
 	for path, e := range r.clients {
 		if e.lastHeartbeat.Before(deadline) {
-			slog.Info("ClusterReceptionist: evicting stale client", "path", path)
+			logger.Default().Info("ClusterReceptionist: evicting stale client", "path", path)
 			delete(r.clients, path)
 		}
 	}

@@ -11,7 +11,6 @@ package cluster
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net"
 	"sort"
 	"strconv"
@@ -20,6 +19,7 @@ import (
 	"time"
 
 	"github.com/sopranoworks/gekka/discovery"
+	"github.com/sopranoworks/gekka/logger"
 )
 
 // BootstrapConfig holds configuration for the ClusterBootstrap coordinator.
@@ -161,7 +161,7 @@ func (b *ClusterBootstrap) loop(ctx context.Context) {
 
 		contacts, err := b.provider.FetchSeedNodes()
 		if err != nil {
-			slog.Warn("bootstrap: discovery error", "error", err)
+			logger.Default().Warn("bootstrap: discovery error", "error", err)
 			continue
 		}
 
@@ -195,24 +195,24 @@ func (b *ClusterBootstrap) loop(ctx context.Context) {
 
 		if seed == localAddr {
 			// This node is the leader — self-join.
-			slog.Info("bootstrap: this node is the lowest-address contact point, performing self-join")
+			logger.Default().Info("bootstrap: this node is the lowest-address contact point, performing self-join")
 			host, port, _ := parseHostPort(seed)
 			if err := b.joinFn(ctx, host, port); err != nil {
-				slog.Warn("bootstrap: self-join failed", "error", err)
+				logger.Default().Warn("bootstrap: self-join failed", "error", err)
 				continue
 			}
 		} else {
 			// Join the leader.
-			slog.Info("bootstrap: joining seed node", "seed", seed)
+			logger.Default().Info("bootstrap: joining seed node", "seed", seed)
 			host, port, _ := parseHostPort(seed)
 			if err := b.joinFn(ctx, host, port); err != nil {
-				slog.Warn("bootstrap: join failed", "error", err)
+				logger.Default().Warn("bootstrap: join failed", "error", err)
 				continue
 			}
 		}
 
 		// Bootstrap complete.
-		slog.Info("bootstrap: cluster join initiated successfully")
+		logger.Default().Info("bootstrap: cluster join initiated successfully")
 		return
 	}
 }

@@ -559,7 +559,7 @@ func (r *Replicator) persistEntry(key string, ctype CRDTType, payload any) {
 	}
 	bytes, err := json.Marshal(payload)
 	if err != nil {
-		slog.Warn("Replicator: durable marshal failed", "key", key, "type", ctype, "err", err)
+		logger.Default().Warn("Replicator: durable marshal failed", "key", key, "type", ctype, "err", err)
 		return
 	}
 	if err := r.DurableStore.Store(context.Background(), DurableEntry{
@@ -567,7 +567,7 @@ func (r *Replicator) persistEntry(key string, ctype CRDTType, payload any) {
 		Type:    ctype,
 		Payload: bytes,
 	}); err != nil {
-		slog.Warn("Replicator: durable store failed", "key", key, "type", ctype, "err", err)
+		logger.Default().Warn("Replicator: durable store failed", "key", key, "type", ctype, "err", err)
 	}
 }
 
@@ -614,47 +614,47 @@ func (r *Replicator) Recover(ctx context.Context) error {
 		case CRDTTypeGCounter:
 			var p GCounterPayload
 			if err := json.Unmarshal(e.Payload, &p); err != nil {
-				slog.Warn("Replicator: durable decode gcounter", "key", e.Key, "err", err)
+				logger.Default().Warn("Replicator: durable decode gcounter", "key", e.Key, "err", err)
 				continue
 			}
 			r.GCounter(e.Key).MergeState(p.State)
 		case CRDTTypeORSet:
 			var snap ORSetSnapshot
 			if err := json.Unmarshal(e.Payload, &snap); err != nil {
-				slog.Warn("Replicator: durable decode orset", "key", e.Key, "err", err)
+				logger.Default().Warn("Replicator: durable decode orset", "key", e.Key, "err", err)
 				continue
 			}
 			r.ORSet(e.Key).MergeSnapshot(snap)
 		case CRDTTypeLWWMap:
 			var p LWWMapPayload
 			if err := json.Unmarshal(e.Payload, &p); err != nil {
-				slog.Warn("Replicator: durable decode lwwmap", "key", e.Key, "err", err)
+				logger.Default().Warn("Replicator: durable decode lwwmap", "key", e.Key, "err", err)
 				continue
 			}
 			r.LWWMap(e.Key).Merge(p.State)
 		case CRDTTypePNCounter:
 			var p PNCounterPayload
 			if err := json.Unmarshal(e.Payload, &p); err != nil {
-				slog.Warn("Replicator: durable decode pncounter", "key", e.Key, "err", err)
+				logger.Default().Warn("Replicator: durable decode pncounter", "key", e.Key, "err", err)
 				continue
 			}
 			r.PNCounter(e.Key).MergeSnapshot(p.PNCounterSnapshot)
 		case CRDTTypeORFlag:
 			var snap ORSetSnapshot
 			if err := json.Unmarshal(e.Payload, &snap); err != nil {
-				slog.Warn("Replicator: durable decode orflag", "key", e.Key, "err", err)
+				logger.Default().Warn("Replicator: durable decode orflag", "key", e.Key, "err", err)
 				continue
 			}
 			r.ORFlag(e.Key).MergeSnapshot(snap)
 		case CRDTTypeLWWRegister:
 			var p LWWRegisterPayload
 			if err := json.Unmarshal(e.Payload, &p); err != nil {
-				slog.Warn("Replicator: durable decode lwwregister", "key", e.Key, "err", err)
+				logger.Default().Warn("Replicator: durable decode lwwregister", "key", e.Key, "err", err)
 				continue
 			}
 			r.LWWRegister(e.Key).MergeSnapshot(p.LWWRegisterSnapshot)
 		default:
-			slog.Warn("Replicator: durable unknown crdt type", "key", e.Key, "type", e.Type)
+			logger.Default().Warn("Replicator: durable unknown crdt type", "key", e.Key, "type", e.Type)
 		}
 	}
 	return nil
@@ -680,7 +680,7 @@ func (r *Replicator) WaitForRecovery(ctx context.Context) bool {
 		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			slog.Warn("Replicator: recovery-timeout exceeded with no peers", "timeout", timeout)
+			logger.Default().Warn("Replicator: recovery-timeout exceeded with no peers", "timeout", timeout)
 			return true
 		}
 		wait := 10 * time.Millisecond
@@ -705,7 +705,7 @@ func (r *Replicator) WaitForRecovery(ctx context.Context) bool {
 func (r *Replicator) Start(ctx context.Context) {
 	if r.DurableEnabled && r.DurableStore != nil {
 		if err := r.Recover(ctx); err != nil {
-			slog.Warn("Replicator: durable recovery failed", "err", err)
+			logger.Default().Warn("Replicator: durable recovery failed", "err", err)
 		}
 	}
 	r.wg.Add(1)
@@ -1363,7 +1363,7 @@ func (r *Replicator) sendToPeers(ctx context.Context, msg ReplicatorMsg, consist
 		if hook := r.LogDataSizeExceedingHook; hook != nil {
 			hook(msg.Type, msg.Key, len(data))
 		}
-		slog.Warn("Replicator: serialized data size exceeds threshold",
+		logger.Default().Warn("Replicator: serialized data size exceeds threshold",
 			"type", msg.Type, "key", msg.Key, "size", len(data), "threshold", threshold)
 	}
 	r.mu.RLock()

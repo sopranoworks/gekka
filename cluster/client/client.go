@@ -11,12 +11,12 @@ package client
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/cluster"
+	"github.com/sopranoworks/gekka/logger"
 )
 
 // ── Internal client messages ──────────────────────────────────────────────────
@@ -118,7 +118,7 @@ func NewClusterClient(cfg Config, router cluster.Router) *ClusterClient {
 
 // PreStart begins heartbeat and contact-refresh timers.
 func (c *ClusterClient) PreStart() {
-	slog.Info("ClusterClient: starting", "contacts", c.cfg.InitialContacts)
+	logger.Default().Info("ClusterClient: starting", "contacts", c.cfg.InitialContacts)
 	c.tryConnect()
 	go c.runTimers()
 }
@@ -126,7 +126,7 @@ func (c *ClusterClient) PreStart() {
 // PostStop halts all background goroutines.
 func (c *ClusterClient) PostStop() {
 	close(c.stopTimers)
-	slog.Info("ClusterClient: stopped")
+	logger.Default().Info("ClusterClient: stopped")
 }
 
 // runTimers drives the periodic heartbeat, contact-refresh, and deadline
@@ -175,7 +175,7 @@ func (c *ClusterClient) Receive(msg any) {
 	// ── Receptionist replies ─────────────────────────────────────────────
 	case HeartbeatRsp:
 		c.conn.lastHeartbeat = time.Now()
-		slog.Debug("ClusterClient: heartbeat acknowledged", "contact", c.conn.contactPath)
+		logger.Default().Debug("ClusterClient: heartbeat acknowledged", "contact", c.conn.contactPath)
 
 	case Contacts:
 		c.handleContacts(m)
@@ -191,7 +191,7 @@ func (c *ClusterClient) Receive(msg any) {
 		c.checkDeadline()
 
 	default:
-		slog.Debug("ClusterClient: unknown message", "type", fmt.Sprintf("%T", msg))
+		logger.Default().Debug("ClusterClient: unknown message", "type", fmt.Sprintf("%T", msg))
 	}
 }
 
@@ -203,7 +203,7 @@ func (c *ClusterClient) tryConnect() {
 	c.contactsMu.RUnlock()
 
 	if n == 0 {
-		slog.Warn("ClusterClient: no contact points configured")
+		logger.Default().Warn("ClusterClient: no contact points configured")
 		return
 	}
 	c.rotateContact()
@@ -225,7 +225,7 @@ func (c *ClusterClient) rotateContact() {
 
 	c.conn.contactPath = path
 	c.conn.connected = false
-	slog.Info("ClusterClient: using contact point", "path", path)
+	logger.Default().Info("ClusterClient: using contact point", "path", path)
 }
 
 // sendHeartbeat sends a Heartbeat to the current contact point, if connected.
@@ -235,7 +235,7 @@ func (c *ClusterClient) sendHeartbeat() {
 		return
 	}
 	if err := c.router.SendWithSender(context.TODO(), c.conn.contactPath, c.Self().Path(), Heartbeat{}); err != nil {
-		slog.Debug("ClusterClient: heartbeat send failed", "contact", c.conn.contactPath, "err", err)
+		logger.Default().Debug("ClusterClient: heartbeat send failed", "contact", c.conn.contactPath, "err", err)
 	}
 }
 
@@ -245,7 +245,7 @@ func (c *ClusterClient) sendGetContacts() {
 		return
 	}
 	if err := c.router.SendWithSender(context.TODO(), c.conn.contactPath, c.Self().Path(), GetContacts{}); err != nil {
-		slog.Debug("ClusterClient: GetContacts send failed", "contact", c.conn.contactPath, "err", err)
+		logger.Default().Debug("ClusterClient: GetContacts send failed", "contact", c.conn.contactPath, "err", err)
 	}
 }
 
@@ -268,7 +268,7 @@ func (c *ClusterClient) handleContacts(m Contacts) {
 	if !c.conn.connected {
 		c.conn.connected = true
 		c.conn.lastHeartbeat = time.Now()
-		slog.Info("ClusterClient: connected to cluster", "contact", c.conn.contactPath)
+		logger.Default().Info("ClusterClient: connected to cluster", "contact", c.conn.contactPath)
 		c.drainBuffer()
 	}
 }
@@ -281,7 +281,7 @@ func (c *ClusterClient) checkDeadline() {
 	}
 	window := c.cfg.HeartbeatInterval + c.cfg.AcceptableHeartbeatPause
 	if time.Since(c.conn.lastHeartbeat) > window {
-		slog.Warn("ClusterClient: heartbeat deadline exceeded — rotating contact",
+		logger.Default().Warn("ClusterClient: heartbeat deadline exceeded — rotating contact",
 			"contact", c.conn.contactPath,
 			"last", c.conn.lastHeartbeat,
 		)
@@ -296,7 +296,7 @@ func (c *ClusterClient) checkDeadline() {
 func (c *ClusterClient) forward(deliver func(contactPath string) error, msg any) {
 	if c.conn.connected && c.conn.contactPath != "" {
 		if err := deliver(c.conn.contactPath); err != nil {
-			slog.Warn("ClusterClient: deliver failed, buffering", "err", err)
+			logger.Default().Warn("ClusterClient: deliver failed, buffering", "err", err)
 			c.bufferMsg(bufferedMsg{msg: msg, deliver: deliver})
 		}
 		return

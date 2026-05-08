@@ -14,7 +14,6 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"fmt"
-	"log"
 	"log/slog"
 	"net"
 	"reflect"
@@ -2246,7 +2245,7 @@ func applyDiscoveredSeeds(cfg *ClusterConfig, scheme, system string) error {
 	}
 	discovered, err := provider.FetchSeedNodes()
 	if err != nil {
-		log.Printf("[Discovery] %s: %v", cfg.Discovery.Type, err)
+		logger.Default().Error("[Discovery] seed-node fetch failed", slog.String("type", cfg.Discovery.Type), slog.Any("err", err))
 		return nil
 	}
 	for _, s := range discovered {
@@ -2732,7 +2731,7 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 			return nil, fmt.Errorf("gekka: aeron-udp handler: %w", err)
 		}
 		nm.UDPHandler = udpH
-		log.Printf("gekka: aeron-udp transport active on %s", udpAddr)
+		logger.Default().Info("gekka: aeron-udp transport active", slog.String("addr", udpAddr))
 	}
 
 	nodeID := fmt.Sprintf("%s:%d", host, actualPort)
@@ -2977,7 +2976,7 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 		if err == nil {
 			cluster.Receptionist().Tell(Register[any]{Key: ddata_typed.ReplicatorServiceKey, Service: ref})
 		} else {
-			log.Printf("gekka: failed to spawn typed ddata replicator: %v", err)
+			logger.Default().Error("gekka: failed to spawn typed ddata replicator", slog.Any("err", err))
 		}
 
 		// Automatically manage replicator peers and feed member-removal events
@@ -3022,7 +3021,7 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	// Spawn the local receptionist actor. It uses the CRDT replicator to
 	// propagate service registrations cluster-wide.
 	if _, err := spawnReceptionist(cluster, repl, cfg.TypedReceptionist); err != nil {
-		log.Printf("gekka: failed to spawn receptionist: %v", err)
+		logger.Default().Error("gekka: failed to spawn receptionist", slog.Any("err", err))
 	}
 
 	// ── Coordinated Shutdown ────────────────────────────────────────────────
@@ -3063,15 +3062,15 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	}
 	provider, ok := cluster.downingProviders.Resolve(providerName)
 	if !ok {
-		log.Printf("downing: %s — falling back to %q",
-			gcluster.FormatUnknownProviderError(providerName, cluster.downingProviders.Names()),
-			gcluster.DefaultDowningProviderName)
+		logger.Default().Warn("downing: falling back to default provider",
+			slog.String("reason", gcluster.FormatUnknownProviderError(providerName, cluster.downingProviders.Names())),
+			slog.String("fallback", gcluster.DefaultDowningProviderName))
 		provider, _ = cluster.downingProviders.Resolve(gcluster.DefaultDowningProviderName)
 	}
 	cluster.downingProvider = provider
 	if provider != nil {
 		if err := provider.Start(ctx); err != nil {
-			log.Printf("downing: provider %q Start failed: %v", provider.Name(), err)
+			logger.Default().Error("downing: provider Start failed", slog.String("provider", provider.Name()), slog.Any("err", err))
 		}
 	}
 
@@ -3096,7 +3095,7 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 						selfAddr := cm.LocalAddress.GetAddress()
 						if downed.Member.Host == selfAddr.GetHostname() &&
 							downed.Member.Port == selfAddr.GetPort() {
-							log.Printf("[CoordinatedShutdown] self downed — triggering shutdown")
+							logger.Default().Info("[CoordinatedShutdown] self downed — triggering shutdown")
 							go cluster.GracefulShutdown(context.Background())
 							return
 						}
@@ -4007,7 +4006,7 @@ func (c *Cluster) resolveSingletonLease(typeName string) lease.Lease {
 	}
 	l, err := c.LeaseManager().GetLease(name, settings)
 	if err != nil {
-		log.Printf("gekka: singleton use-lease %q resolve failed: %v", name, err)
+		logger.Default().Error("gekka: singleton use-lease resolve failed", slog.String("name", name), slog.Any("err", err))
 		return nil
 	}
 	return l
@@ -4037,7 +4036,7 @@ func (c *Cluster) resolveShardingLease(typeName string) lease.Lease {
 	}
 	l, err := c.LeaseManager().GetLease(name, settings)
 	if err != nil {
-		log.Printf("gekka: sharding use-lease %q resolve failed: %v", name, err)
+		logger.Default().Error("gekka: sharding use-lease resolve failed", slog.String("name", name), slog.Any("err", err))
 		return nil
 	}
 	return l
@@ -4217,7 +4216,7 @@ func (c *Cluster) registerBuiltinShutdownTasks() {
 	c.cs.AddTask("cluster-leave", "send-leave-and-wait", func(ctx context.Context) error {
 		if err := c.cm.LeaveCluster(); err != nil {
 			// Non-fatal: we might not be fully joined yet.
-			log.Printf("[CoordinatedShutdown] LeaveCluster: %v", err)
+			logger.Default().Error("[CoordinatedShutdown] LeaveCluster failed", slog.Any("err", err))
 		}
 		return c.cm.WaitForSelfRemoved(ctx)
 	})
@@ -4797,7 +4796,7 @@ func (n *Cluster) SpawnActor(path string, a actor.Actor, props actor.Props) acto
 func (c *Cluster) SubscribeToReceptionist(keyID string, subscriber typed.TypedActorRef[any], callback func([]string)) {
 	recept := Receptionist()
 	if recept.Untyped() == nil {
-		log.Printf("Cluster: Receptionist not initialized")
+		logger.Default().Warn("Cluster: Receptionist not initialized")
 		return
 	}
 

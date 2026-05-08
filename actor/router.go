@@ -14,7 +14,7 @@ import (
 	"context"
 	"fmt"
 	"hash/crc32"
-	"log"
+	"log/slog"
 	"math/rand"
 	"reflect"
 	"sort"
@@ -24,6 +24,7 @@ import (
 
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
+	"github.com/sopranoworks/gekka/logger"
 
 	"google.golang.org/protobuf/proto"
 )
@@ -113,7 +114,7 @@ const (
 	// which encodes java.lang.String as raw UTF-8 bytes (no Java-serialisation
 	// overhead).  Go uses this ID when sending strings to Akka nodes.
 	StringSerializerID int32 = 20
-	)
+)
 
 // AssociationState represents the state of a connection to a remote node.
 type AssociationState int
@@ -680,7 +681,7 @@ func (r *Router) Send(ctx context.Context, path string, msg any) error {
 	// 1. Check if local
 	local := r.provider.LocalAddress()
 	if ap.Address.System == local.GetSystem() && ap.Address.Host == local.GetHostname() && uint32(ap.Address.Port) == local.GetPort() {
-		log.Printf("Router: local delivery to %s", ap.Path())
+		logger.Default().Info("Router: local delivery", slog.String("path", ap.Path()))
 		// In a real system, this would go to the local actor's mailbox.
 		return nil
 	}
@@ -690,7 +691,7 @@ func (r *Router) Send(ctx context.Context, path string, msg any) error {
 
 	assoc, ok := r.provider.GetAssociationByHost(targetAddr.GetHostname(), targetAddr.GetPort())
 	if !ok {
-		log.Printf("Router: initiating new connection to %s:%d", targetAddr.GetHostname(), targetAddr.GetPort())
+		logger.Default().Info("Router: initiating new connection", slog.String("host", targetAddr.GetHostname()), slog.Uint64("port", uint64(targetAddr.GetPort())))
 		var err error
 		assoc, err = r.provider.DialRemoteWithRestart(ctx, targetAddr)
 		if err != nil {
@@ -797,14 +798,14 @@ func (r *Router) prepareMessage(msg any) ([]byte, int32, string, error) {
 			sid = 2
 			manifest = msgType.String()
 		} else if _, isBytes := msg.([]byte); isBytes {
-		        sid = 4
-		        manifest = ""
+			sid = 4
+			manifest = ""
 		} else if msgType.Kind() == reflect.String {
-		        sid = StringSerializerID
-		        manifest = ""
+			sid = StringSerializerID
+			manifest = ""
 		} else {
-		        sid = JSONSerializerID
-		        manifest = msgType.String()
+			sid = JSONSerializerID
+			manifest = msgType.String()
 		}
 	}
 

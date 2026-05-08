@@ -9,10 +9,12 @@
 package delivery
 
 import (
-	"log"
+	"fmt"
+	"log/slog"
 
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/actor/typed"
+	"github.com/sopranoworks/gekka/logger"
 )
 
 // producerState holds the mutable state of the ProducerController.
@@ -80,16 +82,16 @@ func (p *producerState) handleCommand(ctx typed.TypedContext[any], msg any) type
 	case SendMessage:
 		p.onSendMessage(ctx, m)
 	default:
-		log.Printf("ProducerController: unhandled message %T", msg)
+		logger.Default().Warn("ProducerController: unhandled message", slog.String("type", fmt.Sprintf("%T", msg)))
 	}
 	return typed.Same[any]()
 }
 
 func (p *producerState) onRegisterConsumer(ctx typed.TypedContext[any], m RegisterConsumer) {
-	log.Printf("ProducerController: consumer registered at %s", m.ConsumerControllerRef)
+	logger.Default().Info("ProducerController: consumer registered", slog.String("consumerControllerRef", m.ConsumerControllerRef))
 	ref, err := ctx.System().Resolve(m.ConsumerControllerRef)
 	if err != nil {
-		log.Printf("ProducerController: resolve consumer %q: %v", m.ConsumerControllerRef, err)
+		logger.Default().Error("ProducerController: resolve consumer failed", slog.String("consumerControllerRef", m.ConsumerControllerRef), slog.Any("err", err))
 		return
 	}
 	p.consumerRef = ref

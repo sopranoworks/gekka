@@ -9,10 +9,11 @@
 package delivery
 
 import (
-	"log"
+	"log/slog"
 
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/actor/typed"
+	"github.com/sopranoworks/gekka/logger"
 )
 
 // ── WorkPulling message types ─────────────────────────────────────────────────
@@ -162,7 +163,7 @@ func (s *workPullingState) handle(ctx typed.TypedContext[any], msg any) typed.Be
 		}
 		// Watch the worker so we can clean up if it stops.
 		ctx.Watch(m.Worker)
-		log.Printf("WorkPulling: worker registered %s", m.Worker.Path())
+		logger.Default().Info("WorkPulling: worker registered", slog.String("worker", m.Worker.Path()))
 
 		// If we have pending work, dispatch immediately.
 		if len(s.pendingWork) > 0 {
@@ -178,7 +179,7 @@ func (s *workPullingState) handle(ctx typed.TypedContext[any], msg any) typed.Be
 
 	case DeregisterWorker:
 		s.removeWorker(m.Worker)
-		log.Printf("WorkPulling: worker deregistered %s", m.Worker.Path())
+		logger.Default().Info("WorkPulling: worker deregistered", slog.String("worker", m.Worker.Path()))
 
 	// ── Work confirmation (worker finished) ───────────────────────────────
 
@@ -206,7 +207,7 @@ func (s *workPullingState) handle(ctx typed.TypedContext[any], msg any) typed.Be
 		// Check for actor.Ref (producer registration).
 		if ref, ok := msg.(actor.Ref); ok && ref != nil {
 			s.producer = ref
-			log.Printf("WorkPulling: producer set to %s", ref.Path())
+			logger.Default().Info("WorkPulling: producer set", slog.String("producer", ref.Path()))
 			s.maybeRequestNext()
 			return nil
 		}
@@ -235,7 +236,7 @@ func (s *workPullingState) handle(ctx typed.TypedContext[any], msg any) typed.Be
 func (s *workPullingState) appendPending(item any) {
 	if s.bufferSize > 0 && len(s.pendingWork) >= s.bufferSize {
 		s.droppedCount++
-		log.Printf("WorkPulling: buffer full (size=%d), dropping work item", s.bufferSize)
+		logger.Default().Warn("WorkPulling: buffer full, dropping work item", slog.Int("size", s.bufferSize))
 		return
 	}
 	s.pendingWork = append(s.pendingWork, item)

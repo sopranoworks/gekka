@@ -9,10 +9,12 @@
 package delivery
 
 import (
-	"log"
+	"fmt"
+	"log/slog"
 
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/actor/typed"
+	"github.com/sopranoworks/gekka/logger"
 )
 
 // consumerState holds the mutable state of the ConsumerController.
@@ -100,17 +102,17 @@ func (c *consumerState) handleCommand(ctx typed.TypedContext[any], msg any) type
 	case Confirmed:
 		c.onConfirmed(ctx, m)
 	default:
-		log.Printf("ConsumerController: unhandled message %T", msg)
+		logger.Default().Warn("ConsumerController: unhandled message", slog.String("type", fmt.Sprintf("%T", msg)))
 	}
 	return typed.Same[any]()
 }
 
 // onConsumerStart handles a ConsumerStart command: registers with the given producer.
 func (c *consumerState) onConsumerStart(ctx typed.TypedContext[any], m ConsumerStart) {
-	log.Printf("ConsumerController: registering with producer at %s", m.ProducerPath)
+	logger.Default().Info("ConsumerController: registering with producer", slog.String("producerPath", m.ProducerPath))
 	ref, err := ctx.System().Resolve(m.ProducerPath)
 	if err != nil {
-		log.Printf("ConsumerController: resolve producer %q: %v", m.ProducerPath, err)
+		logger.Default().Error("ConsumerController: resolve producer failed", slog.String("producerPath", m.ProducerPath), slog.Any("err", err))
 		return
 	}
 	c.producerRef = ref
@@ -128,7 +130,7 @@ func (c *consumerState) onSequencedMessage(ctx typed.TypedContext[any], m *Seque
 		c.producerPath = m.ProducerRef
 		ref, err := ctx.System().Resolve(m.ProducerRef)
 		if err != nil {
-			log.Printf("ConsumerController: resolve producer %q: %v", m.ProducerRef, err)
+			logger.Default().Error("ConsumerController: resolve producer failed", slog.String("producerRef", m.ProducerRef), slog.Any("err", err))
 		} else {
 			c.producerRef = ref
 			// Send initial Request to open the delivery window.
@@ -254,5 +256,5 @@ func (c *consumerState) sendRequest(_ typed.TypedContext[any], viaTimeout bool) 
 		ViaTimeout:       viaTimeout,
 	}
 	c.producerRef.Tell(req, c.selfRef)
-	log.Printf("ConsumerController: Request confirmed=%d upTo=%d", req.ConfirmedSeqNr, req.RequestUpToSeqNr)
+	logger.Default().Info("ConsumerController: Request", slog.Int64("confirmed", req.ConfirmedSeqNr), slog.Int64("upTo", req.RequestUpToSeqNr))
 }

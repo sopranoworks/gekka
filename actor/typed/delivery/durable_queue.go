@@ -12,10 +12,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/actor/typed"
+	"github.com/sopranoworks/gekka/logger"
 	"github.com/sopranoworks/gekka/persistence"
 )
 
@@ -31,7 +32,7 @@ type DurableProducerQueueSettings struct {
 
 // durableEvent is the discriminated union persisted to the journal.
 type durableEvent struct {
-	Kind    string          `json:"kind"`            // "sent" | "confirmed"
+	Kind    string          `json:"kind"` // "sent" | "confirmed"
 	SeqNr   int64           `json:"seq_nr"`
 	Payload json.RawMessage `json:"payload,omitempty"`
 }
@@ -108,7 +109,7 @@ func (s *durableQueueState) handle(ctx typed.TypedContext[any], msg any) typed.B
 	if !s.recovered {
 		s.recovered = true
 		if err := s.recover(ctx); err != nil {
-			log.Printf("DurableProducerQueue %s: recovery failed: %v", s.producerID, err)
+			logger.Default().Error("DurableProducerQueue: recovery failed", slog.String("producerID", s.producerID), slog.Any("err", err))
 		}
 	}
 
@@ -134,7 +135,7 @@ func (s *durableQueueState) handle(ctx typed.TypedContext[any], msg any) typed.B
 			context.Background(), s.persistenceID, uint64(m.ConfirmedSeqNr))
 
 	default:
-		log.Printf("DurableProducerQueue: unhandled message %T", msg)
+		logger.Default().Warn("DurableProducerQueue: unhandled message", slog.String("type", fmt.Sprintf("%T", msg)))
 	}
 	return typed.Same[any]()
 }
@@ -232,14 +233,18 @@ func (s *durableQueueState) recover(_ typed.TypedContext[any]) error {
 		s.nextSeqNr = confirmedUpTo + 1
 	}
 
-	log.Printf("DurableProducerQueue %s: recovered confirmedUpTo=%d, buffered=%d, nextSeqNr=%d",
-		s.producerID, s.confirmedUpTo, len(s.buffer), s.nextSeqNr)
+	logger.Default().Info("DurableProducerQueue: recovered",
+		slog.String("producerID", s.producerID),
+		slog.Int64("confirmedUpTo", s.confirmedUpTo),
+		slog.Int("buffered", len(s.buffer)),
+		slog.Int64("nextSeqNr", s.nextSeqNr))
 	return nil
 }
 
 func (s *durableQueueState) onRegisterConsumer(_ typed.TypedContext[any], m RegisterConsumer) {
-	log.Printf("DurableProducerQueue %s: consumer registered at %s",
-		s.producerID, m.ConsumerControllerRef)
+	logger.Default().Info("DurableProducerQueue: consumer registered",
+		slog.String("producerID", s.producerID),
+		slog.String("consumerControllerRef", m.ConsumerControllerRef))
 	// We don't resolve here — the consumer path is stored for reconnect logic.
 	// The real ref is set when a *Request arrives (which carries the consumer's
 	// flow-control window and implicitly the reply address via the actor context).
@@ -253,8 +258,10 @@ func (s *durableQueueState) onSendMessage(_ typed.TypedContext[any], m SendMessa
 
 	// Persist before sending.
 	if err := s.persistSent(seqNr, m); err != nil {
-		log.Printf("DurableProducerQueue %s: persist seqNr=%d failed: %v",
-			s.producerID, seqNr, err)
+		logger.Default().Error("DurableProducerQueue: persist failed",
+			slog.String("producerID", s.producerID),
+			slog.Int64("seqNr", seqNr),
+			slog.Any("err", err))
 		// Still enqueue — the message will be sent but may be lost if we crash
 		// before persisting. In production use a synchronous journal.
 	}

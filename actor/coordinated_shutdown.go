@@ -12,9 +12,11 @@ package actor
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/sopranoworks/gekka/logger"
 )
 
 // DefaultPhases lists every standard shutdown phase in execution order.
@@ -168,7 +170,7 @@ func (cs *CoordinatedShutdown) runAllPhases(ctx context.Context) error {
 		}
 		if err := runPhase(ctx, phase, phaseTasks, timeout); err != nil {
 			// Log but continue — mirrors Pekko's default recover=on behaviour.
-			log.Printf("CoordinatedShutdown: phase %q did not complete cleanly: %v", phase, err)
+			logger.Default().Warn("CoordinatedShutdown: phase did not complete cleanly", slog.String("phase", phase), slog.Any("err", err))
 		}
 	}
 	return nil
@@ -177,7 +179,7 @@ func (cs *CoordinatedShutdown) runAllPhases(ctx context.Context) error {
 // runPhase executes all tasks for a single phase concurrently and waits for
 // all of them to finish or the phase timeout to expire.
 func runPhase(ctx context.Context, phase string, tasks []ShutdownTask, timeout time.Duration) error {
-	log.Printf("CoordinatedShutdown: [%s] starting (%d task(s))", phase, len(tasks))
+	logger.Default().Info("CoordinatedShutdown: phase starting", slog.String("phase", phase), slog.Int("tasks", len(tasks)))
 
 	phaseCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -189,7 +191,7 @@ func runPhase(ctx context.Context, phase string, tasks []ShutdownTask, timeout t
 		go func() {
 			defer wg.Done()
 			if err := t.Fn(phaseCtx); err != nil {
-				log.Printf("CoordinatedShutdown: [%s] task %q: %v", phase, t.Name, err)
+				logger.Default().Error("CoordinatedShutdown: task failed", slog.String("phase", phase), slog.String("task", t.Name), slog.Any("err", err))
 			}
 		}()
 	}
@@ -199,10 +201,10 @@ func runPhase(ctx context.Context, phase string, tasks []ShutdownTask, timeout t
 
 	select {
 	case <-done:
-		log.Printf("CoordinatedShutdown: [%s] done", phase)
+		logger.Default().Info("CoordinatedShutdown: phase done", slog.String("phase", phase))
 		return nil
 	case <-phaseCtx.Done():
-		log.Printf("CoordinatedShutdown: [%s] timeout", phase)
+		logger.Default().Warn("CoordinatedShutdown: phase timeout", slog.String("phase", phase))
 		return phaseCtx.Err()
 	}
 }

@@ -9,10 +9,12 @@
 package actor
 
 import (
-	"log"
+	"log/slog"
 	"reflect"
 	"sync"
 	"sync/atomic"
+
+	"github.com/sopranoworks/gekka/logger"
 )
 
 // DeadLetter is published to the EventStream whenever a message cannot be
@@ -133,8 +135,8 @@ func (es *EventStream) Publish(event any) {
 // up to a configurable limit, matching Pekko's pekko.log-dead-letters behavior.
 type DeadLetterLogger struct {
 	mu             sync.Mutex
-	remaining      int   // positive = countdown, 0 = exhausted, negative = unlimited
-	suppressDuring bool  // suppress during shutdown
+	remaining      int    // positive = countdown, 0 = exhausted, negative = unlimited
+	suppressDuring bool   // suppress during shutdown
 	isShuttingDown *int32 // pointer to system's shuttingDown flag (atomic)
 	subscribed     bool
 }
@@ -177,12 +179,15 @@ func (dl *DeadLetterLogger) handle(event any) {
 	if d.Recipient != nil {
 		recipientPath = d.Recipient.Path()
 	}
-	log.Printf("Dead letter [%s] from %s to %s: %v",
-		d.Cause, deadLetterRefPath(d.Sender), recipientPath, d.Message)
+	logger.Default().Info("Dead letter",
+		slog.String("cause", d.Cause),
+		slog.String("from", deadLetterRefPath(d.Sender)),
+		slog.String("to", recipientPath),
+		slog.Any("message", d.Message))
 	if dl.remaining > 0 {
 		dl.remaining--
 		if dl.remaining == 0 {
-			log.Printf("Dead letter logging limit reached. No further dead letters will be logged. " +
+			logger.Default().Info("Dead letter logging limit reached. No further dead letters will be logged. " +
 				"To change this limit, configure pekko.log-dead-letters.")
 		}
 	}

@@ -113,7 +113,7 @@ The keys most users actually tune. All are Pekko-compatible (drop them into your
 
 | Key | Default | Description |
 |---|---|---|
-| `pekko.loglevel` | `INFO` | Minimum log level (`DEBUG`, `INFO`, `WARN`, `ERROR`) — *parsed only; consumer deferred to the external-log-server cycle* |
+| `pekko.loglevel` | `INFO` | Minimum log level (`DEBUG`, `INFO`, `WARN`, `ERROR`) — wired by `cluster.go` `NewCluster` into `logger.MainLevelVar` via `logger.Install` |
 | `gekka.telemetry.exporter.otlp.endpoint` | `""` | OTLP/HTTP collector endpoint for metrics/traces |
 
 ---
@@ -122,8 +122,8 @@ The keys most users actually tune. All are Pekko-compatible (drop them into your
 
 | Path | Pekko Default | Gekka? | Notes |
 |---|---|---|---|
-| `pekko.loglevel` | `"INFO"` | ❌ | Not implemented — parsed into `NodeConfig.LogLevel` (cluster.go:223) but no consumer; deferred to the future external-log-server logging cycle (gekka's logger is being replaced). Tracked in `docs/LEFTWORKS.md` §11 |
-| `pekko.stdout-loglevel` | `"WARNING"` | ❌ | Not implemented — deferred to the future external-log-server logging cycle (separate from the immediate post-audit roadmap). Tracked in `docs/LEFTWORKS.md` §11 |
+| `pekko.loglevel` | `"INFO"` | ✅ | `ClusterConfig.LogLevel` — parsed by `hocon_config.go` (with `akka.loglevel` alias and `gekka.logging.level` fallback), then `cluster.go` `NewCluster` calls `logger.ParseLevel` and feeds the result to `logger.Install` as `Options.MainLevel`, which writes `logger.MainLevelVar`. The composite handler at `logger/handler.go` filters records by that LevelVar; an empty parsed value defaults to `"INFO"` at the install call site (parse stays honest to absent). |
+| `pekko.stdout-loglevel` | `"WARNING"` | ✅ | `ClusterConfig.StdoutLogLevel` — parsed by `hocon_config.go` (with `akka.stdout-loglevel` alias), then `cluster.go` `NewCluster` calls `logger.ParseLevel` and feeds the result to `logger.Install` as `Options.StdoutLevel`, which writes `logger.StdoutLevelVar`. `"OFF"` maps to `logger.LevelOff` (`math.MaxInt32`); the composite handler skips its stdout leg whenever `record.Level < stdoutLevelVar.Level()`. Empty parsed value defaults to `"WARNING"` at the install call site. |
 | `pekko.log-config-on-start` | `off` | ✅ | When on, NewCluster emits the resolved ClusterConfig at INFO via slog |
 | `pekko.log-dead-letters` | `10` | ✅ | `ClusterConfig.LogDeadLetters` — cap on dead-letter log spam (off=disable, N=log first N occurrences) |
 | `pekko.log-dead-letters-during-shutdown` | `on` | ✅ | `ClusterConfig.LogDeadLettersDuringShutdown` — when off, suppresses dead-letter logging during coordinated shutdown |
@@ -582,15 +582,15 @@ touching the consumer code.
 
 ## Summary
 
-### Symbol counts (post 2026-05-07 perfect-pekko Phase 9 closure)
+### Symbol counts (post 2026-05-09 perfect-pekko Phase 10 closure)
 
 | Symbol | Substantive table rows | Meaning |
 |---|---|---|
-| ✅ | 300 | Parsed AND consumed |
+| ✅ | 302 | Parsed AND consumed |
 | ⚠️ | 0 | Forward-compat parsed; consumer deferred (Note states what's deferred) |
 | ☕ | 8 | JVM-only — no equivalent capability in Go runtime |
 | 🚫 | 4 | Go/JVM API-shape incompatibility (FQCN class loading, JCA Provider, JKS rotation) |
-| ❌ | 2 | Not implemented; portable in principle (tracked in `docs/LEFTWORKS.md` §11) |
+| ❌ | 0 | Not implemented; portable in principle (tracked in `docs/LEFTWORKS.md` §11) |
 
 (Counts exclude the legend lines themselves and this Summary table. `grep -c "| ✅ |"` etc. on the file returns counts +1 because each Summary-table row contributes one match.)
 
@@ -636,22 +636,68 @@ semantics. See `docs/LEFTWORKS.md` §9 for the full JVM-only list.
 
 ### Not Yet Implemented (❌) — single source of truth
 
-Portable Pekko paths gekka has not bridged. The full list lives in
-`docs/LEFTWORKS.md` §11 ("Future Work — Portable"). After Phase 1 closed
-the mailbox subsystem (sub-commits 1.1–1.6, 2026-05-06) only the logging
-deferrals remain:
+Portable Pekko paths gekka has not bridged. After perfect-pekko-compat
+Phase 10 closed the logging deferrals on 2026-05-09 (Project A's slog-
+based logging foundation + Project B's `pekko.loglevel` /
+`pekko.stdout-loglevel` production wiring), zero ❌ rows remain in the
+portable surface.
 
-1. **Logging** — `pekko.loglevel` (honesty-downgraded ✅ → ❌ on
-   2026-04-30 — parsed-only) and `pekko.stdout-loglevel`. Both are
-   **deferred to the future external-log-server logging cycle**, not the
-   immediate post-audit roadmap; the in-process logger is being replaced.
+- Mailbox subsystem (control-aware mailbox bindings, `default-mailbox.*`
+  tunables, `mailbox.requirements.*`, deprecated `passivate-idle-entity-after`
+  alias) — closed by perfect-pekko-compat Phase 1 on 2026-05-06.
+- Logging (`pekko.loglevel` row 125 + `pekko.stdout-loglevel` row 126) —
+  closed by perfect-pekko-compat Phase 10 on 2026-05-09.
 
-Mailbox subsystem ❌ rows (control-aware mailbox bindings, `default-mailbox.*`
-tunables, `mailbox.requirements.*`, and the deprecated
-`passivate-idle-entity-after` alias) closed by perfect-pekko-compat Phase 1
-on 2026-05-06.
+Future external-log-server transport remains an additive enhancement that
+swaps `logger.Install`'s `Options.Main` for a network handler with no
+config-surface change.
 
 ### Audit history
+
+- **2026-05-09 — Perfect-pekko Phase 10 closure (logger replacement:
+  `pekko.loglevel` + `pekko.stdout-loglevel` wired onto slog
+  foundation):** Closes the final two ❌ rows in `pekko/actor` — 125
+  (`pekko.loglevel`) and 126 (`pekko.stdout-loglevel`). Project A
+  (sub-commits A1–A5.7, 2026-05-07 → 2026-05-09) shipped the permanent
+  `logger/` package built on `log/slog`: composite handler with two
+  filtered legs (`logger/handler.go`), `Install`/`Uninstall` lifecycle
+  with atomic main-leg swap (`logger/install.go`), case-insensitive
+  Pekko level parser including the `OFF` sentinel `LevelOff` =
+  `math.MaxInt32` (`logger/level.go`), and migration of every in-process
+  `log.Print*` / `fmt.Fprintf(os.Stderr, …)` callsite in production code
+  to `logger.Default()` across cluster, internal/core, persistence,
+  stream, actor, and management packages. Project B (this commit) wires
+  the LevelVars to the parsed HOCON values: `cluster.go` `NewCluster`
+  reads `ClusterConfig.LogLevel` and `ClusterConfig.StdoutLogLevel`,
+  defaults them to `"INFO"` / `"WARNING"` (Pekko reference.conf) at the
+  install call site, runs `logger.ParseLevel`, and feeds
+  `logger.Install` `Options.MainLevel` / `Options.StdoutLevel`. The
+  composite handler's `Handle` gates each leg by its LevelVar so
+  `stdout-loglevel = "OFF"` (mapped to `LevelOff`) silences the stdout
+  leg without disabling the main leg, and the LevelVars themselves are
+  lock-free — runtime level changes are picked up on the next record.
+  Parse-site default for `StdoutLogLevel` (`"WARNING"`) was removed from
+  `hocon_config.go` so the parser now returns the empty string when
+  neither `pekko.stdout-loglevel` nor `akka.stdout-loglevel` is present,
+  with the install call site holding the only default. New file
+  `level_binding_test.go` adds five RED-then-GREEN tests covering the
+  end-to-end binding through `ParseHOCONString` + `NewCluster`:
+  `TestNodeConfig_LogLevelDriversMainLevelVar`,
+  `TestNodeConfig_StdoutLogLevelDriversStdoutLevelVar`,
+  `TestStdoutLogLevel_OFF_SilencesStdoutLeg`,
+  `TestLogLevel_DefaultsAreInfoAndWarning`,
+  `TestPekkoAlias_AkkaLogLevel`; the existing
+  `TestParseHOCON_StdoutLogLevel_DefaultWarning` was renamed to
+  `TestParseHOCON_StdoutLogLevel_AbsentLeavesEmpty` to reflect the
+  parse-site honesty contract. `LEFTWORKS.md` §11 "Logging — deferred
+  to future external-log-server cycle" subsection removed; the
+  external-log-server transport remains a future additive enhancement
+  that plugs into `Options.Main` without API change. Iron Rule 1 full
+  gate: `go test -count=1 ./...` green (38 packages), `go test -tags
+  integration -p 1 -count=1 ./...` green (38 packages, root 264 s),
+  `cd test/compatibility/akka-multi-node && sbt multi-jvm:test` 3/3
+  STABILITY_PASSED in 197 s. Summary counts: ✅ 300 → 302, ❌ 2 → 0.
+  Phase 10 closes the perfect-pekko-compat roadmap.
 
 - **2026-05-07 — Perfect-pekko Phase 9 closure (Persistence plugin
   proxy cross-process mode):** Closes the final two ⚠️ rows in

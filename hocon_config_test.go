@@ -4983,9 +4983,15 @@ akka.remote.artery.canonical.port = 2552
 	}
 }
 
-// TestParseHOCON_StdoutLogLevel_DefaultWarning verifies the Pekko reference.conf
-// default of "WARNING" when both pekko.* and akka.* keys are absent.
-func TestParseHOCON_StdoutLogLevel_DefaultWarning(t *testing.T) {
+// TestParseHOCON_StdoutLogLevel_AbsentLeavesEmpty verifies that the HOCON
+// parse site does NOT inject the Pekko reference.conf default "WARNING"
+// when both pekko.* and akka.* keys are absent — the parse site is honest
+// to "absent". Defaulting to "WARNING" happens at the logger.Install call
+// site in cluster.go's NewCluster, per Phase 10 of perfect-pekko-compat.
+// See cluster.go's NewCluster (`stdoutLogLevelStr == "" → "WARNING"`) and
+// TestLogLevel_DefaultsAreInfoAndWarning in level_binding_test.go for the
+// install-site default contract.
+func TestParseHOCON_StdoutLogLevel_AbsentLeavesEmpty(t *testing.T) {
 	const hocon = `
 pekko.remote.artery.canonical.hostname = "127.0.0.1"
 pekko.remote.artery.canonical.port = 2552
@@ -4994,7 +5000,7 @@ pekko.remote.artery.canonical.port = 2552
 	if err != nil {
 		t.Fatalf("parseHOCONString: %v", err)
 	}
-	if got, want := cfg.StdoutLogLevel, "WARNING"; got != want {
-		t.Errorf("StdoutLogLevel = %q, want %q (Pekko reference.conf default)", got, want)
+	if got, want := cfg.StdoutLogLevel, ""; got != want {
+		t.Errorf("StdoutLogLevel = %q, want %q (parse site stays honest to absent)", got, want)
 	}
 }

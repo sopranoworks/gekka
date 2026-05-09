@@ -155,15 +155,15 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 		}
 	}
 
-	// Stdout log level: pekko.stdout-loglevel (or akka.stdout-loglevel),
-	// default "WARNING" per Pekko reference.conf when both are absent.
+	// Stdout log level: pekko.stdout-loglevel (or akka.stdout-loglevel).
+	// The parse site stays honest to "absent" — when neither key is present
+	// nodeCfg.StdoutLogLevel remains the empty string. Defaulting to Pekko's
+	// reference.conf "WARNING" happens at the logger.Install call site in
+	// cluster.go's NewCluster, per Phase 10 of perfect-pekko-compat.
 	if nodeCfg.StdoutLogLevel == "" {
 		if v, err := cfg.GetString(prefix + ".stdout-loglevel"); err == nil {
 			nodeCfg.StdoutLogLevel = strings.TrimSpace(v)
 		}
-	}
-	if nodeCfg.StdoutLogLevel == "" {
-		nodeCfg.StdoutLogLevel = "WARNING"
 	}
 
 	// Dead letter logging: pekko.log-dead-letters (default: 10)

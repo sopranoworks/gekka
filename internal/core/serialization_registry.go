@@ -13,7 +13,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"reflect"
 	"strings"
 	"sync"
@@ -21,6 +20,7 @@ import (
 	hocon "github.com/sopranoworks/gekka-config"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 	"github.com/sopranoworks/gekka/internal/proto/remote"
+	"github.com/sopranoworks/gekka/logger"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -465,7 +465,7 @@ func (j *JSONSerializer) FromBinary(data []byte, manifest string) (interface{}, 
 	if err := json.Unmarshal(data, ptr.Interface()); err != nil {
 		// Unmarshal failure — manifest collision between serializers.
 		// Return opaque wrapper so the connection isn't killed.
-		slog.Debug("JSONSerializer: manifest collision, returning opaque message",
+		logger.Default().Debug("JSONSerializer: manifest collision, returning opaque message",
 			"manifest", manifest, "type", typ, "error", err)
 		return &OpaqueJSONMessage{Manifest: manifest, Data: data}, nil
 	}

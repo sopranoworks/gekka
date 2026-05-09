@@ -62,7 +62,6 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -72,8 +71,9 @@ import (
 
 	"github.com/sopranoworks/gekka/cluster"
 	"github.com/sopranoworks/gekka/internal/core"
-	"github.com/sopranoworks/gekka/persistence"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
+	"github.com/sopranoworks/gekka/logger"
+	"github.com/sopranoworks/gekka/persistence"
 )
 
 //go:embed dashboard.html
@@ -186,7 +186,7 @@ func NewManagementServer(provider ClusterStateProvider, hostname string, port in
 	if err != nil {
 		return nil, fmt.Errorf("management: listen on %s:%d: %w", hostname, port, err)
 	}
-	slog.Info("gekka: management server listening", "address", ln.Addr().String())
+	logger.Default().Info("gekka: management server listening", "address", ln.Addr().String())
 
 	enableHealth := len(healthChecks) == 0 || healthChecks[0] // default true
 	ms := &ManagementServer{
@@ -240,18 +240,18 @@ func (ms *ManagementServer) Start(ctx context.Context) {
 	// Start the server in a background goroutine immediately.
 	go func() {
 		if err := ms.srv.Serve(ms.listener); err != nil && err != http.ErrServerClosed {
-			slog.Error("gekka: management server serve error", "error", err)
+			logger.Default().Error("gekka: management server serve error", "error", err)
 		}
 	}()
 
 	// Background goroutine for graceful shutdown.
 	go func() {
 		<-ctx.Done()
-		slog.Info("gekka: management server shutting down", "address", addr)
+		logger.Default().Info("gekka: management server shutting down", "address", addr)
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := ms.srv.Shutdown(shutCtx); err != nil {
-			slog.Error("gekka: management server shutdown error", "error", err)
+			logger.Default().Error("gekka: management server shutdown error", "error", err)
 		}
 	}()
 }

@@ -11,11 +11,12 @@ package core
 import (
 	"fmt"
 	"io"
-	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/sopranoworks/gekka/logger"
 )
 
 // flightRecorderBufSize is the fixed ring buffer capacity (shared across all levels).
@@ -251,9 +252,9 @@ func (fr *FlightRecorder) DumpOnQuarantine(remoteAddr string) {
 	if len(events) == 0 {
 		return
 	}
-	slog.Warn("flight-recorder: quarantine dump", "association", remoteAddr, "event_count", len(events))
+	logger.Default().Warn("flight-recorder: quarantine dump", "association", remoteAddr, "event_count", len(events))
 	for i := range events {
-		slog.Warn("flight-recorder: event", "line", events[i].FormatText())
+		logger.Default().Warn("flight-recorder: event", "line", events[i].FormatText())
 	}
 }
 

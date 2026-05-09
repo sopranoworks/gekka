@@ -20,6 +20,7 @@ import (
 
 	"github.com/sopranoworks/gekka/actor"
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
+	"github.com/sopranoworks/gekka/logger"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -70,7 +71,7 @@ func TcpArteryHandlerWithNodeManager(nm *NodeManager) TcpHandler {
 		err := nm.ProcessConnection(ctx, conn, INBOUND, nil, 0) // Unknown streamId
 		if err != nil {
 			if !nm.TryRecordInboundRestart() {
-				slog.Warn("artery: inbound-restart cap exceeded",
+				logger.Default().Warn("artery: inbound-restart cap exceeded",
 					"error", err,
 					"max", nm.EffectiveInboundMaxRestarts(),
 					"window", nm.EffectiveInboundRestartTimeout())
@@ -118,7 +119,7 @@ func TcpArteryOutboundHandler(ctx context.Context, conn net.Conn, handler FrameH
 	// the "pekko://" vs "akka://" distinction is only in actor-path URIs,
 	// not in the TCP stream header.
 	magicHeader := []byte{'A', 'K', 'K', 'A', byte(streamId)}
-	slog.Info("artery: writing Pekko preamble", "streamId", streamId)
+	logger.Default().Info("artery: writing Pekko preamble", "streamId", streamId)
 
 	if _, err := conn.Write(magicHeader); err != nil {
 		return fmt.Errorf("failed to write stream magic header: %w", err)
@@ -205,16 +206,16 @@ func tcpArteryReadLoop(ctx context.Context, conn net.Conn, handler FrameHandler,
 		// Decode the envelope.
 		meta, err := DecodeArteryEnvelope(targetBuf, ctm, remoteUid)
 		if err != nil {
-			slog.Warn("artery: failed to decode envelope", "error", err)
+			logger.Default().Warn("artery: failed to decode envelope", "error", err)
 			continue
 		}
-		slog.Debug("artery: decoded frame",
+		logger.Default().Debug("artery: decoded frame",
 			"serializerId", meta.SerializerId,
 			"manifest", string(meta.MessageManifest),
 			"seq", meta.SeqNo)
 
 		if err := handler(ctx, meta); err != nil {
-			slog.Warn("artery: handler error", "error", err)
+			logger.Default().Warn("artery: handler error", "error", err)
 			return fmt.Errorf("handler error: %w", err)
 		}
 	}
@@ -316,12 +317,12 @@ func WriteFrame(writer io.Writer, payload []byte) error {
 
 	// Trace-level hex dump of the first 64 bytes (header + start of Artery envelope).
 	// Enable with slog at Debug level to compare wire bytes against a real Pekko/Akka node.
-	if slog.Default().Enabled(context.TODO(), slog.LevelDebug) {
+	if logger.Default().Enabled(context.TODO(), slog.LevelDebug) {
 		end := 64
 		if end > len(frame) {
 			end = len(frame)
 		}
-		slog.Debug("artery: outbound frame",
+		logger.Default().Debug("artery: outbound frame",
 			"total_bytes", len(frame),
 			"payload_bytes", len(payload),
 			"hex64", hex.EncodeToString(frame[:end]),
@@ -331,7 +332,7 @@ func WriteFrame(writer io.Writer, payload []byte) error {
 	if _, err := writer.Write(frame); err != nil {
 		return fmt.Errorf("failed to write frame: %w", err)
 	}
-	slog.Debug("artery: wrote frame", "total_bytes", 4+len(payload))
+	logger.Default().Debug("artery: wrote frame", "total_bytes", 4+len(payload))
 	return nil
 }
 
@@ -339,11 +340,11 @@ func WriteFrame(writer io.Writer, payload []byte) error {
 func ArteryDispatcher(ctx context.Context, meta *ArteryMetadata) error {
 	switch meta.SerializerId {
 	case 1: // Example: Java Serializer
-		slog.Debug("artery: routing to Java Serializer", "seq", meta.SeqNo)
+		logger.Default().Debug("artery: routing to Java Serializer", "seq", meta.SeqNo)
 	case 2: // Example: JSON Serializer
-		slog.Debug("artery: routing to JSON Serializer", "seq", meta.SeqNo)
+		logger.Default().Debug("artery: routing to JSON Serializer", "seq", meta.SeqNo)
 	default:
-		slog.Debug("artery: unrecognized serializerId", "serializerId", meta.SerializerId)
+		logger.Default().Debug("artery: unrecognized serializerId", "serializerId", meta.SerializerId)
 		return fmt.Errorf("unrecognized serializerId: %d", meta.SerializerId)
 	}
 	return nil

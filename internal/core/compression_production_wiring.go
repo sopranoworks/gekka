@@ -20,10 +20,10 @@ package core
 import (
 	"context"
 	"fmt"
-	"log/slog"
 
 	"github.com/sopranoworks/gekka/actor"
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
+	"github.com/sopranoworks/gekka/logger"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -83,7 +83,7 @@ func sendCompressionAdvertisement(ctx context.Context, nm *NodeManager, router *
 			addr.GetProtocol(), addr.GetSystem(),
 			addr.GetHostname(), addr.GetPort())
 		if err := router.Send(ctx, path, adv); err != nil {
-			slog.Debug("artery: compression advertisement send failed",
+			logger.Default().Debug("artery: compression advertisement send failed",
 				"peer", path, "isActorRef", isActorRef, "err", err)
 		}
 	}

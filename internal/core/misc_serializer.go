@@ -10,7 +10,8 @@ package core
 
 import (
 	"fmt"
-	"log/slog"
+
+	"github.com/sopranoworks/gekka/logger"
 )
 
 // MiscMessageSerializer handles Pekko's MiscMessageSerializer (ID=16) messages.
@@ -40,6 +41,6 @@ func (*MiscMessageSerializer) ToBinary(msg interface{}) ([]byte, error) {
 }
 
 func (*MiscMessageSerializer) FromBinary(data []byte, manifest string) (interface{}, error) {
-	slog.Debug("MiscMessageSerializer: received message", "manifest", manifest, "len", len(data))
+	logger.Default().Debug("MiscMessageSerializer: received message", "manifest", manifest, "len", len(data))
 	return &MiscMessage{Manifest: manifest, Data: data}, nil
 }

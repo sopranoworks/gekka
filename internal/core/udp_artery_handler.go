@@ -42,12 +42,12 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
-	"log/slog"
 	"net"
 	"sync"
 	"time"
 
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
+	"github.com/sopranoworks/gekka/logger"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -166,7 +166,7 @@ func NewUdpArteryHandler(ctx context.Context, addr string, nm *NodeManager, hand
 	go h.receiveLoop()
 	go h.smLoop()
 
-	slog.Info("aeron-udp: listening", "addr", conn.LocalAddr())
+	logger.Default().Info("aeron-udp: listening", "addr", conn.LocalAddr())
 	return h, nil
 }
 
@@ -206,18 +206,18 @@ func (h *UdpArteryHandler) receiveLoop() {
 			case <-h.ctx.Done():
 				return
 			default:
-				slog.Warn("aeron-udp: read error", "error", err)
+				logger.Default().Warn("aeron-udp: read error", "error", err)
 				continue
 			}
 		}
 
 		if n < AeronDataHeaderLen {
-			slog.Debug("aeron-udp: short datagram", "bytes", n, "src", src)
+			logger.Default().Debug("aeron-udp: short datagram", "bytes", n, "src", src)
 			continue
 		}
 
 		frameType := binary.LittleEndian.Uint16(buf[6:8])
-		slog.Info("aeron-udp: received frame",
+		logger.Default().Info("aeron-udp: received frame",
 			"src", src, "bytes", n, "frameType", fmt.Sprintf("0x%04x", frameType))
 		switch frameType {
 		case AeronHdrTypeData:
@@ -235,9 +235,9 @@ func (h *UdpArteryHandler) receiveLoop() {
 				h.handleNak(src, buf[:n])
 			}
 		case AeronHdrTypePad:
-			slog.Info("aeron-udp: PAD frame received", "src", src)
+			logger.Default().Info("aeron-udp: PAD frame received", "src", src)
 		default:
-			slog.Info("aeron-udp: unknown frame type", "type", fmt.Sprintf("0x%04x", frameType), "src", src)
+			logger.Default().Info("aeron-udp: unknown frame type", "type", fmt.Sprintf("0x%04x", frameType), "src", src)
 		}
 	}
 }
@@ -266,7 +266,7 @@ func (h *UdpArteryHandler) handleSetup(src *net.UDPAddr, buf []byte) {
 			mtu:           setup.Mtu,
 		}
 		h.inSessions[key] = sess
-		slog.Info("aeron-udp: new inbound session",
+		logger.Default().Info("aeron-udp: new inbound session",
 			"src", src, "sessionId", setup.SessionId, "streamId", setup.StreamId)
 	} else {
 		// Refresh active term parameters on re-SETUP.
@@ -293,16 +293,16 @@ func (h *UdpArteryHandler) handleData(src *net.UDPAddr, buf []byte) {
 	// FrameLength == 0 is a legitimate Aeron heartbeat DATA frame (publisher
 	// keepalive with no payload).  Treat as zero-length payload.
 	if hdr.FrameLength == 0 {
-		slog.Debug("aeron-udp: heartbeat DATA frame (frameLength=0)", "src", src)
+		logger.Default().Debug("aeron-udp: heartbeat DATA frame (frameLength=0)", "src", src)
 		return
 	}
 	if int(hdr.FrameLength) < AeronDataHeaderLen {
-		slog.Warn("aeron-udp: DATA frameLength < header size, dropping",
+		logger.Default().Warn("aeron-udp: DATA frameLength < header size, dropping",
 			"frameLen", hdr.FrameLength, "src", src)
 		return
 	}
 	if len(buf) < int(hdr.FrameLength) {
-		slog.Warn("aeron-udp: truncated DATA frame",
+		logger.Default().Warn("aeron-udp: truncated DATA frame",
 			"frameLen", hdr.FrameLength, "actual", len(buf))
 		return
 	}
@@ -342,7 +342,7 @@ func (h *UdpArteryHandler) handleData(src *net.UDPAddr, buf []byte) {
 	if hdr.TermId == sess.activeTermId && hdr.TermOffset > expectedOffset {
 		// Gap detected — send NAK for the missing range.
 		gapLen := hdr.TermOffset - expectedOffset
-		slog.Debug("aeron-udp: gap detected, sending NAK",
+		logger.Default().Debug("aeron-udp: gap detected, sending NAK",
 			"expected", expectedOffset, "got", hdr.TermOffset, "gap", gapLen)
 		go h.sendNak(src, hdr.SessionId, hdr.StreamId, hdr.TermId, expectedOffset, gapLen)
 	}
@@ -417,12 +417,12 @@ func (h *UdpArteryHandler) dispatchEnvelope(src *net.UDPAddr, streamId int32, en
 
 	meta, err := ParseArteryFrame(envelope, ctm, remoteUid)
 	if err != nil {
-		slog.Warn("aeron-udp: failed to decode Artery envelope",
+		logger.Default().Warn("aeron-udp: failed to decode Artery envelope",
 			"src", src, "streamId", streamId, "error", err)
 		return
 	}
 
-	slog.Debug("aeron-udp: dispatching Artery message",
+	logger.Default().Debug("aeron-udp: dispatching Artery message",
 		"src", src, "streamId", streamId,
 		"serializerId", meta.SerializerId, "manifest", string(meta.MessageManifest))
 
@@ -432,7 +432,7 @@ func (h *UdpArteryHandler) dispatchEnvelope(src *net.UDPAddr, streamId int32, en
 	if h.nm != nil {
 		assoc := h.nm.GetOrCreateUDPAssociation(src, h)
 		if err := assoc.Dispatch(h.ctx, meta); err != nil {
-			slog.Warn("aeron-udp: dispatch error", "error", err)
+			logger.Default().Warn("aeron-udp: dispatch error", "error", err)
 		}
 		return
 	}
@@ -440,7 +440,7 @@ func (h *UdpArteryHandler) dispatchEnvelope(src *net.UDPAddr, streamId int32, en
 	// Fallback to the generic FrameHandler when no NodeManager is wired in
 	// (e.g. unit tests that only test frame parsing / SM logic).
 	if err := h.handler(h.ctx, meta); err != nil {
-		slog.Warn("aeron-udp: frame handler error", "error", err)
+		logger.Default().Warn("aeron-udp: frame handler error", "error", err)
 	}
 }
 
@@ -466,11 +466,11 @@ func (h *UdpArteryHandler) handleSm(src *net.UDPAddr, buf []byte) {
 	defer sess.mu.Unlock()
 
 	if !sess.established {
-		slog.Info("aeron-udp: outbound session established via SM",
+		logger.Default().Info("aeron-udp: outbound session established via SM",
 			"remote", src, "streamId", sm.StreamId, "sessionId", sm.SessionId)
 		sess.established = true
 	}
-	slog.Debug("aeron-udp: SM received",
+	logger.Default().Debug("aeron-udp: SM received",
 		"remote", src, "consumptionTermId", sm.ConsumptionTermId,
 		"consumptionOffset", sm.ConsumptionTermOffset,
 		"window", sm.ReceiverWindowLength)
@@ -485,7 +485,7 @@ func (h *UdpArteryHandler) handleNak(src *net.UDPAddr, buf []byte) {
 	nak.Decode(buf)
 	// Retransmission is beyond the scope of the in-memory transport — log and
 	// let the higher-level retry (cluster heartbeat / gossip) recover.
-	slog.Warn("aeron-udp: NAK received — retransmission not implemented",
+	logger.Default().Warn("aeron-udp: NAK received — retransmission not implemented",
 		"remote", src, "sessionId", nak.SessionId,
 		"termId", nak.TermId, "termOffset", nak.TermOffset, "len", nak.Length)
 }
@@ -544,7 +544,7 @@ func (h *UdpArteryHandler) sendSm(dst *net.UDPAddr, sess *aeronInboundSession) {
 	sm.Encode(buf)
 
 	if _, err := h.conn.WriteToUDP(buf, dst); err != nil {
-		slog.Warn("aeron-udp: SM send error", "dst", dst, "error", err)
+		logger.Default().Warn("aeron-udp: SM send error", "dst", dst, "error", err)
 	}
 }
 
@@ -565,7 +565,7 @@ func (h *UdpArteryHandler) sendNak(dst *net.UDPAddr, sessionId, streamId, termId
 	nak.Encode(buf)
 
 	if _, err := h.conn.WriteToUDP(buf, dst); err != nil {
-		slog.Warn("aeron-udp: NAK send error", "dst", dst, "error", err)
+		logger.Default().Warn("aeron-udp: NAK send error", "dst", dst, "error", err)
 	}
 }
 
@@ -639,7 +639,7 @@ func (h *UdpArteryHandler) ensureOutSession(dst *net.UDPAddr, streamId int32) (*
 		attempt++
 
 		if attempt == 1 || attempt%20 == 0 {
-			slog.Info("aeron-udp: SETUP sent, waiting for SM",
+			logger.Default().Info("aeron-udp: SETUP sent, waiting for SM",
 				"dst", dst, "streamId", streamId, "attempt", attempt)
 		}
 
@@ -649,14 +649,14 @@ func (h *UdpArteryHandler) ensureOutSession(dst *net.UDPAddr, streamId int32) (*
 		sess.mu.Lock()
 
 		if sess.established {
-			slog.Info("aeron-udp: SM received, session established",
+			logger.Default().Info("aeron-udp: SM received, session established",
 				"dst", dst, "streamId", streamId, "attempts", attempt)
 			return sess, nil
 		}
 	}
 
 	// Proceed without SM — DATA may be lost until the remote creates an image.
-	slog.Warn("aeron-udp: no SM received within 30s, proceeding optimistically",
+	logger.Default().Warn("aeron-udp: no SM received within 30s, proceeding optimistically",
 		"dst", dst, "streamId", streamId, "attempts", attempt)
 	sess.established = true
 	return sess, nil
@@ -820,21 +820,21 @@ func (nm *NodeManager) DialRemoteUDP(ctx context.Context, udpHandler *UdpArteryH
 					return
 				}
 				if err := udpHandler.SendFrame(dstAddr, AeronStreamControl, frame); err != nil {
-					slog.Warn("aeron-udp: outbound control outbox send error", "error", err)
+					logger.Default().Warn("aeron-udp: outbound control outbox send error", "error", err)
 				}
 			case frame, ok := <-assoc.udpOrdinaryOutbox:
 				if !ok {
 					return
 				}
 				if err := udpHandler.SendFrame(dstAddr, AeronStreamOrdinary, frame); err != nil {
-					slog.Warn("aeron-udp: outbound ordinary outbox send error", "error", err)
+					logger.Default().Warn("aeron-udp: outbound ordinary outbox send error", "error", err)
 				}
 			case frame, ok := <-assoc.udpLargeOutbox:
 				if !ok {
 					return
 				}
 				if err := udpHandler.SendFrame(dstAddr, AeronStreamLarge, frame); err != nil {
-					slog.Warn("aeron-udp: outbound large outbox send error", "error", err)
+					logger.Default().Warn("aeron-udp: outbound large outbox send error", "error", err)
 				}
 			}
 		}
@@ -844,7 +844,7 @@ func (nm *NodeManager) DialRemoteUDP(ctx context.Context, udpHandler *UdpArteryH
 	go func() {
 		time.Sleep(200 * time.Millisecond)
 		if err := assoc.initiateHandshake(remoteUA.Address); err != nil {
-			slog.Error("aeron-udp: initiateHandshake error", "error", err)
+			logger.Default().Error("aeron-udp: initiateHandshake error", "error", err)
 		}
 	}()
 

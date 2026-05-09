@@ -47,9 +47,11 @@ type akkaSignals struct {
 func startAkkaIntegrationNode(t *testing.T, ctx context.Context) *akkaSignals {
 	t.Helper()
 
-	p, err := jvmproc.Spawn(t, ctx, "sbt", []string{"akkaServer/runMain com.example.AkkaIntegrationNode"}, jvmproc.Options{
-		Dir: "scala-server",
-	})
+	jar := jvmproc.EnsureAssembly(t, jvmproc.AkkaAssembly)
+	p, err := jvmproc.SpawnJava(t, ctx, jar,
+		"com.example.AkkaIntegrationNode", nil, jvmproc.Options{
+			Dir: "scala-server",
+		})
 	if err != nil {
 		t.Fatalf("failed to start sbt: %v", err)
 	}

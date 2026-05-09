@@ -39,8 +39,18 @@ import (
 func startSbtServer(t *testing.T, ctx context.Context, mainClass string, port int) (*jvmproc.Process, io.ReadCloser) {
 	t.Helper()
 	_ = port // port is informational; jvmproc kills the entire process group on cleanup
+	// Historical callers pass either a bare class name ("com.example.PekkoServer")
+	// or a class + space-separated argv ("com.example.ScalaClusterNode 127.0.0.1 2550").
+	// runMain accepted both because sbt parses the trailing tokens itself; java -cp
+	// requires the class and args as separate argv entries.
+	tokens := strings.Fields(mainClass)
+	class := tokens[0]
+	var mainArgs []string
+	if len(tokens) > 1 {
+		mainArgs = tokens[1:]
+	}
 	jar := jvmproc.EnsureAssembly(t, jvmproc.PekkoAssembly)
-	p, err := jvmproc.SpawnJava(t, ctx, jar, mainClass, nil, jvmproc.Options{
+	p, err := jvmproc.SpawnJava(t, ctx, jar, class, mainArgs, jvmproc.Options{
 		Dir: "scala-server",
 	})
 	if err != nil {

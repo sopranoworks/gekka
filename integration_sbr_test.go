@@ -49,8 +49,9 @@ type sbrSignals struct {
 func startSBRTestNode(t *testing.T, ctx context.Context, strategy string) *sbrSignals {
 	t.Helper()
 
-	p, err := jvmproc.Spawn(t, ctx, "sbt",
-		[]string{fmt.Sprintf("runMain com.example.SBRTestNode %s", strategy)}, jvmproc.Options{
+	jar := jvmproc.EnsureAssembly(t, jvmproc.PekkoAssembly)
+	p, err := jvmproc.SpawnJava(t, ctx, jar,
+		"com.example.SBRTestNode", []string{strategy}, jvmproc.Options{
 			Dir: "scala-server",
 		})
 	if err != nil {

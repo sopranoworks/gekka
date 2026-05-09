@@ -62,9 +62,11 @@ type scalaSignals struct {
 func startPekkoIntegrationNode(t *testing.T, ctx context.Context) *scalaSignals {
 	t.Helper()
 
-	p, err := jvmproc.Spawn(t, ctx, "sbt", []string{"runMain com.example.PekkoIntegrationNode"}, jvmproc.Options{
-		Dir: "scala-server",
-	})
+	jar := jvmproc.EnsureAssembly(t, jvmproc.PekkoAssembly)
+	p, err := jvmproc.SpawnJava(t, ctx, jar,
+		"com.example.PekkoIntegrationNode", nil, jvmproc.Options{
+			Dir: "scala-server",
+		})
 	if err != nil {
 		t.Fatalf("failed to start sbt: %v", err)
 	}

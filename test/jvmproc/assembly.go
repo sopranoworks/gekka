@@ -14,6 +14,40 @@
 
 package jvmproc
 
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+)
+
+// findRepoRoot walks up from the current working directory looking for
+// go.work, the gekka workspace marker. Returns the absolute path of the
+// directory that contains it. Errors out after 10 ancestors so a stray
+// invocation outside the repo fails loudly instead of silently walking
+// up past `/`.
+func findRepoRoot() (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	dir := cwd
+	for i := 0; i < 10; i++ {
+		if _, err := os.Stat(filepath.Join(dir, "go.work")); err == nil {
+			abs, err := filepath.Abs(dir)
+			if err != nil {
+				return "", err
+			}
+			return abs, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return "", fmt.Errorf("repo root not found (no go.work) starting from %s", cwd)
+}
+
 // AssemblyProject identifies a fat JAR target produced by sbt-assembly.
 // All paths are relative to the repository root (the directory that
 // contains go.work).

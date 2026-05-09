@@ -15,9 +15,12 @@
 package jvmproc
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // findRepoRoot walks up from the current working directory looking for
@@ -46,6 +49,47 @@ func findRepoRoot() (string, error) {
 		dir = parent
 	}
 	return "", fmt.Errorf("repo root not found (no go.work) starting from %s", cwd)
+}
+
+// isAssemblyFresh reports whether jarPath exists and its mtime is at
+// least as recent as the newest file under any of inputRoots. A missing
+// jar is never fresh. A missing input root is treated as having no
+// inputs (the project simply contributes nothing). Errors other than
+// fs.ErrNotExist are surfaced.
+func isAssemblyFresh(jarPath string, inputRoots []string) (bool, error) {
+	jarStat, err := os.Stat(jarPath)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	var newest time.Time
+	for _, root := range inputRoots {
+		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				if errors.Is(err, fs.ErrNotExist) {
+					return nil
+				}
+				return err
+			}
+			if d.IsDir() {
+				return nil
+			}
+			info, err := d.Info()
+			if err != nil {
+				return err
+			}
+			if info.ModTime().After(newest) {
+				newest = info.ModTime()
+			}
+			return nil
+		})
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return false, err
+		}
+	}
+	return !newest.After(jarStat.ModTime()), nil
 }
 
 // AssemblyProject identifies a fat JAR target produced by sbt-assembly.

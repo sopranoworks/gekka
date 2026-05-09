@@ -9,11 +9,48 @@
 package jvmproc
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+// stubAssemblyProject scaffolds a temp-dir project that mimics the
+// AssemblyProject layout: <tmp>/go.work + <tmp>/proj/build.sbt +
+// <tmp>/proj/project + <tmp>/proj/src. The test's cwd is changed to
+// <tmp> so findRepoRoot finds the stub go.work.
+func stubAssemblyProject(t *testing.T) (repo string, p AssemblyProject, jarPath string) {
+	t.Helper()
+	repo = t.TempDir()
+	if err := os.WriteFile(filepath.Join(repo, "go.work"), []byte("go 1.26\n"), 0o644); err != nil {
+		t.Fatalf("write go.work: %v", err)
+	}
+	for _, sub := range []string{"proj", "proj/project", "proj/src", "proj/target/scala-2.13"} {
+		if err := os.MkdirAll(filepath.Join(repo, sub), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", sub, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repo, "proj", "build.sbt"), []byte("// stub\n"), 0o644); err != nil {
+		t.Fatalf("write build.sbt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "proj", "src", "Main.scala"), []byte("// stub\n"), 0o644); err != nil {
+		t.Fatalf("write Main.scala: %v", err)
+	}
+	jarPath = filepath.Join(repo, "proj", "target", "scala-2.13", "out.jar")
+	p = AssemblyProject{
+		Dir:        "proj",
+		SbtProject: "",
+		ProjectSrc: "proj",
+		JarPath:    "proj/target/scala-2.13/out.jar",
+	}
+	t.Chdir(repo)
+	resetAssemblyCacheForTest(t)
+	return repo, p, jarPath
+}
 
 func TestFindRepoRoot_FindsGoWorkInParent(t *testing.T) {
 	// Build a tree:
@@ -135,5 +172,137 @@ func TestIsAssemblyFresh_MissingInputRootIgnored(t *testing.T) {
 	}
 	if !fresh {
 		t.Error("expected fresh=true when no inputs exist")
+	}
+}
+
+func TestTryEnsureAssembly_FreshSkipsBuilder(t *testing.T) {
+	_, p, jarPath := stubAssemblyProject(t)
+	// Pre-create JAR with future mtime so it's fresh.
+	if err := os.WriteFile(jarPath, []byte("PK"), 0o644); err != nil {
+		t.Fatalf("write jar: %v", err)
+	}
+	future := time.Now().Add(1 * time.Hour)
+	if err := os.Chtimes(jarPath, future, future); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+
+	var calls int32
+	setAssemblyBuilderForTest(t, func(testing.TB, context.Context, AssemblyProject) error {
+		atomic.AddInt32(&calls, 1)
+		return nil
+	})
+
+	got, err := tryEnsureAssembly(t, p)
+	if err != nil {
+		t.Fatalf("tryEnsureAssembly: %v", err)
+	}
+	if got != jarPath {
+		t.Errorf("path: got %q, want %q", got, jarPath)
+	}
+	if calls != 0 {
+		t.Errorf("builder called %d times, want 0 (fresh JAR should skip)", calls)
+	}
+}
+
+func TestTryEnsureAssembly_StaleRebuilds(t *testing.T) {
+	_, p, jarPath := stubAssemblyProject(t)
+	// JAR exists but is older than src.
+	if err := os.WriteFile(jarPath, []byte("PK"), 0o644); err != nil {
+		t.Fatalf("write jar: %v", err)
+	}
+	past := time.Now().Add(-1 * time.Hour)
+	if err := os.Chtimes(jarPath, past, past); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+
+	var calls int32
+	setAssemblyBuilderForTest(t, func(testing.TB, context.Context, AssemblyProject) error {
+		atomic.AddInt32(&calls, 1)
+		// Simulate sbt by touching the JAR after the build.
+		now := time.Now()
+		return os.Chtimes(jarPath, now, now)
+	})
+
+	if _, err := tryEnsureAssembly(t, p); err != nil {
+		t.Fatalf("tryEnsureAssembly: %v", err)
+	}
+	if calls != 1 {
+		t.Errorf("builder calls = %d, want 1", calls)
+	}
+}
+
+func TestTryEnsureAssembly_MissingBuilds(t *testing.T) {
+	_, p, jarPath := stubAssemblyProject(t)
+	// No JAR pre-created.
+
+	var calls int32
+	setAssemblyBuilderForTest(t, func(testing.TB, context.Context, AssemblyProject) error {
+		atomic.AddInt32(&calls, 1)
+		return os.WriteFile(jarPath, []byte("PK"), 0o644)
+	})
+
+	if _, err := tryEnsureAssembly(t, p); err != nil {
+		t.Fatalf("tryEnsureAssembly: %v", err)
+	}
+	if calls != 1 {
+		t.Errorf("builder calls = %d, want 1", calls)
+	}
+}
+
+func TestTryEnsureAssembly_MemoizesAcrossCalls(t *testing.T) {
+	_, p, jarPath := stubAssemblyProject(t)
+	var calls int32
+	setAssemblyBuilderForTest(t, func(testing.TB, context.Context, AssemblyProject) error {
+		atomic.AddInt32(&calls, 1)
+		return os.WriteFile(jarPath, []byte("PK"), 0o644)
+	})
+
+	for i := 0; i < 5; i++ {
+		if _, err := tryEnsureAssembly(t, p); err != nil {
+			t.Fatalf("call %d: %v", i, err)
+		}
+	}
+	if calls != 1 {
+		t.Errorf("builder calls = %d across 5 invocations, want 1", calls)
+	}
+}
+
+func TestTryEnsureAssembly_ForceRebuildEnv(t *testing.T) {
+	_, p, jarPath := stubAssemblyProject(t)
+	if err := os.WriteFile(jarPath, []byte("PK"), 0o644); err != nil {
+		t.Fatalf("write jar: %v", err)
+	}
+	future := time.Now().Add(1 * time.Hour)
+	if err := os.Chtimes(jarPath, future, future); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+	t.Setenv("GEKKA_FORCE_ASSEMBLY", "1")
+
+	var calls int32
+	setAssemblyBuilderForTest(t, func(testing.TB, context.Context, AssemblyProject) error {
+		atomic.AddInt32(&calls, 1)
+		return nil
+	})
+
+	if _, err := tryEnsureAssembly(t, p); err != nil {
+		t.Fatalf("tryEnsureAssembly: %v", err)
+	}
+	if calls != 1 {
+		t.Errorf("builder calls = %d under GEKKA_FORCE_ASSEMBLY=1, want 1", calls)
+	}
+}
+
+func TestTryEnsureAssembly_BuildFailureSurfacesError(t *testing.T) {
+	_, p, _ := stubAssemblyProject(t)
+	setAssemblyBuilderForTest(t, func(testing.TB, context.Context, AssemblyProject) error {
+		return fmt.Errorf("synthetic build failure")
+	})
+
+	_, err := tryEnsureAssembly(t, p)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "synthetic build failure") {
+		t.Errorf("error = %v, want it to wrap 'synthetic build failure'", err)
 	}
 }

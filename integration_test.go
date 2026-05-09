@@ -39,7 +39,8 @@ import (
 func startSbtServer(t *testing.T, ctx context.Context, mainClass string, port int) (*jvmproc.Process, io.ReadCloser) {
 	t.Helper()
 	_ = port // port is informational; jvmproc kills the entire process group on cleanup
-	p, err := jvmproc.Spawn(t, ctx, "sbt", []string{fmt.Sprintf("runMain %s", mainClass)}, jvmproc.Options{
+	jar := jvmproc.EnsureAssembly(t, jvmproc.PekkoAssembly)
+	p, err := jvmproc.SpawnJava(t, ctx, jar, mainClass, nil, jvmproc.Options{
 		Dir: "scala-server",
 	})
 	if err != nil {

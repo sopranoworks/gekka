@@ -60,7 +60,7 @@ pekko {
 		t.Fatal("services.svc missing")
 	}
 	svc, _ := svcAny.(map[string]any)
-	endpointsAny, _ := svc["endpoints"]
+	endpointsAny := svc["endpoints"]
 	endpoints, ok := endpointsAny.([]any)
 	if !ok {
 		t.Fatalf("endpoints has wrong type: %T", endpointsAny)

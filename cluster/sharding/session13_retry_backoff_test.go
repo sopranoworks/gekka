@@ -188,7 +188,8 @@ func TestShardRegion_ShardFailureBackoff_DelaysHomeCacheClear(t *testing.T) {
 	}
 
 	// Deliver the elapsed signal (simulating time.AfterFunc firing).
-	region.Receive(shardFailureBackoffElapsedMsg{ShardId: req.ShardId})
+	sid := req.ShardId
+	region.Receive(shardFailureBackoffElapsedMsg{ShardId: sid})
 	if _, ok := region.shardHomePaths[req.ShardId]; ok {
 		t.Errorf("expected home cache cleared after backoff elapsed")
 	}

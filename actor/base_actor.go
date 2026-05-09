@@ -991,7 +991,6 @@ func Start(a Actor) {
 								for localSysCh != nil {
 									sm, sok := <-localSysCh
 									if !sok {
-										localSysCh = nil
 										return
 									}
 									sc, exit := processRaw(sm)

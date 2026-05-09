@@ -2484,7 +2484,7 @@ func parseHOCONByteSize(s string) (int, error) {
 		return 0, fmt.Errorf("parseHOCONByteSize: cannot parse number %q: %w", numStr, err)
 	}
 
-	multiplier := 1.0
+	var multiplier float64
 	switch unit {
 	case "", "b":
 		multiplier = 1

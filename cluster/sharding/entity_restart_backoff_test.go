@@ -15,7 +15,6 @@
 package sharding
 
 import (
-	"sort"
 	"testing"
 	"time"
 
@@ -64,14 +63,12 @@ func TestShard_EntityRestartBackoff_RespawnsAfterDelay(t *testing.T) {
 	}
 
 	// The store entry must persist — entity-restart-backoff is for *unexpected*
-	// terminations and the entity is still considered remembered.
-	ids, _ := store.GetEntities("shard-0")
-	if len(ids) != 0 {
-		// memShardStore is intentionally a snapshot — the real test is that the
-		// shard does NOT call RemoveEntity. Use mctx to track that.
-	}
-	// We do not have direct visibility into RemoveEntity calls on memShardStore,
-	// but we can assert that mctx.created has not grown a "remove" record.
+	// terminations and the entity is still considered remembered. memShardStore
+	// is intentionally a snapshot — the real test is that the shard does NOT
+	// call RemoveEntity. We do not have direct visibility into RemoveEntity
+	// calls on memShardStore, but we can assert that mctx.created has not
+	// grown a "remove" record.
+	_, _ = store.GetEntities("shard-0")
 
 	// Wait for the backoff plus a small slack and verify the entity respawned.
 	deadline := time.Now().Add(500 * time.Millisecond)
@@ -169,11 +166,4 @@ func TestShard_EntityRestartBackoff_SpacingMeasured(t *testing.T) {
 		t.Errorf("respawn happened too quickly: %v (backoff=%v)",
 			elapsed, settings.EntityRestartBackoff)
 	}
-	// Sanity: every recorded spawn name remains "e1" (deterministic).
-	names := append([]string(nil), nil...)
-	for _, n := range []string{"e1"} {
-		names = append(names, n)
-	}
-	sort.Strings(names) // unused outside the assertion frame; keeps the helper imported
-	_ = names
 }

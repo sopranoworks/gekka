@@ -197,14 +197,9 @@ func resetMailboxGlobals(t *testing.T) {
 	t.Helper()
 	prevType := mailbox.GlobalDefaultType()
 	prevDefaults := mailbox.GlobalDefaults()
-	prev := mailbox.GlobalBindings()
+	// Bindings has no exported iterator; for test purposes it's enough to
+	// clear the table on cleanup and let SetGlobalConfig repopulate.
 	bm := map[string]string{}
-	if prev != nil {
-		// Bindings has no exported iterator; copy via reflection-free
-		// best-effort by hitting known requirement IDs. For test purposes
-		// it's enough to clear the table and let SetGlobalConfig
-		// repopulate.
-	}
 	t.Cleanup(func() {
 		mailbox.SetGlobalConfig(prevType, prevDefaults.Capacity, prevDefaults.PushTimeout, bm)
 	})

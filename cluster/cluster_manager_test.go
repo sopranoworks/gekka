@@ -497,12 +497,12 @@ func TestLogInfo_SuppressesInfoMessages(t *testing.T) {
 	// LogInfo=true (default) — info messages should appear.
 	cm := NewClusterManager(local, router)
 	cm.LogInfo = true
-	output := captureLog(func() {
+	_ = captureLog(func() {
 		cm.performLeaderActions()
 	})
 	// performLeaderActions may or may not produce output depending on state,
 	// but JoinCluster always logs "initiating join" when LogInfo=true.
-	output = captureLog(func() {
+	output := captureLog(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 		defer cancel()
 		_ = cm.JoinCluster(ctx, "10.0.0.1", 2551)

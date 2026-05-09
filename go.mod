@@ -5,6 +5,7 @@ go 1.26.1
 require (
 	github.com/sopranoworks/gekka-config v1.0.4
 	github.com/stretchr/testify v1.11.1
+	go.etcd.io/bbolt v1.4.3
 	google.golang.org/protobuf v1.36.11
 )
 
@@ -61,7 +62,6 @@ require (
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/spiffe/go-spiffe/v2 v2.6.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
-	go.etcd.io/bbolt v1.4.3 // indirect
 	go.opencensus.io v0.24.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/detectors/gcp v1.39.0 // indirect

@@ -400,18 +400,6 @@ var _ SnapshotStore = (*CircuitBreakerSnapshotStore)(nil)
 
 // ── helpers ───────────────────────────────────────────────────────────────
 
-// breakerHumanState formats a state value for log/error messages.
-func breakerHumanState(s breakerState) string {
-	switch s {
-	case breakerOpen:
-		return "OPEN"
-	case breakerHalfOpen:
-		return "HALF_OPEN"
-	default:
-		return "CLOSED"
-	}
-}
-
 // String pretty-prints the breaker config for log lines.
 func (c CircuitBreakerConfig) String() string {
 	return fmt.Sprintf("CircuitBreakerConfig{MaxFailures: %d, CallTimeout: %s, ResetTimeout: %s}",

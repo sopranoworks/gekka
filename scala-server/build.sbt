@@ -57,5 +57,15 @@ lazy val akkaServer = (project in file("akka-server"))
       "com.typesafe"       % "config"              % "1.4.3"
     ),
     Compile / mainClass       := Some("com.example.AkkaIntegrationNode"),
-    Compile / run / mainClass := Some("com.example.AkkaIntegrationNode")
+    Compile / run / mainClass := Some("com.example.AkkaIntegrationNode"),
+    assembly / assemblyJarName := "akka-mains-assembly.jar",
+    assembly / mainClass       := None,
+    assembly / assemblyMergeStrategy := {
+      case PathList("META-INF", "io.netty.versions.properties")                       => MergeStrategy.first
+      case PathList("META-INF", xs @ _*) if xs.lastOption.exists(_.endsWith(".SF"))   => MergeStrategy.discard
+      case PathList("reference.conf")                                                  => MergeStrategy.concat
+      case PathList("application.conf")                                                => MergeStrategy.concat
+      case PathList(ps @ _*) if ps.lastOption.contains("module-info.class")            => MergeStrategy.discard
+      case x => (assembly / assemblyMergeStrategy).value(x)
+    }
   )

@@ -15,11 +15,14 @@
 package jvmproc
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sync"
+	"testing"
 	"time"
 )
 
@@ -134,3 +137,124 @@ var (
 		JarPath:    "scala-server/akka-server/target/scala-2.13/akka-mains-assembly.jar",
 	}
 )
+
+// assemblyState carries the result of a single (Dir, SbtProject) build.
+type assemblyState struct {
+	once sync.Once
+	path string
+	err  error
+}
+
+// assemblyCache memoizes EnsureAssembly results within one test binary.
+// Keyed by "<Dir>::<SbtProject>". Cleared between tests via
+// resetAssemblyCacheForTest.
+var assemblyCache sync.Map
+
+// assemblyBuilder is the function that actually invokes sbt to produce
+// the JAR. Tests swap this via setAssemblyBuilderForTest.
+var assemblyBuilder = realBuildAssembly
+
+// EnsureAssembly returns the absolute path to a fresh fat JAR for p,
+// rebuilding via `sbt <SbtProject>/assembly` if any input file is newer
+// than the JAR. Memoized per process. Calls t.Fatalf on build failure.
+func EnsureAssembly(t testing.TB, p AssemblyProject) string {
+	t.Helper()
+	path, err := tryEnsureAssembly(t, p)
+	if err != nil {
+		t.Fatalf("EnsureAssembly(%s::%s): %v", p.Dir, p.SbtProject, err)
+	}
+	return path
+}
+
+// tryEnsureAssembly is the error-returning core of EnsureAssembly so
+// tests can assert on failure modes without their TB instance Fatalf-ing
+// out. Production code should use the public EnsureAssembly wrapper.
+func tryEnsureAssembly(t testing.TB, p AssemblyProject) (string, error) {
+	t.Helper()
+	repo, err := findRepoRoot()
+	if err != nil {
+		return "", fmt.Errorf("repo root: %w", err)
+	}
+	absJar := filepath.Join(repo, p.JarPath)
+
+	key := p.Dir + "::" + p.SbtProject
+	v, _ := assemblyCache.LoadOrStore(key, &assemblyState{})
+	s := v.(*assemblyState)
+	s.once.Do(func() {
+		force := os.Getenv("GEKKA_FORCE_ASSEMBLY") == "1"
+		if !force {
+			fresh, ferr := isAssemblyFresh(absJar, assemblyInputRoots(repo, p))
+			if ferr != nil {
+				s.err = fmt.Errorf("freshness: %w", ferr)
+				return
+			}
+			if fresh {
+				s.path = absJar
+				return
+			}
+		}
+		if berr := assemblyBuilder(t, context.Background(), p); berr != nil {
+			s.err = fmt.Errorf("build: %w", berr)
+			return
+		}
+		if _, statErr := os.Stat(absJar); statErr != nil {
+			s.err = fmt.Errorf("post-build: jar not at %s: %w", absJar, statErr)
+			return
+		}
+		s.path = absJar
+	})
+	return s.path, s.err
+}
+
+// assemblyInputRoots returns the absolute paths whose mtimes invalidate
+// the fat JAR for p.
+func assemblyInputRoots(repo string, p AssemblyProject) []string {
+	return []string{
+		filepath.Join(repo, p.Dir, "build.sbt"),
+		filepath.Join(repo, p.Dir, "project"),
+		filepath.Join(repo, p.ProjectSrc, "src"),
+	}
+}
+
+// realBuildAssembly invokes sbt via jvmproc.Spawn and waits for the
+// build task to exit. The build runs as a Task inside sbt's own JVM
+// (assembly does NOT bgRun-fork), so it does not create a bg-jobs
+// entry of its own.
+func realBuildAssembly(t testing.TB, ctx context.Context, p AssemblyProject) error {
+	t.Helper()
+	cmd := "assembly"
+	if p.SbtProject != "" {
+		cmd = p.SbtProject + "/assembly"
+	}
+	proc, err := Spawn(t, ctx, "sbt", []string{cmd}, Options{
+		Dir:         p.Dir,
+		KillTimeout: 30 * time.Second,
+	})
+	if err != nil {
+		return err
+	}
+	code, werr := proc.WaitForExit(ctx)
+	if werr != nil {
+		return werr
+	}
+	if code != 0 {
+		return fmt.Errorf("sbt %s exited with code %d", cmd, code)
+	}
+	return nil
+}
+
+// setAssemblyBuilderForTest swaps the package-level builder for the
+// duration of a test. Restored via t.Cleanup.
+func setAssemblyBuilderForTest(t testing.TB, fn func(testing.TB, context.Context, AssemblyProject) error) {
+	t.Helper()
+	prev := assemblyBuilder
+	assemblyBuilder = fn
+	t.Cleanup(func() { assemblyBuilder = prev })
+}
+
+// resetAssemblyCacheForTest clears the per-project sync.Once cache so
+// each test starts with a cold cache.
+func resetAssemblyCacheForTest(t testing.TB) {
+	t.Helper()
+	assemblyCache = sync.Map{}
+}

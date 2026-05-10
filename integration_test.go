@@ -1653,6 +1653,29 @@ func TestGoSeed_Ask(t *testing.T) {
 	log.Printf("[SUCCESS] TestGoSeed_Ask passed.")
 }
 
+// TestGoSeed_Sharding: Go-Seed and Scala both register a ShardRegion
+// "echo"; Go-Seed sends entity messages and the test asserts at least
+// one entity print appears on Scala stdout (proving at least one shard
+// was allocated to the Scala region).
+//
+// Currently SKIPPED — cross-language sharding requires wire-format
+// compatibility for Pekko's ShardCoordinator messages
+// (RegisterCoordinator, GetShardHome, ShardHome, RegionRegistered, …).
+// Pekko serializes these via `pekko.cluster.sharding.serializer` with
+// class-name manifests like
+// `org.apache.pekko.cluster.sharding.ShardCoordinator$Internal$RegisterCoordinator`,
+// while gekka's StartSharding registers Go-internal manifests like
+// `sharding.RegisterRegion`. Until a translation layer exists for
+// these coordinator messages, Pekko's region registration with a
+// Go-hosted coordinator will time out.
+//
+// The Scala scaffold (ScalaShardingJoiner) is intentionally landed so
+// that a future cycle can drop the t.Skip and run the assertion. See
+// spec Risk #3 for the architectural background.
+func TestGoSeed_Sharding(t *testing.T) {
+	t.Skip("cross-language sharding requires Pekko↔gekka coordinator-message manifest mappings; see comment for architectural background and Task 9 of docs/superpowers/plans/2026-05-10-go-as-seed-integration-tests.md")
+}
+
 // HexDump outputs a formatted hex dump of the data.
 func HexDump(data []byte) {
 	fmt.Printf("%s\n", hex.Dump(data))

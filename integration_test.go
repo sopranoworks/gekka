@@ -1484,6 +1484,103 @@ func TestGoSeed_SingletonHandover(t *testing.T) {
 	log.Printf("[SUCCESS] TestGoSeed_SingletonHandover passed.")
 }
 
+// TestGoSeed_DistributedData: Go-Seed initiates a GCounter increment;
+// gossip must propagate to a Scala joiner whose GoReplicator merges
+// the state and prints "[SCALA-DDATA] hits=5".
+func TestGoSeed_DistributedData(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	const goSeedPort = uint32(2550)
+
+	goSeed, err := NewCluster(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: goSeedPort})
+	if err != nil {
+		t.Fatalf("Spawn Go-Seed: %v", err)
+	}
+	defer goSeed.Shutdown()
+	if err := goSeed.Join("127.0.0.1", goSeedPort); err != nil {
+		t.Fatalf("Go-Seed self-join: %v", err)
+	}
+
+	scalaProc, scalaStdout := startSbtServer(t, ctx,
+		fmt.Sprintf("com.example.joiner.ScalaDDataJoiner 127.0.0.1 %d", goSeedPort), 0)
+	_ = scalaProc
+
+	// Watch stdout for both the readiness marker and the per-merge
+	// markers in a single drain loop so the JVM never blocks on its
+	// stdout pipe.
+	ready := make(chan struct{}, 1)
+	hits := make(chan string, 8)
+	go func() {
+		scanner := bufio.NewScanner(scalaStdout)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			line := scanner.Text()
+			fmt.Printf("[SCALA] %s\n", line)
+			if strings.Contains(line, "--- SCALA DDATA READY ---") {
+				select {
+				case ready <- struct{}{}:
+				default:
+				}
+			}
+			if i := strings.Index(line, "[SCALA-DDATA] hits="); i >= 0 {
+				select {
+				case hits <- line[i:]:
+				default:
+				}
+			}
+		}
+	}()
+
+	select {
+	case <-ready:
+	case <-time.After(30 * time.Second):
+		t.Fatal("[SCALA] DDATA joiner did not signal ready")
+	}
+	if err := waitForUpMembers(goSeed, 2, 30*time.Second); err != nil {
+		t.Fatalf("[CONVERGENCE] %v", err)
+	}
+
+	// Find Scala port from gossip and register its goReplicator as a peer.
+	var scalaPort uint32
+	for _, m := range goSeed.cm.GetState().GetMembers() {
+		if m.GetStatus() != gproto_cluster.MemberStatus_Up {
+			continue
+		}
+		a := goSeed.cm.GetState().GetAllAddresses()[m.GetAddressIndex()].GetAddress()
+		if a.GetPort() != goSeedPort {
+			scalaPort = a.GetPort()
+			break
+		}
+	}
+	if scalaPort == 0 {
+		t.Fatal("no Scala member in gossip")
+	}
+	repl := goSeed.Replicator()
+	peer := actor.Address{Protocol: "pekko", System: "ClusterSystem", Host: "127.0.0.1", Port: int(scalaPort)}
+	repl.AddPeer(peer.WithRoot("user").Child("goReplicator").String())
+	repl.IncrementCounter("hits", 5, ddata.WriteLocal)
+	repl.Start(ctx)
+	defer repl.Stop()
+
+	deadline := time.After(30 * time.Second)
+	for {
+		select {
+		case line := <-hits:
+			if line == "[SCALA-DDATA] hits=5" {
+				if v := repl.GCounter("hits").Value(); v != 5 {
+					t.Errorf("local GCounter hits=%d, want 5", v)
+				}
+				log.Printf("[SUCCESS] TestGoSeed_DistributedData passed.")
+				return
+			}
+			// Intermediate merges (hits=N for N<5) are valid; keep looping.
+		case <-deadline:
+			t.Fatal("[GOSSIP] Scala did not see hits=5 within 30s")
+		}
+	}
+}
+
 // HexDump outputs a formatted hex dump of the data.
 func HexDump(data []byte) {
 	fmt.Printf("%s\n", hex.Dump(data))

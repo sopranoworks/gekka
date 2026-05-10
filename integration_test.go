@@ -1183,6 +1183,62 @@ func TestGoSeed_ScalaJoinLeave(t *testing.T) {
 	log.Printf("[SUCCESS] TestGoSeed_ScalaJoinLeave passed.")
 }
 
+// TestGoSeed_FailureRecovery: Go-Seed (leader) must drive a SIGKILL'd
+// Scala member through Unreachable → Down → Removed via its phi-accrual
+// failure detector + SBR loop.
+//
+// Go-Seed needs explicit SBR config — NewCluster's default leaves SBR
+// disabled (NewSBRManager returns nil when ActiveStrategy is empty).
+// Without SBR Go-Seed never issues the Down decision and the test would
+// hang waiting for membership convergence.
+//
+// Timing: keep-oldest stable-after 10s + phi-accrual unreachable
+// detection (~15s with default heartbeat-pause) + gossip slack = 90s.
+func TestGoSeed_FailureRecovery(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	const goSeedPort = uint32(2550)
+
+	goSeed, err := NewCluster(ClusterConfig{
+		SystemName: "ClusterSystem",
+		Host:       "127.0.0.1",
+		Port:       goSeedPort,
+		SBR: SBRConfig{
+			ActiveStrategy: "keep-oldest",
+			StableAfter:    10 * time.Second,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Spawn Go-Seed: %v", err)
+	}
+	defer goSeed.Shutdown()
+	if err := goSeed.Join("127.0.0.1", goSeedPort); err != nil {
+		t.Fatalf("Go-Seed self-join: %v", err)
+	}
+
+	scalaProc, scalaStdout := startSbtServer(t, ctx,
+		fmt.Sprintf("com.example.ScalaClusterNode 127.0.0.1 %d", goSeedPort), 0)
+
+	if err := waitForScalaStdoutContains(t, scalaStdout, "--- SCALA NODE STARTED ---", 30*time.Second); err != nil {
+		t.Fatalf("[SCALA] startup: %v", err)
+	}
+	if err := waitForUpMembers(goSeed, 2, 30*time.Second); err != nil {
+		t.Fatalf("[CONVERGENCE] %v", err)
+	}
+
+	log.Printf("[KILL] SIGKILL Scala JVM…")
+	scalaProc.Stop() // process-group SIGKILL
+
+	// Wait for Go-Seed (leader) to remove Scala from the cluster.
+	// Budget = acceptable-heartbeat-pause (15s) + stable-after (10s) +
+	// gossip convergence slack (≈30s) = ~60s.
+	if err := waitForExactUpMembers(goSeed, 1, 60*time.Second); err != nil {
+		t.Fatalf("[RECOVERY] Go-Seed leader did not drive Scala to Removed: %v", err)
+	}
+	log.Printf("[SUCCESS] TestGoSeed_FailureRecovery passed.")
+}
+
 // HexDump outputs a formatted hex dump of the data.
 func HexDump(data []byte) {
 	fmt.Printf("%s\n", hex.Dump(data))

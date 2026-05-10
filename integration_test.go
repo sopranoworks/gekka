@@ -892,6 +892,56 @@ func countUpMembers(node *Cluster) int {
 	return count
 }
 
+// waitForScalaStdoutContains scans `stdout` for a line containing `pattern`,
+// echoing every line via fmt.Printf("[SCALA] %s\n", ...) (matching the
+// established style used by every TestIntegration_* test). It blocks until
+// either a match is found (returns nil) or the timeout elapses (returns
+// error). After the match it keeps draining stdout in the same goroutine
+// so the JVM's pipe buffer never blocks.
+//
+// The drain goroutine is intentionally not joined — the test owns the JVM
+// lifecycle via jvmproc.Process, and SIGKILL on cleanup closes the
+// underlying file descriptor, terminating the goroutine.
+func waitForScalaStdoutContains(t *testing.T, stdout io.Reader, pattern string, timeout time.Duration) error {
+	t.Helper()
+	matched := make(chan struct{}, 1)
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		// Allow long lines (Pekko stack traces, JSON gossip frames).
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		seen := false
+		for scanner.Scan() {
+			line := scanner.Text()
+			fmt.Printf("[SCALA] %s\n", line)
+			if !seen && strings.Contains(line, pattern) {
+				seen = true
+				select {
+				case matched <- struct{}{}:
+				default:
+				}
+				// Continue draining — do NOT return; otherwise the JVM
+				// blocks on the next stdout write.
+			}
+		}
+	}()
+	select {
+	case <-matched:
+		return nil
+	case <-time.After(timeout):
+		return fmt.Errorf("timeout: did not see %q in Scala stdout within %v", pattern, timeout)
+	}
+}
+
+// waitForJvmExit blocks until the supervised JVM process exits or the
+// timeout fires. Returns the exit code on clean exit; returns -1 plus
+// the error on timeout. Wraps jvmproc.Process.WaitForExit with a
+// context-bound timeout so callers don't need their own context plumbing.
+func waitForJvmExit(p *jvmproc.Process, timeout time.Duration) (int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return p.WaitForExit(ctx)
+}
+
 func TestCluster_GoDominantMixed(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()

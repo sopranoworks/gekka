@@ -1581,6 +1581,78 @@ func TestGoSeed_DistributedData(t *testing.T) {
 	}
 }
 
+// TestGoSeed_Ask: Scala-side Ask to a Go-hosted echo path — the inverse
+// of TestAsk_PekkoEcho. Scala JVM exits 0 on Ack match.
+//
+// Inbound routing uses node.OnMessage (matching the established pattern
+// from TestIntegration_PekkoServer and TestAsk_PekkoEcho); ActorRef
+// registered via node.System.ActorOf does not receive incoming Artery
+// frames addressed to /user/<name> in the current SDK surface.
+func TestGoSeed_Ask(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	const goSeedPort = uint32(2550)
+
+	goSeed, err := NewCluster(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: goSeedPort})
+	if err != nil {
+		t.Fatalf("Spawn Go-Seed: %v", err)
+	}
+	defer goSeed.Shutdown()
+	if err := goSeed.Join("127.0.0.1", goSeedPort); err != nil {
+		t.Fatalf("Go-Seed self-join: %v", err)
+	}
+
+	// Inbound echo handler: when /user/echo receives a []byte payload
+	// with a populated Sender, reply with "Echo: <utf8>" routed back
+	// to the sender's temp Ask path via SendWithSender.
+	//
+	// Note: Pekko's actorSelection sends with MessageContainerSerializer
+	// (id=6), which gekka cannot decode. ScalaAskJoiner therefore
+	// resolves the ActorRef via Identify before Asking, so the message
+	// arrives with the raw ByteArraySerializer (id=4).
+	goSeed.OnMessage(func(_ context.Context, msg *IncomingMessage) error {
+		if msg.SerializerId != 4 { // ByteArraySerializer
+			return nil
+		}
+		if !strings.HasSuffix(msg.RecipientPath, "/user/echo") {
+			return nil
+		}
+		senderPath := msg.Sender.Path()
+		if senderPath == "" {
+			return nil
+		}
+		reply := append([]byte("Echo: "), msg.Payload...)
+		if err := goSeed.SendWithSender(ctx, senderPath, "/user/echo", reply); err != nil {
+			log.Printf("[GO-REPLY] SendWithSender error: %v", err)
+		}
+		return nil
+	})
+
+	echoPath := fmt.Sprintf("pekko://ClusterSystem@127.0.0.1:%d/user/echo", goSeedPort)
+	scalaProc, scalaStdout := startSbtServer(t, ctx,
+		fmt.Sprintf("com.example.joiner.ScalaAskJoiner 127.0.0.1 %d %s", goSeedPort, echoPath), 0)
+
+	// Drain stdout for visibility; the test's success signal is the
+	// JVM exit code, not a stdout match.
+	go func() {
+		scanner := bufio.NewScanner(scalaStdout)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			fmt.Printf("[SCALA] %s\n", scanner.Text())
+		}
+	}()
+
+	exitCode, err := waitForJvmExit(scalaProc, 30*time.Second)
+	if err != nil {
+		t.Fatalf("Scala JVM did not exit: %v", err)
+	}
+	if exitCode != 0 {
+		t.Fatalf("Scala JVM exit code = %d, want 0 (Ask reply did not match)", exitCode)
+	}
+	log.Printf("[SUCCESS] TestGoSeed_Ask passed.")
+}
+
 // HexDump outputs a formatted hex dump of the data.
 func HexDump(data []byte) {
 	fmt.Printf("%s\n", hex.Dump(data))

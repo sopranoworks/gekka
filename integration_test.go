@@ -1302,6 +1302,64 @@ func TestGoSeed_Churn(t *testing.T) {
 	log.Printf("[SUCCESS] TestGoSeed_Churn passed (%d cycles).", cycles)
 }
 
+// TestGoSeed_SingletonOnGo: Go-Seed hosts ClusterSingletonManager at
+// /user/echoSingleton; Pekko's ClusterSingletonProxy must resolve to
+// /user/echoSingleton/singleton on Go and route Ask correctly.
+func TestGoSeed_SingletonOnGo(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	const goSeedPort = uint32(2550)
+
+	goSeed, err := NewCluster(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: goSeedPort})
+	if err != nil {
+		t.Fatalf("Spawn Go-Seed: %v", err)
+	}
+	defer goSeed.Shutdown()
+	if err := goSeed.Join("127.0.0.1", goSeedPort); err != nil {
+		t.Fatalf("Go-Seed self-join: %v", err)
+	}
+
+	// Host the singleton: an actor that responds to []byte with
+	// "Ack: <utf8>" sent back via the original sender.
+	singletonProps := actor.Props{New: func() actor.Actor { return newAckBytesActor() }}
+	mgr := goSeed.SingletonManager(singletonProps, "")
+	if _, err := goSeed.System.ActorOf(actor.Props{
+		New: func() actor.Actor { return mgr },
+	}, "echoSingleton"); err != nil {
+		t.Fatalf("ActorOf singletonManager: %v", err)
+	}
+
+	scalaProc, scalaStdout := startSbtServer(t, ctx,
+		fmt.Sprintf("com.example.joiner.ScalaSingletonJoiner 127.0.0.1 %d", goSeedPort), 0)
+	_ = scalaProc
+
+	if err := waitForScalaStdoutContains(t, scalaStdout,
+		"[SCALA-SINGLETON] phase1=Ack: hello-from-go-phase1", 45*time.Second); err != nil {
+		t.Fatalf("[SCALA-SINGLETON] %v", err)
+	}
+	log.Printf("[SUCCESS] TestGoSeed_SingletonOnGo passed.")
+}
+
+// ackBytesActor is the Go-side singleton body for TestGoSeed_Singleton*:
+// replies to []byte with "Ack: <utf8>" via the current sender.
+type ackBytesActor struct {
+	actor.BaseActor
+}
+
+func newAckBytesActor() *ackBytesActor {
+	return &ackBytesActor{BaseActor: actor.NewBaseActor()}
+}
+
+func (a *ackBytesActor) Receive(msg any) {
+	if b, ok := msg.([]byte); ok {
+		reply := append([]byte("Ack: "), b...)
+		if s := a.Sender(); s != nil {
+			s.Tell(reply)
+		}
+	}
+}
+
 // HexDump outputs a formatted hex dump of the data.
 func HexDump(data []byte) {
 	fmt.Printf("%s\n", hex.Dump(data))

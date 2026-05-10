@@ -1003,9 +1003,15 @@ func TestCluster_GoDominantMixed(t *testing.T) {
 	// Down the Scala member from Go-Seed (which is the leader). We use
 	// DownMember instead of stdin "leave" because sbt consumes stdin and
 	// never forwards it to the ScalaClusterNode application.
-	// Find Scala's actual port from the gossip state.
+	// Find Scala's actual port from the gossip state. Filter on Up
+	// status — Go-3 is no longer Up but its entry can linger in
+	// GetMembers() as Removed for a while; iterating without the status
+	// filter would let Go-3's stale port shadow Scala.
 	var scalaPort uint32
 	for _, m := range goSeed.cm.GetState().GetMembers() {
+		if m.GetStatus() != gproto_cluster.MemberStatus_Up {
+			continue
+		}
 		ua := goSeed.cm.GetState().GetAllAddresses()[m.GetAddressIndex()]
 		a := ua.GetAddress()
 		if a.GetPort() != goSeedPort &&

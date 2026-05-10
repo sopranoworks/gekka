@@ -157,6 +157,19 @@ func TestAdaptiveShardingRebalance(t *testing.T) {
 		CPUUsage: 0.1,
 		Score:    0.1,
 	})
+	// Force the new mock pressures into the cluster-wide LWWMap
+	// immediately. Without this the strategy would observe stale (real)
+	// pressures until the next 5s MetricsGossip tick on each node, which
+	// makes the rebalance loop below race against the 30s deadline.
+	node1.MetricsGossip().PublishNow()
+	node2.MetricsGossip().PublishNow()
+
+	// Wait until both nodes' mock pressures have replicated into node1's
+	// LWWMap (DData gossip-interval = 200ms). The strategy reads from
+	// node1's view because the coordinator runs as singleton there.
+	if !waitForMockPressuresVisible(t, node1, port1, port2, 5*time.Second) {
+		t.Fatalf("mock pressures did not converge within timeout")
+	}
 
 	// Wait for metrics to propagate and rebalance to trigger
 	t.Log("Waiting for rebalance...")
@@ -194,6 +207,29 @@ func TestAdaptiveShardingRebalance(t *testing.T) {
 
 	t.Logf("Final snapshot: %v", snap)
 	assert.True(t, rebalanced, "Shards should have migrated to node2 under pressure on node1")
+}
+
+// waitForMockPressuresVisible polls node1's MetricsGossip.ClusterPressure
+// until both port1 and port2 are present with the mock CPU values
+// (0.9 and 0.1 respectively, set by the caller). Returns false on timeout.
+//
+// The strategy reads from this map; without this gate the rebalance
+// loop can spin past the 30s deadline before the LWWMap converges.
+func waitForMockPressuresVisible(t *testing.T, node1 *gekka.Cluster, port1, port2 uint32, timeout time.Duration) bool {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	wantNode1 := fmt.Sprintf("127.0.0.1:%d", port1)
+	wantNode2 := fmt.Sprintf("127.0.0.1:%d", port2)
+	for time.Now().Before(deadline) {
+		pressures := node1.MetricsGossip().ClusterPressure()
+		p1, ok1 := pressures[wantNode1]
+		p2, ok2 := pressures[wantNode2]
+		if ok1 && ok2 && p1.CPUUsage > 0.5 && p2.CPUUsage < 0.5 {
+			return true
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return false
 }
 
 func contains(s, substr string) bool {

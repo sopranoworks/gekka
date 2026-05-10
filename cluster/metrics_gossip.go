@@ -52,11 +52,23 @@ func (g *MetricsGossip) Start(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				pressure := g.collector.Collect()
-				g.repl.PutInMap(MetricsMapKey, g.nodeID, pressure, ddata.WriteLocal)
+				g.PublishNow()
 			}
 		}
 	}()
+}
+
+// PublishNow synchronously samples the local collector and writes the
+// resulting NodePressure into the cluster-wide LWWMap. The Start ticker
+// otherwise drives this on its g.interval cadence, but tests (and
+// callers that just adjusted MockPressure) need the new value to be
+// observable in the gossip layer without waiting up to interval.
+//
+// The write itself is non-blocking with WriteLocal consistency; gossip
+// propagation to peers is driven by the replicator's own gossip-interval.
+func (g *MetricsGossip) PublishNow() {
+	pressure := g.collector.Collect()
+	g.repl.PutInMap(MetricsMapKey, g.nodeID, pressure, ddata.WriteLocal)
 }
 
 // ClusterPressure returns a map of node IDs to their pressure status.

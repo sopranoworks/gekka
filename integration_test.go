@@ -1117,6 +1117,72 @@ func TestCluster_GoDominantMixed(t *testing.T) {
 	log.Printf("[SUCCESS] TestCluster_GoDominantMixed passed!")
 }
 
+// TestGoSeed_ScalaJoinLeave is the canary test for the Go-as-Seed suite:
+// a single Scala node joins a Go-Seed cluster, both reach Up, then the
+// leader (Go-Seed) downs the Scala member.
+//
+// If this test fails, the rest of TestGoSeed_* will also fail — the bug
+// is in the Artery handshake or membership convergence, not in the
+// scenario-specific joiners.
+func TestGoSeed_ScalaJoinLeave(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	const goSeedPort = uint32(2550)
+
+	goSeed, err := NewCluster(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: goSeedPort})
+	if err != nil {
+		t.Fatalf("Spawn Go-Seed: %v", err)
+	}
+	defer goSeed.Shutdown()
+	if err := goSeed.Join("127.0.0.1", goSeedPort); err != nil {
+		t.Fatalf("Go-Seed self-join: %v", err)
+	}
+	log.Printf("[SEED] Go-Seed running at %s", goSeed.Addr())
+
+	scalaProc, scalaStdout := startSbtServer(t, ctx,
+		fmt.Sprintf("com.example.ScalaClusterNode 127.0.0.1 %d", goSeedPort), 0)
+	_ = scalaProc
+
+	if err := waitForScalaStdoutContains(t, scalaStdout, "--- SCALA NODE STARTED ---", 30*time.Second); err != nil {
+		t.Fatalf("[SCALA] startup: %v", err)
+	}
+
+	if err := waitForUpMembers(goSeed, 2, 30*time.Second); err != nil {
+		t.Fatalf("[CONVERGENCE] %v", err)
+	}
+	log.Printf("[CONVERGENCE] 2-node cluster (Go-Seed + Scala) is Up.")
+
+	// Find the Scala port from gossip (only Up member that isn't Go-Seed).
+	var scalaPort uint32
+	for _, m := range goSeed.cm.GetState().GetMembers() {
+		if m.GetStatus() != gproto_cluster.MemberStatus_Up {
+			continue
+		}
+		a := goSeed.cm.GetState().GetAllAddresses()[m.GetAddressIndex()].GetAddress()
+		if a.GetPort() != goSeedPort {
+			scalaPort = a.GetPort()
+			break
+		}
+	}
+	if scalaPort == 0 {
+		t.Fatalf("could not find Scala member in gossip")
+	}
+
+	log.Printf("[DEPARTURE] Downing Scala (port %d) from leader…", scalaPort)
+	goSeed.cm.DownMember(cluster.MemberAddress{
+		Protocol: "pekko",
+		System:   "ClusterSystem",
+		Host:     "127.0.0.1",
+		Port:     scalaPort,
+	})
+
+	if err := waitForExactUpMembers(goSeed, 1, 30*time.Second); err != nil {
+		t.Fatalf("[DEPARTURE] %v", err)
+	}
+	log.Printf("[SUCCESS] TestGoSeed_ScalaJoinLeave passed.")
+}
+
 // HexDump outputs a formatted hex dump of the data.
 func HexDump(data []byte) {
 	fmt.Printf("%s\n", hex.Dump(data))

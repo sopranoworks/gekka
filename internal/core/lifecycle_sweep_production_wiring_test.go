@@ -76,11 +76,11 @@ func TestStartLifecycleSweepers_StopIdleOutboundAfter_FiresFromTicker(t *testing
 		nodeMgr:  nm,
 		localUid: nm.localUid,
 		outbox:   make(chan []byte, 1),
-		remote:   remote,
 		streamId: 1,
 		lastSeen: time.Now().Add(-time.Second),
 		conn:     conn,
 	}
+	assoc.remote.Store(remote)
 	nm.RegisterAssociation(remote, assoc)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -129,10 +129,10 @@ func TestStartLifecycleSweepers_QuarantineIdleOutboundAfter_FiresFromTicker(t *t
 		nodeMgr:  nm,
 		localUid: nm.localUid,
 		outbox:   make(chan []byte, 1),
-		remote:   remote,
 		streamId: 1,
 		lastSeen: time.Now().Add(-time.Second),
 	}
+	assoc.remote.Store(remote)
 	nm.RegisterAssociation(remote, assoc)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -174,12 +174,12 @@ func TestStartLifecycleSweepers_StopQuarantinedAfterIdle_ClosesConn(t *testing.T
 		nodeMgr:          nm,
 		localUid:         nm.localUid,
 		outbox:           make(chan []byte, 1),
-		remote:           remote,
 		streamId:         1,
 		lastSeen:         time.Now().Add(-time.Second),
 		quarantinedSince: time.Now(),
 		conn:             conn,
 	}
+	assoc.remote.Store(remote)
 	nm.RegisterAssociation(remote, assoc)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -224,11 +224,11 @@ func TestStartLifecycleSweepers_RemoveQuarantinedAssociationAfter_ExpiresUID(t *
 		nodeMgr:          nm,
 		localUid:         nm.localUid,
 		outbox:           make(chan []byte, 1),
-		remote:           remote,
 		streamId:         1,
 		lastSeen:         old,
 		quarantinedSince: old,
 	}
+	assoc.remote.Store(remote)
 	nm.RegisterAssociation(remote, assoc)
 	nm.RegisterQuarantinedUIDAt(remote, old)
 
@@ -277,10 +277,10 @@ func TestStartLifecycleSweepers_StopsWhenContextCancelled(t *testing.T) {
 		nodeMgr:  nm,
 		localUid: nm.localUid,
 		outbox:   make(chan []byte, 1),
-		remote:   remote,
 		streamId: 1,
 		lastSeen: time.Now().Add(-time.Second),
 	}
+	assoc.remote.Store(remote)
 	nm.RegisterAssociation(remote, assoc)
 
 	// Wait several tick periods worth; the cancelled goroutine must

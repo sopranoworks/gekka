@@ -33,9 +33,9 @@ func makeInboundStream2Assoc(t *testing.T, nm *NodeManager, remoteAddr *gproto_r
 		Handshake: make(chan struct{}),
 		localUid:  nm.localUid,
 		outbox:    make(chan []byte, 16),
-		remote:    &gproto_remote.UniqueAddress{Address: remoteAddr, Uid: proto.Uint64(0)},
 		streamId:  2,
 	}
+	assoc.remote.Store(&gproto_remote.UniqueAddress{Address: remoteAddr, Uid: proto.Uint64(0)})
 	return assoc, client
 }
 
@@ -56,9 +56,9 @@ func preregisterOutboundControl(t *testing.T, nm *NodeManager, remoteAddr *gprot
 		Handshake: make(chan struct{}),
 		localUid:  nm.localUid,
 		outbox:    make(chan []byte, 16),
-		remote:    remote,
 		streamId:  1,
 	}
+	control.remote.Store(remote)
 	close(control.Handshake)
 	nm.RegisterAssociation(remote, control)
 	return control
@@ -166,10 +166,10 @@ func TestOutboundLanes_HandshakeRspRoutesToCorrectLane(t *testing.T) {
 		Handshake: make(chan struct{}),
 		localUid:  nm.localUid,
 		outbox:    make(chan []byte, 1),
-		remote:    remote,
 		streamId:  2,
 		lanes:     lanes,
 	}
+	sib.remote.Store(remote)
 	close(sib.Handshake)
 	control.mu.Lock()
 	control.ordinarySibling = sib

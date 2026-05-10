@@ -247,9 +247,9 @@ func makeControlAssoc(t *testing.T, nm *NodeManager, remoteAddr *gproto_remote.A
 		Handshake: make(chan struct{}),
 		localUid:  nm.localUid,
 		outbox:    make(chan []byte, 16),
-		remote:    remote,
 		streamId:  1,
 	}
+	assoc.remote.Store(remote)
 	close(assoc.Handshake)
 	nm.RegisterAssociation(remote, assoc)
 	return assoc, server, client
@@ -399,9 +399,9 @@ func TestOutboundLanes_DispatchHashesByRecipient(t *testing.T) {
 		Handshake: make(chan struct{}),
 		localUid:  nm.localUid,
 		outbox:    make(chan []byte, 16),
-		remote:    remote,
 		streamId:  1,
 	}
+	control.remote.Store(remote)
 	close(control.Handshake)
 
 	// Build sibling with N lanes (no real conns — direct-mode unit test).
@@ -422,10 +422,10 @@ func TestOutboundLanes_DispatchHashesByRecipient(t *testing.T) {
 		Handshake: make(chan struct{}),
 		localUid:  nm.localUid,
 		outbox:    make(chan []byte, 1),
-		remote:    remote,
 		streamId:  2,
 		lanes:     lanes,
 	}
+	sib.remote.Store(remote)
 	close(sib.Handshake)
 	control.ordinarySibling = sib
 	sib.ordinarySibling = control

@@ -404,11 +404,9 @@ func (h *UdpArteryHandler) dispatchEnvelope(src *net.UDPAddr, streamId int32, en
 		ctm = h.nm.compressionMgr
 		h.nm.mu.RUnlock()
 		if assoc, ok := h.nm.GetGekkaAssociationByHost(src.IP.String(), uint32(src.Port)); ok {
-			assoc.mu.RLock()
-			if assoc.remote != nil {
-				remoteUid = assoc.remote.GetUid()
+			if r := assoc.remote.Load(); r != nil {
+				remoteUid = r.GetUid()
 			}
-			assoc.mu.RUnlock()
 		}
 	}
 	if ctm == nil {
@@ -802,10 +800,10 @@ func (nm *NodeManager) DialRemoteUDP(ctx context.Context, udpHandler *UdpArteryH
 		udpOrdinaryOutbox: make(chan []byte, 512),
 		udpLargeOutbox:    make(chan []byte, largeCap),
 		nodeMgr:           nm,
-		remote:            remoteUA,
 		udpHandler:        udpHandler,
 		udpDst:            dstAddr,
 	}
+	assoc.remote.Store(remoteUA)
 	nm.RegisterAssociation(remoteUA, assoc)
 
 	// Drain control (stream 1), ordinary (stream 2), and large (stream 3)

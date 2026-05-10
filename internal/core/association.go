@@ -16,6 +16,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
@@ -111,7 +112,16 @@ type GekkaAssociation struct {
 	state     AssociationState
 	role      AssociationRole
 	conn      net.Conn
-	remote    *gproto_remote.UniqueAddress
+	// remote is the remote node's UniqueAddress. Set once by handshake
+	// processing (handleHandshakeReq / handleHandshakeRsp) and read
+	// concurrently from many goroutines (every inbound dispatch path,
+	// every outbound send path). Stored atomically so that reads do not
+	// have to take assoc.mu — under the prior plain *UniqueAddress field
+	// the race detector reported reads at dispatch racing with writes
+	// inside handleHandshakeReq, which on multi-lane connections caused
+	// corrupted protobuf field access and downstream test flakiness
+	// (TestAdaptiveShardingRebalance).
+	remote    atomic.Pointer[gproto_remote.UniqueAddress]
 	lastSeen  time.Time
 	nodeMgr   *NodeManager
 	Handshake chan struct{} // signaled when associated
@@ -1082,7 +1092,7 @@ func (nm *NodeManager) SweepIdleOutboundQuarantine() int {
 		role := assoc.role
 		state := assoc.state
 		lastSeen := assoc.lastSeen
-		remote := assoc.remote
+		remote := assoc.remote.Load()
 		if role != OUTBOUND || state == QUARANTINED {
 			assoc.mu.Unlock()
 			continue
@@ -1366,7 +1376,7 @@ func (nm *NodeManager) SnapshotAssociatedAddresses() []*gproto_remote.UniqueAddr
 	for _, assoc := range nm.associations {
 		assoc.mu.RLock()
 		st := assoc.state
-		remote := assoc.remote
+		remote := assoc.remote.Load()
 		assoc.mu.RUnlock()
 		if st != ASSOCIATED || remote == nil {
 			continue
@@ -1445,7 +1455,7 @@ func (nm *NodeManager) GetGekkaAssociationByHost(host string, port uint32) (*Gek
 	// Prioritize Control Stream (1) for outbound delivery.
 	for _, assoc := range nm.associations {
 		assoc.mu.RLock()
-		remote := assoc.remote
+		remote := assoc.remote.Load()
 		role := assoc.role
 		state := assoc.state
 		streamId := assoc.streamId
@@ -1463,7 +1473,7 @@ func (nm *NodeManager) GetGekkaAssociationByHost(host string, port uint32) (*Gek
 	// Fallback to any outbound if control not found
 	for _, assoc := range nm.associations {
 		assoc.mu.RLock()
-		remote := assoc.remote
+		remote := assoc.remote.Load()
 		role := assoc.role
 		state := assoc.state
 		assoc.mu.RUnlock()
@@ -1829,7 +1839,7 @@ func (nm *NodeManager) RegisterAssociation(remote *gproto_remote.UniqueAddress, 
 
 				logger.Default().Warn("node manager: detected node restart, quarantining old association", "hostPort", hostPortKey, "oldKey", k)
 				existing.mu.Lock()
-				existingRemote := existing.remote
+				existingRemote := existing.remote.Load()
 				existing.state = QUARANTINED
 				if existing.conn != nil {
 					existing.conn.Close()
@@ -1837,7 +1847,7 @@ func (nm *NodeManager) RegisterAssociation(remote *gproto_remote.UniqueAddress, 
 				existing.mu.Unlock()
 				existing.emitFlight(SeverityError, CatQuarantine, "QUARANTINED", map[string]any{
 					"remote":  existing.remoteKey(),
-					"new_uid": assoc.remote.GetUid(),
+					"new_uid": assoc.remote.Load().GetUid(),
 				})
 				if nm.FlightRec != nil {
 					nm.FlightRec.DumpOnQuarantine(existing.remoteKey())
@@ -1949,9 +1959,9 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 		Handshake: make(chan struct{}),
 		localUid:  nm.localUid,
 		outbox:    make(chan []byte, outboxCap),
-		remote:    &gproto_remote.UniqueAddress{Address: remote, Uid: proto.Uint64(0)},
 		streamId:  streamId,
 	}
+	assoc.remote.Store(&gproto_remote.UniqueAddress{Address: remote, Uid: proto.Uint64(0)})
 	// System-message redelivery (Phase 2): only the control stream
 	// (streamId=1) carries system messages, so only that association
 	// allocates a SystemMessageOutbox and runs the resend ticker.
@@ -1999,7 +2009,7 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 
 	// Register early so handleHandshakeRsp can find it
 	if remote != nil {
-		nm.RegisterAssociation(assoc.remote, assoc)
+		nm.RegisterAssociation(assoc.remote.Load(), assoc)
 	}
 
 	// Start background write loop. The single-conn path (streamId=1
@@ -2076,8 +2086,8 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 					assoc.mu.RLock()
 					isAssociated := assoc.state == ASSOCIATED
 					remoteUID := uint64(0)
-					if assoc.remote != nil {
-						remoteUID = assoc.remote.GetUid()
+					if assoc.remote.Load() != nil {
+						remoteUID = assoc.remote.Load().GetUid()
 					}
 					assoc.mu.RUnlock()
 					if isAssociated && remoteUID != 0 {
@@ -2099,9 +2109,7 @@ func (assoc *GekkaAssociation) LocalUid() uint64 {
 
 // Remote returns the remote UniqueAddress for this association. Thread-safe.
 func (assoc *GekkaAssociation) Remote() *gproto_remote.UniqueAddress {
-	assoc.mu.RLock()
-	defer assoc.mu.RUnlock()
-	return assoc.remote
+	return assoc.remote.Load()
 }
 
 func (assoc *GekkaAssociation) Outbox() chan []byte {
@@ -2330,8 +2338,8 @@ func (assoc *GekkaAssociation) Process(ctx context.Context, protocol string) err
 		return assoc.dispatchSharded(ctx, meta)
 	}
 	remoteUid := uint64(0)
-	if assoc.remote != nil {
-		remoteUid = assoc.remote.GetUid()
+	if assoc.remote.Load() != nil {
+		remoteUid = assoc.remote.Load().GetUid()
 	}
 	maxFrame := assoc.effectiveStreamFrameSizeCap()
 	pool := assoc.nodeMgr.streamBufferPool(assoc.streamId)
@@ -2424,8 +2432,8 @@ func (nm *NodeManager) runLaneReadLoop(ctx context.Context, assoc *GekkaAssociat
 		return assoc.dispatchSharded(ctx, meta)
 	}
 	remoteUid := uint64(0)
-	if assoc.remote != nil {
-		remoteUid = assoc.remote.GetUid()
+	if assoc.remote.Load() != nil {
+		remoteUid = assoc.remote.Load().GetUid()
 	}
 	maxFrame := assoc.effectiveStreamFrameSizeCap()
 	pool := assoc.nodeMgr.streamBufferPool(assoc.streamId)
@@ -2468,9 +2476,7 @@ func (nm *NodeManager) EnsureOrdinarySibling(ctx context.Context, controlAssoc *
 }
 
 func (nm *NodeManager) dialOrdinarySibling(ctx context.Context, controlAssoc *GekkaAssociation) error {
-	controlAssoc.mu.RLock()
-	remote := controlAssoc.remote
-	controlAssoc.mu.RUnlock()
+	remote := controlAssoc.remote.Load()
 	if remote == nil || remote.Address == nil {
 		return fmt.Errorf("control assoc has no remote address")
 	}
@@ -2522,10 +2528,10 @@ func (nm *NodeManager) dialOrdinarySibling(ctx context.Context, controlAssoc *Ge
 		// per-lane outboxes via outboxFor's lane pivot. Allocate a small
 		// buffer so any stray write that lands here doesn't deadlock.
 		outbox:   make(chan []byte, 1),
-		remote:   remote,
 		streamId: 2,
 		lanes:    lanes,
 	}
+	ordinaryAssoc.remote.Store(remote)
 	close(ordinaryAssoc.Handshake)
 	// Link siblings both directions.
 	controlAssoc.mu.Lock()
@@ -2594,8 +2600,8 @@ func (assoc *GekkaAssociation) effectiveStreamFrameSizeCap() int {
 
 func (assoc *GekkaAssociation) dispatch(ctx context.Context, meta *ArteryMetadata) error {
 	// Drop all inbound frames from a muted node (simulates network partition).
-	if assoc.nodeMgr != nil && assoc.remote != nil {
-		a := assoc.remote.GetAddress()
+	if assoc.nodeMgr != nil && assoc.remote.Load() != nil {
+		a := assoc.remote.Load().GetAddress()
 		if assoc.nodeMgr.isNodeMuted(a.GetHostname(), a.GetPort()) {
 			return nil
 		}
@@ -2660,7 +2666,7 @@ func (assoc *GekkaAssociation) dispatch(ctx context.Context, meta *ArteryMetadat
 		if env.GetSerializerId() == actor.ClusterSerializerID {
 			if assoc.nodeMgr.clusterMgr != nil {
 				assoc.mu.RLock()
-				remote := assoc.remote
+				remote := assoc.remote.Load()
 				assoc.mu.RUnlock()
 				senderPath := meta.Sender.GetPath()
 				return assoc.nodeMgr.clusterMgr.HandleIncomingClusterMessage(ctx, env.GetEnclosedMessage(), string(env.GetMessageManifest()), ToClusterUniqueAddress(remote), senderPath)
@@ -2728,7 +2734,7 @@ func (assoc *GekkaAssociation) dispatch(ctx context.Context, meta *ArteryMetadat
 	case actor.ClusterSerializerID:
 		if assoc.nodeMgr.clusterMgr != nil {
 			assoc.mu.RLock()
-			remote := assoc.remote
+			remote := assoc.remote.Load()
 			assoc.mu.RUnlock()
 			senderPath := meta.Sender.GetPath()
 			return assoc.nodeMgr.clusterMgr.HandleIncomingClusterMessage(ctx, meta.Payload, string(meta.MessageManifest), ToClusterUniqueAddress(remote), senderPath)
@@ -2811,7 +2817,7 @@ func (assoc *GekkaAssociation) handleSystemMessage(meta *ArteryMetadata) error {
 	logger.Default().Debug("artery: received system message", "type", sm.GetType())
 
 	if assoc.nodeMgr.SystemMessageCallback != nil {
-		return assoc.nodeMgr.SystemMessageCallback(assoc.remote, env, sm)
+		return assoc.nodeMgr.SystemMessageCallback(assoc.remote.Load(), env, sm)
 	}
 	return nil
 }
@@ -2902,8 +2908,8 @@ func (assoc *GekkaAssociation) SendWithSender(recipient, senderPath string, payl
 	}
 
 	// Drop outbound frames when the target node is muted.
-	if assoc.nodeMgr != nil && assoc.remote != nil {
-		a := assoc.remote.GetAddress()
+	if assoc.nodeMgr != nil && assoc.remote.Load() != nil {
+		a := assoc.remote.Load().GetAddress()
 		if assoc.nodeMgr.isNodeMuted(a.GetHostname(), a.GetPort()) {
 			return nil
 		}
@@ -2988,8 +2994,8 @@ func (assoc *GekkaAssociation) GetRTT() time.Duration {
 
 // remoteKey returns the "host:port" key used to identify this association in the flight recorder.
 func (assoc *GekkaAssociation) remoteKey() string {
-	if assoc.remote != nil {
-		a := assoc.remote.GetAddress()
+	if assoc.remote.Load() != nil {
+		a := assoc.remote.Load().GetAddress()
 		if a != nil {
 			return fmt.Sprintf("%s:%d", a.GetHostname(), a.GetPort())
 		}
@@ -3038,8 +3044,8 @@ func (assoc *GekkaAssociation) Send(recipient string, payload []byte, serializer
 	}
 
 	// Drop outbound frames when the target node is muted.
-	if assoc.nodeMgr != nil && assoc.remote != nil {
-		a := assoc.remote.GetAddress()
+	if assoc.nodeMgr != nil && assoc.remote.Load() != nil {
+		a := assoc.remote.Load().GetAddress()
 		if assoc.nodeMgr.isNodeMuted(a.GetHostname(), a.GetPort()) {
 			return nil
 		}
@@ -3057,7 +3063,7 @@ func (assoc *GekkaAssociation) Send(recipient string, payload []byte, serializer
 	if err != nil {
 		return err
 	}
-	logger.Default().Debug("artery: sending frame", "total_bytes", len(frame), "remote_uid", assoc.remote.GetUid(), "serializerId", serializerId, "manifest", manifest)
+	logger.Default().Debug("artery: sending frame", "total_bytes", len(frame), "remote_uid", assoc.remote.Load().GetUid(), "serializerId", serializerId, "manifest", manifest)
 
 	// pekko.remote.artery.log-sent-messages — DEBUG outbound logging.
 	if assoc.nodeMgr != nil && assoc.nodeMgr.LogSentMessages {
@@ -3167,7 +3173,7 @@ func (assoc *GekkaAssociation) startLaneWriter(ctx context.Context, lane *outbou
 			// queued before MuteNode was called). Use assoc.remote under
 			// read lock since it's updated after the handshake.
 			assoc.mu.RLock()
-			remoteAddr := assoc.remote.GetAddress()
+			remoteAddr := assoc.remote.Load().GetAddress()
 			assoc.mu.RUnlock()
 			if remoteAddr != nil && nm != nil && nm.isNodeMuted(remoteAddr.GetHostname(), remoteAddr.GetPort()) {
 				continue
@@ -3374,7 +3380,7 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 				// Forward cluster messages (sid=5) to the cluster manager.
 				if innerSID == 5 && innerManifest != "" && assoc.nodeMgr.clusterMgr != nil {
 					assoc.mu.RLock()
-					remote := assoc.remote
+					remote := assoc.remote.Load()
 					assoc.mu.RUnlock()
 					logger.Default().Debug("artery: forwarding actorSelection cluster message", "manifest", innerManifest)
 					return assoc.nodeMgr.clusterMgr.HandleIncomingClusterMessage(
@@ -3439,7 +3445,7 @@ func (assoc *GekkaAssociation) handleIdentify(meta *ArteryMetadata, env *gproto_
 
 	// Send ActorIdentity via the outbound association to Pekko.
 	// In Artery TCP, connections are unidirectional.
-	remoteAddr := assoc.remote.GetAddress()
+	remoteAddr := assoc.remote.Load().GetAddress()
 	outAssoc, ok := assoc.nodeMgr.GetGekkaAssociationByHost(remoteAddr.GetHostname(), remoteAddr.GetPort())
 	if !ok {
 		logger.Default().Warn("artery: no outbound association for ActorIdentity reply")
@@ -3508,8 +3514,8 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 		return fmt.Errorf("artery: HandshakeReq rejected — UID %d is quarantined", uid)
 	}
 
+	assoc.remote.Store(req.From)
 	assoc.mu.Lock()
-	assoc.remote = req.From
 	assoc.state = ASSOCIATED
 	assoc.mu.Unlock()
 	assoc.emitFlight(SeverityInfo, CatHandshake, "ASSOCIATED", map[string]any{
@@ -3542,9 +3548,10 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 				continue
 			}
 			a.mu.RLock()
+			aRemote := a.remote.Load()
 			match := a.streamId == 2 &&
-				a.remote != nil &&
-				a.remote.GetUid() == req.From.GetUid()
+				aRemote != nil &&
+				aRemote.GetUid() == req.From.GetUid()
 			a.mu.RUnlock()
 			if match {
 				existing = a
@@ -3614,9 +3621,10 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 			var hostMatch bool
 			var aHost string
 			var aPort uint32
-			if a.remote != nil && a.remote.Address != nil {
-				aHost = a.remote.Address.GetHostname()
-				aPort = a.remote.Address.GetPort()
+			aRemote := a.remote.Load()
+			if aRemote != nil && aRemote.Address != nil {
+				aHost = aRemote.Address.GetHostname()
+				aPort = aRemote.Address.GetPort()
 				hostMatch = normalize(aHost) == normalize(addr.GetHostname()) &&
 					aPort == addr.GetPort()
 			}
@@ -3749,8 +3757,8 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 		// complete it directly without waiting for an extra round-trip.
 		if matched != nil {
 			logger.Default().Info("artery: completing matching OUTBOUND association")
+			matched.remote.Store(req.From)
 			matched.mu.Lock()
-			matched.remote = req.From
 			matched.state = ASSOCIATED
 			select {
 			case <-matched.Handshake:
@@ -3838,8 +3846,9 @@ func (assoc *GekkaAssociation) handleHandshakeRsp(mwa *gproto_remote.MessageWith
 		isWaiting := a.state == INITIATED || a.state == WAITING_FOR_HANDSHAKE || a.state == ASSOCIATED
 
 		var match bool
-		if a.remote != nil && mwa.Address != nil && mwa.Address.Address != nil {
-			aHost, aPort := a.remote.Address.GetHostname(), a.remote.Address.GetPort()
+		aRemote := a.remote.Load()
+		if aRemote != nil && mwa.Address != nil && mwa.Address.Address != nil {
+			aHost, aPort := aRemote.Address.GetHostname(), aRemote.Address.GetPort()
 			mHost, mPort := mwa.Address.Address.GetHostname(), mwa.Address.Address.GetPort()
 
 			normalize := func(h string) string {
@@ -3851,7 +3860,7 @@ func (assoc *GekkaAssociation) handleHandshakeRsp(mwa *gproto_remote.MessageWith
 			match = normalize(aHost) == normalize(mHost) && aPort == mPort
 			logger.Default().Debug("artery: handleHandshakeRsp candidate", "match", match, "host", aHost, "port", aPort)
 		} else {
-			logger.Default().Debug("artery: handleHandshakeRsp candidate", "match", false, "hasRemote", a.remote != nil, "hasMwaAddr", mwa.Address != nil)
+			logger.Default().Debug("artery: handleHandshakeRsp candidate", "match", false, "hasRemote", aRemote != nil, "hasMwaAddr", mwa.Address != nil)
 		}
 		a.mu.RUnlock()
 
@@ -3863,8 +3872,8 @@ func (assoc *GekkaAssociation) handleHandshakeRsp(mwa *gproto_remote.MessageWith
 	}
 
 	if matched != nil {
+		matched.remote.Store(mwa.Address)
 		matched.mu.Lock()
-		matched.remote = mwa.Address
 		matched.state = ASSOCIATED
 
 		// Unblock anybody waiting on this
@@ -3935,7 +3944,7 @@ func (nm *NodeManager) getAnyAssociationByHost(host string, port uint32) (*Gekka
 	defer nm.mu.RUnlock()
 	for _, assoc := range nm.associations {
 		assoc.mu.RLock()
-		remote := assoc.remote
+		remote := assoc.remote.Load()
 		assoc.mu.RUnlock()
 		if remote != nil && remote.Address.GetHostname() == host && remote.Address.GetPort() == port {
 			return assoc, true
@@ -3974,17 +3983,17 @@ func (nm *NodeManager) GetOrCreateUDPAssociation(src *net.UDPAddr, udpH *UdpArte
 		streamId:   AeronStreamControl,
 		udpHandler: udpH,
 		udpDst:     src,
-		remote: &gproto_remote.UniqueAddress{
-			Address: &gproto_remote.Address{
-				Protocol: nm.LocalAddr.Protocol,
-				System:   nm.LocalAddr.System,
-				Hostname: proto.String(src.IP.String()),
-				Port:     proto.Uint32(uint32(src.Port)),
-			},
-			Uid: proto.Uint64(0),
-		},
 	}
-	nm.RegisterAssociation(assoc.remote, assoc)
+	assoc.remote.Store(&gproto_remote.UniqueAddress{
+		Address: &gproto_remote.Address{
+			Protocol: nm.LocalAddr.Protocol,
+			System:   nm.LocalAddr.System,
+			Hostname: proto.String(src.IP.String()),
+			Port:     proto.Uint32(uint32(src.Port)),
+		},
+		Uid: proto.Uint64(0),
+	})
+	nm.RegisterAssociation(assoc.remote.Load(), assoc)
 
 	// Pin the ephemeral UDP source address to this association permanently.
 	// handleHandshakeReq will later overwrite assoc.remote with the canonical

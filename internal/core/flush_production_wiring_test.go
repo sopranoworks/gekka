@@ -32,10 +32,10 @@ func flushTestAssoc(t *testing.T, nm *NodeManager, uid uint64, outboxCap int) *G
 		nodeMgr:  nm,
 		localUid: nm.localUid,
 		outbox:   make(chan []byte, outboxCap),
-		remote:   remote,
 		streamId: 1,
 		lastSeen: time.Now(),
 	}
+	assoc.remote.Store(remote)
 	nm.RegisterAssociation(remote, assoc)
 	return assoc
 }

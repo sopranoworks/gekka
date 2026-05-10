@@ -44,16 +44,16 @@ func newSystemRedeliveryAssoc(t *testing.T, sysBufCap, outboxCap int, resendInte
 		outbox:       make(chan []byte, outboxCap),
 		streamId:     1,
 		systemOutbox: NewSystemMessageOutbox(nm.EffectiveSystemMessageBufferSize()),
-		remote: &gproto_remote.UniqueAddress{
-			Address: &gproto_remote.Address{
-				Protocol: proto.String("pekko"),
-				System:   proto.String("Peer"),
-				Hostname: proto.String("127.0.0.1"),
-				Port:     proto.Uint32(2552),
-			},
-			Uid: proto.Uint64(42),
-		},
 	}
+	assoc.remote.Store(&gproto_remote.UniqueAddress{
+		Address: &gproto_remote.Address{
+			Protocol: proto.String("pekko"),
+			System:   proto.String("Peer"),
+			Hostname: proto.String("127.0.0.1"),
+			Port:     proto.Uint32(2552),
+		},
+		Uid: proto.Uint64(42),
+	})
 	close(assoc.Handshake)
 	return assoc, nm
 }
@@ -287,8 +287,8 @@ func TestHandleSystemMessage_DedupesByLastDeliveredSeq(t *testing.T) {
 			// will fail silently — that's fine, the dedupe path under test
 			// runs before the dispatch regardless of whether the ack hit.
 			AckReplyTo: &gproto_remote.UniqueAddress{
-				Address: assoc.remote.GetAddress(),
-				Uid:     proto.Uint64(assoc.remote.GetUid()),
+				Address: assoc.remote.Load().GetAddress(),
+				Uid:     proto.Uint64(assoc.remote.Load().GetUid()),
 			},
 		}
 		envBytes, err := proto.Marshal(env)
@@ -345,11 +345,11 @@ func TestHandleControlMessage_DeliveryAckPrunesSenderBuffer(t *testing.T) {
 	// returns the OUTBOUND streamId=1 assoc, so the prune routes to
 	// outAssoc.systemOutbox even though the ack is dispatched on inAssoc.
 	outAssoc, nm := newSystemRedeliveryAssoc(t, 16, 16, 100*time.Millisecond)
-	peerHost := outAssoc.remote.GetAddress().GetHostname()
-	peerPort := outAssoc.remote.GetAddress().GetPort()
+	peerHost := outAssoc.remote.Load().GetAddress().GetHostname()
+	peerPort := outAssoc.remote.Load().GetAddress().GetPort()
 
 	// Register outAssoc so GetGekkaAssociationByHost can find it.
-	nm.RegisterAssociation(outAssoc.remote, outAssoc)
+	nm.RegisterAssociation(outAssoc.remote.Load(), outAssoc)
 	outAssoc.mu.Lock()
 	outAssoc.state = ASSOCIATED
 	outAssoc.mu.Unlock()
@@ -371,16 +371,16 @@ func TestHandleControlMessage_DeliveryAckPrunesSenderBuffer(t *testing.T) {
 		nodeMgr:  nm,
 		streamId: 1,
 		outbox:   make(chan []byte, 4),
-		remote: &gproto_remote.UniqueAddress{
-			Address: &gproto_remote.Address{
-				Protocol: proto.String("pekko"),
-				System:   proto.String("Peer"),
-				Hostname: proto.String(peerHost),
-				Port:     proto.Uint32(peerPort),
-			},
-			Uid: proto.Uint64(99),
-		},
 	}
+	inAssoc.remote.Store(&gproto_remote.UniqueAddress{
+		Address: &gproto_remote.Address{
+			Protocol: proto.String("pekko"),
+			System:   proto.String("Peer"),
+			Hostname: proto.String(peerHost),
+			Port:     proto.Uint32(peerPort),
+		},
+		Uid: proto.Uint64(99),
+	})
 
 	// Build an inbound SystemMessageDeliveryAck frame with cumulative
 	// ack of seq=11. After dispatch, outAssoc.systemOutbox should drop

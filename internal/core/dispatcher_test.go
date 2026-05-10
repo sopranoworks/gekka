@@ -104,8 +104,8 @@ func TestDispatcher_AutoACK(t *testing.T) {
 		state:   ASSOCIATED,
 		conn:    server,
 		nodeMgr: nm,
-		remote:  remoteUA,
 	}
+	assoc.remote.Store(remoteUA)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()

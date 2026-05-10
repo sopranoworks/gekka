@@ -140,10 +140,10 @@ func TestSweepIdleOutboundQuarantine_MarksIdleAssociation(t *testing.T) {
 		nodeMgr:  nm,
 		localUid: nm.localUid,
 		outbox:   make(chan []byte, 1),
-		remote:   remote,
 		streamId: 1,
 		lastSeen: time.Now().Add(-time.Second), // older than 50ms threshold
 	}
+	assoc.remote.Store(remote)
 	nm.RegisterAssociation(remote, assoc)
 
 	// Pre-condition: the association is present.
@@ -194,10 +194,10 @@ func TestSweepIdleOutboundQuarantine_SkipsFreshAssociation(t *testing.T) {
 		nodeMgr:  nm,
 		localUid: nm.localUid,
 		outbox:   make(chan []byte, 1),
-		remote:   remote,
 		streamId: 1,
 		lastSeen: time.Now(), // fresh — well within the 1h threshold
 	}
+	assoc.remote.Store(remote)
 	nm.RegisterAssociation(remote, assoc)
 
 	if n := nm.SweepIdleOutboundQuarantine(); n != 0 {
@@ -228,10 +228,10 @@ func TestSweepIdleOutboundQuarantine_SkipsInbound(t *testing.T) {
 		nodeMgr:  nm,
 		localUid: nm.localUid,
 		outbox:   make(chan []byte, 1),
-		remote:   remote,
 		streamId: 1,
 		lastSeen: time.Now().Add(-time.Second),
 	}
+	assoc.remote.Store(remote)
 	nm.RegisterAssociation(remote, assoc)
 
 	if n := nm.SweepIdleOutboundQuarantine(); n != 0 {

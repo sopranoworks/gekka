@@ -1239,6 +1239,69 @@ func TestGoSeed_FailureRecovery(t *testing.T) {
 	log.Printf("[SUCCESS] TestGoSeed_FailureRecovery passed.")
 }
 
+// TestGoSeed_Churn: 5 sequential join/leave cycles of a Scala node
+// against a Go-Seed cluster. Verifies Go-Seed's gossip table doesn't
+// accumulate zombie members and SBR doesn't misfire on legitimate
+// departures.
+func TestGoSeed_Churn(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	const goSeedPort = uint32(2550)
+	const cycles = 5
+
+	goSeed, err := NewCluster(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: goSeedPort})
+	if err != nil {
+		t.Fatalf("Spawn Go-Seed: %v", err)
+	}
+	defer goSeed.Shutdown()
+	if err := goSeed.Join("127.0.0.1", goSeedPort); err != nil {
+		t.Fatalf("Go-Seed self-join: %v", err)
+	}
+
+	for i := 1; i <= cycles; i++ {
+		log.Printf("[CHURN cycle=%d] Spawning Scala…", i)
+		scalaProc, scalaStdout := startSbtServer(t, ctx,
+			fmt.Sprintf("com.example.ScalaClusterNode 127.0.0.1 %d", goSeedPort), 0)
+
+		if err := waitForScalaStdoutContains(t, scalaStdout, "--- SCALA NODE STARTED ---", 20*time.Second); err != nil {
+			t.Fatalf("[CHURN cycle=%d] startup: %v", i, err)
+		}
+		if err := waitForUpMembers(goSeed, 2, 30*time.Second); err != nil {
+			t.Fatalf("[CHURN cycle=%d] convergence: %v", i, err)
+		}
+
+		// Find Scala's port and down it.
+		var scalaPort uint32
+		for _, m := range goSeed.cm.GetState().GetMembers() {
+			if m.GetStatus() != gproto_cluster.MemberStatus_Up {
+				continue
+			}
+			a := goSeed.cm.GetState().GetAllAddresses()[m.GetAddressIndex()].GetAddress()
+			if a.GetPort() != goSeedPort {
+				scalaPort = a.GetPort()
+				break
+			}
+		}
+		if scalaPort == 0 {
+			t.Fatalf("[CHURN cycle=%d] no Scala in gossip", i)
+		}
+		goSeed.cm.DownMember(cluster.MemberAddress{
+			Protocol: "pekko", System: "ClusterSystem", Host: "127.0.0.1", Port: scalaPort,
+		})
+
+		if err := waitForExactUpMembers(goSeed, 1, 30*time.Second); err != nil {
+			t.Fatalf("[CHURN cycle=%d] departure: %v", i, err)
+		}
+		// Reap the cycle's JVM explicitly so cycle N+1 doesn't pile a
+		// second JVM on top of a still-alive but logically Down one. The
+		// jvmproc t.Cleanup hook runs at test exit, not per cycle.
+		scalaProc.Stop()
+		log.Printf("[CHURN cycle=%d] complete — back to 1 Up member.", i)
+	}
+	log.Printf("[SUCCESS] TestGoSeed_Churn passed (%d cycles).", cycles)
+}
+
 // HexDump outputs a formatted hex dump of the data.
 func HexDump(data []byte) {
 	fmt.Printf("%s\n", hex.Dump(data))

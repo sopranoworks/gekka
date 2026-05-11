@@ -491,7 +491,14 @@ func TestClusterFailureRecovery(t *testing.T) {
 				readyOnce = true
 				close(ready)
 			}
-			if strings.Contains(line, "(Total Up: 3)") || strings.Contains(line, "(Total Up: 4)") {
+			// Wait for the full 4-member cluster (2 Scala + 2 Go) before
+			// declaring convergence. Accepting "(Total Up: 3)" here raced
+			// with Node 2's join: stopping Node 1's heartbeat while Node 2
+			// was still transitioning to Up left Pekko's failure detector
+			// for Node 2 with an empty heartbeat window, and SBR's
+			// down-all-when-unstable then downed the entire cluster before
+			// any Reachable event could land.
+			if strings.Contains(line, "(Total Up: 4)") {
 				select {
 				case clusterSize4Chan <- struct{}{}:
 				default:
@@ -1847,7 +1854,10 @@ func TestMultiNodeDynamicJoin(t *testing.T) {
 				default:
 				}
 			}
-			if strings.Contains(line, "(Total Up: 3)") || strings.Contains(line, "(Total Up: 4)") {
+			// Wait for the full 4-member cluster before declaring size-4
+			// convergence. Accepting "(Total Up: 3)" here would race with
+			// the second Go node's join and produce a premature signal.
+			if strings.Contains(line, "(Total Up: 4)") {
 				select {
 				case clusterSize4Chan <- struct{}{}:
 				default:

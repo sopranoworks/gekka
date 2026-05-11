@@ -355,3 +355,65 @@ func skipProtoField(data []byte, wireType uint64) (int, error) {
 		return 0, fmt.Errorf("unknown wire type %d", wireType)
 	}
 }
+
+// Pekko-wire message types. These are the structs that ShardingSerializer.ToBinary
+// accepts and FromBinary returns; they correspond 1:1 to manifests on the wire.
+//
+// The gekka-internal sharding types (RegisterRegion, GetShardHome, ShardHome,
+// ShardingEnvelope, etc. in sharding.go) remain unchanged so existing Go-to-Go
+// sharding behavior is unaffected. The PekkoCoordinatorShim (pekko_shim.go) is
+// responsible for translating between these wire types and the internal ones.
+
+// PekkoSharding_Register is manifest "BA" — Pekko region announces itself.
+type PekkoSharding_Register struct {
+	// Ref is the serialized actor path of the region (e.g.
+	// "pekko://ClusterSystem@host:port/system/sharding/echoRegion#-1").
+	Ref string
+}
+
+// PekkoSharding_RegisterAck is manifest "BC" — coordinator acks a Register.
+type PekkoSharding_RegisterAck struct {
+	Ref string // serialized actor path of the coordinator
+}
+
+// PekkoSharding_GetShardHome is manifest "BD" — region asks where shard X lives.
+type PekkoSharding_GetShardHome struct {
+	Shard string
+}
+
+// PekkoSharding_ShardHome is manifest "BE" — coordinator answers GetShardHome.
+type PekkoSharding_ShardHome struct {
+	Shard  string
+	Region string // serialized actor path of the owning region
+}
+
+// PekkoSharding_BeginHandOff is manifest "BH" — coordinator asks a region to start handoff.
+type PekkoSharding_BeginHandOff struct {
+	Shard string
+}
+
+// PekkoSharding_BeginHandOffAck is manifest "BI" — region acknowledges BeginHandOff.
+type PekkoSharding_BeginHandOffAck struct {
+	Shard string
+}
+
+// PekkoSharding_HandOff is manifest "BJ" — coordinator initiates the actual handoff.
+type PekkoSharding_HandOff struct {
+	Shard string
+}
+
+// PekkoSharding_ShardStopped is manifest "BK" — region confirms shard stopped.
+type PekkoSharding_ShardStopped struct {
+	Shard string
+}
+
+// PekkoSharding_StartEntity is manifest "EA" — used by remember-entities recovery.
+type PekkoSharding_StartEntity struct {
+	EntityId string
+}
+
+// PekkoSharding_StartEntityAck is manifest "EB".
+type PekkoSharding_StartEntityAck struct {
+	EntityId string
+	ShardId  string
+}

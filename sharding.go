@@ -541,6 +541,22 @@ func StartSharding[Command any, Event any, State any](
 			return sharding.ClusterEntityRef[Command]{}, err
 		}
 		coordinatorRef = ref
+
+		// PekkoCoordinatorShim: translation actor at the Pekko-expected
+		// coordinator path. Pekko's ClusterSharding singleton-proxy
+		// addresses /system/sharding/<typeName>Coordinator/singleton/
+		// coordinator on every gekka node; the shim decodes Pekko-wire
+		// PekkoSharding_* into gekka-internal RegisterRegion/GetShardHome
+		// and forwards to the local ShardCoordinatorProxy (which itself
+		// auto-resolves to the singleton's current location).
+		pekkoCoordPath := "/system/sharding/" + typeName + "Coordinator/singleton/coordinator"
+		shimSendFn := func(recipient string, msg any) error {
+			return cluster.SendWithSender(context.Background(), recipient, pekkoCoordPath, msg)
+		}
+		shim := sharding.NewPekkoCoordinatorShim(coordinatorRef, shimSendFn)
+		cluster.SpawnActor(pekkoCoordPath, shim, actor.Props{
+			New: func() actor.Actor { return shim },
+		})
 	}
 
 	// 2. Start ShardRegion

@@ -417,3 +417,103 @@ type PekkoSharding_StartEntityAck struct {
 	EntityId string
 	ShardId  string
 }
+
+// Identifier implements core.Serializer.
+func (s *ShardingSerializer) Identifier() int32 { return ShardingSerializerID }
+
+// ToBinary implements core.Serializer. Dispatch is by Go type — each
+// PekkoSharding_* maps to the corresponding manifest's encoder.
+func (s *ShardingSerializer) ToBinary(msg interface{}) ([]byte, error) {
+	switch m := msg.(type) {
+	case *PekkoSharding_Register:
+		return s.EncodeActorRefMessage(m.Ref), nil
+	case *PekkoSharding_RegisterAck:
+		return s.EncodeActorRefMessage(m.Ref), nil
+	case *PekkoSharding_GetShardHome:
+		return s.EncodeGetShardHome(m.Shard), nil
+	case *PekkoSharding_ShardHome:
+		return s.EncodeShardHome(m.Shard, m.Region), nil
+	case *PekkoSharding_BeginHandOff:
+		return s.EncodeBeginHandOff(m.Shard), nil
+	case *PekkoSharding_BeginHandOffAck:
+		return encodeStringField1(m.Shard), nil
+	case *PekkoSharding_HandOff:
+		return encodeStringField1(m.Shard), nil
+	case *PekkoSharding_ShardStopped:
+		return encodeStringField1(m.Shard), nil
+	case *PekkoSharding_StartEntity:
+		return s.EncodeStartEntity(m.EntityId), nil
+	case *PekkoSharding_StartEntityAck:
+		return s.EncodeStartEntityAck(m.EntityId, m.ShardId), nil
+	default:
+		return nil, fmt.Errorf("ShardingSerializer.ToBinary: unsupported type %T", msg)
+	}
+}
+
+// FromBinary implements core.Serializer. Dispatch is by manifest code.
+func (s *ShardingSerializer) FromBinary(data []byte, manifest string) (interface{}, error) {
+	switch manifest {
+	case RegisterManifest:
+		ref, err := s.DecodeActorRefMessage(data)
+		if err != nil {
+			return nil, err
+		}
+		return &PekkoSharding_Register{Ref: ref}, nil
+	case RegisterAckManifest:
+		ref, err := s.DecodeActorRefMessage(data)
+		if err != nil {
+			return nil, err
+		}
+		return &PekkoSharding_RegisterAck{Ref: ref}, nil
+	case GetShardHomeManifest:
+		shard, err := s.DecodeGetShardHome(data)
+		if err != nil {
+			return nil, err
+		}
+		return &PekkoSharding_GetShardHome{Shard: shard}, nil
+	case ShardHomeManifest:
+		shard, region, err := s.DecodeShardHome(data)
+		if err != nil {
+			return nil, err
+		}
+		return &PekkoSharding_ShardHome{Shard: shard, Region: region}, nil
+	case BeginHandOffManifest:
+		shard, err := s.DecodeBeginHandOff(data)
+		if err != nil {
+			return nil, err
+		}
+		return &PekkoSharding_BeginHandOff{Shard: shard}, nil
+	case BeginHandOffAckManifest:
+		shard, err := decodeFirstStringField(data, "BeginHandOffAck")
+		if err != nil {
+			return nil, err
+		}
+		return &PekkoSharding_BeginHandOffAck{Shard: shard}, nil
+	case HandOffManifest:
+		shard, err := decodeFirstStringField(data, "HandOff")
+		if err != nil {
+			return nil, err
+		}
+		return &PekkoSharding_HandOff{Shard: shard}, nil
+	case ShardStoppedManifest:
+		shard, err := decodeFirstStringField(data, "ShardStopped")
+		if err != nil {
+			return nil, err
+		}
+		return &PekkoSharding_ShardStopped{Shard: shard}, nil
+	case StartEntityManifest:
+		eid, err := s.DecodeStartEntity(data)
+		if err != nil {
+			return nil, err
+		}
+		return &PekkoSharding_StartEntity{EntityId: eid}, nil
+	case StartEntityAckManifest:
+		eid, sid, err := s.DecodeStartEntityAck(data)
+		if err != nil {
+			return nil, err
+		}
+		return &PekkoSharding_StartEntityAck{EntityId: eid, ShardId: sid}, nil
+	default:
+		return nil, fmt.Errorf("ShardingSerializer.FromBinary: unknown manifest %q", manifest)
+	}
+}

@@ -3209,6 +3209,28 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	nm.SerializerRegistry.RegisterManifest("F", reflect.TypeFor[*stream.SinkRef](), stream.StreamRefSerializerID)
 	nm.SerializerRegistry.RegisterManifest("G", reflect.TypeFor[*stream.OnSubscribeHandshake](), stream.StreamRefSerializerID)
 
+	// Pekko-compatible ClusterShardingMessageSerializer (ID 13) — wire-format
+	// equivalent to Pekko's org.apache.pekko.cluster.sharding.protobuf.
+	// ClusterShardingMessageSerializer. Decoding routes by manifest code;
+	// encoding picks the serializer based on the message's Go type via the
+	// manifest bindings below.
+	shardingSer := &sharding.ShardingSerializer{}
+	nm.SerializerRegistry.RegisterSerializer(sharding.ShardingSerializerID, shardingSer)
+	for manifest, typ := range map[string]reflect.Type{
+		sharding.RegisterManifest:        reflect.TypeFor[*sharding.PekkoSharding_Register](),
+		sharding.RegisterAckManifest:     reflect.TypeFor[*sharding.PekkoSharding_RegisterAck](),
+		sharding.GetShardHomeManifest:    reflect.TypeFor[*sharding.PekkoSharding_GetShardHome](),
+		sharding.ShardHomeManifest:       reflect.TypeFor[*sharding.PekkoSharding_ShardHome](),
+		sharding.BeginHandOffManifest:    reflect.TypeFor[*sharding.PekkoSharding_BeginHandOff](),
+		sharding.BeginHandOffAckManifest: reflect.TypeFor[*sharding.PekkoSharding_BeginHandOffAck](),
+		sharding.HandOffManifest:         reflect.TypeFor[*sharding.PekkoSharding_HandOff](),
+		sharding.ShardStoppedManifest:    reflect.TypeFor[*sharding.PekkoSharding_ShardStopped](),
+		sharding.StartEntityManifest:     reflect.TypeFor[*sharding.PekkoSharding_StartEntity](),
+		sharding.StartEntityAckManifest:  reflect.TypeFor[*sharding.PekkoSharding_StartEntityAck](),
+	} {
+		nm.SerializerRegistry.RegisterManifest(manifest, typ, sharding.ShardingSerializerID)
+	}
+
 	// Wire the persistence-proxy transport so HOCON-driven off-mode
 	// ProxyJournal / ProxySnapshotStore instances created after this
 	// point can route through the cluster's Artery layer.

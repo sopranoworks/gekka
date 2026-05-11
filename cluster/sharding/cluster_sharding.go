@@ -9,6 +9,7 @@
 package sharding
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -17,7 +18,18 @@ import (
 	"github.com/sopranoworks/gekka/cluster"
 	cpersistence "github.com/sopranoworks/gekka/cluster/persistence"
 	"github.com/sopranoworks/gekka/cluster/singleton"
+	"github.com/sopranoworks/gekka/logger"
 )
+
+// pekkoShimSpawner is the subset of the host system that lets the
+// PekkoCoordinatorShim be registered at a fully qualified system path
+// (/system/sharding/<typeName>Coordinator/singleton/coordinator). The host
+// gekka.Cluster satisfies this; mock ActorContexts used by unit tests do
+// not, in which case the shim is silently omitted (Pekko-interop is an
+// integration-time concern).
+type pekkoShimSpawner interface {
+	SpawnActor(path string, a actor.Actor, props actor.Props) actor.Ref
+}
 
 // ClusterShardingConfig holds all options needed to start cluster sharding for
 // one entity type.
@@ -195,6 +207,34 @@ func StartSharding(
 	}, proxyName)
 	if err != nil {
 		return nil, fmt.Errorf("sharding: spawn coordinator proxy for %q: %w", cfg.TypeName, err)
+	}
+
+	// ── Step 2b: PekkoCoordinatorShim ────────────────────────────────────
+	//
+	// Register a translation actor at the path Pekko's ClusterShardingMessage
+	// Serializer + singleton-proxy direct Register / GetShardHome to:
+	// "/system/sharding/<typeName>Coordinator/singleton/coordinator".
+	// The shim translates Pekko-wire messages (PekkoSharding_*) to gekka's
+	// internal RegisterRegion / GetShardHome and forwards to the local
+	// ShardCoordinatorProxy (which auto-resolves to the singleton's current
+	// node), then encodes replies back to the wire and routes them to the
+	// originating Pekko sender via the cluster Router.
+	//
+	// The shim spawns on every gekka node — Pekko addresses the local node's
+	// apparent coordinator path; internal singleton resolution happens behind
+	// proxyRef.
+	pekkoCoordPath := "/system/sharding/" + cfg.TypeName + "Coordinator/singleton/coordinator"
+	if ps, ok := sys.(pekkoShimSpawner); ok {
+		shimSendFn := func(recipient string, msg any) error {
+			return router.SendWithSender(context.Background(), recipient, pekkoCoordPath, msg)
+		}
+		shim := NewPekkoCoordinatorShim(proxyRef, shimSendFn)
+		ps.SpawnActor(pekkoCoordPath, shim, actor.Props{
+			New: func() actor.Actor { return shim },
+		})
+	} else {
+		logger.Default().Debug("sharding: PekkoCoordinatorShim not wired — host does not expose SpawnActor",
+			"typeName", cfg.TypeName, "path", pekkoCoordPath)
 	}
 
 	// ── Step 3: ShardRegion ───────────────────────────────────────────────

@@ -21,10 +21,16 @@ import (
 	"testing"
 	"time"
 
+	"reflect"
+
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/actor/typed"
 	"github.com/sopranoworks/gekka/cluster"
 	"github.com/sopranoworks/gekka/cluster/ddata"
+	"github.com/sopranoworks/gekka/cluster/sharding"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
+	"github.com/sopranoworks/gekka/persistence"
+	ptyped "github.com/sopranoworks/gekka/persistence/typed"
 	"github.com/sopranoworks/gekka/test/jvmproc"
 )
 
@@ -1658,22 +1664,149 @@ func TestGoSeed_Ask(t *testing.T) {
 // one entity print appears on Scala stdout (proving at least one shard
 // was allocated to the Scala region).
 //
-// Currently SKIPPED — cross-language sharding requires wire-format
-// compatibility for Pekko's ShardCoordinator messages
-// (RegisterCoordinator, GetShardHome, ShardHome, RegionRegistered, …).
-// Pekko serializes these via `pekko.cluster.sharding.serializer` with
-// class-name manifests like
-// `org.apache.pekko.cluster.sharding.ShardCoordinator$Internal$RegisterCoordinator`,
-// while gekka's StartSharding registers Go-internal manifests like
-// `sharding.RegisterRegion`. Until a translation layer exists for
-// these coordinator messages, Pekko's region registration with a
-// Go-hosted coordinator will time out.
-//
-// The Scala scaffold (ScalaShardingJoiner) is intentionally landed so
-// that a future cycle can drop the t.Skip and run the assertion. See
-// spec Risk #3 for the architectural background.
+// Wire path under test: Pekko region → gekka coordinator (via the
+// PekkoCoordinatorShim at /system/sharding/echoCoordinator/singleton/
+// coordinator) → gekka allocates a shard to the Pekko region → gekka
+// region forwards the entity envelope to that Pekko region.
 func TestGoSeed_Sharding(t *testing.T) {
-	t.Skip("cross-language sharding requires Pekko↔gekka coordinator-message manifest mappings; see comment for architectural background and Task 9 of docs/superpowers/plans/2026-05-10-go-as-seed-integration-tests.md")
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	const goSeedPort = uint32(2550)
+
+	log.Printf("[SEED] Spawning Go-Seed on port %d...", goSeedPort)
+	goSeed, err := NewCluster(ClusterConfig{SystemName: "ClusterSystem", Host: "127.0.0.1", Port: goSeedPort})
+	if err != nil {
+		t.Fatalf("Spawn Go-Seed: %v", err)
+	}
+	defer goSeed.Shutdown()
+	if err := goSeed.Join("127.0.0.1", goSeedPort); err != nil {
+		t.Fatalf("Go-Seed self-join: %v", err)
+	}
+	log.Printf("[SEED] Go-Seed running at %s", goSeed.Addr())
+
+	// Sharding type "echo" — 4 shards, hash(entityId) mod 4 (matches the
+	// Scala joiner's extractShardId so both sides agree on the shard space).
+	settings := ShardingSettings{NumberOfShards: 4}
+	extract := func(msg any) (sharding.EntityId, sharding.ShardId, any) {
+		switch m := msg.(type) {
+		case sharding.ShardingEnvelope:
+			sid := m.ShardId
+			if sid == "" {
+				sid = shardIdForEntity(m.EntityId, settings.NumberOfShards)
+			}
+			return m.EntityId, sid, m.Message
+		case string:
+			// Region's shardId-recompute path: it calls extract with the
+			// raw entityId string when m.ShardId is empty in the envelope.
+			return sharding.EntityId(m), shardIdForEntity(m, settings.NumberOfShards), m
+		}
+		return "", "", msg
+	}
+	journal := persistence.NewInMemoryJournal()
+	factory := func(id string) *EventSourcedBehavior[string, string, string] {
+		return &EventSourcedBehavior[string, string, string]{
+			PersistenceID: "echo-" + id,
+			Journal:       journal,
+			InitialState:  "",
+			CommandHandler: func(_ typed.TypedContext[string], _ string, c string) ptyped.Effect[string, string] {
+				return ptyped.Persist[string, string](c)
+			},
+			EventHandler: func(_ string, e string) string { return e },
+		}
+	}
+	goSeed.RegisterType("string", reflect.TypeOf(""))
+	if _, err := StartSharding(goSeed, "echo", factory, extract, settings); err != nil {
+		t.Fatalf("StartSharding: %v", err)
+	}
+
+	scalaProc, scalaStdout := startSbtServer(t, ctx,
+		fmt.Sprintf("com.example.joiner.ScalaShardingJoiner 127.0.0.1 %d", goSeedPort), 0)
+	_ = scalaProc
+
+	// Single scanner goroutine: signals "ready" on the boot banner and
+	// "entity" on the first SCALA-SHARDING line. Two waitForScalaStdoutContains
+	// calls would race two scanners on the same io.Reader.
+	ready := make(chan struct{}, 1)
+	entity := make(chan struct{}, 1)
+	go func() {
+		scanner := bufio.NewScanner(scalaStdout)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		var sawReady, sawEntity bool
+		for scanner.Scan() {
+			line := scanner.Text()
+			fmt.Printf("[SCALA] %s\n", line)
+			if !sawReady && strings.Contains(line, "--- SCALA SHARDING READY ---") {
+				sawReady = true
+				select {
+				case ready <- struct{}{}:
+				default:
+				}
+			}
+			if !sawEntity && strings.Contains(line, "[SCALA-SHARDING] entity=e") {
+				sawEntity = true
+				select {
+				case entity <- struct{}{}:
+				default:
+				}
+			}
+		}
+	}()
+
+	select {
+	case <-ready:
+		log.Printf("[SCALA] Scala sharding region ready.")
+	case <-time.After(45 * time.Second):
+		t.Fatalf("[SCALA] startup: SCALA SHARDING READY not seen within 45s")
+	}
+
+	if err := waitForUpMembers(goSeed, 2, 30*time.Second); err != nil {
+		t.Fatalf("[CONVERGENCE] %v", err)
+	}
+
+	// Settling window: PekkoCoordinatorShim must have received Register
+	// from the Scala region and the gekka coordinator must have allocated
+	// some shards to it.
+	time.Sleep(5 * time.Second)
+
+	// Fan out 20 entity messages. hash mod 4 distributes them; at least one
+	// shard should land on the Scala region.
+	for i := 1; i <= 20; i++ {
+		ref, err := EntityRefFor[string](goSeed, "echo", fmt.Sprintf("e%d", i))
+		if err != nil {
+			t.Fatalf("EntityRefFor e%d: %v", i, err)
+		}
+		ref.Tell(fmt.Sprintf("msg-%d", i))
+	}
+
+	select {
+	case <-entity:
+		log.Printf("[SUCCESS] TestGoSeed_Sharding passed.")
+	case <-time.After(45 * time.Second):
+		t.Fatalf("at least one shard should have allocated to Scala — Pekko region received no entity message within 45s")
+	}
+}
+
+// shardIdForEntity mirrors the Scala joiner's extractShardId:
+//
+//	(id.hashCode.abs % numberOfShards).toString
+//
+// using Java's String.hashCode polynomial (31x + c, 32-bit signed
+// rollover, then absolute value) so both languages agree on the shard
+// for every entity id.
+func shardIdForEntity(entityId string, numberOfShards int) string {
+	if numberOfShards <= 0 {
+		return "0"
+	}
+	var h int32
+	for i := 0; i < len(entityId); i++ {
+		h = h*31 + int32(entityId[i])
+	}
+	abs := int64(h)
+	if abs < 0 {
+		abs = -abs
+	}
+	return fmt.Sprintf("%d", abs%int64(numberOfShards))
 }
 
 // HexDump outputs a formatted hex dump of the data.

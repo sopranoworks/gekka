@@ -200,6 +200,28 @@ func (r *ShardRegion) Receive(msg any) {
 		r.Log().Debug("Routing ShardingEnvelope", "shardId", shardId, "entityId", m.EntityId)
 		r.deliverMessageWithSender(shardId, m, r.Sender())
 
+	case []byte:
+		// Cross-node remote forward: the sending region JSON-encoded the
+		// envelope and Tell'd it as a raw byte slice (RawSerializer,
+		// serializer id 4). This is the universal wire format because
+		// serializer id 4 has matching semantics on both gekka and Pekko —
+		// gekka's previous default of JSONSerializerID=9 collides with
+		// Pekko's DistributedPubSubMessageSerializer on the receiving side
+		// and made cross-language entity delivery impossible. Decode and
+		// re-route as a normal ShardingEnvelope so the existing local-shard
+		// path (and shard-home lookups) keep working unchanged.
+		var env ShardingEnvelope
+		if err := json.Unmarshal(m, &env); err != nil {
+			r.Log().Debug("ShardRegion: failed to decode []byte envelope", "err", err)
+			return
+		}
+		shardId := env.ShardId
+		if shardId == "" && env.EntityId != "" {
+			_, shardId, _ = r.extractEntityId(env.EntityId)
+			env.ShardId = shardId
+		}
+		r.deliverMessageWithSender(shardId, env, r.Sender())
+
 	case ShardHome:
 		r.Log().Debug("Received ShardHome", "shardId", m.ShardId, "region", m.RegionPath)
 		r.shardHomePaths[m.ShardId] = m.RegionPath
@@ -418,14 +440,27 @@ func (r *ShardRegion) deliverMessageWithSender(shardId ShardId, envelope Shardin
 		}
 		shard.Tell(envelope, sender)
 	} else {
-		// Remote shard
+		// Remote shard — JSON-encode the envelope and Tell as a raw byte
+		// slice so the serializer id is 4 (RawSerializer). That id has
+		// matching semantics on every receiver: gekka's region Receive
+		// decodes the bytes back to ShardingEnvelope, and Pekko's
+		// ByteArraySerializer hands the receiving extractor a plain
+		// Array[Byte] from which the entity id can be parsed. The
+		// previous default of JSONSerializerID=9 collided with Pekko's
+		// DistributedPubSubMessageSerializer and made cross-language
+		// entity forwarding fail at deserialization.
 		r.Log().Debug("Forwarding message to remote region", "shardId", shardId, "region", homePath)
-		// Use System().Resolve to get a Ref for the remote path
 		remoteRegion, err := r.System().Resolve(homePath)
 		if err != nil {
 			r.Log().Error("Failed to resolve remote region", "path", homePath, "error", err)
 			return
 		}
-		remoteRegion.Tell(envelope, sender)
+		data, err := json.Marshal(envelope)
+		if err != nil {
+			r.Log().Error("ShardRegion: failed to marshal envelope for remote forward",
+				"shardId", shardId, "region", homePath, "err", err)
+			return
+		}
+		remoteRegion.Tell(data, sender)
 	}
 }

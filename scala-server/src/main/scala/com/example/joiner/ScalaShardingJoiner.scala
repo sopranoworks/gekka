@@ -2,6 +2,7 @@ package com.example.joiner
 
 import org.apache.pekko.actor.{Actor, ActorLogging, ActorSystem, Props}
 import org.apache.pekko.cluster.sharding.{ClusterSharding, ClusterShardingSettings, ShardRegion}
+import com.fasterxml.jackson.databind.ObjectMapper
 import com.typesafe.config.ConfigFactory
 import com.example.OrchestratorGate
 
@@ -27,6 +28,15 @@ object ScalaShardingJoiner extends App {
         canonical {
           hostname = "127.0.0.1"
           port = 0
+        }
+        # Disable Artery compression for cross-language interop: gekka does
+        # not maintain a compatible CompressionTable, so leaving compression
+        # enabled makes Pekko's Decoder drop every inbound frame as
+        # "compressed with a table that has already been discarded"
+        # (originUid table 0, attempted id 65535).
+        advanced.compression {
+          actor-refs.max = 0
+          manifests.max  = 0
         }
       }
       cluster {
@@ -61,11 +71,34 @@ object ScalaShardingJoiner extends App {
   }
 
   val NumberOfShards = 4
+
+  // Gekka encodes ShardingEnvelope as JSON and forwards it across nodes
+  // using ByteArraySerializer (id=4). The fields of that JSON object are
+  // {"EntityId":"...", "ShardId":"...", "Message":<json>, ...}. Decode it
+  // here so Pekko's region can route to the correct entity and the entity
+  // actor can print [SCALA-SHARDING] entity=<id> received=<msg>.
+  private val jsonMapper = new ObjectMapper()
+  private def decodeGekkaEnvelope(bytes: Array[Byte]): (String, String) = {
+    val node = jsonMapper.readTree(bytes)
+    val id   = Option(node.get("EntityId")).map(_.asText("")).getOrElse("")
+    val mNode = node.get("Message")
+    val msg = if (mNode == null) ""
+              else if (mNode.isTextual) mNode.asText("")
+              else mNode.toString
+    (id, msg)
+  }
+
   val extractEntityId: ShardRegion.ExtractEntityId = {
     case (id: String, payload) => (id, payload)
+    case bytes: Array[Byte] =>
+      val (id, msg) = decodeGekkaEnvelope(bytes)
+      (id, msg)
   }
   val extractShardId: ShardRegion.ExtractShardId = {
     case (id: String, _) => (id.hashCode.abs % NumberOfShards).toString
+    case bytes: Array[Byte] =>
+      val (id, _) = decodeGekkaEnvelope(bytes)
+      (id.hashCode.abs % NumberOfShards).toString
   }
 
   ClusterSharding(system).start(

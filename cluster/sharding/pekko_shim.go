@@ -64,10 +64,35 @@ func (s *PekkoCoordinatorShim) Receive(msg any) {
 	switch m := msg.(type) {
 	case *PekkoSharding_Register:
 		// Pekko region announces itself. Forward to the local gekka
-		// coordinator with the shim as apparent sender so any future
-		// RegisterAck-style reply lands in our mailbox where we can
-		// translate it.
-		s.coord.Tell(RegisterRegion{RegionPath: m.Ref}, s.Self())
+		// coordinator using the ORIGINAL Pekko-region sender so the
+		// coordinator stores a ref whose .Path() is the Pekko region
+		// (e.g. pekko://Sys@host:port/system/sharding/<type>#-1) rather
+		// than the shim's local path. The shim path is on the gekka
+		// node and would later trick the allocation strategy into
+		// thinking shards belong to gekka; using the real region ref
+		// gives the strategy two distinct refs (local Go region + remote
+		// Pekko region) so cross-language shard allocation works.
+		sender := s.Sender()
+		if sender == nil {
+			sender = s.Self()
+		}
+		s.coord.Tell(RegisterRegion{RegionPath: m.Ref}, sender)
+
+		// Pekko's ShardRegion blocks on a RegisterAck (manifest "BC")
+		// reply from the coordinator address it sent Register to. Without
+		// it the region retries Register every 2 s and never starts
+		// processing entity messages — observed as the
+		// "Trying to register to coordinator … but no acknowledgement"
+		// warning on the Pekko side. The Ack carries the apparent
+		// coordinator path, which for cross-language interop is the shim
+		// itself: Pekko's region uses this Ref as the destination for
+		// subsequent coordinator messages (GetShardHome, etc.) and the
+		// shim translates each in turn.
+		ack := &PekkoSharding_RegisterAck{Ref: s.Self().Path()}
+		if err := s.sendFn(m.Ref, ack); err != nil {
+			logger.Default().Warn("PekkoCoordinatorShim: failed to send RegisterAck",
+				"recipient", m.Ref, "err", err.Error())
+		}
 
 	case *PekkoSharding_GetShardHome:
 		// Remember the originating Pekko sender keyed by shardId, then

@@ -2725,8 +2725,17 @@ func (assoc *GekkaAssociation) dispatch(ctx context.Context, meta *ArteryMetadat
 			return nil
 		}
 
-		// 4. Update meta and route
+		// 4. Update meta and route. Also overwrite the wire-frame fields
+		// (Payload, SerializerId, MessageManifest) with the inner values so
+		// that handleUserMessage's re-deserialize lands on the inner
+		// sharding/MiscMessage/Custom payload — not the outer
+		// SelectionEnvelope — and so any later inspector (e.g. the
+		// cross-language sharding shim) sees the inner serializer id
+		// (e.g. 13 for ClusterShardingMessageSerializer), not 6.
 		meta.DeserializedMessage = innerMsg
+		meta.Payload = env.GetEnclosedMessage()
+		meta.SerializerId = env.GetSerializerId()
+		meta.MessageManifest = env.GetMessageManifest()
 		meta.Recipient = &gproto_remote.ActorRefData{Path: proto.String(path)}
 
 		return assoc.handleUserMessage(meta)

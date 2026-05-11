@@ -418,6 +418,35 @@ type PekkoSharding_StartEntityAck struct {
 	ShardId  string
 }
 
+// ArterySerializerID / ArteryManifest implementations let the cluster Router
+// pin each PekkoSharding_* type to serializer id 13 and its specific manifest
+// without consulting the SerializerRegistry (which the Router's prepareMessage
+// switch does not). Without these pins outbound messages from the
+// PekkoCoordinatorShim fall through to JSONSerializerID=9 + Go type name,
+// which collides with Pekko's DistributedPubSubMessageSerializer id 9 and
+// causes the receiving Pekko region to reject Ack/Reply frames with
+// NotSerializableException.
+func (*PekkoSharding_Register) ArterySerializerID() int32        { return ShardingSerializerID }
+func (*PekkoSharding_Register) ArteryManifest() string           { return RegisterManifest }
+func (*PekkoSharding_RegisterAck) ArterySerializerID() int32     { return ShardingSerializerID }
+func (*PekkoSharding_RegisterAck) ArteryManifest() string        { return RegisterAckManifest }
+func (*PekkoSharding_GetShardHome) ArterySerializerID() int32    { return ShardingSerializerID }
+func (*PekkoSharding_GetShardHome) ArteryManifest() string       { return GetShardHomeManifest }
+func (*PekkoSharding_ShardHome) ArterySerializerID() int32       { return ShardingSerializerID }
+func (*PekkoSharding_ShardHome) ArteryManifest() string          { return ShardHomeManifest }
+func (*PekkoSharding_BeginHandOff) ArterySerializerID() int32    { return ShardingSerializerID }
+func (*PekkoSharding_BeginHandOff) ArteryManifest() string       { return BeginHandOffManifest }
+func (*PekkoSharding_BeginHandOffAck) ArterySerializerID() int32 { return ShardingSerializerID }
+func (*PekkoSharding_BeginHandOffAck) ArteryManifest() string    { return BeginHandOffAckManifest }
+func (*PekkoSharding_HandOff) ArterySerializerID() int32         { return ShardingSerializerID }
+func (*PekkoSharding_HandOff) ArteryManifest() string            { return HandOffManifest }
+func (*PekkoSharding_ShardStopped) ArterySerializerID() int32    { return ShardingSerializerID }
+func (*PekkoSharding_ShardStopped) ArteryManifest() string       { return ShardStoppedManifest }
+func (*PekkoSharding_StartEntity) ArterySerializerID() int32     { return ShardingSerializerID }
+func (*PekkoSharding_StartEntity) ArteryManifest() string        { return StartEntityManifest }
+func (*PekkoSharding_StartEntityAck) ArterySerializerID() int32  { return ShardingSerializerID }
+func (*PekkoSharding_StartEntityAck) ArteryManifest() string     { return StartEntityAckManifest }
+
 // Identifier implements core.Serializer.
 func (s *ShardingSerializer) Identifier() int32 { return ShardingSerializerID }
 

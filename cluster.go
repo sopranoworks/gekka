@@ -4580,20 +4580,54 @@ func (c *Cluster) ActorOfHierarchical(props Props, name string, parentPath strin
 func (c *Cluster) Watch(watcher ActorRef, target ActorRef) {
 	if target.local != nil {
 		target.local.AddWatcher(watcher)
-	} else {
-		// Target is remote
-		c.watchRemote(watcher, target)
+		return
 	}
+	// target.local is unset — that happens whenever the ref was rebuilt by
+	// handleArteryMessage (singleton-proxy round-trips, remote replies, etc).
+	// If the path actually resolves to a local actor on this node, register
+	// the watch locally so SetOnStop fires the Terminated, not the remote
+	// failure detector. Otherwise fall back to the remote watch path.
+	if a := c.resolveLocalActorFromPath(target.Path()); a != nil {
+		a.AddWatcher(watcher)
+		return
+	}
+	c.watchRemote(watcher, target)
 }
 
 // Unwatch implements ActorSystem.
 func (c *Cluster) Unwatch(watcher ActorRef, target ActorRef) {
 	if target.local != nil {
 		target.local.RemoveWatcher(watcher)
-	} else {
-		// Target is remote
-		c.unwatchRemote(watcher, target)
+		return
 	}
+	if a := c.resolveLocalActorFromPath(target.Path()); a != nil {
+		a.RemoveWatcher(watcher)
+		return
+	}
+	c.unwatchRemote(watcher, target)
+}
+
+// resolveLocalActorFromPath returns the locally-registered actor at the
+// given path URI, or nil if the path either does not address this node or
+// addresses a path that has no local actor. Used by Watch/Unwatch to keep
+// loopback-routed sender refs from being misclassified as remote.
+func (c *Cluster) resolveLocalActorFromPath(fullPath string) actor.Actor {
+	if fullPath == "" {
+		return nil
+	}
+	ap, err := actor.ParseActorPath(fullPath)
+	if err != nil {
+		return nil
+	}
+	self := c.SelfAddress()
+	if ap.Address.System != self.System || ap.Address.Host != self.Host || ap.Address.Port != self.Port {
+		return nil
+	}
+	a, ok := c.GetLocalActor(ap.Path())
+	if !ok {
+		return nil
+	}
+	return a
 }
 
 // Stop implements ActorSystem.

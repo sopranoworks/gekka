@@ -136,6 +136,16 @@ var (
 		ProjectSrc: "scala-server/akka-server",
 		JarPath:    "scala-server/akka-server/target/scala-2.13/akka-mains-assembly.jar",
 	}
+
+	// Akka2614Assembly produces the fat JAR for the Akka 2.6.14 strict-HOCON
+	// JOIN reproducer.  Mirrors AkkaAssembly but pins to the older Akka
+	// version that the dashboard's production cluster runs.
+	Akka2614Assembly = AssemblyProject{
+		Dir:        "scala-server",
+		SbtProject: "akka2614Server",
+		ProjectSrc: "scala-server/akka-2614-server",
+		JarPath:    "scala-server/akka-2614-server/target/scala-2.13/akka-2614-mains-assembly.jar",
+	}
 )
 
 // assemblyState carries the result of a single (Dir, SbtProject) build.

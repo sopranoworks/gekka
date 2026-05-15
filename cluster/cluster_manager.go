@@ -68,6 +68,15 @@ type ClusterManager struct {
 	WatchFd         *WatchFailureDetector // remote-watch FD; pekko.remote.watch-failure-detector.*
 	Sys             actor.ActorContext    // bridge back to the node's actor system
 	WelcomeReceived atomic.Bool
+	// joinAttempted is set true the first time JoinCluster is called.
+	// Used by the leader-action loop to gate the "len(members)==1 ->
+	// self-promote" bootstrap path: when joinAttempted is true the
+	// node has explicitly tried to join a remote (or itself) and must
+	// wait for Welcome before treating its local single-member view as
+	// authoritative.  Without this gate, gekka self-promotes as
+	// upNumber=1 in the brief window before Welcome arrives, then SBR
+	// detects the view conflict against the seed's gossip and self-downs.
+	joinAttempted atomic.Bool
 	CancelHeartbeat context.CancelFunc
 
 	// Protocol is the configured actor-path scheme ("pekko" or "akka").
@@ -415,6 +424,84 @@ func (cm *ClusterManager) localHashString() string {
 // node and, if a non-empty hash is found in AllHashes at the corresponding
 // index, adopts it as LocalHashStr and updates the AllHashes entry in
 // cm.State.  Must be called with cm.Mu held (write).
+// repairSelfReincarnationLocked is invoked after we adopt an incoming
+// gossip wholesale (ClockBefore) or merge it (ClockConcurrent).  Its
+// job: if the incoming gossip carried an entry for our host:port with
+// a DIFFERENT UID — typically a previous gekka instance the seed
+// recorded as Down/Removed before we restarted on the same port —
+// rewrite that entry to point at our CURRENT UniqueAddress with status
+// Joining (the legitimate state of a freshly-joined member).
+//
+// Without this, the seed's stale "you were Down" gossip overwrites our
+// liveness on the very first GossipEnvelope we receive, the
+// CoordinatedShutdown subscriber sees self transition to Down, and the
+// freshly-joined node terminates within ~1s of being welcomed — exactly
+// the dashboard's "I see no nodes" symptom.
+//
+// Caller must hold cm.Mu (write lock).
+func (cm *ClusterManager) repairSelfReincarnationLocked() {
+	localHost := cm.LocalAddress.GetAddress().GetHostname()
+	localPort := cm.LocalAddress.GetAddress().GetPort()
+	myUid := cm.LocalAddress.GetUid()
+	myUid2 := cm.LocalAddress.GetUid2()
+
+	// Find our host:port slot in AllAddresses.  If the UID at that slot
+	// matches ours we're fine.  If it differs, replace the slot's
+	// UniqueAddress with our current one and reset the corresponding
+	// member entry to Joining.  If no slot exists for our address yet,
+	// append one — the leader hasn't seen us yet (we just sent Join).
+	addrIdx := -1
+	for i, ua := range cm.State.AllAddresses {
+		a := ua.GetAddress()
+		if a.GetHostname() == localHost && a.GetPort() == localPort {
+			addrIdx = i
+			break
+		}
+	}
+	if addrIdx < 0 {
+		// No slot for our address — append one with our identity.
+		newUA := &gproto_cluster.UniqueAddress{
+			Address: cm.LocalAddress.GetAddress(),
+			Uid:     proto.Uint32(myUid),
+			Uid2:    proto.Uint32(myUid2),
+		}
+		cm.State.AllAddresses = append(cm.State.AllAddresses, newUA)
+		// Pad AllHashes to keep the indexes aligned.
+		for len(cm.State.AllHashes) < len(cm.State.AllAddresses) {
+			cm.State.AllHashes = append(cm.State.AllHashes, cm.localHashString())
+		}
+		newIdx := int32(len(cm.State.AllAddresses) - 1)
+		cm.State.Members = append(cm.State.Members, &gproto_cluster.Member{
+			AddressIndex: proto.Int32(newIdx),
+			UpNumber:     proto.Int32(0),
+			Status:       gproto_cluster.MemberStatus_Joining.Enum(),
+		})
+		return
+	}
+
+	stale := cm.State.AllAddresses[addrIdx]
+	if stale.GetUid() == myUid && stale.GetUid2() == myUid2 {
+		return // not a reincarnation; nothing to repair
+	}
+	logger.Default().Info("cluster: repairing self-reincarnation in incoming gossip",
+		slog.String("host", localHost),
+		slog.Int("port", int(localPort)),
+		slog.Uint64("staleUid", uint64(stale.GetUid())|uint64(stale.GetUid2())<<32),
+		slog.Uint64("ourUid", uint64(myUid)|uint64(myUid2)<<32))
+
+	cm.State.AllAddresses[addrIdx] = &gproto_cluster.UniqueAddress{
+		Address: cm.LocalAddress.GetAddress(),
+		Uid:     proto.Uint32(myUid),
+		Uid2:    proto.Uint32(myUid2),
+	}
+	for _, m := range cm.State.Members {
+		if m.GetAddressIndex() == int32(addrIdx) {
+			m.Status = gproto_cluster.MemberStatus_Joining.Enum()
+			break
+		}
+	}
+}
+
 func (cm *ClusterManager) syncLocalHashFromStateLocked() {
 	localHost := cm.LocalAddress.GetAddress().GetHostname()
 	localPort := cm.LocalAddress.GetAddress().GetPort()
@@ -566,6 +653,7 @@ func toClusterAddress(a *gproto_cluster.Address) *gproto_cluster.Address {
 
 // JoinCluster initiates the joining protocol to a seed node.
 func (cm *ClusterManager) JoinCluster(ctx context.Context, seedHost string, seedPort uint32) error {
+	cm.joinAttempted.Store(true)
 	system := cm.LocalAddress.GetAddress().GetSystem()
 	path := cm.ClusterCorePath(system, seedHost, seedPort)
 	if cm.LogInfo {
@@ -1466,6 +1554,15 @@ func (cm *ClusterManager) processIncomingGossip(gossip *gproto_cluster.Gossip, r
 		}
 		events = diffGossipMembers(cm.State, gossip)
 		cm.State = gossip
+		// Reincarnation guard: if the incoming gossip carries an entry for
+		// our address with a DIFFERENT UID (a previous gekka instance that
+		// crashed and was marked Down/Removed by the seed), do NOT let it
+		// overwrite our current liveness.  Replace the stale entry with
+		// our own current Joining/Up identity.  Without this, the
+		// CoordinatedShutdown subscriber sees self transition to Down and
+		// kills the freshly-joined node within ~1s of receiving the seed's
+		// gossip — exactly the dashboard symptom.
+		cm.repairSelfReincarnationLocked()
 		// Adopt Pekko's hash for our own address so future VectorClock comparisons
 		// use a format compatible with Pekko's murmur-hash scheme.
 		cm.syncLocalHashFromStateLocked()
@@ -1483,6 +1580,7 @@ func (cm *ClusterManager) processIncomingGossip(gossip *gproto_cluster.Gossip, r
 		merged := cm.mergeGossipStates(cm.State, gossip)
 		events = diffGossipMembers(cm.State, merged)
 		cm.State = merged
+		cm.repairSelfReincarnationLocked()
 		// Adopt Pekko's hash for our own address if the incoming gossip carries it.
 		// This must happen before incrementVersionWithLockHeld so the new hash is used.
 		cm.adoptHashFromGossipLocked(gossip)
@@ -2399,7 +2497,16 @@ func (cm *ClusterManager) performLeaderActions() {
 					minMembers = 1
 				}
 				meetsMinMembers := len(cm.State.Members) >= minMembers && cm.meetsRoleMinNrOfMembersLocked()
-				if meetsMinMembers && (len(cm.State.Members) == 1 || cm.CheckConvergenceLocked()) {
+				// Bootstrap shortcut: if we are a 1-member cluster, self-promote
+				// without waiting for convergence.  GATE: only when no remote
+				// JOIN has been attempted, OR Welcome from the seed has already
+				// arrived.  Without this gate, gekka self-promotes as upNumber=1
+				// in the window between JoinCluster and Welcome — then when
+				// Welcome arrives and reveals the seed's larger cluster view,
+				// SBR detects the upNumber-1 conflict and self-downs.
+				canBootstrap := len(cm.State.Members) == 1 &&
+					(!cm.joinAttempted.Load() || cm.WelcomeReceived.Load())
+				if meetsMinMembers && (canBootstrap || cm.CheckConvergenceLocked()) {
 					m.Status = gproto_cluster.MemberStatus_Up.Enum()
 					m.UpNumber = proto.Int32(int32(len(cm.State.Members))) // Simplified upNumber
 					events = append(events, MemberUp{Member: ma})

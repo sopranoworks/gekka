@@ -150,9 +150,11 @@ func TestDispatcher_AutoACK(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseArteryFrame on ACK: %v", err)
 	}
-	// "h" is the ArteryMessageSerializer short manifest for SystemMessageDeliveryAck.
-	if string(ackMeta.MessageManifest) != "h" {
-		t.Errorf("expected SystemMessageDeliveryAck short manifest %q, got %q", "h", string(ackMeta.MessageManifest))
+	// "k" is Akka 2.6.x's ArteryMessageSerializer short manifest for
+	// SystemMessageDeliveryAck (gekka previously used "h" by mistake — that
+	// letter is actually ClassManifestCompressionAdvertisement on Akka).
+	if string(ackMeta.MessageManifest) != "k" {
+		t.Errorf("expected SystemMessageDeliveryAck short manifest %q, got %q", "k", string(ackMeta.MessageManifest))
 	}
 
 	ackBody := &gproto_remote.SystemMessageDeliveryAck{}

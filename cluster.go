@@ -3095,6 +3095,24 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 						selfAddr := cm.LocalAddress.GetAddress()
 						if downed.Member.Host == selfAddr.GetHostname() &&
 							downed.Member.Port == selfAddr.GetPort() {
+							// Re-validate against the current cluster state.
+							// MemberDowned can fire from a stale-gossip diff
+							// (e.g. TestCluster welcomed us, but its first gossip
+							// envelope still carried an old gekka@<port>
+							// entry from a previous crashed instance with a
+							// different UID).  The reincarnation guard in
+							// processIncomingGossip rewrites that entry back
+							// to Joining/Up, so by the time we get here our
+							// actual current status may not be Down at all.
+							// Don't trigger shutdown unless the current state
+							// agrees we are Down or Removed.
+							curStatus := cluster.selfMemberStatus()
+							if curStatus != gproto_cluster.MemberStatus_Down &&
+								curStatus != gproto_cluster.MemberStatus_Removed {
+								logger.Default().Info("[CoordinatedShutdown] ignoring stale self-down event after reincarnation repair",
+									slog.String("currentStatus", curStatus.String()))
+								continue
+							}
 							logger.Default().Info("[CoordinatedShutdown] self downed — triggering shutdown")
 							go cluster.GracefulShutdown(context.Background())
 							return
@@ -3477,6 +3495,31 @@ func (c *Cluster) SelfAddress() actor.Address {
 		Host:     c.localAddr.GetHostname(),
 		Port:     int(c.localAddr.GetPort()),
 	}
+}
+
+// selfMemberStatus returns the current MemberStatus for the local node as
+// reflected in the latest gossip state.  Returns Removed when the local
+// node is absent from State.Members (treated as "no longer a member").
+//
+// Intended for use by the CoordinatedShutdown self-downed subscriber so it
+// can re-validate stale "self downed" events after the reincarnation guard
+// in processIncomingGossip has had a chance to repair the gossip.
+func (c *Cluster) selfMemberStatus() gproto_cluster.MemberStatus {
+	state := c.cm.GetState()
+	localHost := c.cm.LocalAddress.GetAddress().GetHostname()
+	localPort := c.cm.LocalAddress.GetAddress().GetPort()
+	allAddrs := state.GetAllAddresses()
+	for _, m := range state.GetMembers() {
+		idx := int(m.GetAddressIndex())
+		if idx >= len(allAddrs) {
+			continue
+		}
+		a := allAddrs[idx].GetAddress()
+		if a.GetHostname() == localHost && a.GetPort() == localPort {
+			return m.GetStatus()
+		}
+	}
+	return gproto_cluster.MemberStatus_Removed
 }
 
 // Send resolves the destination and delivers msg to the remote actor.

@@ -403,7 +403,7 @@ func TestHandleControlMessage_DeliveryAckPrunesSenderBuffer(t *testing.T) {
 	}
 	meta := &ArteryMetadata{
 		SerializerId:    17,
-		MessageManifest: []byte("h"),
+		MessageManifest: []byte("k"),
 		Payload:         ackBytes,
 	}
 
@@ -447,7 +447,7 @@ func TestHandleControlMessage_DeliveryAckIgnoredForUnknownPeer(t *testing.T) {
 	}
 	meta := &ArteryMetadata{
 		SerializerId:    17,
-		MessageManifest: []byte("h"),
+		MessageManifest: []byte("k"),
 		Payload:         ackBytes,
 	}
 

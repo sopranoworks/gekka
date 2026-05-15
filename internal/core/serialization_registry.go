@@ -118,16 +118,41 @@ func NewSerializationRegistry() *SerializationRegistry {
 	r.serializers[JavaStringSerializerID] = &JavaStringSerializer{}
 	r.serializers[MessageContainerSerializerID] = r.messageContainerSerializer
 
-	// Artery Control Manifests (Serializer ID 17)
-	r.RegisterManifest("d", reflect.TypeOf((*remote.HandshakeReq)(nil)), ArteryInternalSerializerID)
-	r.RegisterManifest("e", reflect.TypeOf((*remote.MessageWithAddress)(nil)), ArteryInternalSerializerID)
-	r.RegisterManifest("n", reflect.TypeOf((*remote.ArteryHeartbeatRsp)(nil)), ArteryInternalSerializerID)
-	r.RegisterManifest("q", reflect.TypeOf((*remote.Quarantined)(nil)), ArteryInternalSerializerID)
+	// Artery Control Manifests (Serializer ID 17).
+	//
+	// Inbound: ALL of these are dispatched correctly because the
+	// manifestsToType map accepts every key registered; later writes do
+	// not overwrite earlier ones for unique manifest strings.
+	//
+	// Outbound: GetManifestByType picks the LAST-registered manifest for
+	// each Go proto type — so the registration ORDER matters.  We
+	// register the legacy gekka-internal manifests FIRST so they are
+	// overwritten by the Akka 2.6.x single-letter manifests below.  This
+	// ensures gekka's outbound stream uses the wire identifiers Akka
+	// recognises (e.g. SystemMessageDeliveryAck → "k", not the legacy
+	// "h" which is actually ClassManifestCompressionAdvertisement on the
+	// Akka side).
+	//
+	// Legacy / non-Akka manifests (kept for back-compat with prior gekka peers).
 	r.RegisterManifest("ct", reflect.TypeOf((*remote.CompressionTableAdvertisement)(nil)), ArteryInternalSerializerID)
 	r.RegisterManifest("cta", reflect.TypeOf((*remote.CompressionTableAdvertisementAck)(nil)), ArteryInternalSerializerID)
+	r.RegisterManifest("q", reflect.TypeOf((*remote.Quarantined)(nil)), ArteryInternalSerializerID)
 	r.RegisterManifest("SystemMessage", reflect.TypeOf((*remote.SystemMessageEnvelope)(nil)), ArteryInternalSerializerID)
-	r.RegisterManifest("h", reflect.TypeOf((*remote.SystemMessageDeliveryAck)(nil)), ArteryInternalSerializerID)
 	r.RegisterManifest("sel", reflect.TypeOf((*remote.SelectionEnvelope)(nil)), ArteryInternalSerializerID)
+	// Akka 2.6.x single-letter manifests (akka.remote.serialization.ArteryMessageSerializer).
+	// Registered LAST so the reverse-lookup (typeToManifests) selects these for outbound.
+	r.RegisterManifest("a", reflect.TypeOf((*remote.Quarantined)(nil)), ArteryInternalSerializerID)
+	r.RegisterManifest("d", reflect.TypeOf((*remote.HandshakeReq)(nil)), ArteryInternalSerializerID)
+	r.RegisterManifest("e", reflect.TypeOf((*remote.MessageWithAddress)(nil)), ArteryInternalSerializerID)
+	r.RegisterManifest("f", reflect.TypeOf((*remote.CompressionTableAdvertisement)(nil)), ArteryInternalSerializerID)
+	r.RegisterManifest("g", reflect.TypeOf((*remote.CompressionTableAdvertisementAck)(nil)), ArteryInternalSerializerID)
+	r.RegisterManifest("h", reflect.TypeOf((*remote.CompressionTableAdvertisement)(nil)), ArteryInternalSerializerID)
+	r.RegisterManifest("i", reflect.TypeOf((*remote.CompressionTableAdvertisementAck)(nil)), ArteryInternalSerializerID)
+	r.RegisterManifest("j", reflect.TypeOf((*remote.SystemMessageEnvelope)(nil)), ArteryInternalSerializerID)
+	r.RegisterManifest("k", reflect.TypeOf((*remote.SystemMessageDeliveryAck)(nil)), ArteryInternalSerializerID)
+	// "m" (ArteryHeartbeat) carries no payload — handled directly in the
+	// inbound dispatcher; no proto type to register.
+	r.RegisterManifest("n", reflect.TypeOf((*remote.ArteryHeartbeatRsp)(nil)), ArteryInternalSerializerID)
 
 	// Cluster Message Manifests (Serializer ID 5)
 	r.RegisterManifest("IJ", reflect.TypeOf((*gproto_cluster.InitJoin)(nil)), ClusterSerializerID)

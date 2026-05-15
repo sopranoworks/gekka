@@ -2763,10 +2763,14 @@ func (assoc *GekkaAssociation) sendSystemAck(seq uint64, to *gproto_remote.Uniqu
 			Uid:     proto.Uint64(assoc.localUid),
 		},
 	}
-	// "h" is the ArteryMessageSerializer short manifest for SystemMessageDeliveryAck.
-	// Using the long class name causes Akka's ControlMessageObserver to skip the frame
-	// and pass it to MessageDispatcher.dispatch with an empty recipient → OptionVal.None.get.
-	return SendArteryMessageWithAck(assoc.conn, int64(assoc.localUid), actor.ArteryInternalSerializerID, "h", ack, to, true)
+	// "k" is Akka 2.6.x's ArteryMessageSerializer short manifest for
+	// SystemMessageDeliveryAck (gekka previously used "h" by mistake — that's
+	// actually ClassManifestCompressionAdvertisement, causing Akka to fail
+	// the proto-required-field check on the wrong message type and drop the
+	// ack).  Using the long class name causes Akka's ControlMessageObserver
+	// to skip the frame and pass it to MessageDispatcher.dispatch with an
+	// empty recipient → OptionVal.None.get.
+	return SendArteryMessageWithAck(assoc.conn, int64(assoc.localUid), actor.ArteryInternalSerializerID, "k", ack, to, true)
 }
 
 func (assoc *GekkaAssociation) handleSystemMessage(meta *ArteryMetadata) error {
@@ -3292,13 +3296,18 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 		})
 		return nil
 
-	case "ActorRefCompressionAdvertisement", "ClassManifestCompressionAdvertisement":
+	// Akka 2.6.x ArteryMessageSerializer single-letter manifests:
+	//   "f" = ActorRefCompressionAdvertisement
+	//   "h" = ClassManifestCompressionAdvertisement
+	// Legacy/long names kept for back-compat with prior gekka peers.
+	case "f", "h",
+		"ActorRefCompressionAdvertisement", "ClassManifestCompressionAdvertisement":
 		if assoc.nodeMgr.compressionMgr != nil {
 			adv := &gproto_remote.CompressionTableAdvertisement{}
 			if err := proto.Unmarshal(meta.Payload, adv); err != nil {
 				return err
 			}
-			isActorRef := manifest == "ActorRefCompressionAdvertisement"
+			isActorRef := manifest == "f" || manifest == "ActorRefCompressionAdvertisement"
 			// Get local address from NodeManager to use in the Ack
 			localUA := &gproto_remote.UniqueAddress{
 				Address: assoc.nodeMgr.LocalAddr,
@@ -3308,7 +3317,7 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 		}
 		return nil
 
-	case "Quarantined":
+	case "a", "Quarantined":
 		// Remote has detected a UID conflict and is notifying us. Quarantine the association.
 		quar := &gproto_remote.Quarantined{}
 		if err := proto.Unmarshal(meta.Payload, quar); err != nil {
@@ -3333,7 +3342,11 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 		}
 		return nil
 
-	case "ActorRefCompressionAdvertisementAck", "ClassManifestCompressionAdvertisementAck":
+	// Akka 2.6.x ArteryMessageSerializer single-letter manifests:
+	//   "g" = ActorRefCompressionAdvertisementAck
+	//   "i" = ClassManifestCompressionAdvertisementAck
+	case "g", "i",
+		"ActorRefCompressionAdvertisementAck", "ClassManifestCompressionAdvertisementAck":
 		// We log the ack, but we don't block on receiving it yet.
 		// In a full implementation, we'd wait for this before transitioning to using the compressed IDs.
 		ack := &gproto_remote.CompressionTableAdvertisementAck{}
@@ -3343,7 +3356,7 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 		logger.Default().Debug("artery: received compression table ack", "manifest", manifest, "version", ack.GetVersion(), "from", ack.GetFrom())
 		return nil
 
-	case "h": // SystemMessageDeliveryAck — Phase 2.3 sender-side ack consumer.
+	case "k": // SystemMessageDeliveryAck — Akka manifest "k" (gekka previously used "h" by mistake).
 		// The receiver of a SystemMessage replies with a cumulative ack
 		// carrying the highest seqNo it has delivered. Prune every entry
 		// in the matching association's systemOutbox with seqNo <= ack.SeqNo

@@ -38,6 +38,7 @@ import (
 // lifetime is bound to ctx.
 func StartCompressionTableManager(ctx context.Context, nm *NodeManager, router *actor.Router) *CompressionTableManager {
 	ctm := NewCompressionTableManager(router)
+	ctm.SetNodeManager(nm)
 	ctm.SetActorRefsMax(nm.EffectiveCompressionActorRefsMax())
 	ctm.SetManifestsMax(nm.EffectiveCompressionManifestsMax())
 	ctm.SetAdvertisementIntervals(

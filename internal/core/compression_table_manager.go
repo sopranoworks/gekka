@@ -17,6 +17,7 @@ import (
 	"github.com/sopranoworks/gekka/actor"
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 	"github.com/sopranoworks/gekka/logger"
+	"google.golang.org/protobuf/proto"
 )
 
 // CompressionTableManager holds mapping tables for ActorRef and ClassManifest strings to integer IDs.
@@ -26,7 +27,20 @@ type CompressionTableManager struct {
 	actorRefTable map[uint64]*CompressionTable
 	manifestTable map[uint64]*CompressionTable
 	router        *actor.Router // needed to send acks back
-	flightRec     *FlightRecorder
+	// nm provides access to peer associations so HandleAdvertisement can
+	// bypass router.Send when emitting the Ack — router.Send routes
+	// *CompressionTableAdvertisementAck through prepareMessage's default
+	// (proto.Message → manifest = reflect type name) which produces
+	// "*remote.CompressionTableAdvertisementAck" on the wire. Akka's
+	// ArteryMessageSerializer rejects that with NotSerializableException,
+	// the peer's CompressionTableManager never marks our advertisement as
+	// acknowledged, and the peer's failure detector eventually downs us.
+	// Set via SetNodeManager from StartCompressionTableManager. Nil in
+	// the unit tests (NewCompressionTableManager + HandleAdvertisement
+	// path) — those tests only verify the table-update side effect and
+	// tolerate a no-op send.
+	nm        *NodeManager
+	flightRec *FlightRecorder
 
 	// Configured caps (pekko.remote.artery.advanced.compression.*.max).
 	// Zero means "no cap". Updates whose key count exceeds these caps are
@@ -223,8 +237,22 @@ func (ctm *CompressionTableManager) LookupManifest(originUid uint64, id uint32) 
 	return str, nil
 }
 
+// SetNodeManager wires the NodeManager that owns the per-peer associations.
+// Required for HandleAdvertisement to emit a wire-correct Ack — router.Send
+// alone routes *CompressionTableAdvertisementAck through prepareMessage's
+// default (proto.Message → reflect type name) which Akka rejects with
+// NotSerializableException; with nm set the Ack path bypasses router.Send
+// and writes the frame directly with the Akka-canonical manifest ("g" or
+// "i" depending on isActorRef).
+func (ctm *CompressionTableManager) SetNodeManager(nm *NodeManager) {
+	ctm.mu.Lock()
+	defer ctm.mu.Unlock()
+	ctm.nm = nm
+}
+
 // HandleAdvertisement processes an incoming advertisement and sends an Ack.
 func (ctm *CompressionTableManager) HandleAdvertisement(ctx context.Context, adv *gproto_remote.CompressionTableAdvertisement, isActorRef bool, localAddress *gproto_remote.UniqueAddress) error {
+	_ = ctx // sender path no longer routes via router.Send
 	originUid := adv.GetOriginUid()
 	version := adv.GetTableVersion()
 	keys := adv.GetKeys()
@@ -251,19 +279,54 @@ func (ctm *CompressionTableManager) HandleAdvertisement(ctx context.Context, adv
 		})
 	}
 
-	// Send Ack
+	// Send Ack — bypass router.Send so we can stamp the wire-correct
+	// Akka manifest ("g" = ActorRefCompressionAdvertisementAck, "i" =
+	// ClassManifestCompressionAdvertisementAck) and serializer id 17.
+	// Without this the proto.Message default in Router.prepareMessage
+	// produces manifest "*remote.CompressionTableAdvertisementAck" which
+	// Akka's ArteryMessageSerializer can't deserialize:
+	//
+	//   WARN Deserializer Failed to deserialize message from [<peer>]
+	//   with serializer id [2] and manifest [*remote.CompressionTableAdvertisementAck].
+	//   java.io.NotSerializableException: Cannot find manifest class
+	//   [*remote.CompressionTableAdvertisementAck] for serializer with id [2].
+	//
+	// The peer's CompressionTableManager never sees the Ack, treats us
+	// as unresponsive for compression, and (in multi-member Akka clusters
+	// with SBR active) the failure detector eventually marks us
+	// unreachable → Down.
+	target := adv.GetFrom().GetAddress()
+	ackManifest := "i" // ClassManifestCompressionAdvertisementAck
+	if isActorRef {
+		ackManifest = "g" // ActorRefCompressionAdvertisementAck
+	}
+	ctm.mu.RLock()
+	nm := ctm.nm
+	ctm.mu.RUnlock()
+	if nm == nil {
+		// Test / no-association path — table update already happened; the
+		// Ack would have nowhere to land. Skip without erroring.
+		return nil
+	}
+	assoc, ok := nm.GetAssociationByHost(target.GetHostname(), target.GetPort())
+	if !ok || assoc == nil {
+		// Peer association not yet established; the next gossip cycle
+		// will trigger a fresh advertisement which we'll Ack then.
+		return nil
+	}
 	ack := &gproto_remote.CompressionTableAdvertisementAck{
 		From:    localAddress,
 		Version: adv.TableVersion,
 	}
-
-	target := adv.GetFrom().GetAddress()
-	path := fmt.Sprintf("%s://%s@%s:%d/system/cluster", target.GetProtocol(), target.GetSystem(), target.GetHostname(), target.GetPort())
-
-	// ArteryControl messages usually use SerializerId 17 (or 1 depending on version, check later)
-
-	if err := ctm.router.Send(ctx, path, ack); err != nil {
-		return err
+	payload, err := proto.Marshal(ack)
+	if err != nil {
+		return fmt.Errorf("marshal CompressionTableAdvertisementAck: %w", err)
+	}
+	path := fmt.Sprintf("%s://%s@%s:%d/system/cluster",
+		target.GetProtocol(), target.GetSystem(),
+		target.GetHostname(), target.GetPort())
+	if err := assoc.Send(path, payload, actor.ArteryInternalSerializerID, ackManifest); err != nil {
+		return fmt.Errorf("send CompressionTableAdvertisementAck (%s): %w", ackManifest, err)
 	}
 
 	if ctm.flightRec != nil {
@@ -273,7 +336,7 @@ func (ctm *CompressionTableManager) HandleAdvertisement(ctx context.Context, adv
 			Severity:  SeverityInfo,
 			Category:  CatCompression,
 			Message:   "ack_sent",
-			Fields:    map[string]any{"version": adv.GetTableVersion()},
+			Fields:    map[string]any{"version": adv.GetTableVersion(), "manifest": ackManifest},
 		})
 	}
 

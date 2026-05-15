@@ -2986,7 +2986,11 @@ func (assoc *GekkaAssociation) SendQuarantined(to *gproto_remote.UniqueAddress) 
 		logger.Default().Warn("artery: failed to marshal Quarantined", "error", err)
 		return
 	}
-	frame, err := BuildArteryFrame(int64(assoc.localUid), actor.ArteryInternalSerializerID, "", "", "Quarantined", payload, true)
+	// Akka 2.6.x's ArteryMessageSerializer recognises Quarantined under the
+	// single-letter manifest "a"; the long Go type name "Quarantined" fails
+	// the receiver's Cannot-find-manifest-class check (same shape as the
+	// CompressionTableAdvertisementAck bug — see compression_table_manager.go).
+	frame, err := BuildArteryFrame(int64(assoc.localUid), actor.ArteryInternalSerializerID, "", "", "a", payload, true)
 	if err != nil {
 		logger.Default().Warn("artery: failed to build Quarantined frame", "error", err)
 		return

@@ -124,8 +124,8 @@ func TestQuarantine_SendFrameEnqueued(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ParseArteryFrame: %v", err)
 		}
-		if string(meta.MessageManifest) != "Quarantined" {
-			t.Fatalf("expected manifest 'Quarantined', got %q", string(meta.MessageManifest))
+		if string(meta.MessageManifest) != "a" {
+			t.Fatalf("expected manifest %q (Akka 2.6.x Quarantined), got %q", "a", string(meta.MessageManifest))
 		}
 		if meta.SerializerId != actor.ArteryInternalSerializerID {
 			t.Fatalf("expected serializer %d, got %d", actor.ArteryInternalSerializerID, meta.SerializerId)

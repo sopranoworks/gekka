@@ -66,35 +66,34 @@ func BuildArteryFrame(
 	// Literal section: sender, recipient, manifest then payload
 	// Each literal: position stored at the tag offset, then 2-byte short length + ASCII bytes
 	//
-	// HISTORY: gekka previously encoded an absent sender as DeadLettersCode = -1
-	// to dodge a NoSuchElementException ("OptionVal.None.get") that fires when
-	// Akka resolves an empty literal sender.  But -1 (= 0xFFFFFFFF) collides
-	// with Akka's multi-DC Decoder, which reads the senderTag's high bits as
-	// a "compressed" flag and the low 16 bits as a compression-table id.
-	// -1 → flag set, id = 0xFFFF = 65535 → lookup in the empty per-origin
-	// compression table → frame dropped → joiner stays in Joining forever
-	// (the dashboard's reported failure).  See absentSenderLiteral for the
-	// full rationale.
+	// Empty-sender encoding policy.  Pekko/Akka's canonical NoSender wire
+	// form is a zero-length literal (HeaderBuilderImpl.writeHeader routes
+	// to `writeLiteral(SenderActorRefTagOffset, null)` when
+	// `_senderActorRefIdx == -1`).  However for frames whose RECIPIENT is
+	// also empty (gekka's transport-level ArteryHeartbeat is the main
+	// offender) Pekko's pipeline routes the InboundEnvelope through
+	// MessageDispatcher.dispatch which calls `inboundEnvelope.recipient.get`
+	// — when recipient is None this throws OptionVal.None.get and crashes
+	// the inbound stream.  So:
 	//
-	// The Akka-canonical absent-sender encoding is the system-only literal
-	// "<proto>://<system>/deadLetters", which Akka resolves to the receiver's
-	// own deadLetters singleton without invoking the compression decoder.
+	//   - non-empty senderPath  -> literal at the next free position.
+	//   - empty AND we can synthesise a deadLetters path from
+	//     recipientPath  -> literal `<recipientProto>://<recipientSystem>/deadLetters`.
+	//     Akka 2.6.x multi-DC accepts this; Pekko 1.x accepts it when
+	//     `recipientSystem` matches the receiver's actor system (it
+	//     always does, because gekka and the cluster share a name).
+	//   - empty AND no hint (Heartbeat-style frames where the caller
+	//     itself has no usable address)  -> legacy DeadLettersCode = -1
+	//     sentinel.  Pekko WARNs once per origin and drops the frame at
+	//     the codec drop-check, sparing MessageDispatcher.dispatch the
+	//     `.get` crash.  This branch is the only one that retains the
+	//     legacy noise — eliminating it altogether requires the caller
+	//     to provide a recipient too (see SendArteryHeartbeat).
 	litBuf := &bytes.Buffer{}
 
 	// Resolve a (proto, system) hint for synthesising an absent sender.
-	// Try recipientPath (most callers have it) — senderPath being empty
-	// is what we're trying to handle, so it isn't useful here.
 	hintProto, hintSystem := extractProtoAndSystem(recipientPath)
 
-	// Sender encoding policy:
-	//   - non-empty senderPath  -> literal at the next free position
-	//   - empty AND we can synthesise a deadLetters path
-	//     ("<localProto>://<localSystem>/deadLetters" derived from the
-	//     recipient) -> literal deadLetters (Akka multi-DC compatible)
-	//   - empty AND no usable hint (heartbeat-style frames where both
-	//     sender and recipient are absent) -> legacy DeadLettersCode = -1
-	//     sentinel.  This preserves the pre-multi-DC behaviour the
-	//     existing tests and Akka non-multi-DC clusters depend on.
 	var senderTag int32
 	if senderPath == "" && hintSystem == "" {
 		senderTag = DeadLettersCode
@@ -153,11 +152,12 @@ func writeLiteral(buf *bytes.Buffer, s string) {
 
 // absentSenderLiteral returns the Akka-canonical deadLetters actor path
 // "<proto>://<system>/deadLetters" used in place of an empty sender tag.
-// Akka resolves system-only paths ending in /deadLetters to the receiver's
-// own local deadLetters singleton, regardless of the system name in the
-// path — so even if proto/system are best-guess fallbacks this still
-// resolves cleanly and avoids the compression-decoder collision the
-// legacy DeadLettersCode = -1 sentinel had in multi-DC mode.
+// Akka/Pekko resolve system-only paths ending in /deadLetters to the
+// receiver's local deadLetters singleton when the system name matches the
+// receiver's actor system.  In gekka's normal multi-DC layout the cluster
+// shares a single actor-system name across all nodes, so this resolves
+// cleanly on both implementations and avoids the compression-decoder
+// collision that the DeadLettersCode = -1 sentinel triggers.
 func absentSenderLiteral(proto, system string) string {
 	if proto == "" {
 		proto = "akka"
@@ -186,7 +186,6 @@ func extractProtoAndSystem(paths ...string) (proto, system string) {
 		}
 		proto = p[:i]
 		rest := p[i+3:]
-		// rest is "<system>@<host>:<port>/..." or "<system>/...".
 		if at := strings.IndexByte(rest, '@'); at > 0 {
 			system = rest[:at]
 		} else if slash := strings.IndexByte(rest, '/'); slash > 0 {

@@ -2199,6 +2199,10 @@ type Cluster struct {
 	// shuttingDown is set to 1 atomically during shutdown; used by DeadLetterLogger.
 	shuttingDown int32
 
+	// shutdownOnce guards the non-CoordinatedShutdown teardown steps in
+	// Shutdown so that callers may invoke it multiple times safely.
+	shutdownOnce sync.Once
+
 	// eventStream is the system-wide publish/subscribe bus.
 	eventStream *actor.EventStream
 
@@ -4336,32 +4340,81 @@ func (c *Cluster) GracefulShutdown(ctx context.Context) error {
 	return c.cs.Run(ctx)
 }
 
-// Shutdown stops the TCP server and cancels all background goroutines.
-// It is safe to call multiple times.
+// Shutdown drives the node through the standard CoordinatedShutdown sequence
+// (cluster-leave → cluster-exiting → cluster-shutdown → actor-system-terminate)
+// before tearing down the remaining process-level resources.  This matches
+// Pekko's actorSystem.terminate() semantics where invoking terminate triggers
+// CoordinatedShutdown.
 //
-// For a graceful exit that drives the node through the cluster leave/exiting/
-// removed lifecycle, call GracefulShutdown instead.
+// Without this guarantee a Shutdown call closes the transport before the
+// cluster-leave phase can deliver a Leave message to the seed, and the seed's
+// failure detector observes the node disappear — the cluster reports the node
+// through Up → Unreachable → Down → Removed instead of the graceful
+// Leaving → Exiting → Removed lifecycle.
+//
+// It is safe to call multiple times; subsequent calls block until the first
+// invocation has finished and then return immediately.
+//
+// For an asynchronous variant that returns control immediately, the caller
+// can run Shutdown in a goroutine.  For finer-grained control over the
+// CoordinatedShutdown context (e.g. a longer deadline), call GracefulShutdown
+// directly.
 func (c *Cluster) Shutdown() error {
 	atomic.StoreInt32(&c.shuttingDown, 1)
-	c.stopWatchFDReaper()
-	uninstallPersistenceProxyTransport(c)
-	if c.cancel != nil {
-		c.cancel()
+
+	// Run the standard CoordinatedShutdown sequence so the
+	// cluster-leave phase can deliver a Leave message and
+	// WaitForSelfRemoved can observe the leader's transitions through
+	// Exiting → Removed before the transport is torn down by the
+	// actor-system-terminate phase.
+	//
+	// cs.Run is sync.Once-protected, so concurrent Shutdown invocations
+	// share a single CoordinatedShutdown pass; later callers simply
+	// block until the first one returns.
+	if c.cs != nil {
+		csCtx, csCancel := context.WithTimeout(context.Background(), c.shutdownBudget())
+		_ = c.cs.Run(csCtx)
+		csCancel()
 	}
-	if c.durable != nil {
-		_ = c.durable.Close()
-	}
-	// A4: revert the logger.Install performed by NewCluster. install.go's
-	// version-aware uninstall is a no-op when a subsequent Install has
-	// superseded this one, so calling it unconditionally here is safe even
-	// when multiple Cluster instances are created and torn down in sequence.
-	if c.uninstallLogger != nil {
-		c.uninstallLogger()
-	}
-	if c.server != nil {
-		return c.server.Shutdown()
-	}
+
+	// Steps below are not CoordinatedShutdown tasks; they are
+	// process-level reclamations of resources owned by the Cluster
+	// value itself.  The actor-system-terminate phase has already
+	// invoked c.cancel() and c.server.Shutdown(), so this block does
+	// not duplicate them.
+	c.shutdownOnce.Do(func() {
+		c.stopWatchFDReaper()
+		uninstallPersistenceProxyTransport(c)
+		if c.cancel != nil {
+			// Idempotent: cancel is safe to call multiple times.
+			// Guarantees teardown even if cs.Run was skipped because cs
+			// was nil or did not reach actor-system-terminate.
+			c.cancel()
+		}
+		if c.durable != nil {
+			_ = c.durable.Close()
+		}
+		// A4: revert the logger.Install performed by NewCluster.
+		// install.go's version-aware uninstall is a no-op when a
+		// subsequent Install has superseded this one, so calling it
+		// unconditionally here is safe even when multiple Cluster
+		// instances are created and torn down in sequence.
+		if c.uninstallLogger != nil {
+			c.uninstallLogger()
+		}
+		if c.server != nil {
+			_ = c.server.Shutdown()
+		}
+	})
 	return nil
+}
+
+// shutdownBudget bounds how long Shutdown spends inside CoordinatedShutdown
+// before forcing the rest of the process-level teardown.  The default
+// accommodates a typical cluster-leave (~1–3 s) plus the per-phase fallback
+// timeout when peers are slow to respond.
+func (c *Cluster) shutdownBudget() time.Duration {
+	return 20 * time.Second
 }
 
 // Terminate implements ActorSystem.

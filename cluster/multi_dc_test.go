@@ -656,22 +656,31 @@ func TestDownRemovalMargin_DelaysRemoval(t *testing.T) {
 	// First leader actions should NOT remove the downed member (margin not elapsed).
 	cm.performLeaderActions()
 	cm.Mu.RLock()
-	status := cm.State.Members[1].GetStatus()
+	memberCount := len(cm.State.Members)
+	var stillDown bool
+	for _, m := range cm.State.Members {
+		if m.GetStatus() == gproto_cluster.MemberStatus_Down {
+			stillDown = true
+			break
+		}
+	}
 	cm.Mu.RUnlock()
-	if status == gproto_cluster.MemberStatus_Removed {
-		t.Fatal("member should not be Removed before down-removal-margin elapsed")
+	if memberCount != 2 || !stillDown {
+		t.Fatalf("member should still be present as Down before down-removal-margin elapsed (got memberCount=%d, stillDown=%v)", memberCount, stillDown)
 	}
 
 	// Wait for margin to elapse.
 	time.Sleep(250 * time.Millisecond)
 
-	// Now leader actions should remove the member.
+	// Now leader actions should remove the member from gossip state entirely
+	// (transition to Removed AND drop from Members, mirroring Akka's
+	// MembershipState.copyWithMembers semantics).
 	cm.performLeaderActions()
 	cm.Mu.RLock()
-	status = cm.State.Members[1].GetStatus()
+	memberCount = len(cm.State.Members)
 	cm.Mu.RUnlock()
-	if status != gproto_cluster.MemberStatus_Removed {
-		t.Errorf("member should be Removed after margin, got %v", status)
+	if memberCount != 1 {
+		t.Errorf("downed member should be dropped from Members after margin, got memberCount=%d", memberCount)
 	}
 }
 
@@ -691,10 +700,64 @@ func TestDownRemovalMargin_ZeroMeansImmediate(t *testing.T) {
 
 	cm.performLeaderActions()
 	cm.Mu.RLock()
-	status := cm.State.Members[1].GetStatus()
+	memberCount := len(cm.State.Members)
 	cm.Mu.RUnlock()
-	if status != gproto_cluster.MemberStatus_Removed {
-		t.Errorf("member should be Removed immediately with zero margin, got %v", status)
+	if memberCount != 1 {
+		t.Errorf("downed member should be dropped immediately with zero margin, got memberCount=%d", memberCount)
+	}
+}
+
+// TestLeaderDropsStaleRemovedFromGossip exercises Issue 3 of the
+// 2026-05-16 dashboard self-down spec: when gekka becomes leader and the
+// gossip state contains stale Removed entries (inherited from incoming
+// gossip — e.g. zombie slots in a corrupted cluster), the leader must
+// drop them so subsequent gossip emissions do not rebroadcast the stale
+// entries to live peers.
+func TestLeaderDropsStaleRemovedFromGossip(t *testing.T) {
+	router := func(_ context.Context, _ string, _ any) error { return nil }
+	local := makeUAWithDC("10.0.0.1", 2552, 1)
+	cm := NewClusterManager(local, router)
+
+	// Build a state with three stale Removed entries alongside the live
+	// local Up member.  None of these went through gekka's own transition
+	// path, so they have no tombstone yet — simulating entries that
+	// arrived via incoming gossip from a corrupted peer.
+	cm.Mu.Lock()
+	cm.State.Members[0].Status = gproto_cluster.MemberStatus_Up.Enum()
+	cm.State.Members[0].UpNumber = proto.Int32(1)
+	for i := 2; i <= 4; i++ {
+		zombie := makeUAWithDC(fmt.Sprintf("10.0.0.%d", i), 2552, uint32(i))
+		addMemberUpWithRoles(cm, zombie, int32(i), nil)
+		cm.State.Members[len(cm.State.Members)-1].Status = gproto_cluster.MemberStatus_Removed.Enum()
+	}
+	cm.Mu.Unlock()
+
+	cm.Mu.RLock()
+	beforeCount := len(cm.State.Members)
+	cm.Mu.RUnlock()
+	if beforeCount != 4 {
+		t.Fatalf("setup error: expected 4 members before leader actions, got %d", beforeCount)
+	}
+
+	// Leader actions must run dropRemovedMembersLocked at the end and
+	// strip every Removed entry, regardless of tombstone state.
+	cm.performLeaderActions()
+
+	cm.Mu.RLock()
+	defer cm.Mu.RUnlock()
+	if len(cm.State.Members) != 1 {
+		t.Fatalf("leader actions should drop all stale Removed entries; got %d members, want 1", len(cm.State.Members))
+	}
+	if status := cm.State.Members[0].GetStatus(); status != gproto_cluster.MemberStatus_Up {
+		t.Errorf("surviving member should be the live local Up entry, got status=%v", status)
+	}
+	// Every dropped entry must have its host:port recorded as a tombstone
+	// so subsequent incoming gossip cannot resurrect the slot.
+	for i := 2; i <= 4; i++ {
+		key := fmt.Sprintf("10.0.0.%d:2552", i)
+		if _, ok := cm.tombstones[key]; !ok {
+			t.Errorf("dropped stale Removed entry %s should have a tombstone recorded", key)
+		}
 	}
 }
 

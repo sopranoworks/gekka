@@ -184,6 +184,7 @@ type Replicator struct {
 	GossipInterval time.Duration
 	gossipRound    int // incremented each gossipAll call
 	stopCh         chan struct{}
+	stopOnce       sync.Once
 	wg             sync.WaitGroup
 
 	// ── Config knobs (wired from DistributedDataConfig) ──
@@ -858,9 +859,14 @@ func (r *Replicator) AllSetsSnapshot() map[string][]string {
 	return result
 }
 
-// Stop halts the gossip loop.
+// Stop halts the gossip loop.  Safe to call multiple times; only the first
+// invocation closes the stop channel.  Subsequent calls are no-ops, which is
+// required because both the user's defer and the cluster-shutdown
+// CoordinatedShutdown phase can drive Stop on the same replicator instance.
 func (r *Replicator) Stop() {
-	close(r.stopCh)
+	r.stopOnce.Do(func() {
+		close(r.stopCh)
+	})
 	r.wg.Wait()
 }
 

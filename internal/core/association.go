@@ -2990,7 +2990,14 @@ func (assoc *GekkaAssociation) SendQuarantined(to *gproto_remote.UniqueAddress) 
 	// single-letter manifest "a"; the long Go type name "Quarantined" fails
 	// the receiver's Cannot-find-manifest-class check (same shape as the
 	// CompressionTableAdvertisementAck bug — see compression_table_manager.go).
-	frame, err := BuildArteryFrame(int64(assoc.localUid), actor.ArteryInternalSerializerID, "", "", "a", payload, true)
+	//
+	// Pass the peer's path as a recipient hint so the empty-sender fallback
+	// in BuildArteryFrame uses an absentSenderLiteral instead of the legacy
+	// `-1` sentinel — Pekko/Akka would otherwise WARN about a failed
+	// compression lookup for every Quarantined emission.  Quarantined is a
+	// ControlMessage so InboundControlJunction consumes it; the recipient
+	// string is never resolved against an actor.
+	frame, err := BuildArteryFrame(int64(assoc.localUid), actor.ArteryInternalSerializerID, "", remoteWatcherPathForAddress(to.GetAddress()), "a", payload, true)
 	if err != nil {
 		logger.Default().Warn("artery: failed to build Quarantined frame", "error", err)
 		return
@@ -3264,13 +3271,19 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 		// ArteryHeartbeat is a Scala singleton with an empty payload.
 		// Reply immediately with ArteryHeartbeatRsp containing our local UID so
 		// Pekko's RemoteWatcher does not mark the Go node as unreachable.
+		//
+		// Address the response to the peer's /system/remote-watcher (mirroring
+		// Pekko's RemoteWatcher.receiveHeartbeat which replies via sender()).
+		// ArteryHeartbeatRsp is not a ControlMessage, so an empty recipient
+		// would crash Pekko's MessageDispatcher with OptionVal.None.get.
 		logger.Default().Debug("artery: ArteryHeartbeat received — replying with ArteryHeartbeatRsp", "uid", assoc.localUid)
 		rsp := &gproto_remote.ArteryHeartbeatRsp{Uid: proto.Uint64(assoc.localUid)}
 		payload, err := proto.Marshal(rsp)
 		if err != nil {
 			return fmt.Errorf("failed to marshal ArteryHeartbeatRsp: %w", err)
 		}
-		frame, err := BuildArteryFrame(int64(assoc.localUid), actor.ArteryInternalSerializerID, "", "", "n", payload, true)
+		recipientPath := remoteWatcherPathFor(assoc)
+		frame, err := BuildArteryFrame(int64(assoc.localUid), actor.ArteryInternalSerializerID, "", recipientPath, "n", payload, true)
 		if err != nil {
 			return fmt.Errorf("failed to build ArteryHeartbeatRsp frame: %w", err)
 		}
@@ -3717,8 +3730,15 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 		{
 			localUA := &gproto_remote.UniqueAddress{Address: assoc.nodeMgr.LocalAddr, Uid: proto.Uint64(assoc.localUid)}
 			rspProto := &gproto_remote.MessageWithAddress{Address: localUA}
+			// Provide the peer's path as the recipient hint so BuildArteryFrame
+			// can synthesise a non-`-1` sender via absentSenderLiteral and avoid
+			// Pekko's "Couldn't decompress sender" WARN.  HandshakeRsp is a
+			// ControlMessage that Pekko's InboundControlJunction consumes
+			// before MessageDispatcher, so the recipient string itself is
+			// never resolved against an actor — only parsed for its system.
+			rspRecipientPath := remoteWatcherPathForAddress(req.From.GetAddress())
 			if rspPayload, err2 := proto.Marshal(rspProto); err2 == nil {
-				if frame, err2 := BuildArteryFrame(int64(assoc.localUid), actor.ArteryInternalSerializerID, "", "", "e", rspPayload, true); err2 == nil {
+				if frame, err2 := BuildArteryFrame(int64(assoc.localUid), actor.ArteryInternalSerializerID, "", rspRecipientPath, "e", rspPayload, true); err2 == nil {
 					var rspOutbox chan []byte
 					var routed string
 					if outboundToRemote != nil {
@@ -3836,12 +3856,17 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 	localUA := &gproto_remote.UniqueAddress{Address: assoc.nodeMgr.LocalAddr, Uid: proto.Uint64(assoc.localUid)}
 	rsp := &gproto_remote.MessageWithAddress{Address: localUA}
 
-	// Write HandshakeRsp to outbox
+	// Write HandshakeRsp to outbox.  Use the peer's address as the recipient
+	// hint so BuildArteryFrame synthesises a non-`-1` sender literal and
+	// Pekko/Akka don't WARN about a failed compression lookup.  HandshakeRsp
+	// is a ControlMessage that's consumed by InboundControlJunction, so the
+	// recipient string itself is never resolved against a real actor.
 	payload, err := proto.Marshal(rsp)
 	if err != nil {
 		return err
 	}
-	frame, err := BuildArteryFrame(int64(assoc.localUid), actor.ArteryInternalSerializerID, "", "", "e", payload, true)
+	rspRecipientPath := remoteWatcherPathFor(assoc)
+	frame, err := BuildArteryFrame(int64(assoc.localUid), actor.ArteryInternalSerializerID, "", rspRecipientPath, "e", payload, true)
 	if err != nil {
 		return err
 	}

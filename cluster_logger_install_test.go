@@ -143,6 +143,11 @@ func TestNewCluster_InvalidStdoutLogLevel_ReturnsError(t *testing.T) {
 // (A2) replaces the main leg with a fresh stdout JSON handler when the
 // uninstall fn fires, so the recorder is unreachable from logger.Default()
 // after Shutdown.
+//
+// Note: Shutdown legitimately emits CoordinatedShutdown phase logs through
+// logger.Default() while it runs, so the recorder grows during Shutdown.
+// The contract this test guards is the post-Shutdown one: any record logged
+// AFTER Shutdown returns must not reach the supplied handler.
 func TestCluster_Shutdown_UninstallsLogger(t *testing.T) {
 	rec := &recordingHandler{}
 	cfg := ClusterConfig{
@@ -158,8 +163,7 @@ func TestCluster_Shutdown_UninstallsLogger(t *testing.T) {
 	}
 
 	logger.Default().LogAttrs(context.Background(), slog.LevelDebug, "before-shutdown")
-	beforeShutdown := len(rec.snapshot())
-	if beforeShutdown == 0 {
+	if len(rec.snapshot()) == 0 {
 		t.Fatalf("expected recorder to capture pre-shutdown record, got 0")
 	}
 
@@ -167,10 +171,13 @@ func TestCluster_Shutdown_UninstallsLogger(t *testing.T) {
 		t.Fatalf("Shutdown: %v", err)
 	}
 
+	// Snapshot the recorder *after* Shutdown returns so that any records
+	// emitted by Shutdown's own phase logs are absorbed into the baseline.
+	postShutdownBaseline := len(rec.snapshot())
+
 	logger.Default().LogAttrs(context.Background(), slog.LevelDebug, "after-shutdown")
-	afterShutdown := len(rec.snapshot())
-	if afterShutdown != beforeShutdown {
-		t.Fatalf("recorder grew across Shutdown: before=%d after=%d (uninstall did not detach main leg)",
-			beforeShutdown, afterShutdown)
+	if got := len(rec.snapshot()); got != postShutdownBaseline {
+		t.Fatalf("recorder grew after Shutdown returned: baseline=%d got=%d (uninstall did not detach main leg)",
+			postShutdownBaseline, got)
 	}
 }

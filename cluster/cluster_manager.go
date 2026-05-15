@@ -930,9 +930,28 @@ func (cm *ClusterManager) DownMember(addr MemberAddress) {
 // own membership entry is absent or in Removed status, or the context expires.
 // It is called by the coordinated-shutdown cluster-leave phase to block until
 // the cluster leader has driven the transition all the way to Removed.
+//
+// Fast paths:
+//   - If this node never received a Welcome (no peer ever knew about it),
+//     there is no leader anywhere driving the transition, so waiting cannot
+//     succeed; return immediately so unit-test teardown isn't penalised with
+//     the full phase timeout.
+//   - If self is already absent or Removed, return immediately.
 func (cm *ClusterManager) WaitForSelfRemoved(ctx context.Context) error {
 	localHost := cm.LocalAddress.GetAddress().GetHostname()
 	localPort := cm.LocalAddress.GetAddress().GetPort()
+
+	if cm.isSelfRemovedOrGone(localHost, localPort) {
+		return nil
+	}
+	if !cm.WelcomeReceived.Load() {
+		// Never joined a cluster — there is no remote leader to drive
+		// the Leaving → Exiting → Removed transitions and no peer to
+		// gossip a Removed state back to us.  Cluster-leave still ran
+		// (LeaveCluster updates self to Leaving for local subscribers);
+		// we just don't have a counterparty to wait on.
+		return nil
+	}
 
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
@@ -2612,6 +2631,20 @@ func (cm *ClusterManager) performLeaderActions() {
 		}
 		// Prune stale tombstones (removed members older than configured TTL).
 		cm.pruneGossipTombstonesLocked()
+		// Drop every Member with status Removed from gossip state immediately,
+		// regardless of tombstone age, and record their UniqueAddress in
+		// tombstones.  Mirrors Akka's MembershipState.copyWithMembers
+		// semantics where Removed members are dropped from `members` at the
+		// same gossip version where the transition happens.  Without this,
+		// stale Removed entries inherited via incoming gossip (or carried over
+		// from prior incarnations) get rebroadcast every time gekka becomes
+		// leader, causing application-level subscribers to re-fire
+		// `Cluster.down(addr)` against the live address — see
+		// docs/superpowers/specs/2026-05-16-dashboard-self-down-followups.md
+		// Issue 3.
+		if cm.dropRemovedMembersLocked() {
+			cm.incrementVersionWithLockHeld()
+		}
 		cm.Mu.Unlock()
 
 		for _, evt := range events {
@@ -2642,6 +2675,40 @@ func (cm *ClusterManager) recordTombstoneLocked(host string, port uint32) {
 		cm.tombstones = make(map[string]time.Time)
 	}
 	cm.tombstones[key] = time.Now()
+}
+
+// dropRemovedMembersLocked removes every Member with status Removed from
+// cm.State.Members and records each one's host:port in cm.tombstones so
+// subsequent incoming gossip cannot resurrect the slot.  Returns true when
+// at least one entry was dropped so the caller can bump the vector clock.
+// Must be called with cm.Mu held.
+func (cm *ClusterManager) dropRemovedMembersLocked() bool {
+	if len(cm.State.Members) == 0 {
+		return false
+	}
+	kept := cm.State.Members[:0]
+	dropped := false
+	for _, m := range cm.State.Members {
+		if m.GetStatus() != gproto_cluster.MemberStatus_Removed {
+			kept = append(kept, m)
+			continue
+		}
+		idx := int(m.GetAddressIndex())
+		if idx >= 0 && idx < len(cm.State.AllAddresses) {
+			a := cm.State.AllAddresses[idx].GetAddress()
+			cm.recordTombstoneLocked(a.GetHostname(), a.GetPort())
+		}
+		dropped = true
+	}
+	if !dropped {
+		return false
+	}
+	// Re-slice so callers iterating cm.State.Members afterwards see the
+	// pruned set; the underlying array beyond len(kept) may still alias
+	// the dropped pointers, which is fine because gossip serialisation
+	// uses the slice header length.
+	cm.State.Members = kept
+	return true
 }
 
 // pruneGossipTombstonesLocked removes tombstone entries older than

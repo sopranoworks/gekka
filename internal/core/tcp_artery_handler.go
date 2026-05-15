@@ -254,14 +254,25 @@ func SendArteryMessageWithAck(conn net.Conn, localUid int64, serializerId int32,
 
 // SendArteryHeartbeat sends a transport-level heartbeat and records the sent time.
 // It uses the association's outbox to ensure thread-safety with other outbound frames.
+//
+// The recipient is set to the peer's `/system/remote-watcher` path because
+// ArteryHeartbeat extends `HeartbeatMessage with ArteryMessage` — NOT
+// `ControlMessage` — so Pekko's InboundControlJunction lets it through to
+// MessageDispatcher.dispatch which calls `inboundEnvelope.recipient.get`
+// and crashes the inbound stream when the recipient is None.  Pointing the
+// recipient at RemoteWatcher mirrors how Pekko itself emits these
+// heartbeats (see RemoteWatcher.sendHeartbeat:
+// `context.actorSelection(RootActorPath(a) / self.path.elements) ! heartBeatMsg`).
 func SendArteryHeartbeat(assoc *GekkaAssociation) error {
 	assoc.mu.Lock()
 	assoc.lastHeartbeatSentAt = time.Now()
 	uid := assoc.localUid
 	assoc.mu.Unlock()
 
+	recipientPath := remoteWatcherPathFor(assoc)
+
 	// ArteryHeartbeat (manifest "m") is an empty payload message.
-	frame, err := BuildArteryFrame(int64(uid), actor.ArteryInternalSerializerID, "", "", "m", nil, true)
+	frame, err := BuildArteryFrame(int64(uid), actor.ArteryInternalSerializerID, "", recipientPath, "m", nil, true)
 	if err != nil {
 		return err
 	}
@@ -272,6 +283,33 @@ func SendArteryHeartbeat(assoc *GekkaAssociation) error {
 	default:
 		return fmt.Errorf("association outbox full")
 	}
+}
+
+// remoteWatcherPathFor returns the peer's `/system/remote-watcher` actor
+// path, derived from the post-handshake remote address recorded on the
+// association.  Returns an empty string if the remote address is not yet
+// available (in which case the caller falls back to the legacy absent-
+// recipient encoding).
+func remoteWatcherPathFor(assoc *GekkaAssociation) string {
+	if assoc == nil {
+		return ""
+	}
+	ua := assoc.remote.Load()
+	if ua == nil {
+		return ""
+	}
+	return remoteWatcherPathForAddress(ua.GetAddress())
+}
+
+// remoteWatcherPathForAddress builds the canonical `/system/remote-watcher`
+// path for the given peer address.  Returns an empty string if the address
+// is incomplete.
+func remoteWatcherPathForAddress(a *gproto_remote.Address) string {
+	if a == nil || a.GetHostname() == "" || a.GetPort() == 0 || a.GetSystem() == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s://%s@%s:%d/system/remote-watcher",
+		a.GetProtocol(), a.GetSystem(), a.GetHostname(), a.GetPort())
 }
 
 // BuildRemoteEnvelope constructs a 3-layer remote envelope for actor messages.

@@ -53,13 +53,34 @@ func StartCompressionTableManager(ctx context.Context, nm *NodeManager, router *
 }
 
 // sendCompressionAdvertisement is the production tick body invoked by
-// the CompressionTableManager scheduler. gekka does not yet accumulate
-// outbound compression dictionaries — every outbound frame still carries
-// literal strings — so the advert payload carries TableVersion=0 and an
-// empty key/value set. An empty advert is Pekko-compatible: the receiver
-// records "peer N has nothing compressed yet" and continues to decode
-// using literal tags, which is exactly what gekka still emits.
-func sendCompressionAdvertisement(ctx context.Context, nm *NodeManager, router *actor.Router, isActorRef bool) {
+// the CompressionTableManager scheduler.
+//
+// Akka 2.6.x's ArteryMessageSerializer (id 17) splits compression
+// advertisements into two distinct messages with single-letter manifests:
+//
+//   "f"  ActorRefCompressionAdvertisement
+//   "h"  ClassManifestCompressionAdvertisement
+//
+// (See akka-remote/src/main/scala/akka/remote/serialization/ArteryMessageSerializer.scala.)
+//
+// gekka models both with the single Go type CompressionTableAdvertisement
+// (the proto fields are identical between the two variants — only the
+// semantic intent differs).  Bypass router.Send so we can set the
+// correct serializer id and manifest directly; the router fall-through
+// for proto.Message would emit (sid=2, manifest=*remote.Compression...)
+// which Akka rejects with NotSerializableException, leaving the joiner
+// stuck in Joining forever.
+//
+// gekka does not yet accumulate outbound compression dictionaries — every
+// outbound frame still carries literal strings — so the advert payload
+// carries TableVersion=0 with no keys/values.  An empty advert is Akka-
+// compatible: the receiver records "peer N has nothing compressed yet"
+// and continues to decode using literal tags, which is exactly what
+// gekka still emits.
+func sendCompressionAdvertisement(_ context.Context, nm *NodeManager, _ *actor.Router, isActorRef bool) {
+	if nm == nil {
+		return
+	}
 	peers := nm.SnapshotAssociatedAddresses()
 	if len(peers) == 0 {
 		return
@@ -74,6 +95,15 @@ func sendCompressionAdvertisement(ctx context.Context, nm *NodeManager, router *
 		OriginUid:    proto.Uint64(localUid),
 		TableVersion: proto.Uint32(0),
 	}
+	payload, err := proto.Marshal(adv)
+	if err != nil {
+		logger.Default().Warn("artery: failed to marshal CompressionTableAdvertisement", "err", err)
+		return
+	}
+	manifest := "h" // ClassManifestCompressionAdvertisement
+	if isActorRef {
+		manifest = "f" // ActorRefCompressionAdvertisement
+	}
 	for _, peer := range peers {
 		addr := peer.GetAddress()
 		if addr == nil {
@@ -82,7 +112,11 @@ func sendCompressionAdvertisement(ctx context.Context, nm *NodeManager, router *
 		path := fmt.Sprintf("%s://%s@%s:%d/system/cluster/core/daemon",
 			addr.GetProtocol(), addr.GetSystem(),
 			addr.GetHostname(), addr.GetPort())
-		if err := router.Send(ctx, path, adv); err != nil {
+		assoc, ok := nm.GetAssociationByHost(addr.GetHostname(), addr.GetPort())
+		if !ok {
+			continue
+		}
+		if err := assoc.Send(path, payload, actor.ArteryInternalSerializerID, manifest); err != nil {
 			logger.Default().Debug("artery: compression advertisement send failed",
 				"peer", path, "isActorRef", isActorRef, "err", err)
 		}

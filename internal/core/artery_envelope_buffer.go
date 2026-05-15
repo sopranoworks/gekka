@@ -13,6 +13,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"strings"
 
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 )
@@ -65,23 +66,45 @@ func BuildArteryFrame(
 	// Literal section: sender, recipient, manifest then payload
 	// Each literal: position stored at the tag offset, then 2-byte short length + ASCII bytes
 	//
-	// IMPORTANT: an absent sender must be encoded as DeadLettersCode = -1, NOT as an empty
-	// literal.  Akka/Pekko reads a non-(-1) sender tag as a pointer to an actor path string,
-	// resolves it to an ActorRef, and in several inbound pipeline stages calls
-	// OptionVal.get() on the result — which throws NoSuchElementException when the path is
-	// empty, crashing the inbound stream.
+	// HISTORY: gekka previously encoded an absent sender as DeadLettersCode = -1
+	// to dodge a NoSuchElementException ("OptionVal.None.get") that fires when
+	// Akka resolves an empty literal sender.  But -1 (= 0xFFFFFFFF) collides
+	// with Akka's multi-DC Decoder, which reads the senderTag's high bits as
+	// a "compressed" flag and the low 16 bits as a compression-table id.
+	// -1 → flag set, id = 0xFFFF = 65535 → lookup in the empty per-origin
+	// compression table → frame dropped → joiner stays in Joining forever
+	// (the dashboard's reported failure).  See absentSenderLiteral for the
+	// full rationale.
 	//
-	// The recipient must still be written as a literal (even if empty) because Akka's
-	// InboundHandshake and routing stages behave differently for recipient = -1.
+	// The Akka-canonical absent-sender encoding is the system-only literal
+	// "<proto>://<system>/deadLetters", which Akka resolves to the receiver's
+	// own deadLetters singleton without invoking the compression decoder.
 	litBuf := &bytes.Buffer{}
 
-	// Sender: use DeadLettersCode for absent (empty) sender.
+	// Resolve a (proto, system) hint for synthesising an absent sender.
+	// Try recipientPath (most callers have it) — senderPath being empty
+	// is what we're trying to handle, so it isn't useful here.
+	hintProto, hintSystem := extractProtoAndSystem(recipientPath)
+
+	// Sender encoding policy:
+	//   - non-empty senderPath  -> literal at the next free position
+	//   - empty AND we can synthesise a deadLetters path
+	//     ("<localProto>://<localSystem>/deadLetters" derived from the
+	//     recipient) -> literal deadLetters (Akka multi-DC compatible)
+	//   - empty AND no usable hint (heartbeat-style frames where both
+	//     sender and recipient are absent) -> legacy DeadLettersCode = -1
+	//     sentinel.  This preserves the pre-multi-DC behaviour the
+	//     existing tests and Akka non-multi-DC clusters depend on.
 	var senderTag int32
-	if senderPath == "" {
+	if senderPath == "" && hintSystem == "" {
 		senderTag = DeadLettersCode
 	} else {
+		effectiveSender := senderPath
+		if effectiveSender == "" {
+			effectiveSender = absentSenderLiteral(hintProto, hintSystem)
+		}
 		senderTag = int32(arteryHeaderSize + litBuf.Len())
-		writeLiteral(litBuf, senderPath)
+		writeLiteral(litBuf, effectiveSender)
 	}
 
 	// Recipient: always write as a literal (empty string is valid).
@@ -126,6 +149,54 @@ func writeLiteral(buf *bytes.Buffer, s string) {
 	binary.LittleEndian.PutUint16(lenBytes[:], uint16(l))
 	buf.Write(lenBytes[:])
 	buf.WriteString(s)
+}
+
+// absentSenderLiteral returns the Akka-canonical deadLetters actor path
+// "<proto>://<system>/deadLetters" used in place of an empty sender tag.
+// Akka resolves system-only paths ending in /deadLetters to the receiver's
+// own local deadLetters singleton, regardless of the system name in the
+// path — so even if proto/system are best-guess fallbacks this still
+// resolves cleanly and avoids the compression-decoder collision the
+// legacy DeadLettersCode = -1 sentinel had in multi-DC mode.
+func absentSenderLiteral(proto, system string) string {
+	if proto == "" {
+		proto = "akka"
+	}
+	if system == "" {
+		system = "gekka"
+	}
+	return fmt.Sprintf("%s://%s/deadLetters", proto, system)
+}
+
+// extractProtoAndSystem pulls the protocol and system fields from the
+// first non-empty Artery path it is given.  Recognised shape:
+//
+//	<proto>://<system>@<host>:<port>/...     (full Artery path)
+//	<proto>://<system>/...                   (system-only path)
+//
+// Returns ("", "") when neither input parses successfully.
+func extractProtoAndSystem(paths ...string) (proto, system string) {
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		i := strings.Index(p, "://")
+		if i <= 0 {
+			continue
+		}
+		proto = p[:i]
+		rest := p[i+3:]
+		// rest is "<system>@<host>:<port>/..." or "<system>/...".
+		if at := strings.IndexByte(rest, '@'); at > 0 {
+			system = rest[:at]
+		} else if slash := strings.IndexByte(rest, '/'); slash > 0 {
+			system = rest[:slash]
+		} else {
+			system = rest
+		}
+		return proto, system
+	}
+	return "", ""
 }
 
 // ParseArteryFrame decodes an Artery binary frame back into its component fields.

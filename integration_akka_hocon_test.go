@@ -188,3 +188,10 @@ func runStrictHoconJoin(t *testing.T, assembly jvmproc.AssemblyProject) {
 func TestAkkaHoconJoin_2_6_21_Strict(t *testing.T) {
 	runStrictHoconJoin(t, jvmproc.AkkaAssembly)
 }
+
+// TestAkkaHoconJoin_2_6_14_Strict is the reproducer: same scenario as the
+// 2.6.21 test but pinned to the Akka version the dashboard's production
+// cluster runs.  Expected to FAIL until the underlying gekka bug is fixed.
+func TestAkkaHoconJoin_2_6_14_Strict(t *testing.T) {
+	runStrictHoconJoin(t, jvmproc.Akka2614Assembly)
+}

@@ -12,29 +12,31 @@ import scala.concurrent.duration._
 
 import com.typesafe.config.ConfigFactory
 import akka.actor.ActorSystem
-import akka.cluster.{Cluster, ClusterEvent, MemberStatus}
+import akka.cluster.Cluster
 import akka.cluster.ClusterEvent.{InitialStateAsEvents, MemberUp}
 import akka.actor.{Actor, ActorLogging, Props}
 
 /**
- * AkkaStrictHoconJoinNode — production-shaped Akka 2.6.x single-member cluster
- * used by the gekka strict-HOCON JOIN reproducer.
+ * AkkaStrictHoconJoinNode — production-shaped Akka 2.6.x single-member,
+ * multi-DC cluster used by the gekka strict-HOCON JOIN reproducer.
  *
  * Differences from AkkaIntegrationNode (the happy-path scenario):
  *   - ActorSystem name is "TestSystem" (generic; not the real production name)
  *   - Listening port comes from the JVM system property -Dnode.port=<P>
- *   - JoinConfigCompatChecker is in production mode (enforce-on-join = on),
- *     so a misconfigured joiner is silently dropped — exactly the symptom
- *     the gekka dashboard observed
+ *   - JoinConfigCompatChecker is in production mode (enforce-on-join = on)
+ *   - Multi-DC is ON, dc = "test" (matches the shape of TestCluster-style
+ *     production clusters whose dc is non-default)
  *   - No echo / pubsub actors — this scenario tests JOIN only
  *
- * Once the cluster reports self as Up, the line "STRICT_NODE_READY" is printed
- * to stdout so the Go test harness can begin the gekka-side join.
+ * Stdout signals (parsed by the Go test):
+ *   STRICT_NODE_READY                       — self has reached Up
+ *   STRICT_FOREIGN_MEMBER_UP:<host>:<port>  — a NON-SELF member has reached Up
  *
- * Launched by:
- *   jvmproc.SpawnJava(t, ctx, jar, "com.example.AkkaStrictHoconJoinNode",
- *                     nil, jvmproc.Options{Dir: "scala-server",
- *                                          JVMFlags: []string{"-Dnode.port=<P>"}})
+ * The Go test asserts on STRICT_FOREIGN_MEMBER_UP — the SERVER's
+ * authoritative view that the joiner was admitted.  Gekka's local cluster
+ * state is logged for debugging but is not load-bearing (it can claim
+ * "Up" while the server is silently dropping every message from gekka,
+ * as TestCluster's logs proved).
  */
 object AkkaStrictHoconJoinNode extends App {
   OrchestratorGate.require()
@@ -58,6 +60,7 @@ object AkkaStrictHoconJoinNode extends App {
        |    canonical.port = $port
        |  }
        |  cluster {
+       |    multi-data-center.self-data-center = "test"
        |    seed-nodes = ["akka://TestSystem@127.0.0.1:$port"]
        |    min-nr-of-members = 1
        |    downing-provider-class = "akka.cluster.sbr.SplitBrainResolverProvider"
@@ -80,23 +83,29 @@ object AkkaStrictHoconJoinNode extends App {
   val system  = ActorSystem("TestSystem", config)
   val cluster = Cluster(system)
 
-  // Watcher actor: listen for MemberUp(self) and signal readiness.
-  val ready = Promise[Unit]()
+  val selfReady = Promise[Unit]()
 
-  class ReadyWatcher extends Actor with ActorLogging {
+  class MembershipWatcher extends Actor with ActorLogging {
     override def preStart(): Unit =
       cluster.subscribe(self, InitialStateAsEvents, classOf[MemberUp])
     override def postStop(): Unit = cluster.unsubscribe(self)
     def receive: Receive = {
       case MemberUp(m) if m.address == cluster.selfAddress =>
         log.info("self is Up at {}", m.address)
-        if (!ready.isCompleted) ready.success(())
+        if (!selfReady.isCompleted) selfReady.success(())
+
+      case MemberUp(m) =>
+        val host = m.address.host.getOrElse("?")
+        val mp   = m.address.port.map(_.toString).getOrElse("?")
+        log.info("foreign member Up at {}", m.address)
+        println(s"STRICT_FOREIGN_MEMBER_UP:$host:$mp")
+        Console.flush()
     }
   }
 
-  system.actorOf(Props(new ReadyWatcher), "readyWatcher")
+  system.actorOf(Props(new MembershipWatcher), "membershipWatcher")
 
-  Await.result(ready.future, 60.seconds)
+  Await.result(selfReady.future, 60.seconds)
 
   println("STRICT_NODE_READY")
   Console.flush()

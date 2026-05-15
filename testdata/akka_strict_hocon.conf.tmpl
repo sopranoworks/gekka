@@ -3,5 +3,8 @@ akka {
     hostname = "127.0.0.1"
     port = __LOCAL_PORT__
   }
-  cluster.seed-nodes = ["akka://TestSystem@127.0.0.1:__SEED_PORT__"]
+  cluster {
+    seed-nodes = ["akka://TestSystem@127.0.0.1:__SEED_PORT__"]
+    multi-data-center.self-data-center = "test"
+  }
 }

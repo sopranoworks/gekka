@@ -193,10 +193,14 @@ func TestQuarantine_ReceiveQuarantinedFrame(t *testing.T) {
 	}
 	sendArteryFrame(t, clientConn, "d", hsReq)
 
-	// Read HandshakeRsp from server.
-	_ = clientConn.SetReadDeadline(time.Now().Add(3 * time.Second))
-	readArteryFrame(t, clientConn)
-	_ = clientConn.SetReadDeadline(time.Time{})
+	// HandshakeRsp is NOT read here.  Post-2026-05-16 the server routes the
+	// rsp via the peer's OUTBOUND TCP rather than back over the INBOUND
+	// (Pekko Artery rejects writes on its outbound socket); there is no
+	// real listener at the From address used by this test fixture, so the
+	// rsp is silently dropped.  The test verifies quarantine-registry
+	// state, not the HandshakeRsp contents.  Give the server a moment to
+	// finish registering the inbound association before the next frame.
+	time.Sleep(100 * time.Millisecond)
 
 	// Step 2: Send Quarantined control frame from the "remote" node to ourselves.
 	quarMsg := &gproto_remote.Quarantined{

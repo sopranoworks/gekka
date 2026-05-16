@@ -3715,10 +3715,23 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 			}
 			nm.mu.Unlock()
 		}
-		// Always send HandshakeRsp. Use OUTBOUND if available, INBOUND as
-		// fallback (needed for unit tests; Pekko may reset the INBOUND but
-		// the async DialRemote above will establish a working OUTBOUND for
-		// subsequent messages).
+		// Send HandshakeRsp ONLY when we have an OUTBOUND TCP to the peer.
+		// Pekko/Akka's Artery-TCP outbound sockets are write-only from the
+		// peer's perspective: writing bytes back on the INBOUND (= peer's
+		// outbound) produces "Unexpected incoming bytes in outbound
+		// connection ..." and Pekko quarantines the association.  The
+		// quarantine then cascades into MemberDowned/Removed on the peer's
+		// gossip view and our local node is taken out of the cluster —
+		// reproducible in TestFiveNodeStability3Min when the multi-node
+		// cluster forces both directions to bootstrap concurrently.
+		//
+		// When no OUTBOUND exists yet, we drop the response.  The reverse
+		// outbound dial we kicked off above will run its own
+		// HandshakeReq → HandshakeRsp exchange on the OUTBOUND socket
+		// (the correct direction); Pekko's stuck HandshakeReq retry
+		// timer fires every couple of seconds, so a subsequent retry
+		// will land here once outboundToRemote is registered and the
+		// response will be routed via the correct OUTBOUND channel.
 		//
 		// Sub-plan 8f outbound half — lane-aware HandshakeRsp routing.
 		// When the inbound HandshakeReq arrived on a streamId=2 INBOUND
@@ -3727,7 +3740,7 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 		// the request landed). Falls back to the OUTBOUND control assoc's
 		// outbox (streamId=1) when the sibling is not yet registered or
 		// L >= len(lanes) — Pekko/Akka tolerate HandshakeRsp on streamId=1.
-		{
+		if outboundToRemote != nil {
 			localUA := &gproto_remote.UniqueAddress{Address: assoc.nodeMgr.LocalAddr, Uid: proto.Uint64(assoc.localUid)}
 			rspProto := &gproto_remote.MessageWithAddress{Address: localUA}
 			// Provide the peer's path as the recipient hint so BuildArteryFrame
@@ -3739,54 +3752,47 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 			rspRecipientPath := remoteWatcherPathForAddress(req.From.GetAddress())
 			if rspPayload, err2 := proto.Marshal(rspProto); err2 == nil {
 				if frame, err2 := BuildArteryFrame(int64(assoc.localUid), actor.ArteryInternalSerializerID, "", rspRecipientPath, "e", rspPayload, true); err2 == nil {
-					var rspOutbox chan []byte
-					var routed string
-					if outboundToRemote != nil {
-						// Prefer the streamId=1 control outbox for the
-						// "OUTBOUND control" baseline. outboundToRemote
-						// may itself be the streamId=2 sibling — pivot
-						// to its sibling pointer when needed so the
-						// fallback is the control outbox, not the
-						// sibling outbox (which is unused for streamId=2
-						// and would silently swallow the rsp).
-						controlAssoc := outboundToRemote
-						if outboundToRemote.streamId == 2 {
-							outboundToRemote.mu.RLock()
-							p := outboundToRemote.ordinarySibling
-							outboundToRemote.mu.RUnlock()
-							if p != nil {
-								controlAssoc = p
+					// Prefer the streamId=1 control outbox for the
+					// "OUTBOUND control" baseline. outboundToRemote
+					// may itself be the streamId=2 sibling — pivot
+					// to its sibling pointer when needed so the
+					// fallback is the control outbox, not the
+					// sibling outbox (which is unused for streamId=2
+					// and would silently swallow the rsp).
+					controlAssoc := outboundToRemote
+					if outboundToRemote.streamId == 2 {
+						outboundToRemote.mu.RLock()
+						p := outboundToRemote.ordinarySibling
+						outboundToRemote.mu.RUnlock()
+						if p != nil {
+							controlAssoc = p
+						}
+					}
+					rspOutbox := controlAssoc.outbox
+					routed := "OUTBOUND control"
+					// If the inbound HandshakeReq came on a
+					// streamId=2 TCP, route the response onto the
+					// matching outbound lane of the streamId=2
+					// sibling (looked up via control's sibling
+					// pointer, which always points at the lanes-
+					// bearing assoc).
+					if assoc.streamId == 2 {
+						laneIdx := assoc.inboundLaneIndexOf()
+						controlAssoc.mu.RLock()
+						sib := controlAssoc.ordinarySibling
+						controlAssoc.mu.RUnlock()
+						if sib != nil {
+							sib.mu.RLock()
+							lanes := sib.lanes
+							sib.mu.RUnlock()
+							if laneIdx >= 0 && laneIdx < len(lanes) {
+								rspOutbox = lanes[laneIdx].outbox
+								routed = "OUTBOUND sibling lane"
+							} else if len(lanes) > 0 {
+								rspOutbox = lanes[0].outbox
+								routed = "OUTBOUND sibling lane[0]"
 							}
 						}
-						rspOutbox = controlAssoc.outbox
-						routed = "OUTBOUND control"
-						// If the inbound HandshakeReq came on a
-						// streamId=2 TCP, route the response onto the
-						// matching outbound lane of the streamId=2
-						// sibling (looked up via control's sibling
-						// pointer, which always points at the lanes-
-						// bearing assoc).
-						if assoc.streamId == 2 {
-							laneIdx := assoc.inboundLaneIndexOf()
-							controlAssoc.mu.RLock()
-							sib := controlAssoc.ordinarySibling
-							controlAssoc.mu.RUnlock()
-							if sib != nil {
-								sib.mu.RLock()
-								lanes := sib.lanes
-								sib.mu.RUnlock()
-								if laneIdx >= 0 && laneIdx < len(lanes) {
-									rspOutbox = lanes[laneIdx].outbox
-									routed = "OUTBOUND sibling lane"
-								} else if len(lanes) > 0 {
-									rspOutbox = lanes[0].outbox
-									routed = "OUTBOUND sibling lane[0]"
-								}
-							}
-						}
-					} else {
-						rspOutbox = assoc.outbox
-						routed = "INBOUND fallback"
 					}
 					logger.Default().Debug("artery: sending HandshakeRsp", "via", routed)
 					select {
@@ -3796,6 +3802,14 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 					}
 				}
 			}
+		} else {
+			// No OUTBOUND yet — we kicked off DialRemoteWithRestart above.
+			// Drop this rsp; Pekko's HandshakeReq retry will catch the next
+			// attempt once outboundToRemote becomes available.  Writing on
+			// the INBOUND socket here would trigger Pekko's "Unexpected
+			// incoming bytes" + quarantine pipeline.
+			logger.Default().Debug("artery: HandshakeRsp deferred — no OUTBOUND yet, awaiting reverse dial",
+				"remote", fmt.Sprintf("%s:%d", req.From.GetAddress().GetHostname(), req.From.GetAddress().GetPort()))
 		}
 
 		// Symmetric optimization: if this node also has an OUTBOUND assoc to

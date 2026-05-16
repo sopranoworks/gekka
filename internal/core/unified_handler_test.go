@@ -19,9 +19,16 @@ import (
 )
 
 func TestUnifiedHandler_FullDuplexHandshake(t *testing.T) {
-	// Use non-standard ports so handleHandshakeReq's reverse-dial attempt
-	// cannot collide with an external scala-server on the canonical
-	// 2552/2553 artery ports (which breaks the net.Pipe()-only test).
+	// Two-pipe topology mirrors production Artery-TCP: each direction has its
+	// own TCP connection (sender writes, receiver reads).  Post-2026-05-16,
+	// handleHandshakeReq never writes HandshakeRsp back over the INBOUND TCP
+	// (Pekko Artery treats inbound TCPs as write-only from the peer's side
+	// and quarantines on any "incoming bytes"); responses go via the peer's
+	// OUTBOUND.  The single-pipe version of this test relied on the now-
+	// removed INBOUND-fallback write and could not represent that contract.
+	//
+	// pipeAB carries A → B (A's OUTBOUND, B's INBOUND).
+	// pipeBA carries B → A (B's OUTBOUND, A's INBOUND).
 	nodeAAddr := &gproto_remote.Address{
 		Protocol: proto.String("pekko"),
 		System:   proto.String("nodeA"),
@@ -38,26 +45,36 @@ func TestUnifiedHandler_FullDuplexHandshake(t *testing.T) {
 	nmA := NewNodeManager(nodeAAddr, 0)
 	nmB := NewNodeManager(nodeBAddr, 0)
 
-	server, client := net.Pipe()
-	defer server.Close()
-	defer client.Close()
+	// pipeAB.client is A's OUTBOUND write end; pipeAB.server is B's INBOUND read end.
+	pipeABServer, pipeABClient := net.Pipe()
+	defer pipeABServer.Close()
+	defer pipeABClient.Close()
+	// pipeBA.client is B's OUTBOUND write end; pipeBA.server is A's INBOUND read end.
+	pipeBAServer, pipeBAClient := net.Pipe()
+	defer pipeBAServer.Close()
+	defer pipeBAClient.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	// Node B accepts connection (Inbound)
+	// A → B direction: B accepts INBOUND, A initiates OUTBOUND.
 	go func() {
-		_ = nmB.ProcessConnection(ctx, server, INBOUND, nil, 0)
+		_ = nmB.ProcessConnection(ctx, pipeABServer, INBOUND, nil, 0)
 	}()
-
-	// Node A initiates connection (Outbound)
-	errChan := make(chan error, 1)
 	go func() {
-		errChan <- nmA.ProcessConnection(ctx, client, OUTBOUND, nodeBAddr, 1) // Use 1 for test
+		_ = nmA.ProcessConnection(ctx, pipeABClient, OUTBOUND, nodeBAddr, 1)
+	}()
+	// B → A direction: A accepts INBOUND, B initiates OUTBOUND.  This provides
+	// the OUTBOUND channel B needs to send HandshakeRsp back to A.
+	go func() {
+		_ = nmA.ProcessConnection(ctx, pipeBAServer, INBOUND, nil, 0)
+	}()
+	go func() {
+		_ = nmB.ProcessConnection(ctx, pipeBAClient, OUTBOUND, nodeAAddr, 1)
 	}()
 
 	// initiateHandshake sleeps 500 ms before sending HandshakeReq, so wait longer.
-	time.Sleep(700 * time.Millisecond)
+	time.Sleep(900 * time.Millisecond)
 
 	// NewNodeManager(addr, 0) assigns localUid=0, so HandshakeReq/Rsp carry Uid=0.
 	uniqueB := &gproto_remote.UniqueAddress{Address: nodeBAddr, Uid: proto.Uint64(0)}

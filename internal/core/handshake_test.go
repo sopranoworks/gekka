@@ -96,6 +96,17 @@ func TestArteryHandshake_Success(t *testing.T) {
 		Uid: proto.Uint64(12345),
 	}
 
+	// Pre-register a fake OUTBOUND control association.  As of the
+	// dashboard self-down fix (2026-05-16), handleHandshakeReq routes
+	// HandshakeRsp to the OUTBOUND-control outbox of the peer, never
+	// back over the INBOUND TCP — Pekko's Artery treats INBOUND TCP as
+	// write-only from its peer's side and rejects bytes with
+	// "Unexpected incoming bytes" + quarantines the association.  The
+	// test mirrors production by setting up a sibling OUTBOUND so the
+	// rsp has a legitimate channel.  See association.go
+	// `handleHandshakeReq` for the rationale.
+	outbound := preregisterOutboundControl(t, nm, remoteAddr.Address, remoteAddr.GetUid())
+
 	// 1. Send Artery TCP magic header (OUTBOUND side sends this first).
 	sendMagic(t, client, 1)
 
@@ -103,8 +114,18 @@ func TestArteryHandshake_Success(t *testing.T) {
 	req := &gproto_remote.HandshakeReq{From: remoteAddr, To: localAddr}
 	sendArteryFrame(t, client, "d", req)
 
-	// 3. Read HandshakeRsp (manifest "e", payload = MessageWithAddress).
-	meta := readArteryFrame(t, client)
+	// 3. Read HandshakeRsp (manifest "e", payload = MessageWithAddress)
+	// off the pre-registered OUTBOUND outbox.
+	var frame []byte
+	select {
+	case frame = <-outbound.outbox:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for HandshakeRsp on OUTBOUND outbox")
+	}
+	meta, err := ParseArteryFrame(frame, nil, 0)
+	if err != nil {
+		t.Fatalf("ParseArteryFrame: %v", err)
+	}
 	if string(meta.MessageManifest) != "e" {
 		t.Errorf("expected manifest %q, got %q", "e", string(meta.MessageManifest))
 	}
@@ -214,12 +235,20 @@ func TestArteryControl_HeartbeatAndQuarantine(t *testing.T) {
 		Uid: proto.Uint64(123),
 	}
 
-	// 0. Handshake.
+	// 0. Handshake.  This test does NOT preregister an OUTBOUND because it
+	// verifies state transitions on the INBOUND assoc (which is the one
+	// the Quarantined control frame mutates).  Without a preregistered
+	// OUTBOUND, handleHandshakeReq's post-2026-05-16 logic simply drops
+	// the HandshakeRsp — that's correct for this test's purpose: we don't
+	// need the rsp, and the dropped path leaves the INBOUND registered so
+	// GetAssociation below returns the assoc whose state we want to check.
 	sendMagic(t, client, 1)
 	sendArteryFrame(t, client, "d", &gproto_remote.HandshakeReq{From: remoteUA, To: localAddr})
 
-	// Drain HandshakeRsp.
-	readArteryFrame(t, client)
+	// Give handleHandshakeReq a moment to complete its work (the test's
+	// next sendArteryFrame writes synchronously to the pipe, so we must
+	// not race with it).
+	time.Sleep(50 * time.Millisecond)
 
 	// 1. Send ArteryHeartbeatRsp (manifest "n").
 	sendArteryFrame(t, client, "n", &gproto_remote.ArteryHeartbeatRsp{Uid: proto.Uint64(123)})

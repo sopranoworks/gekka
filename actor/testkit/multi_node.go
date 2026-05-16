@@ -23,8 +23,9 @@ type MultiNodeTestKit struct {
 	t     testing.TB
 	nodes []*multiNodeSystem
 
-	mu       sync.Mutex
-	barriers map[string]chan struct{}
+	mu          sync.Mutex
+	barriers    map[string]chan struct{}
+	barrierOnce map[string]*sync.Once
 }
 
 // NewMultiNodeTestKit creates a test kit with n independent actor systems.
@@ -33,9 +34,10 @@ func NewMultiNodeTestKit(t testing.TB, n int) *MultiNodeTestKit {
 		t.Fatal("MultiNodeTestKit: need at least 1 node")
 	}
 	mk := &MultiNodeTestKit{
-		t:        t,
-		nodes:    make([]*multiNodeSystem, n),
-		barriers: make(map[string]chan struct{}),
+		t:           t,
+		nodes:       make([]*multiNodeSystem, n),
+		barriers:    make(map[string]chan struct{}),
+		barrierOnce: make(map[string]*sync.Once),
 	}
 	for i := 0; i < n; i++ {
 		mk.nodes[i] = newMultiNodeSystem(i)
@@ -60,6 +62,16 @@ func (mk *MultiNodeTestKit) NodeCount() int {
 // Barrier synchronizes all nodes at a named barrier point. It blocks until
 // all nodes have called Barrier with the same name. This is useful for
 // coordinating test phases across multiple simulated nodes.
+//
+// Race-safety note (fixed 2026-05-16): the previous implementation closed
+// the gate whenever `arrived >= needed`, which let two goroutines that
+// raced through the lock at the same arrival count both call close(ch) —
+// "close of closed channel" panic, intermittently failing
+// TestMultiNodeTestKit_Barrier under load.  We now close the gate exactly
+// once via the EQ check (`arrived == needed`) so only the goroutine that
+// transitions the counter from N-1 to N performs the close; subsequent
+// late arrivers (if any) observe the post-close `<-ch` returning
+// immediately.
 func (mk *MultiNodeTestKit) Barrier(name string) {
 	mk.mu.Lock()
 	ch, ok := mk.barriers[name]
@@ -67,29 +79,31 @@ func (mk *MultiNodeTestKit) Barrier(name string) {
 		ch = make(chan struct{})
 		mk.barriers[name] = ch
 	}
-	mk.mu.Unlock()
-
-	// Use a simple counter-based barrier.
 	barrierKey := name + "-count"
-	mk.mu.Lock()
-	if _, exists := mk.barriers[barrierKey]; !exists {
-		mk.barriers[barrierKey] = make(chan struct{}, len(mk.nodes))
+	countCh, exists := mk.barriers[barrierKey]
+	if !exists {
+		countCh = make(chan struct{}, len(mk.nodes))
+		mk.barriers[barrierKey] = countCh
 	}
-	countCh := mk.barriers[barrierKey]
+	once, oncePresent := mk.barrierOnce[name]
+	if !oncePresent {
+		once = &sync.Once{}
+		mk.barrierOnce[name] = once
+	}
+	needed := len(mk.nodes)
 	mk.mu.Unlock()
 
 	// Signal this node has reached the barrier.
 	countCh <- struct{}{}
 
-	// Check if all nodes have arrived.
-	mk.mu.Lock()
-	arrived := len(countCh)
-	needed := len(mk.nodes)
-	if arrived >= needed {
-		// All arrived — close the gate.
-		close(ch)
+	// Close the gate exactly once when all nodes have arrived.  Using
+	// sync.Once is the only race-free way to ensure exactly one close():
+	// the previous len(countCh)==needed predicate was satisfied by every
+	// goroutine that ran the post-push check (the counter never decreases),
+	// so each one tried to close — "close of closed channel" panic.
+	if len(countCh) >= needed {
+		once.Do(func() { close(ch) })
 	}
-	mk.mu.Unlock()
 
 	// Wait for the barrier to open.
 	<-ch

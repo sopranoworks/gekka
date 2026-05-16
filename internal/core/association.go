@@ -3939,11 +3939,39 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 	if err != nil {
 		return err
 	}
-	logger.Default().Debug("artery: sending HandshakeRsp (e)", "uid", assoc.localUid)
+	// Pivot away from `assoc.outbox` when assoc is a non-control OUTBOUND
+	// sibling. dialOrdinarySibling allocates the streamId=2 sibling's outbox
+	// with capacity 1 as a deliberately-unused placeholder — real writes
+	// pivot through per-lane outboxes via outboxFor. The OUTBOUND branch of
+	// handleHandshakeReq, however, writes directly to `assoc.outbox`. When
+	// Pekko writes a HandshakeReq on one of gekka's OUTBOUND streamId=2 (or
+	// streamId=3) TCPs and runLaneReadLoop dispatches it onto the sibling
+	// assoc, the cap=1 buffer fills on the first attempt and every
+	// subsequent retry drops, producing the ~1 Hz "outbox full, dropping
+	// HandshakeRsp frame" storm observed in multi-jvm gates and live diag.
+	// Route via the linked OUTBOUND streamId=1 control sibling whose outbox
+	// has the real EffectiveOutboundControlQueueSize capacity (~20000).
+	rspOutbox := assoc.outbox
+	rspVia := "OUTBOUND own"
+	if assoc.streamId != 1 {
+		assoc.mu.RLock()
+		controlSibling := assoc.ordinarySibling
+		assoc.mu.RUnlock()
+		if controlSibling != nil {
+			rspOutbox = controlSibling.outbox
+			rspVia = "OUTBOUND control sibling"
+		} else {
+			logger.Default().Debug("artery: HandshakeRsp dropped — non-control OUTBOUND assoc has no control sibling",
+				"remote", assoc.remoteKey(),
+				"streamId", assoc.streamId)
+			return nil
+		}
+	}
+	logger.Default().Debug("artery: sending HandshakeRsp (e)", "uid", assoc.localUid, "via", rspVia)
 	select {
-	case assoc.outbox <- frame:
+	case rspOutbox <- frame:
 	default:
-		logger.Default().Warn("artery: outbox full, dropping HandshakeRsp frame")
+		logger.Default().Warn("artery: outbox full, dropping HandshakeRsp frame", "via", rspVia)
 	}
 	return nil
 }

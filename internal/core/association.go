@@ -3002,11 +3002,39 @@ func (assoc *GekkaAssociation) SendQuarantined(to *gproto_remote.UniqueAddress) 
 		logger.Default().Warn("artery: failed to build Quarantined frame", "error", err)
 		return
 	}
+	// The Quarantined notification must travel on gekka's OUTBOUND socket
+	// to the peer. When this method is invoked on an INBOUND assoc (e.g.
+	// from handleHandshakeReq's quarantine-UID rejection guard, or from
+	// RegisterAssociation's UID-mismatch path when `existing` was an
+	// INBOUND), writing to assoc.outbox would funnel the frame onto the
+	// socket the peer dialed gekka with (peer's outbound, write-only from
+	// peer's perspective) — Pekko classifies that as "Unexpected incoming
+	// bytes in outbound connection" and quarantines us. Same class as the
+	// HandshakeRsp / ArteryHeartbeatRsp routing bugs already fixed.
+	outbox := assoc.outbox
+	via := "OUTBOUND (own)"
+	if assoc.role == INBOUND {
+		if to != nil && to.GetAddress() != nil {
+			addr := to.GetAddress()
+			if outAssoc, ok := nm.GetGekkaAssociationByHost(addr.GetHostname(), addr.GetPort()); ok && outAssoc != nil && outAssoc != assoc {
+				outbox = outAssoc.outbox
+				via = "OUTBOUND control"
+			} else {
+				logger.Default().Debug("artery: SendQuarantined deferred — no OUTBOUND to peer, peer will retry handshake and we will reject again",
+					"remote", assoc.remoteKey())
+				return
+			}
+		} else {
+			logger.Default().Debug("artery: SendQuarantined dropped — INBOUND assoc with no peer address",
+				"remote", assoc.remoteKey())
+			return
+		}
+	}
 	select {
-	case assoc.outbox <- frame:
-		logger.Default().Info("artery: sent Quarantined frame", "to", to)
+	case outbox <- frame:
+		logger.Default().Info("artery: sent Quarantined frame", "to", to, "via", via)
 	default:
-		logger.Default().Warn("artery: outbox full, Quarantined frame dropped", "to", to)
+		logger.Default().Warn("artery: outbox full, Quarantined frame dropped", "to", to, "via", via)
 	}
 }
 

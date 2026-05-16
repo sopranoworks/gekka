@@ -99,12 +99,16 @@ func TestQuarantine_QuarantinedUIDs(t *testing.T) {
 }
 
 // TestQuarantine_SendFrameEnqueued verifies that SendQuarantined enqueues a
-// properly encoded "Quarantined" Artery control frame on the association outbox.
+// properly encoded "Quarantined" Artery control frame on the association
+// outbox when invoked on an OUTBOUND assoc — the routing fallthrough that
+// writes to assoc.outbox itself. The INBOUND-rerouting case is covered by
+// TestSendQuarantined_RoutesToOutboundNotInboundSocket.
 func TestQuarantine_SendFrameEnqueued(t *testing.T) {
 	nm := NewNodeManager(quarTestAddr("127.0.0.1", 2552, "TestSystem"), 99)
 
 	assoc := &GekkaAssociation{
 		state:    ASSOCIATED,
+		role:     OUTBOUND,
 		localUid: nm.localUid,
 		outbox:   make(chan []byte, 10),
 		nodeMgr:  nm,

@@ -3287,8 +3287,35 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 		if err != nil {
 			return fmt.Errorf("failed to build ArteryHeartbeatRsp frame: %w", err)
 		}
+		// ArteryHeartbeats arrive over the peer's outbound TCP socket, which on
+		// gekka's side is an INBOUND association. Pekko/Akka's outbound socket
+		// is WRITE-ONLY from the peer's perspective — bytes flowing back on it
+		// trigger "Unexpected incoming bytes in outbound connection" and the
+		// peer quarantines the whole association (same class as the
+		// HandshakeRsp-on-INBOUND bug). Route the response onto the peer's
+		// INBOUND (= our OUTBOUND streamId=1 control). When no OUTBOUND
+		// exists yet, drop the rsp: Pekko's RemoteWatcher retries on the
+		// next heartbeat-interval tick, and the reverse-dial kicked off by
+		// handleHandshakeReq will land an OUTBOUND in place by then.
+		rspOutbox := assoc.outbox
+		rspVia := "OUTBOUND (own)"
+		if assoc.role == INBOUND {
+			remote := assoc.remote.Load()
+			if remote != nil && remote.GetAddress() != nil {
+				addr := remote.GetAddress()
+				if outbound, ok := assoc.nodeMgr.GetGekkaAssociationByHost(addr.GetHostname(), addr.GetPort()); ok && outbound != nil && outbound != assoc {
+					rspOutbox = outbound.outbox
+					rspVia = "OUTBOUND control"
+				} else {
+					logger.Default().Debug("artery: ArteryHeartbeatRsp deferred — no OUTBOUND to peer, will reply to next heartbeat",
+						"remote", assoc.remoteKey())
+					return nil
+				}
+			}
+		}
+		logger.Default().Debug("artery: ArteryHeartbeatRsp routing", "via", rspVia)
 		select {
-		case assoc.outbox <- frame:
+		case rspOutbox <- frame:
 		default:
 			logger.Default().Debug("artery: ArteryHeartbeatRsp outbox full, dropping response")
 		}

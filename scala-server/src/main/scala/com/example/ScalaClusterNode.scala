@@ -47,7 +47,7 @@ object ScalaClusterNode extends App {
         configuration-compatibility-check.enforce-on-join = off
         min-nr-of-members = 1
       }
-      loglevel = INFO
+      loglevel = WARNING
     }
   """)
 

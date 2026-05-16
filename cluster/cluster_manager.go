@@ -133,6 +133,20 @@ type ClusterManager struct {
 	// first marks us as Exiting.
 	exitingConfirmedSent atomic.Bool
 
+	// localLeaveInitiated is set when the user (or CoordinatedShutdown's
+	// cluster-leave phase) has called LeaveCluster() on this node.  Until
+	// then, any incoming gossip that carries our exact-UID slot in a
+	// terminal status (Down / Removed / Leaving / Exiting) is treated as
+	// stale state inherited from a prior gekka incarnation at the same
+	// host:port — the seed has not yet pruned its records — and the
+	// reincarnation repair resets it back to Joining so the leader's next
+	// promotion cycle can move us to Up.  Without this gate, the
+	// CoordinatedShutdown self-downed subscriber fires within ~1 s of
+	// receiving Welcome and the freshly-joined node terminates before
+	// reaching Up.  See live diag against the production cluster on
+	// 127.0.0.1:37777 for the verbatim reproducer.
+	localLeaveInitiated atomic.Bool
+
 	// Cluster event subscribers — managed by cluster_events.go methods.
 	SubMu sync.RWMutex
 	Subs  []eventSubscriber
@@ -481,7 +495,37 @@ func (cm *ClusterManager) repairSelfReincarnationLocked() {
 
 	stale := cm.State.AllAddresses[addrIdx]
 	if stale.GetUid() == myUid && stale.GetUid2() == myUid2 {
-		return // not a reincarnation; nothing to repair
+		// Same UID — not a UID-mismatch reincarnation.  But the seed can
+		// still send us back a Welcome carrying our exact-UID slot in a
+		// terminal status (Down / Removed / Leaving / Exiting): this
+		// happens when the seed's gossip carries down-removal-margin
+		// linger from a prior gekka process that crashed at the same
+		// host:port, then the seed maps our fresh Join onto the
+		// already-existing slot without resetting its status.  When that
+		// happens BEFORE we have initiated our own Leave, treat the
+		// terminal status as stale and reset the slot to Joining so the
+		// leader's next promotion cycle can move us to Up.
+		if cm.localLeaveInitiated.Load() {
+			return
+		}
+		for _, m := range cm.State.Members {
+			if m.GetAddressIndex() != int32(addrIdx) {
+				continue
+			}
+			s := m.GetStatus()
+			if s == gproto_cluster.MemberStatus_Down ||
+				s == gproto_cluster.MemberStatus_Removed ||
+				s == gproto_cluster.MemberStatus_Leaving ||
+				s == gproto_cluster.MemberStatus_Exiting {
+				logger.Default().Info("cluster: resetting stale self-UID slot to Joining",
+					slog.String("host", localHost),
+					slog.Int("port", int(localPort)),
+					slog.String("staleStatus", s.String()))
+				m.Status = gproto_cluster.MemberStatus_Joining.Enum()
+			}
+			break
+		}
+		return
 	}
 	logger.Default().Info("cluster: repairing self-reincarnation in incoming gossip",
 		slog.String("host", localHost),
@@ -853,6 +897,12 @@ func (cm *ClusterManager) ProceedJoin(ctx context.Context, actorPath string) err
 // state to Leaving so that cluster event subscribers observe MemberLeft even
 // when the remote leader is unreachable (e.g. during an SBR DownSelf decision).
 func (cm *ClusterManager) LeaveCluster() error {
+	// Flag that the user has initiated graceful leave.  This disables the
+	// reincarnation repair guard that resets stale self-UID Down/Removed
+	// slots inherited from prior incarnations — once we are actually
+	// leaving, those statuses are legitimate and must propagate to
+	// WaitForSelfRemoved.
+	cm.localLeaveInitiated.Store(true)
 	// Update own gossip entry to Leaving before broadcasting so that local
 	// subscribers see MemberLeft regardless of whether remote nodes are alive.
 	cm.Mu.Lock()
@@ -2171,41 +2221,88 @@ func (cm *ClusterManager) incrementVersionWithLockHeld() {
 
 }
 
-// DetermineLeader selects the leader based on sorted UniqueAddress.
+// DetermineLeader selects the cluster leader using Pekko semantics: the
+// Up/WeaklyUp member with the smallest UpNumber wins, with address
+// (hostname, port, uid) as the deterministic tiebreaker.  When NO member
+// has been promoted yet (UpNumber=0 across the board, e.g. a one-node
+// bootstrap window before the first leader-action), the address tiebreak
+// alone picks a deterministic leader.
+//
+// Why the upNumber-first ordering matters (dashboard self-down Issue 3,
+// 2026-05-16): the previous implementation sorted purely by
+// (hostname, port, uid), so a fresh joiner that happened to bind to a
+// numerically smaller port than the existing seed-of-record was elected
+// "leader" within seconds of receiving Welcome, then drove Down → Removed
+// on the cluster's real members.  Pekko's MembershipState.leaderOf
+// instead picks the first Up member in leaderOrdering — i.e. lowest
+// UpNumber — so a joiner with UpNumber assigned mid-cluster (always >=
+// existing-member upNumber) can never displace an existing leader on
+// address alone.  Live diag against the production cluster on
+// 127.0.0.1:37777 with gekka pinned to 2560 reproduces the misroll
+// deterministically until this fix lands.
 func (cm *ClusterManager) DetermineLeader() *gproto_cluster.UniqueAddress {
 	cm.Mu.RLock()
 	defer cm.Mu.RUnlock()
 
-	var upMembers []*gproto_cluster.UniqueAddress
+	type cand struct {
+		ua       *gproto_cluster.UniqueAddress
+		upNumber int32
+	}
+	var candidates []cand
 	for _, m := range cm.State.Members {
 		if m.GetStatus() == gproto_cluster.MemberStatus_Up || m.GetStatus() == gproto_cluster.MemberStatus_WeaklyUp {
-			upMembers = append(upMembers, cm.State.AllAddresses[m.GetAddressIndex()])
+			candidates = append(candidates, cand{
+				ua:       cm.State.AllAddresses[m.GetAddressIndex()],
+				upNumber: m.GetUpNumber(),
+			})
 		}
 	}
 
-	if len(upMembers) == 0 {
-		// If no nodes are UP yet, use all members including JOINING
+	if len(candidates) == 0 {
+		// No Up/WeaklyUp members yet (bootstrap window).  Fall back to the
+		// full member list so the very first node has a deterministic
+		// self-leader for self-promotion via the canBootstrap path.
 		for _, m := range cm.State.Members {
-			upMembers = append(upMembers, cm.State.AllAddresses[m.GetAddressIndex()])
+			candidates = append(candidates, cand{
+				ua:       cm.State.AllAddresses[m.GetAddressIndex()],
+				upNumber: m.GetUpNumber(),
+			})
 		}
 	}
 
-	if len(upMembers) == 0 {
+	if len(candidates) == 0 {
 		return nil
 	}
 
-	sort.Slice(upMembers, func(i, j int) bool {
-		a, b := upMembers[i], upMembers[j]
-		if a.GetAddress().GetHostname() != b.GetAddress().GetHostname() {
-			return a.GetAddress().GetHostname() < b.GetAddress().GetHostname()
+	sort.Slice(candidates, func(i, j int) bool {
+		a, b := candidates[i], candidates[j]
+		// Smallest UpNumber wins (Pekko's leaderOrdering).  UpNumber 0
+		// (unassigned) sorts last among assigned values because all
+		// real promotions yield UpNumber >= 1; treat 0 as "infinitely
+		// large" so an unpromoted joiner never beats a promoted peer.
+		ai, bi := a.upNumber, b.upNumber
+		const sentinel = int32(0x7fffffff)
+		if ai == 0 {
+			ai = sentinel
 		}
-		if a.GetAddress().GetPort() != b.GetAddress().GetPort() {
-			return a.GetAddress().GetPort() < b.GetAddress().GetPort()
+		if bi == 0 {
+			bi = sentinel
 		}
-		return a.GetUid() < b.GetUid()
+		if ai != bi {
+			return ai < bi
+		}
+		// Deterministic tiebreak on address: hostname → port → uid.
+		aa, ba := a.ua.GetAddress(), b.ua.GetAddress()
+		if aa.GetHostname() != ba.GetHostname() {
+			return aa.GetHostname() < ba.GetHostname()
+		}
+		if aa.GetPort() != ba.GetPort() {
+			return aa.GetPort() < ba.GetPort()
+		}
+		return a.ua.GetUid() < b.ua.GetUid()
 	})
 
-	return upMembers[0]
+	return candidates[0].ua
 }
 
 // OldestNode returns the oldest Up/WeaklyUp member, optionally filtered by role.
@@ -2816,10 +2913,31 @@ func (cm *ClusterManager) intakeRemovedFromIncomingLocked(incoming *gproto_clust
 // subsequent incoming gossip cannot resurrect the slot.  Returns true when
 // at least one entry was dropped so the caller can bump the vector clock.
 // Must be called with cm.Mu held.
+//
+// SELF IS PRESERVED.  The self entry must remain in cm.State.Members even
+// when its status is Removed so that:
+//
+//   - WaitForSelfRemoved (the coordinated-shutdown cluster-leave gate) can
+//     observe the terminal state and unblock cleanly.
+//   - External callers polling cm.GetState() can see the lifecycle complete
+//     through Leaving → Exiting → Removed before the actor system tears down.
+//
+// This mirrors intakeRemovedFromIncomingLocked's self-preservation guard
+// at the gossip-ingress filter; both filters must agree that self is the
+// one address allowed to carry status=Removed transiently.  Without this
+// guard the live-diag against the production cluster on 127.0.0.1:37777
+// observed only "Leaving" — the leader's Exiting → Removed transitions
+// completed in cm.State.Members briefly but were stripped before the diag
+// poller's next 50 ms tick.
 func (cm *ClusterManager) dropRemovedMembersLocked() bool {
 	if len(cm.State.Members) == 0 {
 		return false
 	}
+	localHost := cm.LocalAddress.GetAddress().GetHostname()
+	localPort := cm.LocalAddress.GetAddress().GetPort()
+	myUid := cm.LocalAddress.GetUid()
+	myUid2 := cm.LocalAddress.GetUid2()
+
 	kept := cm.State.Members[:0]
 	dropped := false
 	for _, m := range cm.State.Members {
@@ -2829,8 +2947,35 @@ func (cm *ClusterManager) dropRemovedMembersLocked() bool {
 		}
 		idx := int(m.GetAddressIndex())
 		if idx >= 0 && idx < len(cm.State.AllAddresses) {
-			a := cm.State.AllAddresses[idx].GetAddress()
+			ua := cm.State.AllAddresses[idx]
+			a := ua.GetAddress()
+			// Self-Removed (our exact UID) is the legitimate terminal
+			// state of CoordinatedShutdown's cluster-leave phase.  Keep
+			// the entry so WaitForSelfRemoved and external pollers can
+			// observe Removed before the actor system tears down.
+			//
+			// Stale-UID entries at our host:port (prior gekka
+			// incarnations the seed has not yet pruned from its gossip
+			// view) MUST be dropped here — they are not us, they are
+			// zombies that processIncomingGossip's repair guard already
+			// rewrote at most ONE slot of.  Surviving zombie slots
+			// otherwise loop forever: incoming gossip re-adds them as
+			// non-Removed, leader transitions them back to Removed, drop
+			// keeps them.  See live-diag run 2 against the production
+			// cluster on 127.0.0.1:37777 — that loop is exactly what
+			// surfaced gekka's self-down within 1s of receiving Welcome
+			// (the stale slots' MemberDowned diff fired the
+			// CoordinatedShutdown self-down subscriber before our actual
+			// promotion gossip arrived).
+			isSelf := a.GetHostname() == localHost &&
+				a.GetPort() == localPort &&
+				ua.GetUid() == myUid &&
+				ua.GetUid2() == myUid2
 			cm.recordTombstoneLocked(a.GetHostname(), a.GetPort())
+			if isSelf {
+				kept = append(kept, m)
+				continue
+			}
 		}
 		dropped = true
 	}
@@ -3324,12 +3469,18 @@ func (cm *ClusterManager) gossipTick(runLeaderActions bool) {
 		if err == nil {
 			compressedGossip, err := gzipCompress(statePayload)
 			if err == nil {
-				cm.Mu.RLock()
-				to := cm.State.AllAddresses[addrIdx]
-				cm.Mu.RUnlock()
+				// Use the AllAddresses snapshot captured at the top of
+				// gossipTick (line ~3235).  Re-reading cm.State.AllAddresses
+				// here races against a concurrent processIncomingGossip that
+				// can replace cm.State with a merged Gossip whose
+				// AllAddresses is shorter than the snapshot we computed
+				// addrIdx against.  The snapshot is consistent with the
+				// targetAddr chosen above and is safe to reuse without the
+				// lock — slice headers in Go are copy-on-assignment so
+				// `addresses` still points at the original backing array.
 				env := &gproto_cluster.GossipEnvelope{
 					From:             cm.LocalAddress,
-					To:               to,
+					To:               targetAddr,
 					SerializedGossip: compressedGossip,
 				}
 				_ = cm.Router(context.Background(), path, env)

@@ -5,10 +5,29 @@
         </encoder>
     </appender>
 
-    <logger name="org.apache.pekko.remote" level="DEBUG" />
-    <logger name="org.apache.pekko.remote.artery" level="DEBUG" />
+    <!--
+      Scala-side log gate for the gekka integration test harness.
 
-    <root level="INFO">
+      The contract with the Go test runner:
+
+        - Success is signalled by `println(...)` markers (FOREIGN_MEMBER_UP,
+          MULTI_NODE_READY, FIVE_NODE_READY, PEKKO_MEMBER_UP, etc.) which
+          bypass the slf4j/logback pipeline entirely.  Those markers always
+          reach the Go scanner regardless of what logback does.
+
+        - A passing run MUST emit zero log output.  Any line that begins
+          with `[SCALA] ` therefore indicates a real problem worth a
+          human's attention.  WARN is the bottom of that band; INFO/DEBUG
+          would drown the signal — see dashboard self-down live-diag for
+          the kind of failure mode where noise hid the actual bug
+          ("Leader: transitioned member Down → Removed" got buried in
+          decoder INFO logs).
+
+      Akka-side `loglevel = "WARNING"` (set in each *Node.scala HOCON)
+      doubles as the producer-side gate so the logger doesn't waste cycles
+      formatting INFO records that logback will drop anyway.
+    -->
+    <root level="WARN">
         <appender-ref ref="STDOUT" />
     </root>
 </configuration>

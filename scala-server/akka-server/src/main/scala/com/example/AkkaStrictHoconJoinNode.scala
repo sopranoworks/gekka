@@ -52,7 +52,7 @@ object AkkaStrictHoconJoinNode extends App {
   val config = ConfigFactory.parseString(
     s"""
        |akka {
-       |  loglevel = "INFO"
+       |  loglevel = "WARNING"
        |  actor.provider = cluster
        |  remote.artery {
        |    transport = tcp

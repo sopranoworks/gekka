@@ -1059,3 +1059,280 @@ func TestCheckConfigCompat_CustomProviderRejected(t *testing.T) {
 		t.Error("custom downing-provider-class should be incompatible")
 	}
 }
+
+// ── DetermineLeader — upNumber ordering (Issue 3 live-diag regression) ────────
+
+// TestDetermineLeader_LowPortJoinerDoesNotDisplaceSeed reproduces the
+// live-diag dolce failure where gekka pinned to port 2560 joined a real
+// production cluster whose seed of record listened on port 37777, and
+// within ~1.7 s of receiving Welcome gekka self-elected as cluster leader
+// and drove every dolce member from Down → Removed.
+//
+// The root cause was that DetermineLeader sorted Up members by
+// (hostname, port, uid) and returned the smallest.  Gekka's port (2560)
+// being numerically smaller than every dolce port (37564…37777) meant the
+// address tiebreak alone elected the freshly-joined node — even though
+// every dolce member had a smaller UpNumber.  Pekko's MembershipState
+// leaderOrdering prefers upNumber first; this test pins the contract.
+//
+// Setup mirrors the live cluster: local=2560 promoted via the bootstrap
+// path so it carries the post-Welcome upNumber assignment (large), seed at
+// :37777 with the genuine upNumber=1 and a few more Up dolce peers at
+// :37564/:37565/:37567 with upNumbers 2/3/4.  Expected leader: the seed.
+func TestDetermineLeader_LowPortJoinerDoesNotDisplaceSeed(t *testing.T) {
+	router := func(_ context.Context, _ string, _ any) error { return nil }
+	local := makeUAWithDC("127.0.0.1", 2560, 99)
+	cm := NewClusterManager(local, router)
+
+	cm.Mu.Lock()
+	// Local: low port, large upNumber (the fresh joiner).
+	cm.State.Members[0].Status = gproto_cluster.MemberStatus_Up.Enum()
+	cm.State.Members[0].UpNumber = proto.Int32(5)
+	// Seed of record: high port, genuine upNumber=1.
+	seed := makeUAWithDC("127.0.0.1", 37777, 1)
+	addMemberUpWithRoles(cm, seed, 1, nil)
+	// Additional Up dolce peers; ports are all > local's 2560.
+	for i, port := range []uint32{37564, 37565, 37567} {
+		peer := makeUAWithDC("127.0.0.1", port, uint32(100+i))
+		addMemberUpWithRoles(cm, peer, int32(2+i), nil)
+	}
+	cm.Mu.Unlock()
+
+	got := cm.DetermineLeader()
+	if got == nil {
+		t.Fatal("DetermineLeader returned nil with five Up members in state")
+	}
+	a := got.GetAddress()
+	if a.GetHostname() != "127.0.0.1" || a.GetPort() != 37777 {
+		t.Fatalf("DetermineLeader returned %s:%d (uid=%d) — must return the seed at 127.0.0.1:37777 (smallest upNumber), not the low-port joiner",
+			a.GetHostname(), a.GetPort(), got.GetUid())
+	}
+}
+
+// TestDetermineLeader_UpNumberZeroSortsLast covers the bootstrap window
+// where the local node has been added to cm.State.Members but not yet
+// promoted (UpNumber=0) while a peer carries an assigned UpNumber.  The
+// peer must win leader election; UpNumber=0 (unassigned) sorts last.
+func TestDetermineLeader_UpNumberZeroSortsLast(t *testing.T) {
+	router := func(_ context.Context, _ string, _ any) error { return nil }
+	local := makeUAWithDC("10.0.0.1", 2552, 1)
+	cm := NewClusterManager(local, router)
+
+	cm.Mu.Lock()
+	cm.State.Members[0].Status = gproto_cluster.MemberStatus_Up.Enum()
+	cm.State.Members[0].UpNumber = proto.Int32(0) // unassigned
+	peer := makeUAWithDC("10.0.0.2", 2552, 2)
+	addMemberUpWithRoles(cm, peer, 3, nil) // assigned upNumber=3
+	cm.Mu.Unlock()
+
+	got := cm.DetermineLeader()
+	if got == nil {
+		t.Fatal("DetermineLeader returned nil")
+	}
+	if got.GetAddress().GetPort() != 2552 || got.GetAddress().GetHostname() != "10.0.0.2" {
+		t.Fatalf("DetermineLeader returned %s:%d; want the peer with assigned upNumber=3 (UpNumber=0 must sort last)",
+			got.GetAddress().GetHostname(), got.GetAddress().GetPort())
+	}
+}
+
+// TestDetermineLeader_EqualUpNumberFallsBackToAddress confirms the
+// deterministic tiebreak when two members share an UpNumber (e.g. during
+// a brief multi-node bootstrap before the leader assigns canonical
+// numbers).  The smallest address (hostname, port, uid) wins.
+func TestDetermineLeader_EqualUpNumberFallsBackToAddress(t *testing.T) {
+	router := func(_ context.Context, _ string, _ any) error { return nil }
+	local := makeUAWithDC("10.0.0.2", 2552, 5)
+	cm := NewClusterManager(local, router)
+
+	cm.Mu.Lock()
+	cm.State.Members[0].Status = gproto_cluster.MemberStatus_Up.Enum()
+	cm.State.Members[0].UpNumber = proto.Int32(1)
+	peer := makeUAWithDC("10.0.0.1", 2552, 7) // smaller hostname
+	addMemberUpWithRoles(cm, peer, 1, nil)
+	cm.Mu.Unlock()
+
+	got := cm.DetermineLeader()
+	if got == nil {
+		t.Fatal("DetermineLeader returned nil")
+	}
+	if got.GetAddress().GetHostname() != "10.0.0.1" {
+		t.Fatalf("DetermineLeader returned %s; want 10.0.0.1 (smaller hostname wins on equal upNumber)",
+			got.GetAddress().GetHostname())
+	}
+}
+
+// ── dropRemovedMembersLocked — self preservation (Issue 3 lifecycle) ────────
+
+// TestDropRemovedMembersLocked_PreservesSelf pins the second half of the
+// dashboard self-down Issue 3 lifecycle contract: when self is moved to
+// Removed status (the terminal state of CoordinatedShutdown's
+// cluster-leave phase), the entry must remain in cm.State.Members so
+// WaitForSelfRemoved and external callers polling cm.GetState() can
+// observe the transition.  The companion ingress filter
+// intakeRemovedFromIncomingLocked already preserves self; this test
+// ensures the symmetric guard exists in the prune path.
+func TestDropRemovedMembersLocked_PreservesSelf(t *testing.T) {
+	router := func(_ context.Context, _ string, _ any) error { return nil }
+	local := makeUAWithDC("127.0.0.1", 2560, 99)
+	cm := NewClusterManager(local, router)
+
+	cm.Mu.Lock()
+	cm.State.Members[0].Status = gproto_cluster.MemberStatus_Removed.Enum()
+	cm.State.Members[0].UpNumber = proto.Int32(5)
+	dropped := cm.dropRemovedMembersLocked()
+	cm.Mu.Unlock()
+
+	if dropped {
+		t.Error("dropRemovedMembersLocked returned true for a self-only state; self must be preserved")
+	}
+
+	cm.Mu.RLock()
+	defer cm.Mu.RUnlock()
+	found := false
+	for _, m := range cm.State.Members {
+		idx := int(m.GetAddressIndex())
+		if idx < 0 || idx >= len(cm.State.AllAddresses) {
+			continue
+		}
+		a := cm.State.AllAddresses[idx].GetAddress()
+		if a.GetHostname() == "127.0.0.1" && a.GetPort() == 2560 {
+			if m.GetStatus() != gproto_cluster.MemberStatus_Removed {
+				t.Errorf("self entry status mutated from Removed to %v", m.GetStatus())
+			}
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("self entry was stripped from cm.State.Members; lifecycle observation broken")
+	}
+
+	// Even though self was preserved, the address must still be tombstoned
+	// so a future resurrection path treats it as gone.
+	if _, ok := cm.tombstones["127.0.0.1:2560"]; !ok {
+		t.Errorf("self tombstone not recorded; tombstones=%v", cm.tombstones)
+	}
+}
+
+// ── repairSelfReincarnationLocked — stale terminal-status reset ───────────
+
+// TestRepairResetsStaleDownStatusOnSelfUidSlot pins the live-diag root
+// cause exposed against the production cluster on 127.0.0.1:37777: the
+// seed welcomed gekka into its gossip, but the slot the seed assigned us
+// already had `status=Down` (linger from a prior gekka incarnation that
+// crashed at the same host:port; the seed's `down-removal-margin` had
+// not yet pruned it).  Our exact UID matched the seed's slot — repair's
+// UID-mismatch path was a no-op — yet the CoordinatedShutdown self-down
+// subscriber fired within 1 s of Welcome because `selfMemberStatus`
+// returned Down.
+//
+// The fix extends repair to recognise the UID-match-but-terminal-status
+// case as a stale-slot collision and reset the status to Joining, but
+// ONLY when we have not initiated our own Leave.  Once LeaveCluster()
+// has been called, Down/Removed/Leaving/Exiting are legitimate and the
+// reset must NOT fire.
+func TestRepairResetsStaleDownStatusOnSelfUidSlot(t *testing.T) {
+	router := func(_ context.Context, _ string, _ any) error { return nil }
+	local := makeUAWithDC("127.0.0.1", 2560, 99)
+	cm := NewClusterManager(local, router)
+
+	// Simulate the merged-Welcome state: our exact-UID slot has been
+	// adopted but its status is Down (the seed's stale-linger view).
+	cm.Mu.Lock()
+	cm.State.Members[0].Status = gproto_cluster.MemberStatus_Down.Enum()
+	cm.State.Members[0].UpNumber = proto.Int32(0)
+	cm.repairSelfReincarnationLocked()
+	cm.Mu.Unlock()
+
+	cm.Mu.RLock()
+	got := cm.State.Members[0].GetStatus()
+	cm.Mu.RUnlock()
+	if got != gproto_cluster.MemberStatus_Joining {
+		t.Fatalf("repair must reset stale Down on exact-UID self slot to Joining; got %v", got)
+	}
+}
+
+// TestRepairResetsStaleRemovedStatusOnSelfUidSlot covers the Removed
+// variant of the same collision.
+func TestRepairResetsStaleRemovedStatusOnSelfUidSlot(t *testing.T) {
+	router := func(_ context.Context, _ string, _ any) error { return nil }
+	local := makeUAWithDC("127.0.0.1", 2560, 99)
+	cm := NewClusterManager(local, router)
+
+	cm.Mu.Lock()
+	cm.State.Members[0].Status = gproto_cluster.MemberStatus_Removed.Enum()
+	cm.repairSelfReincarnationLocked()
+	cm.Mu.Unlock()
+
+	cm.Mu.RLock()
+	got := cm.State.Members[0].GetStatus()
+	cm.Mu.RUnlock()
+	if got != gproto_cluster.MemberStatus_Joining {
+		t.Fatalf("repair must reset stale Removed on exact-UID self slot to Joining; got %v", got)
+	}
+}
+
+// TestRepairDoesNotResetAfterLocalLeave confirms the guard: once the
+// user (or CoordinatedShutdown's cluster-leave phase) has called
+// LeaveCluster(), repair must NOT fight back against legitimate
+// terminal transitions on our exact-UID slot.
+func TestRepairDoesNotResetAfterLocalLeave(t *testing.T) {
+	router := func(_ context.Context, _ string, _ any) error { return nil }
+	local := makeUAWithDC("127.0.0.1", 2560, 99)
+	cm := NewClusterManager(local, router)
+
+	// Flag the local leave as initiated (without sending; we only need
+	// the flag set).
+	cm.localLeaveInitiated.Store(true)
+
+	cm.Mu.Lock()
+	cm.State.Members[0].Status = gproto_cluster.MemberStatus_Leaving.Enum()
+	cm.repairSelfReincarnationLocked()
+	cm.Mu.Unlock()
+
+	cm.Mu.RLock()
+	got := cm.State.Members[0].GetStatus()
+	cm.Mu.RUnlock()
+	if got != gproto_cluster.MemberStatus_Leaving {
+		t.Fatalf("repair must preserve Leaving status after local Leave; got %v", got)
+	}
+}
+
+// TestDropRemovedMembersLocked_DropsPeerKeepsSelf exercises the mixed
+// case: a peer marked Removed must be stripped (the original purpose of
+// the prune) while a co-resident self-Removed entry stays put.
+func TestDropRemovedMembersLocked_DropsPeerKeepsSelf(t *testing.T) {
+	router := func(_ context.Context, _ string, _ any) error { return nil }
+	local := makeUAWithDC("127.0.0.1", 2560, 99)
+	cm := NewClusterManager(local, router)
+
+	cm.Mu.Lock()
+	cm.State.Members[0].Status = gproto_cluster.MemberStatus_Removed.Enum()
+	cm.State.Members[0].UpNumber = proto.Int32(5)
+	peer := makeUAWithDC("10.0.0.7", 2552, 7)
+	addMemberUpWithRoles(cm, peer, 6, nil)
+	cm.State.Members[len(cm.State.Members)-1].Status = gproto_cluster.MemberStatus_Removed.Enum()
+	dropped := cm.dropRemovedMembersLocked()
+	cm.Mu.Unlock()
+
+	if !dropped {
+		t.Error("dropRemovedMembersLocked must return true when at least one non-self peer is dropped")
+	}
+
+	cm.Mu.RLock()
+	defer cm.Mu.RUnlock()
+	if len(cm.State.Members) != 1 {
+		t.Fatalf("expected 1 surviving member (self), got %d", len(cm.State.Members))
+	}
+	idx := int(cm.State.Members[0].GetAddressIndex())
+	a := cm.State.AllAddresses[idx].GetAddress()
+	if a.GetHostname() != "127.0.0.1" || a.GetPort() != 2560 {
+		t.Errorf("surviving member is %s:%d, expected self 127.0.0.1:2560", a.GetHostname(), a.GetPort())
+	}
+	if _, ok := cm.tombstones["10.0.0.7:2552"]; !ok {
+		t.Errorf("peer tombstone not recorded")
+	}
+	if _, ok := cm.tombstones["127.0.0.1:2560"]; !ok {
+		t.Errorf("self tombstone not recorded even though entry was preserved")
+	}
+}

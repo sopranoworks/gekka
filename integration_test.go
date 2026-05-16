@@ -668,16 +668,17 @@ func TestClusterChurn(t *testing.T) {
 				readyOnce = true
 				close(ready)
 			}
-			// ClusterSeedNode's println signals only fire for port 2553, but
-			// this test uses Port:0 (random). Match the logback cluster event
-			// logs instead, which fire for any member.
-			if strings.Contains(line, "Member is Up:") && !strings.Contains(line, "2552") {
+			// ClusterSeedNode publishes one stdout marker per non-self
+			// membership transition (SEED_MEMBER_UP / SEED_MEMBER_REMOVED).
+			// These bypass the logger pipeline so the test does not depend
+			// on logback's INFO level — the integration log gate is WARN.
+			if strings.HasPrefix(line, "SEED_MEMBER_UP:") {
 				select {
 				case nodeUpChan <- struct{}{}:
 				default:
 				}
 			}
-			if strings.Contains(line, "Member is Removed:") && !strings.Contains(line, "2552") {
+			if strings.HasPrefix(line, "SEED_MEMBER_REMOVED:") {
 				select {
 				case nodeRemovedChan <- struct{}{}:
 				default:

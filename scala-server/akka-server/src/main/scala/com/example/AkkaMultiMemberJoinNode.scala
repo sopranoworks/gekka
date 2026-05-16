@@ -76,7 +76,7 @@ object AkkaMultiMemberJoinNode extends App {
   def buildConfig(selfPort: Int) = ConfigFactory.parseString(
     s"""
        |akka {
-       |  loglevel = "INFO"
+       |  loglevel = "WARNING"
        |  actor.provider = "cluster"
        |  remote {
        |    log-remote-lifecycle-events = off

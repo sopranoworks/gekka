@@ -3505,6 +3505,18 @@ func (c *Cluster) SelfAddress() actor.Address {
 // reflected in the latest gossip state.  Returns Removed when the local
 // node is absent from State.Members (treated as "no longer a member").
 //
+// Matching is by full (host, port, uid).  Pekko's gossip can carry several
+// slots at the same host:port — one for our current incarnation plus any
+// number of zombie slots for prior gekka instances the seed has not yet
+// pruned.  Returning the first host:port match without checking UID can
+// pick a stale zombie's Down/Removed status, which is exactly what fired
+// CoordinatedShutdown's self-down subscriber within 1s of receiving
+// Welcome during the live diag against the production cluster.  If our
+// exact-UID slot is absent we fall back to host:port so we still report a
+// terminal status during the brief window between processIncomingGossip
+// applying an incoming reset and repairSelfReincarnationLocked rewriting
+// our slot.
+//
 // Intended for use by the CoordinatedShutdown self-downed subscriber so it
 // can re-validate stale "self downed" events after the reincarnation guard
 // in processIncomingGossip has had a chance to repair the gossip.
@@ -3512,16 +3524,36 @@ func (c *Cluster) selfMemberStatus() gproto_cluster.MemberStatus {
 	state := c.cm.GetState()
 	localHost := c.cm.LocalAddress.GetAddress().GetHostname()
 	localPort := c.cm.LocalAddress.GetAddress().GetPort()
+	myUid := c.cm.LocalAddress.GetUid()
+	myUid2 := c.cm.LocalAddress.GetUid2()
 	allAddrs := state.GetAllAddresses()
+
+	var fallback gproto_cluster.MemberStatus = gproto_cluster.MemberStatus_Removed
+	foundFallback := false
 	for _, m := range state.GetMembers() {
 		idx := int(m.GetAddressIndex())
 		if idx >= len(allAddrs) {
 			continue
 		}
-		a := allAddrs[idx].GetAddress()
-		if a.GetHostname() == localHost && a.GetPort() == localPort {
+		ua := allAddrs[idx]
+		a := ua.GetAddress()
+		if a.GetHostname() != localHost || a.GetPort() != localPort {
+			continue
+		}
+		if ua.GetUid() == myUid && ua.GetUid2() == myUid2 {
 			return m.GetStatus()
 		}
+		// Remember the most-recent host:port match as a fallback in case
+		// no exact-UID slot exists yet.  Prefer non-Removed over Removed
+		// so a stale Removed slot does not mask a live (Joining/Up) one.
+		if !foundFallback || (fallback == gproto_cluster.MemberStatus_Removed &&
+			m.GetStatus() != gproto_cluster.MemberStatus_Removed) {
+			fallback = m.GetStatus()
+			foundFallback = true
+		}
+	}
+	if foundFallback {
+		return fallback
 	}
 	return gproto_cluster.MemberStatus_Removed
 }

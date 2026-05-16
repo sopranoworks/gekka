@@ -255,7 +255,7 @@ object PekkoIntegrationNode extends App {
   val config = ConfigFactory.parseString(
     """
       |pekko {
-      |  loglevel = "INFO"
+      |  loglevel = "WARNING"
       |  actor.provider = cluster
       |  remote.artery {
       |    transport = tcp

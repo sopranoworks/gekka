@@ -215,7 +215,7 @@ abstract class GekkaSystem
           "--seed-host", "127.0.0.1",
           "--seed-port", "2551",
           "--port",      "2552",
-          "--mgmt-port", "8558",
+          "--mgmt-port", "18558",
           "--echo-target", s"akka://GekkaSystem@127.0.0.1:2551/user/echo"
         )).run(logger)
 
@@ -283,7 +283,7 @@ abstract class GekkaSystem
 
           val stabilityWindowMs = 60000L
           val stepMs            = 1000L
-          val mgmtURL           = "http://127.0.0.1:8558/cluster/members"
+          val mgmtURL           = "http://127.0.0.1:18558/cluster/members"
           val deadline          = System.currentTimeMillis() + stabilityWindowMs
 
           while (System.currentTimeMillis() < deadline) {
@@ -365,7 +365,7 @@ abstract class GekkaSystem
       runOn(node1) {
         import scala.util.Try
 
-        val mgmtBaseURL = "http://127.0.0.1:8558"
+        val mgmtBaseURL = "http://127.0.0.1:18558"
 
         // Only run if the Go management API is reachable (i.e. Go node was started
         // by a prior test phase in the same sbt run).

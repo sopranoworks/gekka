@@ -12,9 +12,11 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/sopranoworks/gekka/actor"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
 	"google.golang.org/protobuf/proto"
 )
@@ -758,6 +760,265 @@ func TestLeaderDropsStaleRemovedFromGossip(t *testing.T) {
 		if _, ok := cm.tombstones[key]; !ok {
 			t.Errorf("dropped stale Removed entry %s should have a tombstone recorded", key)
 		}
+	}
+}
+
+// removedEventCollector captures every MemberRemoved event delivered to it.
+// Used by the Issue-3 ingress-filter tests to assert that stale Removed
+// entries in incoming gossip are silently dropped (no event emitted) while
+// legitimate "X was Up, now Removed" transitions still surface.
+type removedEventCollector struct {
+	mu       sync.Mutex
+	received []MemberRemoved
+}
+
+func (c *removedEventCollector) Tell(msg any, _ ...actor.Ref) {
+	if evt, ok := msg.(MemberRemoved); ok {
+		c.mu.Lock()
+		c.received = append(c.received, evt)
+		c.mu.Unlock()
+	}
+}
+func (c *removedEventCollector) Path() string { return "/user/removedEventCollector" }
+func (c *removedEventCollector) Count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.received)
+}
+func (c *removedEventCollector) At(i int) MemberRemoved {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.received[i]
+}
+
+// gossipWithMembers builds a Gossip envelope whose Members include the local
+// entry as Up plus the supplied (ua, status) pairs.  Version is set to a
+// single hash entry with timestamp `version` so the result compares
+// ClockBefore against an empty (timestamp=0) local state — exercising the
+// "replace wholesale" path through processIncomingGossip.
+func gossipWithMembers(local *gproto_cluster.UniqueAddress, version int64, entries []struct {
+	ua     *gproto_cluster.UniqueAddress
+	status gproto_cluster.MemberStatus
+}) *gproto_cluster.Gossip {
+	g := &gproto_cluster.Gossip{
+		AllAddresses: []*gproto_cluster.UniqueAddress{local},
+		AllHashes:    []string{"local-hash"},
+	}
+	g.Members = append(g.Members, &gproto_cluster.Member{
+		AddressIndex: proto.Int32(0),
+		Status:       gproto_cluster.MemberStatus_Up.Enum(),
+		UpNumber:     proto.Int32(1),
+	})
+	for _, e := range entries {
+		idx := int32(len(g.AllAddresses))
+		g.AllAddresses = append(g.AllAddresses, e.ua)
+		g.AllHashes = append(g.AllHashes, fmt.Sprintf("hash-%d", idx))
+		g.Members = append(g.Members, &gproto_cluster.Member{
+			AddressIndex: proto.Int32(idx),
+			Status:       e.status.Enum(),
+			UpNumber:     proto.Int32(int32(idx + 1)),
+		})
+	}
+	g.Version = &gproto_cluster.VectorClock{
+		Versions: []*gproto_cluster.VectorClock_Version{
+			{HashIndex: proto.Int32(0), Timestamp: proto.Int64(version)},
+		},
+	}
+	g.Overview = &gproto_cluster.GossipOverview{}
+	return g
+}
+
+// TestIngressFiltersStaleRemovedFromGossip exercises Issue 3 of the
+// 2026-05-16 dashboard self-down spec:  when an incoming gossip envelope
+// (Welcome or GossipEnvelope) carries Removed entries for addresses we
+// have never seen before, processIncomingGossip must drop them at ingress
+// — never letting them enter cm.State.Members, tombstoning the address,
+// and emitting no MemberRemoved event (we cannot "remove" a member we
+// never had).  Without this, gekka rebroadcasts the stale entries on its
+// next gossip tick and peers' user-level ClusterManagers fire
+// `Cluster.down(addr)` against what is now a live address.
+func TestIngressFiltersStaleRemovedFromGossip(t *testing.T) {
+	router := func(_ context.Context, _ string, _ any) error { return nil }
+	local := makeUAWithDC("10.0.0.1", 2552, 1)
+	cm := NewClusterManager(local, router)
+
+	// Make the local entry Up so it doesn't get mistaken for a fresh join.
+	cm.Mu.Lock()
+	cm.State.Members[0].Status = gproto_cluster.MemberStatus_Up.Enum()
+	cm.State.Members[0].UpNumber = proto.Int32(1)
+	cm.Mu.Unlock()
+
+	collector := &removedEventCollector{}
+	cm.Subscribe(collector, EventMemberRemoved)
+
+	zombie := makeUAWithDC("10.0.0.99", 2552, 9001)
+	incoming := gossipWithMembers(local, 5, []struct {
+		ua     *gproto_cluster.UniqueAddress
+		status gproto_cluster.MemberStatus
+	}{
+		{ua: zombie, status: gproto_cluster.MemberStatus_Removed},
+	})
+
+	if err := cm.processIncomingGossip(incoming, nil); err != nil {
+		t.Fatalf("processIncomingGossip: %v", err)
+	}
+
+	cm.Mu.RLock()
+	defer cm.Mu.RUnlock()
+
+	// Zombie must NOT appear in cm.State.Members.
+	for _, m := range cm.State.Members {
+		idx := int(m.GetAddressIndex())
+		if idx < 0 || idx >= len(cm.State.AllAddresses) {
+			continue
+		}
+		a := cm.State.AllAddresses[idx].GetAddress()
+		if a.GetHostname() == "10.0.0.99" && a.GetPort() == 2552 {
+			t.Fatalf("stale Removed entry leaked into cm.State.Members: %v (status=%v)", a, m.GetStatus())
+		}
+	}
+
+	// Tombstone must be recorded so future gossip cannot resurrect.
+	if _, ok := cm.tombstones["10.0.0.99:2552"]; !ok {
+		t.Errorf("tombstone for stale Removed address not recorded; got tombstones=%v", cm.tombstones)
+	}
+
+	// No MemberRemoved event — we never saw 10.0.0.99 as Up locally, so
+	// "removed" is not a transition we should announce.
+	if got := collector.Count(); got != 0 {
+		t.Errorf("spurious MemberRemoved events for unknown stale Removed entry: count=%d, first=%v", got, collector.At(0).Member)
+	}
+}
+
+// TestIngressEmitsRemovedForLocallyKnownAddress exercises the second arm
+// of the Issue-3 fix: an incoming gossip envelope that marks a
+// previously-Up member as Removed must
+//   - drop the member from cm.State.Members (so it isn't rebroadcast),
+//   - tombstone its host:port,
+//   - emit a MemberRemoved event so local subscribers observe the
+//     transition (otherwise application-level cleanup never fires).
+func TestIngressEmitsRemovedForLocallyKnownAddress(t *testing.T) {
+	router := func(_ context.Context, _ string, _ any) error { return nil }
+	local := makeUAWithDC("10.0.0.1", 2552, 1)
+	cm := NewClusterManager(local, router)
+
+	cm.Mu.Lock()
+	cm.State.Members[0].Status = gproto_cluster.MemberStatus_Up.Enum()
+	cm.State.Members[0].UpNumber = proto.Int32(1)
+	peer := makeUAWithDC("10.0.0.2", 2552, 2)
+	addMemberUpWithRoles(cm, peer, 2, nil)
+	cm.Mu.Unlock()
+
+	collector := &removedEventCollector{}
+	cm.Subscribe(collector, EventMemberRemoved)
+
+	// Same UID, status flipped to Removed in the incoming view.
+	incoming := gossipWithMembers(local, 5, []struct {
+		ua     *gproto_cluster.UniqueAddress
+		status gproto_cluster.MemberStatus
+	}{
+		{ua: peer, status: gproto_cluster.MemberStatus_Removed},
+	})
+
+	if err := cm.processIncomingGossip(incoming, nil); err != nil {
+		t.Fatalf("processIncomingGossip: %v", err)
+	}
+
+	cm.Mu.RLock()
+	for _, m := range cm.State.Members {
+		idx := int(m.GetAddressIndex())
+		if idx < 0 || idx >= len(cm.State.AllAddresses) {
+			continue
+		}
+		a := cm.State.AllAddresses[idx].GetAddress()
+		if a.GetHostname() == "10.0.0.2" && a.GetPort() == 2552 {
+			t.Errorf("peer Removed in incoming gossip should not remain in cm.State.Members (status=%v)", m.GetStatus())
+		}
+	}
+	if _, ok := cm.tombstones["10.0.0.2:2552"]; !ok {
+		t.Errorf("tombstone for peer not recorded; tombstones=%v", cm.tombstones)
+	}
+	cm.Mu.RUnlock()
+
+	if got := collector.Count(); got != 1 {
+		t.Fatalf("expected exactly 1 MemberRemoved event for locally-known address, got %d", got)
+	}
+	evt := collector.At(0)
+	if evt.Member.Host != "10.0.0.2" || evt.Member.Port != 2552 {
+		t.Errorf("MemberRemoved event address = %s:%d, want 10.0.0.2:2552", evt.Member.Host, evt.Member.Port)
+	}
+}
+
+// TestIngressPreservesSelfInRemovedGossip guards the reincarnation path:
+// when incoming gossip carries our OWN address as Removed (a prior
+// incarnation's slot still lingering at the seed), the ingress filter
+// must NOT strip the self-entry or tombstone our address — that work
+// belongs to repairSelfReincarnationLocked, which replaces the stale UID
+// with our current one and resets the status to Joining.  If the filter
+// were to drop self instead, repair would silently miss the slot and
+// the freshly-joined node would either be lost from gossip entirely or
+// be re-injected with the wrong addrIdx.
+func TestIngressPreservesSelfInRemovedGossip(t *testing.T) {
+	router := func(_ context.Context, _ string, _ any) error { return nil }
+	local := makeUAWithDC("10.0.0.1", 2552, 42)
+	cm := NewClusterManager(local, router)
+
+	cm.Mu.Lock()
+	cm.State.Members[0].Status = gproto_cluster.MemberStatus_Up.Enum()
+	cm.State.Members[0].UpNumber = proto.Int32(1)
+	cm.Mu.Unlock()
+
+	// Incoming gossip carries self's host:port with a STALE UID and
+	// status Removed (prior-incarnation slot at the seed).
+	stale := makeUAWithDC("10.0.0.1", 2552, 7) // different UID from local (42)
+	incoming := &gproto_cluster.Gossip{
+		AllAddresses: []*gproto_cluster.UniqueAddress{stale},
+		AllHashes:    []string{"stale-hash"},
+		Members: []*gproto_cluster.Member{
+			{
+				AddressIndex: proto.Int32(0),
+				Status:       gproto_cluster.MemberStatus_Removed.Enum(),
+				UpNumber:     proto.Int32(1),
+			},
+		},
+		Version: &gproto_cluster.VectorClock{
+			Versions: []*gproto_cluster.VectorClock_Version{
+				{HashIndex: proto.Int32(0), Timestamp: proto.Int64(5)},
+			},
+		},
+		Overview: &gproto_cluster.GossipOverview{},
+	}
+
+	if err := cm.processIncomingGossip(incoming, nil); err != nil {
+		t.Fatalf("processIncomingGossip: %v", err)
+	}
+
+	cm.Mu.RLock()
+	defer cm.Mu.RUnlock()
+
+	// Self must NOT be tombstoned.
+	if _, ok := cm.tombstones["10.0.0.1:2552"]; ok {
+		t.Errorf("self address must not be tombstoned by ingress filter; tombstones=%v", cm.tombstones)
+	}
+	// Self must remain in cm.State.Members with a non-Removed status
+	// (repairSelfReincarnationLocked replaces stale UID + sets Joining).
+	found := false
+	for _, m := range cm.State.Members {
+		idx := int(m.GetAddressIndex())
+		if idx < 0 || idx >= len(cm.State.AllAddresses) {
+			continue
+		}
+		a := cm.State.AllAddresses[idx].GetAddress()
+		if a.GetHostname() == "10.0.0.1" && a.GetPort() == 2552 {
+			if m.GetStatus() == gproto_cluster.MemberStatus_Removed {
+				t.Errorf("self entry must not remain as Removed after ingress + repair; got status=%v", m.GetStatus())
+			}
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("self entry missing from cm.State.Members after ingress + repair")
 	}
 }
 

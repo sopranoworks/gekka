@@ -1561,6 +1561,12 @@ func (cm *ClusterManager) processIncomingGossip(gossip *gproto_cluster.Gossip, r
 		}
 	}
 
+	// Strip stale/zombie Removed entries from incoming gossip BEFORE any
+	// diff or merge runs.  See intakeRemovedFromIncomingLocked for the
+	// rationale (dashboard self-down Issue 3).  Synthesised events are
+	// merged into the regular event slice below so they reach subscribers.
+	intakeEvents := cm.intakeRemovedFromIncomingLocked(gossip)
+
 	m1 := cm.vectorClockToMap(cm.State.Version, cm.State.AllHashes)
 	m2 := cm.vectorClockToMap(gossip.Version, gossip.AllHashes)
 	ordering := cm.compareResolvedClocks(m1, m2)
@@ -1621,6 +1627,24 @@ func (cm *ClusterManager) processIncomingGossip(gossip *gproto_cluster.Gossip, r
 		// check can see that we've acknowledged all known members.
 		cm.mergeSeenLocked(gossip)
 		cm.markLocalSeenLocked()
+	}
+
+	// Defence-in-depth: belt-and-suspenders prune of any residual Removed
+	// entries that may have slipped through mergeGossipStates (e.g.
+	// pre-existing Removed entries already in cm.State from before this
+	// filter shipped, or entries introduced via a future code path).
+	// Mirrors what performLeaderActions does at leader-action time so the
+	// invariant "cm.State.Members never carries status=Removed" holds for
+	// EVERY node, not just the leader.
+	if cm.dropRemovedMembersLocked() {
+		cm.incrementVersionWithLockHeld()
+	}
+
+	// Prepend events synthesised at gossip ingress (MemberRemoved for
+	// stripped-then-locally-known addresses) so subscribers observe the
+	// transition before the regular per-merge diff events.
+	if len(intakeEvents) > 0 {
+		events = append(intakeEvents, events...)
 	}
 
 	// Update lastGossipUpdate timestamp when state was modified.
@@ -2675,6 +2699,116 @@ func (cm *ClusterManager) recordTombstoneLocked(host string, port uint32) {
 		cm.tombstones = make(map[string]time.Time)
 	}
 	cm.tombstones[key] = time.Now()
+}
+
+// intakeRemovedFromIncomingLocked filters Removed entries out of an
+// incoming gossip (Welcome or GossipEnvelope payload) BEFORE we merge it
+// into cm.State.  It mirrors Akka's MembershipState invariant that
+// `Gossip.members` never carries status=Removed: those entries are
+// dropped on receipt and the address tombstoned.
+//
+// Why this is necessary (dashboard self-down Issue 3, 2026-05-16): when
+// gekka re-joins a cluster, the seed's Welcome carries stale Removed slots
+// for prior gekka incarnations (same host:port, different UID) and for
+// previously-evicted peers.  Without this filter, gekka adopts those
+// entries verbatim and the very next gossip-tick rebroadcasts them, at
+// which point peers' user-level subscribers observe MemberRemoved for the
+// addresses and react (e.g. by calling Cluster.down(addr) on what is now
+// a live address) — taking out members of the production cluster.
+// The leader-action `dropRemovedMembersLocked` runs too late: the leak
+// happens on the very first gossip tick after we adopt the Welcome,
+// before performLeaderActions ever fires.
+//
+// Side effects:
+//   - In-place strips every status=Removed Member from incoming.Members
+//     (except the local node — handled by repairSelfReincarnationLocked).
+//   - Records each stripped entry's host:port in cm.tombstones.
+//   - For every stripped entry whose host:port also exists in
+//     cm.State.Members with a non-Removed status: drops the matching
+//     local entry and synthesises a MemberRemoved event so local
+//     subscribers still observe the transition.  Without the local drop,
+//     mergeGossipStates (ClockConcurrent / ClockSame) would re-introduce
+//     the entry from cm.State even though the incoming view considers
+//     it gone.
+//
+// Returns the synthesised MemberRemoved events; the caller must publish
+// them after releasing cm.Mu.  Must be called with cm.Mu held (write).
+func (cm *ClusterManager) intakeRemovedFromIncomingLocked(incoming *gproto_cluster.Gossip) []ClusterDomainEvent {
+	if incoming == nil || len(incoming.Members) == 0 {
+		return nil
+	}
+
+	localHost := cm.LocalAddress.GetAddress().GetHostname()
+	localPort := cm.LocalAddress.GetAddress().GetPort()
+
+	type addrKey struct {
+		host string
+		port uint32
+	}
+	droppedAddrs := make(map[addrKey]struct{})
+
+	kept := incoming.Members[:0]
+	for _, m := range incoming.Members {
+		if m.GetStatus() != gproto_cluster.MemberStatus_Removed {
+			kept = append(kept, m)
+			continue
+		}
+		idx := int(m.GetAddressIndex())
+		if idx < 0 || idx >= len(incoming.AllAddresses) {
+			continue
+		}
+		a := incoming.AllAddresses[idx].GetAddress()
+		host, port := a.GetHostname(), a.GetPort()
+		if host == localHost && port == localPort {
+			// Never tombstone or drop self via this path.  The reincarnation
+			// guard (repairSelfReincarnationLocked) handles UID-mismatched
+			// self entries and resets us back to Joining.  Keeping the entry
+			// in the incoming members lets the existing guard see it.
+			kept = append(kept, m)
+			continue
+		}
+		cm.recordTombstoneLocked(host, port)
+		droppedAddrs[addrKey{host: host, port: port}] = struct{}{}
+	}
+	if len(droppedAddrs) == 0 {
+		// No stripping happened — leave incoming.Members exactly as it was
+		// (kept aliases the same underlying array but len matches).
+		incoming.Members = kept
+		return nil
+	}
+	incoming.Members = kept
+
+	// Drop local cm.State entries at the stripped addresses; synthesise
+	// MemberRemoved events for any that were not already Removed locally.
+	var events []ClusterDomainEvent
+	localKept := cm.State.Members[:0]
+	for _, lm := range cm.State.Members {
+		lidx := int(lm.GetAddressIndex())
+		var lhost string
+		var lport uint32
+		if lidx >= 0 && lidx < len(cm.State.AllAddresses) {
+			la := cm.State.AllAddresses[lidx].GetAddress()
+			lhost = la.GetHostname()
+			lport = la.GetPort()
+		}
+		if _, drop := droppedAddrs[addrKey{host: lhost, port: lport}]; drop {
+			if lm.GetStatus() != gproto_cluster.MemberStatus_Removed && lidx >= 0 && lidx < len(cm.State.AllAddresses) {
+				appVer := ""
+				if vi := lm.GetAppVersionIndex(); int(vi) >= 0 && int(vi) < len(cm.State.AllAppVersions) {
+					appVer = cm.State.AllAppVersions[vi]
+				}
+				events = append(events, MemberRemoved{Member: memberAddressFromGossip(cm.State.AllAddresses[lidx], appVer)})
+				if cm.Metrics != nil {
+					cm.Metrics.IncrementMemberRemoved()
+				}
+			}
+			continue
+		}
+		localKept = append(localKept, lm)
+	}
+	cm.State.Members = localKept
+
+	return events
 }
 
 // dropRemovedMembersLocked removes every Member with status Removed from

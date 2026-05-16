@@ -270,9 +270,21 @@ func SendArteryHeartbeat(assoc *GekkaAssociation) error {
 	assoc.mu.Unlock()
 
 	recipientPath := remoteWatcherPathFor(assoc)
+	// Set the sender path to gekka's OWN /system/remote-watcher so Akka's
+	// RemoteWatcher reply (`sender ! ArteryHeartbeatRsp`) resolves to a
+	// real wire recipient and travels back to gekka over the existing
+	// transport. Without this, Akka resolves the empty sender to its
+	// local DeadLetters actor — every reply goes to /deadLetters and
+	// Akka emits a continuous WARN "received dead letter from
+	// /system/remote-watcher: ArteryHeartbeatRsp(<uid>)" at the heartbeat
+	// interval. At multi-peer fanout the deadletter log volume starves
+	// downstream Scala-side test infrastructure (ProcessLogger callbacks
+	// in particular), causing flaky timeouts in GekkaCompatSpec's
+	// awaitAssert(goLogs.exists) checks.
+	senderPath := remoteWatcherPathForAddress(assoc.nodeMgr.LocalAddr)
 
 	// ArteryHeartbeat (manifest "m") is an empty payload message.
-	frame, err := BuildArteryFrame(int64(uid), actor.ArteryInternalSerializerID, "", recipientPath, "m", nil, true)
+	frame, err := BuildArteryFrame(int64(uid), actor.ArteryInternalSerializerID, senderPath, recipientPath, "m", nil, true)
 	if err != nil {
 		return err
 	}

@@ -3299,7 +3299,29 @@ func (assoc *GekkaAssociation) startLaneWriter(ctx context.Context, lane *outbou
 			err := WriteFrame(lane.conn, msg)
 			lane.writeMu.Unlock()
 			if err != nil {
-				logger.Default().Error("artery: write error", "error", err, "lane", lane.idx)
+				// Classify the failure using positive evidence from gekka's
+				// own state, not by pattern-matching the error string:
+				//   - parent ctx is canceled  => CoordinatedShutdown's
+				//     actor-system-terminate phase has fired; the conn is
+				//     being torn down by us, so a final in-flight write
+				//     racing with the close is expected.
+				//   - assoc.state == QUARANTINED  => an upstream
+				//     "artery: received Quarantined" already fired the
+				//     load-bearing alarm; this is the inevitable write
+				//     attempt against the now-closed conn.
+				// Anything else stays ERROR — real network failures during
+				// steady-state operation must surface.
+				assoc.mu.RLock()
+				state := assoc.state
+				assoc.mu.RUnlock()
+				switch {
+				case ctx.Err() != nil:
+					logger.Default().Info("artery: lane write ended (shutdown)", "error", err, "lane", lane.idx)
+				case state == QUARANTINED:
+					logger.Default().Info("artery: lane write ended (quarantined)", "error", err, "lane", lane.idx)
+				default:
+					logger.Default().Error("artery: write error", "error", err, "lane", lane.idx)
+				}
 				if lane.conn != nil {
 					_ = lane.conn.Close()
 				}

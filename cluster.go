@@ -2306,7 +2306,27 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 		Hostname: &host,
 		Port:     &port,
 	}
-	uid := uint64(time.Now().UnixNano())
+	// UID identifies this ActorSystem incarnation across remote peers.
+	// Pure time.Now().UnixNano() collides when two gekka processes start
+	// within the same nanosecond -- observed in multi-jvm where spawnGoNode
+	// forks two child processes back-to-back, producing rare
+	// "AssociationState(... unknown)" UID collisions on the Akka side.
+	// XOR with 8 bytes of crypto-random keeps the high-order ordering
+	// nudges (handy when UIDs sort across nodes) while making collision
+	// effectively impossible.
+	uidBase := uint64(time.Now().UnixNano())
+	var randBuf [8]byte
+	if _, rerr := rand.Read(randBuf[:]); rerr == nil {
+		uidBase ^= uint64(randBuf[0])<<56 |
+			uint64(randBuf[1])<<48 |
+			uint64(randBuf[2])<<40 |
+			uint64(randBuf[3])<<32 |
+			uint64(randBuf[4])<<24 |
+			uint64(randBuf[5])<<16 |
+			uint64(randBuf[6])<<8 |
+			uint64(randBuf[7])
+	}
+	uid := uidBase
 	localUA := &gproto_remote.UniqueAddress{
 		Address: localAddr,
 		Uid:     &uid,

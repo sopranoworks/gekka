@@ -68,9 +68,16 @@ type Options struct {
 // for line-scanner consumption.  Stop is idempotent and registered with
 // t.Cleanup automatically by Spawn.
 type Process struct {
-	cmd    *exec.Cmd
+	cmd *exec.Cmd
+	// Stdout is the merged stdout+stderr pipe.
 	Stdout io.ReadCloser
-	pgid   int
+	// Stdin is the child process's standard input.  Tests use this to
+	// signal a graceful in-cluster leave (e.g. ScalaClusterNode's
+	// "leave\n" handler) instead of issuing an out-of-band cluster.down
+	// from a peer that would generate a "received gossip where this
+	// member has been downed" WARN on the leaving JVM.
+	Stdin io.WriteCloser
+	pgid  int
 
 	stopOnce sync.Once
 	stopped  chan struct{}
@@ -131,8 +138,13 @@ func Spawn(t testing.TB, ctx context.Context, name string, args []string, opts O
 		return nil, fmt.Errorf("jvmproc: StdoutPipe: %w", err)
 	}
 	cmd.Stderr = cmd.Stdout
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("jvmproc: StdinPipe: %w", err)
+	}
 
 	if err := cmd.Start(); err != nil {
+		_ = stdin.Close()
 		return nil, fmt.Errorf("jvmproc: start %s: %w", name, err)
 	}
 
@@ -156,6 +168,7 @@ func Spawn(t testing.TB, ctx context.Context, name string, args []string, opts O
 	p := &Process{
 		cmd:                cmd,
 		Stdout:             stdout,
+		Stdin:              stdin,
 		pgid:               pgid,
 		stopped:            make(chan struct{}),
 		exited:             make(chan struct{}),

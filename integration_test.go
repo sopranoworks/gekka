@@ -1257,6 +1257,14 @@ func TestGoSeed_FailureRecovery(t *testing.T) {
 // against a Go-Seed cluster. Verifies Go-Seed's gossip table doesn't
 // accumulate zombie members and SBR doesn't misfire on legitimate
 // departures.
+//
+// Departure is initiated by writing "leave\n" to the Scala node's stdin
+// (ScalaClusterNode.scala dispatches a Cluster.leave(self) on receipt),
+// NOT by calling cm.DownMember from the Go-Seed side.  The latter makes
+// Pekko's Cluster receive gossip that downs itself, which it logs at
+// WARN ("Received gossip where this member has been downed").  A
+// peer-initiated graceful Leave is the lifecycle the protocol was
+// designed for and produces no spurious WARN.
 func TestGoSeed_Churn(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -1285,24 +1293,15 @@ func TestGoSeed_Churn(t *testing.T) {
 			t.Fatalf("[CHURN cycle=%d] convergence: %v", i, err)
 		}
 
-		// Find Scala's port and down it.
-		var scalaPort uint32
-		for _, m := range goSeed.cm.GetState().GetMembers() {
-			if m.GetStatus() != gproto_cluster.MemberStatus_Up {
-				continue
-			}
-			a := goSeed.cm.GetState().GetAllAddresses()[m.GetAddressIndex()].GetAddress()
-			if a.GetPort() != goSeedPort {
-				scalaPort = a.GetPort()
-				break
-			}
+		// Graceful peer-initiated leave: write "leave\n" to the Scala
+		// child's stdin.  ScalaClusterNode's stdin-reader thread calls
+		// Cluster.leave(selfAddress), waits ~6 s for the leave to
+		// propagate, then terminates the ActorSystem.  Pekko-side: no
+		// "downed itself" gossip; the member transitions Up → Leaving
+		// → Exiting → Removed via the standard cluster lifecycle.
+		if _, werr := scalaProc.Stdin.Write([]byte("leave\n")); werr != nil {
+			t.Fatalf("[CHURN cycle=%d] write leave to scala stdin: %v", i, werr)
 		}
-		if scalaPort == 0 {
-			t.Fatalf("[CHURN cycle=%d] no Scala in gossip", i)
-		}
-		goSeed.cm.DownMember(cluster.MemberAddress{
-			Protocol: "pekko", System: "ClusterSystem", Host: "127.0.0.1", Port: scalaPort,
-		})
 
 		if err := waitForExactUpMembers(goSeed, 1, 30*time.Second); err != nil {
 			t.Fatalf("[CHURN cycle=%d] departure: %v", i, err)

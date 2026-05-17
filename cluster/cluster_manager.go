@@ -705,10 +705,37 @@ func (cm *ClusterManager) JoinCluster(ctx context.Context, seedHost string, seed
 	}
 
 	// Send a minimal config so the remote's JoinConfigCompatCheckCluster.check
-	// can call getString("<proto>.cluster.downing-provider-class") without throwing.
-	// The config key prefix must match the remote's actor-system protocol ("pekko" or "akka").
+	// can call getString("<proto>.cluster.downing-provider-class") without
+	// throwing AND so the value matches what the remote actually carries.
+	// Pekko's JoinConfigCompatCheckCluster checks two things:
+	//   - downing-provider-class must EQUAL the remote's value (not just be
+	//     non-empty).  Pekko's canonical SBR class is fully qualified as
+	//     "org.apache.pekko.cluster.sbr.SplitBrainResolverProvider"; the
+	//     short form "pekko.cluster.sbr.SplitBrainResolverProvider" is what
+	//     this code used to emit, and Pekko reported it as "incompatible".
+	//   - sharding.state-store-mode must be PRESENT.  Without this key,
+	//     Pekko logs "state-store-mode is missing" on every join.  We
+	//     advertise the Pekko default ("ddata"), which is also the cluster
+	//     sharding default that scala-server tests use.
+	// For Akka 2.6.x, the SBR class is exposed under the akka.* package as
+	// "akka.cluster.sbr.SplitBrainResolverProvider"; the short form here is
+	// the actual FQCN, so the existing string is correct.
 	proto := cm.Proto()
-	minConfig := fmt.Sprintf(`%s.cluster.downing-provider-class = "%s.cluster.sbr.SplitBrainResolverProvider"`, proto, proto)
+	var sbrFQCN string
+	switch proto {
+	case "pekko":
+		sbrFQCN = "org.apache.pekko.cluster.sbr.SplitBrainResolverProvider"
+	case "akka":
+		sbrFQCN = "akka.cluster.sbr.SplitBrainResolverProvider"
+	default:
+		// Unknown protocol — fall back to the short form.  Better to send
+		// something than to crash the remote's JoinConfigCompatCheckCluster.
+		sbrFQCN = proto + ".cluster.sbr.SplitBrainResolverProvider"
+	}
+	minConfig := fmt.Sprintf(
+		"%s.cluster.downing-provider-class = \"%s\"\n"+
+			"%s.cluster.sharding.state-store-mode = \"ddata\"",
+		proto, sbrFQCN, proto)
 	initJoin := &gproto_cluster.InitJoin{CurrentConfig: &minConfig}
 
 	// Send InitJoin immediately; also start a retry loop that re-sends until

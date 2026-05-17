@@ -88,6 +88,10 @@ object FiveNodeStableCluster extends App {
        |  cluster {
        |    seed-nodes = ["$firstSeed"]
        |    metrics { enabled = off }
+       |    # All five ActorSystems share this JVM; suppress the JMX MBean
+       |    # re-registration WARN that fires when systems 2-5 try to register
+       |    # pekko:type=Cluster.
+       |    jmx.multi-mbeans-in-same-jvm = on
        |    downing-provider-class = "org.apache.pekko.cluster.sbr.SplitBrainResolverProvider"
        |    split-brain-resolver {
        |      active-strategy = "keep-oldest"

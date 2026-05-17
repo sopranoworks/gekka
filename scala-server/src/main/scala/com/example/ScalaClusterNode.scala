@@ -35,6 +35,10 @@ object ScalaClusterNode extends App {
       }
       cluster {
         seed-nodes = ["pekko://ClusterSystem@$seedHost:$seedPort"]
+        # Multiple ScalaClusterNode instances may share the same JVM (test helper).
+        # Suppress the WARN that fires when the second ActorSystem registers
+        # pekko:type=Cluster.
+        jmx.multi-mbeans-in-same-jvm = on
         downing-provider-class = "org.apache.pekko.cluster.sbr.SplitBrainResolverProvider"
         split-brain-resolver {
           active-strategy   = keep-oldest

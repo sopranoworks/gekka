@@ -93,6 +93,9 @@ object AkkaMultiMemberJoinNode extends App {
        |      "akka://TestCluster@127.0.0.1:$portB"
        |    ]
        |    metrics { enabled = off }
+       |    # Two ActorSystems share this JVM; suppress the JMX MBean re-registration
+       |    # WARN that Akka logs when the second cluster registers akka:type=Cluster.
+       |    jmx.multi-mbeans-in-same-jvm = on
        |    downing-provider-class = "akka.cluster.sbr.SplitBrainResolverProvider"
        |    multi-data-center.self-data-center = "JP"
        |  }

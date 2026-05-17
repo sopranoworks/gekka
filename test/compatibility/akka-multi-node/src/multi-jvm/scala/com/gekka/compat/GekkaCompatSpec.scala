@@ -187,12 +187,12 @@ abstract class GekkaSystem
 
         // ── Spawn Go binary ───────────────────────────────────────────────
         val binary  = findGoBinary
-        val goLogs  = ListBuffer.empty[String]
+        val goLogs  = new java.util.concurrent.CopyOnWriteArrayList[String]()
         val failure = new java.util.concurrent.atomic.AtomicReference[String]("")
 
         val logger  = ProcessLogger(
           out => {
-            goLogs += out
+            goLogs.add(out)
             println(s"[gekka] $out")
             if (out.startsWith("FAIL:")) {
               failure.set(out)
@@ -200,7 +200,7 @@ abstract class GekkaSystem
             Console.flush()
           },
           err => {
-            goLogs += err
+            goLogs.add(err)
             System.err.println(s"[gekka:err] $err")
             if (err.startsWith("FAIL:")) {
               failure.set(err)
@@ -256,7 +256,7 @@ abstract class GekkaSystem
 
           // Wait for Go node to report Step-2 received
           awaitAssert({
-            if (goLogs.exists(_.contains("STATUS: ECHO_STEP_2_RECEIVED"))) {
+            if (goLogs.stream().anyMatch(s => s.contains("STATUS: ECHO_STEP_2_RECEIVED"))) {
                println("STATUS: GO_RECEIVED_STEP_2")
             } else {
                fail("Go node has not received Step-2 yet")
@@ -265,7 +265,7 @@ abstract class GekkaSystem
 
           // Wait for Go node to report Step-4 received
           awaitAssert({
-            if (goLogs.exists(_.contains("STATUS: ECHO_STEP_4_RECEIVED"))) {
+            if (goLogs.stream().anyMatch(s => s.contains("STATUS: ECHO_STEP_4_RECEIVED"))) {
                println("STATUS: GO_RECEIVED_STEP_4")
             } else {
                fail("Go node has not received Step-4 yet")

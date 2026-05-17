@@ -120,19 +120,19 @@ abstract class FiveNodeClusterSpec
     localPort: Int,
     mgmtPort: Int,
     label: String
-  ): (Process, ListBuffer[String], java.util.concurrent.atomic.AtomicReference[String]) = {
-    val logs    = ListBuffer.empty[String]
+  ): (Process, java.util.List[String], java.util.concurrent.atomic.AtomicReference[String]) = {
+    val logs    = new java.util.concurrent.CopyOnWriteArrayList[String]()
     val failure = new java.util.concurrent.atomic.AtomicReference[String]("")
 
     val logger = ProcessLogger(
       out => {
-        logs += out
+        logs.add(out)
         println(s"[$label] $out")
         if (out.startsWith("FAIL:")) failure.set(out)
         Console.flush()
       },
       err => {
-        logs += err
+        logs.add(err)
         System.err.println(s"[$label:err] $err")
         if (err.startsWith("FAIL:")) failure.set(err)
       },
@@ -202,7 +202,7 @@ abstract class FiveNodeClusterSpec
             val label = goSpecs(idx)._3
             if (fail.get().nonEmpty) sys.error(s"$label failed: ${fail.get()}")
             if (!proc.isAlive()) sys.error(s"$label exited with code ${proc.exitValue()}")
-            val associated = logs.exists(_.contains("STATUS: ARTERY_ASSOCIATED"))
+            val associated = logs.stream().anyMatch(s => s.contains("STATUS: ARTERY_ASSOCIATED"))
             if (!associated) sys.error(s"$label not yet ARTERY_ASSOCIATED")
           }
           println(s"[akka-seed] All 3 Go nodes have ARTERY_ASSOCIATED")

@@ -196,18 +196,18 @@ abstract class AeronSystem
 
         // ── Launch the Go binary ─────────────────────────────────────────
         val binary = findGoBinary()
-        val goLogs = ListBuffer.empty[String]
+        val goLogs = new java.util.concurrent.CopyOnWriteArrayList[String]()
         val failure = new java.util.concurrent.atomic.AtomicReference("")
 
         val logger = ProcessLogger(
           out => {
-            goLogs += out
+            goLogs.add(out)
             println(s"[gekka/aeron] $out")
             Console.flush()
             if (out.startsWith("FAIL:")) failure.set(out)
           },
           err => {
-            goLogs += err
+            goLogs.add(err)
             System.err.println(s"[gekka/aeron:err] $err")
             if (err.startsWith("FAIL:")) failure.set(err)
           },
@@ -258,12 +258,12 @@ abstract class AeronSystem
           Console.flush()
 
           awaitAssert({
-            goLogs.exists(_.contains("STATUS: ECHO_STEP_2_RECEIVED")) shouldBe true
+            goLogs.stream().anyMatch(s => s.contains("STATUS: ECHO_STEP_2_RECEIVED")) shouldBe true
           }, 30.seconds, 500.millis)
           println("STATUS: AERON_GO_RECEIVED_STEP_2")
 
           awaitAssert({
-            goLogs.exists(_.contains("STATUS: ECHO_STEP_4_RECEIVED")) shouldBe true
+            goLogs.stream().anyMatch(s => s.contains("STATUS: ECHO_STEP_4_RECEIVED")) shouldBe true
           }, 30.seconds, 500.millis)
           println("STATUS: AERON_GO_RECEIVED_STEP_4")
           Console.flush()

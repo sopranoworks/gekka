@@ -116,19 +116,19 @@ abstract class FourNodeClusterSpec
     localPort: Int,
     mgmtPort: Int,
     label: String
-  ): (Process, ListBuffer[String], java.util.concurrent.atomic.AtomicReference[String]) = {
-    val logs    = ListBuffer.empty[String]
+  ): (Process, java.util.List[String], java.util.concurrent.atomic.AtomicReference[String]) = {
+    val logs    = new java.util.concurrent.CopyOnWriteArrayList[String]()
     val failure = new java.util.concurrent.atomic.AtomicReference[String]("")
 
     val logger = ProcessLogger(
       out => {
-        logs += out
+        logs.add(out)
         println(s"[$label] $out")
         if (out.startsWith("FAIL:")) failure.set(out)
         Console.flush()
       },
       err => {
-        logs += err
+        logs.add(err)
         System.err.println(s"[$label:err] $err")
         if (err.startsWith("FAIL:")) failure.set(err)
       },
@@ -193,8 +193,8 @@ abstract class FourNodeClusterSpec
           if (!proc1.isAlive()) fail(s"Go node 1 exited with code ${proc1.exitValue()}")
           if (!proc2.isAlive()) fail(s"Go node 2 exited with code ${proc2.exitValue()}")
 
-          val go1Associated = logs1.exists(_.contains("STATUS: ARTERY_ASSOCIATED"))
-          val go2Associated = logs2.exists(_.contains("STATUS: ARTERY_ASSOCIATED"))
+          val go1Associated = logs1.stream().anyMatch(s => s.contains("STATUS: ARTERY_ASSOCIATED"))
+          val go2Associated = logs2.stream().anyMatch(s => s.contains("STATUS: ARTERY_ASSOCIATED"))
           println(s"[akka-seed] Go1 associated=$go1Associated, Go2 associated=$go2Associated")
           Console.flush()
           go1Associated shouldBe true

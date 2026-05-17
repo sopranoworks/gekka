@@ -1251,7 +1251,18 @@ func (cm *ClusterManager) addMemberToGossipLocked(joiningAddr *gproto_cluster.Un
 			newMem := &gproto_cluster.Member{
 				AddressIndex: proto.Int32(int32(i)),
 				Status:       gproto_cluster.MemberStatus_Joining.Enum(),
-				UpNumber:     proto.Int32(int32(len(cm.State.Members) + 1)),
+				// UpNumber stays 0 until promotion to Up — Pekko's
+				// MembershipState.leaderOrdering treats non-Up members as having
+				// UpNumber=MaxValue (sentinel). Assigning a real value here while
+				// the member is still Joining causes DetermineLeader to pick the
+				// joiner over the existing local node whose UpNumber is still 0
+				// (= sentinel, sorts last), breaking self-promotion in the
+				// Go-Seed-with-self-join case. Live diag and
+				// TestGoSeed_FailureRecovery both reproduce this storage flake
+				// when Scala's Join arrives BEFORE gekka's first leader-action
+				// tick: gekka adds Scala with UpNumber=2 → Scala wins the
+				// leader sort → gekka can never promote itself → Joining-stuck.
+				UpNumber:     proto.Int32(0),
 				RolesIndexes: roleIdxs,
 			}
 			if appVerIdx != nil {
@@ -1271,7 +1282,9 @@ func (cm *ClusterManager) addMemberToGossipLocked(joiningAddr *gproto_cluster.Un
 	newMem := &gproto_cluster.Member{
 		AddressIndex: proto.Int32(addrIdx),
 		Status:       gproto_cluster.MemberStatus_Joining.Enum(),
-		UpNumber:     proto.Int32(int32(len(cm.State.Members) + 1)),
+		// UpNumber stays 0 until promotion to Up — see commentary on the
+		// sibling code path above.
+		UpNumber:     proto.Int32(0),
 		RolesIndexes: roleIdxs,
 	}
 	if appVerIdx != nil {

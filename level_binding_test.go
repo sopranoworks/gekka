@@ -9,7 +9,6 @@
 package gekka
 
 import (
-	"context"
 	"log/slog"
 	"testing"
 
@@ -74,14 +73,18 @@ func TestNodeConfig_StdoutLogLevelDriversStdoutLevelVar(t *testing.T) {
 // (TestCompositeHandler_RoutesByLevel and TestCompositeHandler_Enabled_*);
 // this test verifies that the OFF HOCON value reaches the LevelVar end-to-
 // end, which is the binding contract Phase 10 closes.
+//
+// The routing-path exercise (calling LogAttrs at WARN) that used to live
+// here leaked a "stdout-off-probe" record to stdout via the main leg
+// (which still defaults to stdout until external-log-server transport
+// lands) and surfaced as a WARN in the integration log. The byte-level
+// routing assertion is fully covered by the dedicated handler unit tests
+// referenced above.
 func TestStdoutLogLevel_OFF_SilencesStdoutLeg(t *testing.T) {
 	spawnFromHOCON(t, `pekko.stdout-loglevel = "OFF"`)
 	if got, want := logger.StdoutLevelVar().Level(), logger.LevelOff; got != want {
 		t.Fatalf("StdoutLevelVar after OFF: got %v, want %v", got, want)
 	}
-	// Exercise the routing path with a Warning record. The level filter must
-	// prevent it from reaching the stdout leg without panic or error.
-	logger.Default().LogAttrs(context.Background(), slog.LevelWarn, "stdout-off-probe")
 }
 
 // TestLogLevel_DefaultsAreInfoAndWarning — B1.1.

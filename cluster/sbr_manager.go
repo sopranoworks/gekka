@@ -291,7 +291,13 @@ func (m *SBRManager) Start(ctx context.Context) {
 					}
 				}
 
-				logger.Default().Warn("SBR: unreachable — starting stable-after timer", slog.String("address", addr.String()), slog.Duration("stableAfter", m.cfg.StableAfter))
+				// Pekko's SplitBrainResolver emits the equivalent event
+				// ("SBR found unreachable members, waiting for stable-after
+				// = X ms before taking downing decision") at INFO — see
+				// pekko/cluster/.../sbr/SplitBrainResolver.scala line 229.
+				// Gekka emits INFO here to match Pekko's level for the
+				// same semantic event; downing decisions remain at WARN.
+				logger.Default().Info("SBR: unreachable — starting stable-after timer", slog.String("address", addr.String()), slog.Duration("stableAfter", m.cfg.StableAfter))
 				resetStableTimer()
 
 			case ReachableMember:
@@ -309,7 +315,12 @@ func (m *SBRManager) Start(ctx context.Context) {
 			// If unreachable members remain after the strategy decision,
 			// start the unstable timer as a last-resort safety net.
 			if m.hasUnreachable() && unstableDuration > 0 {
-				logger.Default().Warn("SBR: unreachable members remain after decision — starting down-all-when-unstable timer", slog.Duration("unstable", unstableDuration))
+				// Routine SBR state event — the previous decision left
+				// some unreachable members, so we start the safety-net
+				// down-all timer. Pekko's analogue is INFO-level; only
+				// the timer firing itself (catastrophic DownAll) warrants
+				// WARN.
+				logger.Default().Info("SBR: unreachable members remain after decision — starting down-all-when-unstable timer", slog.Duration("unstable", unstableDuration))
 				stopUnstableTimer()
 				unstableTimer = time.NewTimer(unstableDuration)
 			}
@@ -317,6 +328,11 @@ func (m *SBRManager) Start(ctx context.Context) {
 		case <-unstableC:
 			unstableTimer = nil
 			if m.hasUnreachable() {
+				// Catastrophic DownAll path — matches Pekko's WARN at
+				// pekko/cluster/.../sbr/SplitBrainResolver.scala line 318
+				// ("SBR detected instability and will down all nodes").
+				// Individual downings emitted by downAllUnstable below
+				// are INFO, matching Pekko's per-node "SBR is downing".
 				logger.Default().Warn("SBR: down-all-when-unstable timer fired — downing ALL members")
 				m.downAllUnstable(ctx)
 			}
@@ -342,7 +358,10 @@ func (m *SBRManager) checkAutoDown(ctx context.Context) {
 			continue
 		}
 		if now.Sub(since) >= m.cfg.AutoDownUnreachableAfter {
-			logger.Default().Warn("SBR: auto-down-unreachable-after elapsed — executing strategy",
+			// Routine SBR-driven decision triggered by the configured
+			// auto-down-after threshold. Pekko logs the equivalent
+			// "SBR is downing [{}]" at INFO; this is the same semantic.
+			logger.Default().Info("SBR: auto-down-unreachable-after elapsed — executing strategy",
 				slog.Duration("after", m.cfg.AutoDownUnreachableAfter),
 				slog.String("address", u.Address.String()))
 			m.decide(ctx)
@@ -356,9 +375,13 @@ func (m *SBRManager) checkAutoDown(ctx context.Context) {
 // complete cluster restart.
 func (m *SBRManager) downAllUnstable(_ context.Context) {
 	reachable, unreachable := m.classifyMembers()
-	// Down all unreachable members.
+	// Pekko's SBR emits "SBR is downing [{}]" at INFO for every
+	// individual down decision — the catastrophic-context WARN is the
+	// "down-all-when-unstable timer fired" message emitted by the
+	// caller. Match that level here so the catastrophic event surfaces
+	// once, not once per node.
 	for _, u := range unreachable {
-		logger.Default().Warn("SBR: down-all-when-unstable: downing unreachable", slog.String("address", u.Address.String()))
+		logger.Default().Info("SBR: down-all-when-unstable: downing unreachable", slog.String("address", u.Address.String()))
 		m.downFn(u.Address)
 	}
 	// Down all reachable members (except self — handled by leaveFn below).
@@ -367,11 +390,11 @@ func (m *SBRManager) downAllUnstable(_ context.Context) {
 		if r.Address == self {
 			continue
 		}
-		logger.Default().Warn("SBR: down-all-when-unstable: downing reachable", slog.String("address", r.Address.String()))
+		logger.Default().Info("SBR: down-all-when-unstable: downing reachable", slog.String("address", r.Address.String()))
 		m.downFn(r.Address)
 	}
 	// Down self last.
-	logger.Default().Warn("SBR: down-all-when-unstable: downing self", slog.String("address", self.String()))
+	logger.Default().Info("SBR: down-all-when-unstable: downing self", slog.String("address", self.String()))
 	if err := m.leaveFn(); err != nil {
 		logger.Default().Error("SBR: down-all-when-unstable: LeaveCluster error", slog.Any("err", err))
 	}
@@ -425,7 +448,9 @@ func (m *SBRManager) decide(ctx context.Context) {
 	}
 
 	if decision.DownSelf {
-		logger.Default().Warn("SBR: downing self", slog.String("address", self.String()))
+		// Pekko logs "SBR is downing [{}]" for both peer and self at
+		// INFO (see SplitBrainResolver.down()). Match that level.
+		logger.Default().Info("SBR: downing self", slog.String("address", self.String()))
 		if err := m.leaveFn(); err != nil {
 			logger.Default().Error("SBR: LeaveCluster error", slog.Any("err", err))
 		}

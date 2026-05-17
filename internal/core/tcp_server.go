@@ -53,6 +53,18 @@ type TcpServerConfig struct {
 	// Corresponds to pekko.remote.artery.bind.bind-timeout.
 	BindTimeout time.Duration
 
+	// GracefulCloseTimeout caps the wait for handler goroutines to drain
+	// after Shutdown calls CloseWrite on each tracked connection. A
+	// CloseWrite sends FIN to the peer, which lets Pekko's inbound TCP
+	// stream complete with PeerClosed (no WARN) instead of failing with
+	// "connection has been aborted". The handler's read loop then sees
+	// peer FIN as a clean EOF and exits naturally, triggering its defer
+	// to fully close the descriptor. When the peer fails to FIN back
+	// within this budget Shutdown force-closes the remaining conns.
+	// Zero => use a 500ms default; negative => skip the graceful step
+	// (legacy abrupt close).
+	GracefulCloseTimeout time.Duration
+
 	// Listener can be injected for tests; if nil, net.Listen("tcp", Addr) is used.
 	Listener net.Listener
 }
@@ -141,6 +153,19 @@ func listenWithBindTimeout(parent context.Context, addr string, timeout time.Dur
 
 // Shutdown stops accepting new connections and closes all active connections.
 // It is safe to call multiple times.
+//
+// To avoid Pekko logging "StreamTcpException: The connection has been
+// aborted" / "Connection reset by peer" at WARN, Shutdown half-closes
+// each tracked connection (CloseWrite sends FIN) before issuing the
+// full Close. Pekko's TcpStages distinguishes PeerClosed (clean FIN)
+// from Aborted (RST) / ErrorClosed; the former completes the stage
+// without a log emission, the latter fails it with a WARN. See
+// pekko/stream/.../impl/io/TcpStages.scala line 388 for the case split.
+// The handler goroutine's read loop sees the peer's FIN reply as a
+// clean EOF and exits naturally, after which its defer fully closes
+// the descriptor. When the peer fails to FIN back within
+// GracefulCloseTimeout, Shutdown force-closes any remaining conns to
+// guarantee Shutdown is bounded.
 func (s *TcpServer) Shutdown() error {
 	s.mu.Lock()
 	if s.stopping {
@@ -164,11 +189,79 @@ func (s *TcpServer) Shutdown() error {
 		s.logf("closing listener %p", ln)
 		_ = ln.Close()
 	}
-	for _, c := range conns {
-		s.logf("closing active connection %p (shutdown)", c)
+
+	graceful := s.cfg.GracefulCloseTimeout
+	if graceful == 0 {
+		graceful = 500 * time.Millisecond
+	}
+
+	if graceful > 0 {
+		// Phase 1: send FIN to every tracked peer via CloseWrite. The
+		// handler goroutines continue reading until the peer FINs back
+		// (or until graceful timeout); their defer then fully closes.
+		for _, c := range conns {
+			s.logf("half-closing connection %p (shutdown CloseWrite)", c)
+			if cw, ok := findCloseWriter(c); ok {
+				_ = cw.CloseWrite()
+			} else {
+				// Conn type doesn't support CloseWrite (rare — e.g.
+				// in-memory pipes used by tests). Fall through to
+				// abrupt close below.
+				_ = c.Close()
+			}
+		}
+
+		// Phase 2: poll s.conns until handler goroutines drain or the
+		// graceful budget expires.
+		deadline := time.Now().Add(graceful)
+		for {
+			s.mu.Lock()
+			remaining := len(s.conns)
+			s.mu.Unlock()
+			if remaining == 0 {
+				return nil
+			}
+			if time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+
+	// Phase 3: force-close any conns that didn't drain (graceful=0 or
+	// peer never FIN'd back within the budget).
+	s.mu.Lock()
+	forceConns := make([]net.Conn, 0, len(s.conns))
+	for c := range s.conns {
+		forceConns = append(forceConns, c)
+	}
+	s.mu.Unlock()
+	for _, c := range forceConns {
+		s.logf("force-closing connection %p (shutdown timeout)", c)
 		_ = c.Close()
 	}
 	return nil
+}
+
+// findCloseWriter unwraps wrapper conns (tcpTimeoutConn, tls.Conn) to
+// locate the underlying half-close-capable connection.
+//
+// *net.TCPConn and *tls.Conn both provide CloseWrite() error;
+// tcpTimeoutConn embeds net.Conn so its interface check requires
+// unwrapping to the embedded conn first.
+func findCloseWriter(c net.Conn) (interface{ CloseWrite() error }, bool) {
+	for c != nil {
+		if cw, ok := c.(interface{ CloseWrite() error }); ok {
+			return cw, true
+		}
+		switch v := c.(type) {
+		case *tcpTimeoutConn:
+			c = v.Conn
+		default:
+			return nil, false
+		}
+	}
+	return nil, false
 }
 
 // Addr returns the bound address after Start.

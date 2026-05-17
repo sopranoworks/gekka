@@ -74,7 +74,7 @@ object FiveNodeStableCluster extends App {
   def buildConfig(selfPort: Int) = ConfigFactory.parseString(
     s"""
        |pekko {
-       |  loglevel = "ERROR"
+       |  loglevel = "WARNING"
        |  actor.provider = "cluster"
        |  remote {
        |    log-remote-lifecycle-events = off

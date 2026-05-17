@@ -3299,15 +3299,7 @@ func (assoc *GekkaAssociation) startLaneWriter(ctx context.Context, lane *outbou
 			err := WriteFrame(lane.conn, msg)
 			lane.writeMu.Unlock()
 			if err != nil {
-				if isShutdownNetError(err) {
-					// Peer closed (broken pipe / EOF / connection reset) or
-					// our own conn.Close raced ahead of this write.  The
-					// connection is gone — close the lane and exit without
-					// surfacing an alarm.
-					logger.Default().Debug("artery: lane write ended (peer/local close)", "error", err, "lane", lane.idx)
-				} else {
-					logger.Default().Error("artery: write error", "error", err, "lane", lane.idx)
-				}
+				logger.Default().Error("artery: write error", "error", err, "lane", lane.idx)
 				if lane.conn != nil {
 					_ = lane.conn.Close()
 				}

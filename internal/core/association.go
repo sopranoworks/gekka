@@ -11,12 +11,15 @@ package core
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
@@ -25,6 +28,37 @@ import (
 	"github.com/sopranoworks/gekka/logger"
 	"google.golang.org/protobuf/proto"
 )
+
+// isShutdownNetError reports whether err is a benign network error caused by
+// the local or remote end closing the connection — typically during graceful
+// shutdown, after a peer process exits, or when an Artery lane is being torn
+// down as part of a Quarantine.  Such errors are not actionable: the connection
+// is gone, no retry is possible, and the rest of the shutdown path will reap
+// the association.  Logging them at ERROR turns every clean teardown into a
+// false alarm in operational dashboards and trips strict log-scrutiny gates.
+//
+// Returns true for: net.ErrClosed ("use of closed network connection"),
+// io.EOF, syscall.EPIPE ("broken pipe"), and syscall.ECONNRESET ("connection
+// reset by peer").  Falls back to string-matching for the few historical
+// codepaths that surface unwrapped errors.
+func isShutdownNetError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) {
+		return true
+	}
+	var sysErr *os.SyscallError
+	if errors.As(err, &sysErr) {
+		if errors.Is(sysErr.Err, syscall.EPIPE) || errors.Is(sysErr.Err, syscall.ECONNRESET) {
+			return true
+		}
+	}
+	s := err.Error()
+	return strings.Contains(s, "use of closed network connection") ||
+		strings.Contains(s, "broken pipe") ||
+		strings.Contains(s, "connection reset by peer")
+}
 
 // Pekko defaults for pekko.remote.artery.advanced.* knobs. Used when a
 // NodeManager field is left zero-valued.
@@ -3251,7 +3285,15 @@ func (assoc *GekkaAssociation) startLaneWriter(ctx context.Context, lane *outbou
 			err := WriteFrame(lane.conn, msg)
 			lane.writeMu.Unlock()
 			if err != nil {
-				logger.Default().Error("artery: write error", "error", err, "lane", lane.idx)
+				if isShutdownNetError(err) {
+					// Peer closed (broken pipe / EOF / connection reset) or
+					// our own conn.Close raced ahead of this write.  The
+					// connection is gone — close the lane and exit without
+					// surfacing an alarm.
+					logger.Default().Debug("artery: lane write ended (peer/local close)", "error", err, "lane", lane.idx)
+				} else {
+					logger.Default().Error("artery: write error", "error", err, "lane", lane.idx)
+				}
 				if lane.conn != nil {
 					_ = lane.conn.Close()
 				}

@@ -110,7 +110,7 @@ object SBRTestNode extends App {
   val config = ConfigFactory.parseString(
     s"""
       |pekko {
-      |  loglevel = "WARNING"
+      |  loglevel = "ERROR"
       |  actor.provider = cluster
       |  remote.artery {
       |    transport = tcp

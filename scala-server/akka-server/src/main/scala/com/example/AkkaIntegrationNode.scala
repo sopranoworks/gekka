@@ -86,7 +86,7 @@ object AkkaIntegrationNode extends App {
   val config = ConfigFactory.parseString(
     """
       |akka {
-      |  loglevel = "WARNING"
+      |  loglevel = "ERROR"
       |  actor.provider = cluster
       |  remote.artery {
       |    transport = tcp

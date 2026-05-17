@@ -242,8 +242,15 @@ func (fr *FlightRecorder) SnapshotAll() map[string][]FlightEvent {
 	return result
 }
 
-// DumpOnQuarantine logs the full event snapshot for an association to slog at WARN level.
+// DumpOnQuarantine logs the full event snapshot for an association.
 // Called automatically when an association enters QUARANTINED state.
+//
+// The dump is forensic context for a Quarantine — the Quarantine itself is
+// logged at WARN by the caller (association.go).  The per-event lines here
+// are INFO-level recorded trace and have no independent alarm value, so they
+// are emitted at DEBUG to avoid flooding logs with what amounts to a captured
+// in-memory ring buffer.  Operators who want the trace at runtime can enable
+// DEBUG logging, or pull the snapshot via the management endpoint.
 func (fr *FlightRecorder) DumpOnQuarantine(remoteAddr string) {
 	if !fr.enabled {
 		return
@@ -252,9 +259,9 @@ func (fr *FlightRecorder) DumpOnQuarantine(remoteAddr string) {
 	if len(events) == 0 {
 		return
 	}
-	logger.Default().Warn("flight-recorder: quarantine dump", "association", remoteAddr, "event_count", len(events))
+	logger.Default().Debug("flight-recorder: quarantine dump", "association", remoteAddr, "event_count", len(events))
 	for i := range events {
-		logger.Default().Warn("flight-recorder: event", "line", events[i].FormatText())
+		logger.Default().Debug("flight-recorder: event", "line", events[i].FormatText())
 	}
 }
 

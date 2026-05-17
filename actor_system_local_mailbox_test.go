@@ -9,12 +9,22 @@
 package gekka
 
 import (
+	"io"
+	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/actor/mailbox"
+	"github.com/sopranoworks/gekka/logger"
 )
+
+// silenceLogForTest swaps the package default logger to io.Discard for the
+// duration of the test.  See actor/typed/spawn_protocol_test.go for rationale.
+func silenceLogForTest(t *testing.T) {
+	t.Helper()
+	t.Cleanup(logger.SetDefaultForTest(slog.New(slog.NewTextHandler(io.Discard, nil))))
+}
 
 // ── Test fixtures ───────────────────────────────────────────────────────────
 
@@ -117,6 +127,7 @@ func TestSpawnActor_RequirementBindsToControlAwareDefault(t *testing.T) {
 // ── Hard error on bound mismatch (Phase 1.6 contract) ───────────────────────
 
 func TestSpawnActor_RequirementMismatchFailsStart(t *testing.T) {
+	silenceLogForTest(t)
 	// Bind ControlAware → "unbounded" via the global config so the
 	// requirement-driven resolution lands on a non-ControlAware factory.
 	// The construction-time validator must hard-error and SpawnActor

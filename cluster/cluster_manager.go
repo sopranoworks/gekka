@@ -787,7 +787,13 @@ func (cm *ClusterManager) JoinCluster(ctx context.Context, seedHost string, seed
 			case <-seedDeadline:
 				seedDeadline = nil // fire only once
 				if !cm.WelcomeReceived.Load() {
-					logger.Default().Warn("Cluster: seed node did not respond within seed-node-timeout", slog.String("host", seedHost), slog.Int("port", int(seedPort)), slog.Duration("timeout", seedTimeout))
+					// Informational only: the retry loop above continues
+					// to resend InitJoin every retryInterval until either
+					// Welcome arrives, the shutdown deadline elapses
+					// (logged at ERROR), or context is canceled.  This
+					// fires routinely in tests that join a not-yet-running
+					// seed, so it must not be at WARN level.
+					logger.Default().Info("Cluster: seed node did not respond within seed-node-timeout (will keep retrying)", slog.String("host", seedHost), slog.Int("port", int(seedPort)), slog.Duration("timeout", seedTimeout))
 				}
 			case <-ticker.C:
 				if cm.WelcomeReceived.Load() {

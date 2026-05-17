@@ -115,6 +115,7 @@ func TestApplyDiscoveredSeeds_AggregateProvider(t *testing.T) {
 // extracted it; existing v0.9.0 contract).  The cluster still starts; no
 // seeds are added.
 func TestApplyDiscoveredSeeds_ProviderError(t *testing.T) {
+	silenceLogForTest(t)
 	discovery.Register("seed-runtime-err", func(_ discovery.DiscoveryConfig) (discovery.SeedProvider, error) {
 		return stubSeed{err: errors.New("boom")}, nil
 	})

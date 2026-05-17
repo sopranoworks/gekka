@@ -3234,6 +3234,25 @@ func (cm *ClusterManager) CheckReachability() {
 	localHost := cm.LocalAddress.GetAddress().GetHostname()
 	localPort := cm.LocalAddress.GetAddress().GetPort()
 	localUid64 := uint64(cm.LocalAddress.GetUid()) | (uint64(cm.LocalAddress.GetUid2()) << 32)
+	// Build a set of address indices currently referenced by some member
+	// in a membership-active status.  Reachability writes will be gated on
+	// this set: an Address that is no longer referenced by a Up/WeaklyUp/
+	// Joining member must not receive a fresh ObserverReachability entry,
+	// otherwise every CheckReachability tick re-introduces an orphan
+	// reference to a since-Removed member and Pekko's
+	// ClusterMessageSerializer.gossipToProto throws
+	// "Unknown address ... in cluster message" when it tries to forward
+	// our gossip.  Akka's Gossip invariant requires reachability records
+	// to reference only current members.
+	activeIdx := make(map[int32]struct{}, len(cm.State.Members))
+	for _, m := range cm.State.Members {
+		switch m.GetStatus() {
+		case gproto_cluster.MemberStatus_Up,
+			gproto_cluster.MemberStatus_WeaklyUp,
+			gproto_cluster.MemberStatus_Joining:
+			activeIdx[m.GetAddressIndex()] = struct{}{}
+		}
+	}
 	cm.Mu.Unlock()
 
 	for i, addr := range addresses {
@@ -3243,6 +3262,15 @@ func (cm *ClusterManager) CheckReachability() {
 		// Never run the failure detector against ourselves — the local node is
 		// always reachable by definition and has no heartbeat history in the FD.
 		if a.GetHostname() == localHost && a.GetPort() == localPort && uid64 == localUid64 {
+			continue
+		}
+
+		// Skip addresses whose member is no longer membership-active.
+		// AllAddresses retains entries for Removed/Leaving/Exiting/Down
+		// members so historical reachability records remain decodable,
+		// but writing FRESH reachability state about a departed member
+		// just creates the very orphan refs that gossipToProto rejects.
+		if _, active := activeIdx[int32(i)]; !active {
 			continue
 		}
 

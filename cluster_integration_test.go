@@ -98,6 +98,18 @@ func TestCluster_JoinHandshake(t *testing.T) {
 }
 
 func TestCluster_GossipConvergence(t *testing.T) {
+	// Shared connection-tracking context: when this test returns the
+	// defer below cancels procCtx, which propagates into every
+	// ProcessConnection invocation below and triggers the assoc.Process
+	// read-loop to exit cleanly.  Without it, ProcessConnection's
+	// assocCtx (rooted at context.Background()) never cancels, the
+	// associated lane goroutines stay parked in `select`, and they
+	// accumulate across the integration suite — each subsequent
+	// gekka-package test pays an idle-goroutine tax.  Pre-existing
+	// leak; surfaced by the iter1o budget overshoot.
+	procCtx, procCancel := context.WithCancel(context.Background())
+	defer procCancel()
+
 	// Node 1 (Seed)
 	addr1 := &gproto_remote.Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2560), System: proto.String("sys"), Protocol: proto.String("pekko")}
 	ua1 := &gproto_remote.UniqueAddress{Address: addr1, Uid: proto.Uint64(111)}
@@ -116,7 +128,7 @@ func TestCluster_GossipConvergence(t *testing.T) {
 			if err != nil {
 				return
 			}
-			go func() { _ = nm1.ProcessConnection(context.Background(), conn, actor.INBOUND, nil, 0) }()
+			go func() { _ = nm1.ProcessConnection(procCtx, conn, actor.INBOUND, nil, 0) }()
 		}
 	}()
 
@@ -138,7 +150,7 @@ func TestCluster_GossipConvergence(t *testing.T) {
 			if err != nil {
 				return
 			}
-			go func() { _ = nm2.ProcessConnection(context.Background(), conn, actor.INBOUND, nil, 0) }()
+			go func() { _ = nm2.ProcessConnection(procCtx, conn, actor.INBOUND, nil, 0) }()
 		}
 	}()
 

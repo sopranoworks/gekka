@@ -4426,6 +4426,14 @@ func (c *Cluster) GracefulShutdown(ctx context.Context) error {
 // directly.
 func (c *Cluster) Shutdown() error {
 	atomic.StoreInt32(&c.shuttingDown, 1)
+	// Propagate the shutdown signal to the NodeManager so the transport
+	// layer's Quarantined log site can downgrade the "received Quarantined"
+	// alarm from WARN to INFO during our own teardown window (Pekko sends
+	// Quarantined to every associated peer as part of its remoting
+	// transport-shutdown handshake).
+	if c.nm != nil {
+		c.nm.SetShuttingDown()
+	}
 
 	// Run the standard CoordinatedShutdown sequence so the
 	// cluster-leave phase can deliver a Leave message and

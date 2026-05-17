@@ -603,6 +603,14 @@ type NodeManager struct {
 	largeBufferPool     *BufferPool
 	bufferPoolOnce      sync.Once
 	largeBufferPoolOnce sync.Once
+
+	// shuttingDown is set to 1 by Cluster.Shutdown when CoordinatedShutdown
+	// has begun.  Read by code paths that need to distinguish "this peer
+	// event is expected because we are tearing down" from "this peer event
+	// is a genuine alarm".  Notably: the artery: received Quarantined log
+	// site downgrades to INFO when shuttingDown is set, because Pekko sends
+	// Quarantined as part of its own transport shutdown handshake.
+	shuttingDown atomic.Int32
 }
 
 func NewNodeManager(local *gproto_remote.Address, uid uint64) *NodeManager {
@@ -617,6 +625,18 @@ func NewNodeManager(local *gproto_remote.Address, uid uint64) *NodeManager {
 		quarantinedUIDs:    make(map[uint64]quarantineEntry),
 		FlightRec:          NewFlightRecorder(true, LevelLifecycle),
 	}
+}
+
+// SetShuttingDown marks this NodeManager as in the CoordinatedShutdown window.
+// Called by Cluster.Shutdown so transport-level code paths can distinguish
+// expected teardown signals from genuine alarms.
+func (nm *NodeManager) SetShuttingDown() {
+	nm.shuttingDown.Store(1)
+}
+
+// IsShuttingDown reports whether CoordinatedShutdown has begun for this node.
+func (nm *NodeManager) IsShuttingDown() bool {
+	return nm.shuttingDown.Load() != 0
 }
 
 // EffectiveInboundLanes returns the configured inbound-lanes or the Pekko default.
@@ -3465,7 +3485,21 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 		if err := proto.Unmarshal(meta.Payload, quar); err != nil {
 			return err
 		}
-		logger.Default().Warn("artery: received Quarantined", "from", quar.From, "to", quar.To)
+		// Classify by gekka's own state: if CoordinatedShutdown has begun
+		// for this NodeManager, Pekko's Quarantined is part of its
+		// reciprocal transport-shutdown handshake — Pekko explicitly
+		// emits Quarantined to every still-associated peer when its
+		// remoting transport closes during graceful shutdown.  Under
+		// those conditions the message carries no alarm value; log it
+		// at INFO.  When we are NOT shutting down, an incoming
+		// Quarantined IS the load-bearing alarm (peer's UID conflict,
+		// peer SBR decision, peer-side incompatibility) and stays at
+		// WARN.
+		if assoc.nodeMgr != nil && assoc.nodeMgr.IsShuttingDown() {
+			logger.Default().Info("artery: received Quarantined (shutdown handshake)", "from", quar.From, "to", quar.To)
+		} else {
+			logger.Default().Warn("artery: received Quarantined", "from", quar.From, "to", quar.To)
+		}
 		// Register the sender UID permanently so we also refuse future re-association from them.
 		if assoc.nodeMgr != nil {
 			assoc.nodeMgr.RegisterQuarantinedUID(quar.From)

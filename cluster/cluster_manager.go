@@ -3027,7 +3027,57 @@ func (cm *ClusterManager) dropRemovedMembersLocked() bool {
 	// the dropped pointers, which is fine because gossip serialisation
 	// uses the slice header length.
 	cm.State.Members = kept
+
+	// Strip orphan reachability references.  Pekko's ClusterMessageSerializer
+	// builds its outgoing-gossip address-to-hash map from members only and
+	// will throw IllegalArgumentException ("Unknown address ... in cluster
+	// message") if any ObserverReachability entry — Observer or any
+	// SubjectReachability subject — references an address whose Member has
+	// been dropped.  Akka's Reachability invariant is the same: reachability
+	// records may only reference current members.  Without this scrub, Pekko
+	// nodes downstream of gekka emit one ERROR per Removed peer per gossip
+	// tick.
+	cm.pruneOrphanReachabilityLocked()
 	return true
+}
+
+// pruneOrphanReachabilityLocked drops every ObserverReachability entry whose
+// Observer AddressIndex no longer maps to a present member, and from every
+// surviving entry drops each SubjectReachability whose Subject AddressIndex
+// no longer maps to a present member.  Must be called with cm.Mu held and
+// only after cm.State.Members has been pruned to its final shape.
+func (cm *ClusterManager) pruneOrphanReachabilityLocked() {
+	if cm.State.Overview == nil || len(cm.State.Overview.ObserverReachability) == 0 {
+		return
+	}
+
+	// Build the set of address indices that still correspond to a present
+	// member.  An index is "present" iff some Member.AddressIndex equals it.
+	presentIdx := make(map[int32]struct{}, len(cm.State.Members))
+	for _, m := range cm.State.Members {
+		presentIdx[m.GetAddressIndex()] = struct{}{}
+	}
+
+	keptObservers := cm.State.Overview.ObserverReachability[:0]
+	for _, obs := range cm.State.Overview.ObserverReachability {
+		if _, ok := presentIdx[obs.GetAddressIndex()]; !ok {
+			// Observer itself was Removed — drop the whole record.
+			continue
+		}
+		keptSubjects := obs.SubjectReachability[:0]
+		for _, sub := range obs.SubjectReachability {
+			if _, ok := presentIdx[sub.GetAddressIndex()]; !ok {
+				continue
+			}
+			keptSubjects = append(keptSubjects, sub)
+		}
+		obs.SubjectReachability = keptSubjects
+		// Keep observer even if its subject list is now empty: Pekko
+		// tolerates that, and the empty record may legitimately come
+		// back via a later updateReachability call.
+		keptObservers = append(keptObservers, obs)
+	}
+	cm.State.Overview.ObserverReachability = keptObservers
 }
 
 // pruneGossipTombstonesLocked removes tombstone entries older than
@@ -3078,6 +3128,9 @@ func (cm *ClusterManager) pruneGossipTombstonesLocked() {
 	}
 	if len(kept) != len(cm.State.Members) {
 		cm.State.Members = kept
+		// See dropRemovedMembersLocked for rationale: orphaned reachability
+		// refs trip Pekko's ClusterMessageSerializer.
+		cm.pruneOrphanReachabilityLocked()
 	}
 }
 

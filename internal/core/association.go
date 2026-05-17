@@ -1899,10 +1899,13 @@ func (nm *NodeManager) RegisterAssociation(remote *gproto_remote.UniqueAddress, 
 				existing.mu.Lock()
 				existingRemote := existing.remote.Load()
 				existing.state = QUARANTINED
-				if existing.conn != nil {
-					existing.conn.Close()
-				}
+				closingExisting := existing.conn
 				existing.mu.Unlock()
+				// Half-close before full Close so the peer's stream
+				// observes PeerClosed instead of Aborted.
+				if closingExisting != nil {
+					gracefulCloseConn(closingExisting)
+				}
 				existing.emitFlight(SeverityError, CatQuarantine, "QUARANTINED", map[string]any{
 					"remote":  existing.remoteKey(),
 					"new_uid": assoc.remote.Load().GetUid(),
@@ -3604,10 +3607,17 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 		}
 		assoc.mu.Lock()
 		assoc.state = QUARANTINED
-		if assoc.conn != nil {
-			assoc.conn.Close()
-		}
+		closing := assoc.conn
 		assoc.mu.Unlock()
+		// Half-close (CloseWrite then Close) so the peer's inbound TCP
+		// stream observes a clean PeerClosed instead of Aborted —
+		// eliminates Pekko's "StreamTcpException: The connection has
+		// been aborted" WARN that otherwise follows every quarantine.
+		// Performed outside the assoc lock to avoid blocking other
+		// goroutines on the underlying syscall.
+		if closing != nil {
+			gracefulCloseConn(closing)
+		}
 		assoc.emitFlight(SeverityError, CatQuarantine, "QUARANTINED", map[string]any{
 			"remote": assoc.remoteKey(),
 		})
@@ -3799,14 +3809,18 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 			"remote": assoc.remoteKey(),
 			"uid":    uid,
 		})
-		// Inform the remote that it is quarantined and close.
+		// Inform the remote that it is quarantined and close. Use
+		// gracefulCloseConn so the peer's inbound stream sees
+		// PeerClosed rather than Aborted — same rationale as the
+		// "received Quarantined" branch above.
 		assoc.SendQuarantined(req.From)
 		assoc.mu.Lock()
 		assoc.state = QUARANTINED
-		if assoc.conn != nil {
-			assoc.conn.Close()
-		}
+		closing := assoc.conn
 		assoc.mu.Unlock()
+		if closing != nil {
+			gracefulCloseConn(closing)
+		}
 		return fmt.Errorf("artery: HandshakeReq rejected — UID %d is quarantined", uid)
 	}
 

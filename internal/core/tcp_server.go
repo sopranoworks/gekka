@@ -264,6 +264,29 @@ func findCloseWriter(c net.Conn) (interface{ CloseWrite() error }, bool) {
 	return nil, false
 }
 
+// gracefulCloseConn half-closes c (CloseWrite sends FIN) before
+// performing the full Close. The half-close signals the peer's TCP
+// read side cleanly so Pekko's inbound TcpStages routes the event
+// into the PeerClosed case (no log emission) instead of the
+// Aborted/ErrorClosed cases that produce
+// "StreamTcpException: The connection has been aborted" at WARN.
+//
+// Best-effort: when the conn does not expose CloseWrite (the
+// findCloseWriter unwrap fails — e.g. in-memory pipes used by some
+// tests), gracefulCloseConn falls through to a plain Close. The
+// CloseWrite return value is intentionally ignored — if it fails
+// because the conn was already closed by another goroutine, the
+// subsequent Close is idempotent.
+func gracefulCloseConn(c net.Conn) {
+	if c == nil {
+		return
+	}
+	if cw, ok := findCloseWriter(c); ok {
+		_ = cw.CloseWrite()
+	}
+	_ = c.Close()
+}
+
 // Addr returns the bound address after Start.
 func (s *TcpServer) Addr() net.Addr {
 	s.mu.Lock()

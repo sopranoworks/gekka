@@ -4291,6 +4291,17 @@ func (c *Cluster) registerBuiltinShutdownTasks() {
 		if c.mgmt != nil {
 			c.mgmt.SetShuttingDown()
 		}
+		// Also propagate the shutdown signal to the NodeManager so the
+		// transport layer's Quarantined log site can downgrade incoming
+		// Quarantined frames to INFO. Pekko sends Quarantined to every
+		// associated peer as part of its remoting transport-shutdown
+		// handshake; under our own teardown that is expected, not an alarm.
+		// Shutdown() sets this directly before invoking cs.Run, but
+		// GracefulShutdown(ctx) and any caller using CoordinatedShutdown()
+		// directly rely on this phase to mark the flag.
+		if c.nm != nil {
+			c.nm.SetShuttingDown()
+		}
 		return nil
 	})
 

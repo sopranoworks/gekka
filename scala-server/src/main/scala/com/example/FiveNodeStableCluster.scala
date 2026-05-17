@@ -62,6 +62,18 @@ object FiveNodeStableCluster extends App {
     sys.exit(2)
   }
 
+  // -Dgekka.hold.signal=<path> — optional file the Go test writes once its
+  // 3-minute hold window has elapsed.  Until then, MemberLeft/Exited/
+  // Downed/Removed events from the StabilityWatcher are real "member
+  // dropped during hold" failures and stay prefixed "ERROR:".  Once the
+  // file appears, the same events are emitted with prefix "POST_HOLD:"
+  // because they represent gekka's expected graceful teardown after the
+  // Go test reached PASS.  Missing the property = no hold-end gate, so
+  // events stay ERROR-prefixed forever (legacy compat).
+  private val holdSignalFile: String = sys.props.getOrElse("gekka.hold.signal", "")
+  private def holdEnded(): Boolean =
+    holdSignalFile.nonEmpty && new java.io.File(holdSignalFile).exists()
+
   // All five systems live in the same JVM, so we cannot make every one of
   // them think it is a seed: the simultaneous in-process "firstSeedNodeProcess"
   // contention causes InitJoinNack ping-pong and the cluster never converges
@@ -179,22 +191,26 @@ object FiveNodeStableCluster extends App {
 
       case MemberLeft(m) =>
         val hp = hostPort(m.address)
-        println(s"ERROR:[$tag] MemberLeft for $hp — no member should leave during stability hold")
+        val pfx = if (holdEnded()) "POST_HOLD" else "ERROR"
+        println(s"$pfx:[$tag] MemberLeft for $hp — no member should leave during stability hold")
         Console.flush()
 
       case MemberExited(m) =>
         val hp = hostPort(m.address)
-        println(s"ERROR:[$tag] MemberExited for $hp — no member should exit during stability hold")
+        val pfx = if (holdEnded()) "POST_HOLD" else "ERROR"
+        println(s"$pfx:[$tag] MemberExited for $hp — no member should exit during stability hold")
         Console.flush()
 
       case MemberDowned(m) =>
         val hp = hostPort(m.address)
-        println(s"ERROR:[$tag] MemberDowned for $hp — dashboard self-down symptom")
+        val pfx = if (holdEnded()) "POST_HOLD" else "ERROR"
+        println(s"$pfx:[$tag] MemberDowned for $hp — dashboard self-down symptom")
         Console.flush()
 
       case MemberRemoved(m, _) =>
         val hp = hostPort(m.address)
-        println(s"ERROR:[$tag] MemberRemoved for $hp — no member should be removed during stability hold")
+        val pfx = if (holdEnded()) "POST_HOLD" else "ERROR"
+        println(s"$pfx:[$tag] MemberRemoved for $hp — no member should be removed during stability hold")
         Console.flush()
 
       case UnreachableMember(m) =>

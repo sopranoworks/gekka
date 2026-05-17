@@ -95,10 +95,18 @@ func TestFiveNodeStability3Min(t *testing.T) {
 	gekkaPort := allocateFreeTCPPort(t)
 
 	jar := jvmproc.EnsureAssembly(t, jvmproc.PekkoAssembly)
-	jvmFlags := make([]string, numScalaNodes)
+	// holdEndSignal is the file Scala's StabilityWatcher polls per cluster
+	// event to decide whether MemberLeft/Exited/Downed/Removed transitions
+	// should be reported as "ERROR:" (real hold-window failure) or
+	// "POST_HOLD:" (expected during gekka's teardown after PASS).  Written
+	// once, just before the PASS return; absent means "still in hold".
+	tempDir := t.TempDir()
+	holdEndSignal := tempDir + "/hold-ended"
+	jvmFlags := make([]string, 0, numScalaNodes+1)
 	for i, port := range scalaPorts {
-		jvmFlags[i] = fmt.Sprintf("-Dnode.port.%d=%d", i+1, port)
+		jvmFlags = append(jvmFlags, fmt.Sprintf("-Dnode.port.%d=%d", i+1, port))
 	}
+	jvmFlags = append(jvmFlags, "-Dgekka.hold.signal="+holdEndSignal)
 	p, err := jvmproc.SpawnJava(t, ctx, jar, "com.example.FiveNodeStableCluster", nil, jvmproc.Options{
 		Dir:           "scala-server",
 		JVMFlags:      jvmFlags,
@@ -171,7 +179,7 @@ func TestFiveNodeStability3Min(t *testing.T) {
   }
 }
 `, gekkaPort, strings.Join(seedNodes, ","))
-	confPath := fmt.Sprintf("%s/cluster.conf", t.TempDir())
+	confPath := fmt.Sprintf("%s/cluster.conf", tempDir)
 	if err := os.WriteFile(confPath, []byte(conf), 0o600); err != nil {
 		t.Fatalf("write conf: %v", err)
 	}
@@ -240,6 +248,15 @@ func TestFiveNodeStability3Min(t *testing.T) {
 				t.Fatalf("gekka self-status transitioned to %s during 3-min hold — dashboard self-down regressed", status)
 			}
 		case <-stableUntil:
+			// Signal Scala-side StabilityWatcher that the hold window has
+			// elapsed BEFORE letting t.Cleanup run cluster.Shutdown() — once
+			// the file exists, watcher emits POST_HOLD: instead of ERROR:
+			// for the imminent MemberLeft/Exited/Removed sequence triggered
+			// by gekka's graceful departure.  fs.WriteFile is durable enough
+			// (returns after pagecache update) for the next Pekko event tick.
+			if werr := os.WriteFile(holdEndSignal, []byte("ended"), 0o600); werr != nil {
+				t.Logf("warn: write hold-end signal: %v", werr)
+			}
 			t.Logf("[PASS] held Up for %v with no errors from any of %d Scala nodes + gekka", holdWindow, numScalaNodes)
 			return
 		case <-ctx.Done():

@@ -126,14 +126,27 @@ func TestInboundCoalescence_MultiTcpFromSamePeerSharesAssociation(t *testing.T) 
 	}
 }
 
-// TestOutboundLanes_HandshakeRspRoutesToCorrectLane verifies the lane-
-// aware HandshakeRsp routing rule: when the inbound HandshakeReq arrives
-// on the L-th coalesced inbound conn of a streamId=2 INBOUND association,
-// the response is written on the OUTBOUND ordinary sibling's lane[L]
-// outbox (matching the source lane index). When the sibling is not yet
-// registered or L >= len(lanes), the response falls back to the
-// streamId=1 control outbox.
-func TestOutboundLanes_HandshakeRspRoutesToCorrectLane(t *testing.T) {
+// TestOutboundLanes_HandshakeRspAlwaysRoutesToControl pins the
+// Pekko/Akka-compatible HandshakeRsp routing rule: regardless of which
+// inbound stream (control or one of the coalesced streamId=2 lanes) the
+// HandshakeReq arrives on, the response must always be written on the
+// OUTBOUND streamId=1 control outbox.
+//
+// Pekko's InboundControlJunction (the stage that consumes HandshakeRsp)
+// is only attached to the inbound control sink. The inbound ordinary
+// and large sinks pass the message through InboundHandshake's
+// inControlStream=false branch, which falls through HandshakeRsp into
+// onMessage; the dispatcher then routes it to /system/remote-watcher
+// where it is logged as "unhandled message from Actor[X/deadLetters]:
+// HandshakeRsp(...)". Sending the rsp on a non-control stream therefore
+// produces the multi-jvm dead-letter WARN that this fix eliminates.
+//
+// An earlier "sub-plan 8f outbound half" optimisation tried to mirror
+// the inbound lane index onto the OUTBOUND streamId=2 sibling's
+// lane[L].outbox. That optimisation was reverted; this test now
+// guarantees the lane outboxes never see a HandshakeRsp regardless of
+// which inbound lane the request landed on.
+func TestOutboundLanes_HandshakeRspAlwaysRoutesToControl(t *testing.T) {
 	const N = 3
 	nm, _ := newOutboundLanesNodeManager(t, N)
 
@@ -181,9 +194,8 @@ func TestOutboundLanes_HandshakeRspRoutesToCorrectLane(t *testing.T) {
 
 	// Open N INBOUND streamId=2 TCPs sequentially. Each runs
 	// handleHandshakeReq, coalesces onto the OUTBOUND sibling, and writes
-	// a HandshakeRsp onto the corresponding outbound lane. We assert per
-	// shadow: response landed on lane[i] and not on any other lane (the
-	// other lanes' outboxes must be empty between shadows).
+	// a HandshakeRsp. Per Pekko, every rsp must land on control.outbox
+	// (the streamId=1 OUTBOUND), never on any sibling lane.
 	from := &gproto_remote.UniqueAddress{Address: remoteAddr, Uid: proto.Uint64(remoteUid)}
 	req := &gproto_remote.HandshakeReq{From: from, To: nm.LocalAddr}
 	shadows := make([]*GekkaAssociation, N)
@@ -198,16 +210,13 @@ func TestOutboundLanes_HandshakeRspRoutesToCorrectLane(t *testing.T) {
 			t.Fatalf("shadow[%d] lane index = %d, want %d", i, idx, i)
 		}
 		select {
-		case <-lanes[i].outbox:
-			// OK — HandshakeRsp landed on lane[i].
+		case <-control.outbox:
+			// OK — HandshakeRsp landed on the control outbox.
 		case <-time.After(200 * time.Millisecond):
-			t.Fatalf("shadow[%d] HandshakeRsp did not land on lane[%d]", i, i)
+			t.Fatalf("shadow[%d] HandshakeRsp did not land on control outbox", i)
 		}
-		// Other lanes must NOT have received this rsp.
+		// No lane outbox must ever receive a HandshakeRsp.
 		for j, ln := range lanes {
-			if j == i {
-				continue
-			}
 			select {
 			case <-ln.outbox:
 				t.Fatalf("shadow[%d] HandshakeRsp leaked to lane[%d]", i, j)
@@ -221,8 +230,8 @@ func TestOutboundLanes_HandshakeRspRoutesToCorrectLane(t *testing.T) {
 	}
 	sib.mu.RUnlock()
 
-	// Fallback: if we manually clear the sibling pointer, response goes
-	// to control.outbox.
+	// Fallback: when the OUTBOUND sibling pointer is cleared, the rsp
+	// still lands on control.outbox.
 	control.mu.Lock()
 	control.ordinarySibling = nil
 	control.mu.Unlock()

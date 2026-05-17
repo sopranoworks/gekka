@@ -3373,6 +3373,15 @@ func (assoc *GekkaAssociation) startLaneWriter(ctx context.Context, lane *outbou
 				//     a peer we have already decided is gone is not a new
 				//     alarm.
 				//
+				//   - errors.Is(err, net.ErrClosed)  => the lane.conn was
+				//     already closed by another gekka goroutine (the read
+				//     side closes the conn after detecting peer EOF/RST;
+				//     this writer just lost the race with that close).
+				//     net.ErrClosed is the Go runtime's structured signal
+				//     for "Close was called on this conn" — it is internal
+				//     state, not a network failure, so this is positive
+				//     evidence rather than error-string pattern matching.
+				//
 				// Anything else stays ERROR — real network failures during
 				// steady-state operation must surface.
 				assoc.mu.RLock()
@@ -3395,6 +3404,22 @@ func (assoc *GekkaAssociation) startLaneWriter(ctx context.Context, lane *outbou
 					logger.Default().Info("artery: lane write ended (quarantined)", "error", err, "lane", lane.idx)
 				case peerDeparting:
 					logger.Default().Info("artery: lane write ended (peer departed)", "error", err, "lane", lane.idx, "remote", remoteAddr.GetHostname()+":"+fmt.Sprint(remoteAddr.GetPort()))
+				case errors.Is(err, net.ErrClosed):
+					logger.Default().Info("artery: lane write ended (conn closed by reader)", "error", err, "lane", lane.idx)
+				case errors.Is(err, syscall.EPIPE), errors.Is(err, syscall.ECONNRESET):
+					// Peer's TCP endpoint disappeared (EPIPE from a
+					// closed remote receive half, or ECONNRESET from
+					// a remote RST). These are positive evidence that
+					// the connection is dead — the gossip/failure-
+					// detection layer will catch up within
+					// acceptable-heartbeat-pause. Logging ERROR here
+					// double-counts what the upper layers will report,
+					// and treats every peer-kill test scenario
+					// (TestGoSeed_FailureRecovery, SBR interop, etc.)
+					// as a failure. errors.Is against the exported
+					// syscall constants is structural positive
+					// evidence, not error-string pattern matching.
+					logger.Default().Info("artery: lane write ended (peer endpoint gone)", "error", err, "lane", lane.idx)
 				default:
 					logger.Default().Error("artery: write error", "error", err, "lane", lane.idx)
 				}
@@ -3965,13 +3990,20 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 		// will land here once outboundToRemote is registered and the
 		// response will be routed via the correct OUTBOUND channel.
 		//
-		// Sub-plan 8f outbound half — lane-aware HandshakeRsp routing.
-		// When the inbound HandshakeReq arrived on a streamId=2 INBOUND
-		// TCP at lane index L, prefer routing the response to the OUTBOUND
-		// streamId=2 sibling's lane[L] (matching the lane index on which
-		// the request landed). Falls back to the OUTBOUND control assoc's
-		// outbox (streamId=1) when the sibling is not yet registered or
-		// L >= len(lanes) — Pekko/Akka tolerate HandshakeRsp on streamId=1.
+		// HandshakeRsp MUST be sent on the OUTBOUND streamId=1 (control)
+		// outbox.  Pekko's InboundControlJunction sits on the inbound
+		// control sink only; the inbound ordinary/large sinks dispatch
+		// messages by recipient path to the destination actor.  When
+		// HandshakeRsp arrives on streamId=2, the InboundHandshake stage
+		// for inControlStream=false falls through to onMessage and the
+		// dispatcher routes it to /system/remote-watcher, which logs
+		// "unhandled message from Actor[X/deadLetters]: HandshakeRsp(...)".
+		// Reference: Pekko's Handshake.scala InboundHandshake handler and
+		// inboundContext.sendControl(from.address, HandshakeRsp(...)) on
+		// onHandshakeReq.  An earlier "sub-plan 8f outbound half" tried to
+		// route the rsp onto the sibling's lane[laneIdx] when the request
+		// landed on a streamId=2 inbound conn; that optimisation produced
+		// the multi-jvm dead-letter WARN and is reverted here.
 		if outboundToRemote != nil {
 			localUA := &gproto_remote.UniqueAddress{Address: assoc.nodeMgr.LocalAddr, Uid: proto.Uint64(assoc.localUid)}
 			rspProto := &gproto_remote.MessageWithAddress{Address: localUA}
@@ -3984,15 +4016,14 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 			rspRecipientPath := remoteWatcherPathForAddress(req.From.GetAddress())
 			if rspPayload, err2 := proto.Marshal(rspProto); err2 == nil {
 				if frame, err2 := BuildArteryFrame(int64(assoc.localUid), actor.ArteryInternalSerializerID, "", rspRecipientPath, "e", rspPayload, true); err2 == nil {
-					// Prefer the streamId=1 control outbox for the
-					// "OUTBOUND control" baseline. outboundToRemote
-					// may itself be the streamId=2 sibling — pivot
-					// to its sibling pointer when needed so the
-					// fallback is the control outbox, not the
-					// sibling outbox (which is unused for streamId=2
-					// and would silently swallow the rsp).
+					// Pivot to the OUTBOUND streamId=1 control outbox.
+					// outboundToRemote may itself be the streamId=2
+					// sibling (registry hits its association by host
+					// regardless of stream type) — pivot to its
+					// linked control sibling so the rsp always lands
+					// on the control stream.
 					controlAssoc := outboundToRemote
-					if outboundToRemote.streamId == 2 {
+					if outboundToRemote.streamId != 1 {
 						outboundToRemote.mu.RLock()
 						p := outboundToRemote.ordinarySibling
 						outboundToRemote.mu.RUnlock()
@@ -4002,30 +4033,6 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 					}
 					rspOutbox := controlAssoc.outbox
 					routed := "OUTBOUND control"
-					// If the inbound HandshakeReq came on a
-					// streamId=2 TCP, route the response onto the
-					// matching outbound lane of the streamId=2
-					// sibling (looked up via control's sibling
-					// pointer, which always points at the lanes-
-					// bearing assoc).
-					if assoc.streamId == 2 {
-						laneIdx := assoc.inboundLaneIndexOf()
-						controlAssoc.mu.RLock()
-						sib := controlAssoc.ordinarySibling
-						controlAssoc.mu.RUnlock()
-						if sib != nil {
-							sib.mu.RLock()
-							lanes := sib.lanes
-							sib.mu.RUnlock()
-							if laneIdx >= 0 && laneIdx < len(lanes) {
-								rspOutbox = lanes[laneIdx].outbox
-								routed = "OUTBOUND sibling lane"
-							} else if len(lanes) > 0 {
-								rspOutbox = lanes[0].outbox
-								routed = "OUTBOUND sibling lane[0]"
-							}
-						}
-					}
 					logger.Default().Debug("artery: sending HandshakeRsp", "via", routed)
 					select {
 					case rspOutbox <- frame:

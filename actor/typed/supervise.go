@@ -10,8 +10,9 @@ package typed
 
 import (
 	"fmt"
-	"log/slog"
 	"time"
+
+	"github.com/sopranoworks/gekka/logger"
 )
 
 // SupervisorStrategy defines how the actor should react to failures.
@@ -115,7 +116,12 @@ func supervisedBackoffBehavior[T any](inner Behavior[T], opts BackoffOptions) Be
 func safeInvoke[T any](ctx TypedContext[T], msg T, b Behavior[T]) (next Behavior[T], panicked bool) {
 	defer func() {
 		if r := recover(); r != nil {
-			log := slog.Default()
+			// Use gekka's package logger by default so that
+			// logger.SetDefaultForTest can silence panic-recovery
+			// logging in tests that intentionally exercise this path
+			// (TestSupervise_RestartOnPanic etc).  ctx.Log() still
+			// wins when the actor has its own bound logger.
+			log := logger.Default()
 			if ctx != nil {
 				func() {
 					defer func() { recover() }()

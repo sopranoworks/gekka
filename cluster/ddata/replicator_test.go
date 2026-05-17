@@ -10,11 +10,22 @@ package ddata
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/sopranoworks/gekka/logger"
 )
+
+// silenceLogForTest swaps the package default logger to io.Discard for the
+// duration of the test.  See actor/typed/spawn_protocol_test.go for rationale.
+func silenceLogForTest(t *testing.T) {
+	t.Helper()
+	t.Cleanup(logger.SetDefaultForTest(slog.New(slog.NewTextHandler(io.Discard, nil))))
+}
 
 func TestReplicator_Entries_Empty(t *testing.T) {
 	r := NewReplicator("node-1", nil)
@@ -95,6 +106,7 @@ func TestReplicator_LookupORSet_HitAndMiss(t *testing.T) {
 // JSON-serialized gossip payload exceeds the configured threshold, the warn
 // hook fires with the offending key and observed size.
 func TestReplicator_LogDataSizeExceeding_FiresAtThreshold(t *testing.T) {
+	silenceLogForTest(t)
 	r := NewReplicator("node-1", nil)
 	r.LogDataSizeExceeding = 128
 
@@ -175,6 +187,7 @@ func TestReplicator_LogDataSizeExceeding_DisabledByZero(t *testing.T) {
 // session 16 wiring of `pekko.cluster.distributed-data.recovery-timeout`:
 // without any registered peers WaitForRecovery returns true (timed out).
 func TestReplicator_WaitForRecovery_TimesOutWithoutPeers(t *testing.T) {
+	silenceLogForTest(t)
 	r := NewReplicator("node-1", nil)
 	r.RecoveryTimeout = 30 * time.Millisecond
 	timedOut := r.WaitForRecovery(context.Background())

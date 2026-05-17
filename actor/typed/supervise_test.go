@@ -14,6 +14,7 @@ import (
 )
 
 func TestSupervise_RestartOnPanic(t *testing.T) {
+	silenceLogForTest(t)
 	panicOnce := true
 	var received []string
 
@@ -46,6 +47,7 @@ func TestSupervise_RestartOnPanic(t *testing.T) {
 }
 
 func TestSupervise_StopOnPanic(t *testing.T) {
+	silenceLogForTest(t)
 	behavior := func(ctx TypedContext[string], msg string) Behavior[string] {
 		panic("test panic")
 	}
@@ -59,6 +61,7 @@ func TestSupervise_StopOnPanic(t *testing.T) {
 }
 
 func TestSupervise_ResumeOnPanic(t *testing.T) {
+	silenceLogForTest(t)
 	callCount := 0
 	var received []string
 
@@ -93,6 +96,7 @@ func TestSupervise_ResumeOnPanic(t *testing.T) {
 }
 
 func TestSupervise_BackoffDelaysRestart(t *testing.T) {
+	silenceLogForTest(t)
 	panicCount := 0
 	var received []string
 

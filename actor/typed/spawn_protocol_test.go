@@ -9,10 +9,24 @@
 package typed
 
 import (
+	"io"
+	"log/slog"
 	"testing"
 
 	"github.com/sopranoworks/gekka/actor"
+	"github.com/sopranoworks/gekka/logger"
 )
+
+// silenceLogForTest swaps the package default logger to io.Discard for the
+// duration of the test.  Used by tests that intentionally exercise WARN/ERROR
+// log paths as a side-effect of asserting behaviour: the assertion still
+// holds, but the noise no longer surfaces to stderr where the strict
+// reliability gate scrutinises log output.  Tests using this helper must NOT
+// call t.Parallel() — SetDefaultForTest swaps a process-global pointer.
+func silenceLogForTest(t *testing.T) {
+	t.Helper()
+	t.Cleanup(logger.SetDefaultForTest(slog.New(slog.NewTextHandler(io.Discard, nil))))
+}
 
 func TestSpawnProtocol_SpawnViaMessage(t *testing.T) {
 	// Test the spawnRequestHandler interface
@@ -84,6 +98,7 @@ func TestSpawnProtocol_SpawnViaMessage(t *testing.T) {
 }
 
 func TestSpawnProtocol_UnexpectedMessage(t *testing.T) {
+	silenceLogForTest(t)
 	guardian := SpawnProtocolBehavior()
 	ctx := &typedContext[any]{
 		actor: &TypedActor[any]{

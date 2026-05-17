@@ -10,6 +10,8 @@ package cluster
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -18,8 +20,16 @@ import (
 
 	icluster "github.com/sopranoworks/gekka/internal/cluster"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
+	"github.com/sopranoworks/gekka/logger"
 	"google.golang.org/protobuf/proto"
 )
+
+// silenceLogForTest swaps the package default logger to io.Discard for the
+// duration of the test.  See actor/typed/spawn_protocol_test.go for rationale.
+func silenceLogForTest(t *testing.T) {
+	t.Helper()
+	t.Cleanup(logger.SetDefaultForTest(slog.New(slog.NewTextHandler(io.Discard, nil))))
+}
 
 // newTestClusterManager builds a minimal in-memory ClusterManager for
 // the round-2 session 28 SBR-provider tests.  Mirrors the helper used
@@ -300,6 +310,7 @@ func TestResolveSBRConfigDefaults_PreservesOperatorOverrides(t *testing.T) {
 // `keep-referee` requires RefereeAddress to construct successfully.
 // Anything else and the consolidation broke a strategy code path.
 func TestBuildSBRDowningProvider_AllStrategiesResolveByName(t *testing.T) {
+	silenceLogForTest(t)
 	cm := newTestClusterManager(t)
 
 

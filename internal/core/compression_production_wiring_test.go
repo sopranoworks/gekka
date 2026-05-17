@@ -18,14 +18,24 @@ package core
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
 	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
+	"github.com/sopranoworks/gekka/logger"
 	"google.golang.org/protobuf/proto"
 )
+
+// silenceLogForTest swaps the package default logger to io.Discard for the
+// duration of the test.  See actor/typed/spawn_protocol_test.go for rationale.
+func silenceLogForTest(t *testing.T) {
+	t.Helper()
+	t.Cleanup(logger.SetDefaultForTest(slog.New(slog.NewTextHandler(io.Discard, nil))))
+}
 
 func newWiringTestNodeManager() (*NodeManager, *actor.Router) {
 	nm := NewNodeManager(&gproto_remote.Address{
@@ -55,6 +65,7 @@ func TestStartCompressionTableManager_AttachesCtmToNodeManager(t *testing.T) {
 }
 
 func TestStartCompressionTableManager_ActorRefsMaxRejectsOversize(t *testing.T) {
+	silenceLogForTest(t)
 	nm, router := newWiringTestNodeManager()
 	nm.CompressionActorRefsMax = 2
 	ctx, cancel := context.WithCancel(context.Background())
@@ -76,6 +87,7 @@ func TestStartCompressionTableManager_ActorRefsMaxRejectsOversize(t *testing.T) 
 }
 
 func TestStartCompressionTableManager_ManifestsMaxRejectsOversize(t *testing.T) {
+	silenceLogForTest(t)
 	nm, router := newWiringTestNodeManager()
 	nm.CompressionManifestsMax = 2
 	ctx, cancel := context.WithCancel(context.Background())

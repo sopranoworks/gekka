@@ -1306,7 +1306,11 @@ func (nm *NodeManager) RegisterQuarantinedUIDAt(remote *gproto_remote.UniqueAddr
 	nm.quarantinedMu.Lock()
 	nm.quarantinedUIDs[uid] = quarantineEntry{remote: remote, since: since}
 	nm.quarantinedMu.Unlock()
-	logger.Default().Warn("node manager: registered permanently quarantined UID", "uid", uid, "address", remote.GetAddress())
+	// This is a confirmation of a registry mutation triggered by an upstream
+	// "artery: received Quarantined" WARN at association.go (the load-bearing
+	// alarm).  Logging the registry update itself at WARN doubles the alarm
+	// for what is in fact a successful internal book-keeping step.
+	logger.Default().Info("node manager: registered permanently quarantined UID", "uid", uid, "address", remote.GetAddress())
 	if nm.FlightRec != nil {
 		key := fmt.Sprintf("%s:%d", remote.GetAddress().GetHostname(), remote.GetAddress().GetPort())
 		nm.FlightRec.Emit(key, FlightEvent{
@@ -2062,7 +2066,17 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 			// Give handler a moment to start and send magic header
 			time.Sleep(200 * time.Millisecond)
 			if err := assoc.initiateHandshake(remote); err != nil {
-				logger.Default().Error("artery: initiateHandshake error", "error", err)
+				if isShutdownNetError(err) {
+					// Peer or local side closed the connection before we
+					// could finish writing the first handshake frame —
+					// expected during shutdown, after a Quarantine has
+					// torn the conn down, or when the peer process exits
+					// mid-handshake.  The retry loop below will surface
+					// any persistent failure.
+					logger.Default().Debug("artery: initiateHandshake ended (peer/local close)", "error", err)
+				} else {
+					logger.Default().Error("artery: initiateHandshake error", "error", err)
+				}
 			}
 
 			// Retry loop: re-send HandshakeReq at handshake-retry-interval

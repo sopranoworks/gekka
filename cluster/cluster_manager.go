@@ -1098,9 +1098,30 @@ func (cm *ClusterManager) HandleIncomingClusterMessage(ctx context.Context, payl
 		}
 
 		// Include a minimal config so Pekko's JoinConfigCompatCheckCluster
-		// can parse it without crashing. The key checked unconditionally is
-		// pekko.cluster.downing-provider-class (same as the InitJoin fix).
-		minConfig := proto.String(`pekko.cluster.downing-provider-class = ""`)
+		// can parse it without crashing AND so the values match what the
+		// joining node carries.  This is the reverse direction of the
+		// InitJoin builder fix above: when gekka is the seed and a Pekko
+		// node is joining, the joining node compares OUR config against
+		// its own.  If we send an empty downing-provider-class here, the
+		// joining Pekko side logs "Cluster validated this node config, but
+		// sent back incompatible settings" — see JoinSeedNodeProcess'
+		// validateConfig.  Mirror the InitJoin builder: emit the
+		// fully-qualified SBR class (Pekko uses org.apache.pekko.*, Akka
+		// uses akka.*) and advertise the state-store-mode key.
+		ackProto := cm.Proto()
+		var ackSbrFQCN string
+		switch ackProto {
+		case "pekko":
+			ackSbrFQCN = "org.apache.pekko.cluster.sbr.SplitBrainResolverProvider"
+		case "akka":
+			ackSbrFQCN = "akka.cluster.sbr.SplitBrainResolverProvider"
+		default:
+			ackSbrFQCN = ackProto + ".cluster.sbr.SplitBrainResolverProvider"
+		}
+		minConfig := proto.String(fmt.Sprintf(
+			"%s.cluster.downing-provider-class = \"%s\"\n"+
+				"%s.cluster.sharding.state-store-mode = \"ddata\"",
+			ackProto, ackSbrFQCN, ackProto))
 		ack := &gproto_cluster.InitJoinAck{
 			Address: toClusterAddress(cm.LocalAddress.Address),
 			ConfigCheck: &gproto_cluster.ConfigCheck{

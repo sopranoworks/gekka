@@ -842,7 +842,11 @@ func (nm *NodeManager) DialRemoteUDP(ctx context.Context, udpHandler *UdpArteryH
 	go func() {
 		time.Sleep(200 * time.Millisecond)
 		if err := assoc.initiateHandshake(remoteUA.Address); err != nil {
-			logger.Default().Error("aeron-udp: initiateHandshake error", "error", err)
+			if isShutdownNetError(err) {
+				logger.Default().Debug("aeron-udp: initiateHandshake ended (peer/local close)", "error", err)
+			} else {
+				logger.Default().Error("aeron-udp: initiateHandshake error", "error", err)
+			}
 		}
 	}()
 

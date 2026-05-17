@@ -16,6 +16,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/sopranoworks/gekka/actor"
@@ -215,7 +216,17 @@ func tcpArteryReadLoop(ctx context.Context, conn net.Conn, handler FrameHandler,
 			"seq", meta.SeqNo)
 
 		if err := handler(ctx, meta); err != nil {
-			logger.Default().Warn("artery: handler error", "error", err)
+			// HandshakeReq rejected from a known-Quarantined UID is a
+			// defensive book-keeping branch, not an alarm: an upstream
+			// node attempted to reconnect with a UID our quarantine
+			// registry has marked as terminal, we refused, we closed.
+			// Log at INFO so the alarm-level WARN is reserved for actual
+			// protocol or framing errors.
+			if strings.Contains(err.Error(), "HandshakeReq rejected") && strings.Contains(err.Error(), "is quarantined") {
+				logger.Default().Info("artery: handler rejected quarantined-UID reconnect", "error", err)
+			} else {
+				logger.Default().Warn("artery: handler error", "error", err)
+			}
 			return fmt.Errorf("handler error: %w", err)
 		}
 	}

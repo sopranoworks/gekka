@@ -1009,6 +1009,45 @@ func (cm *ClusterManager) DownMember(addr MemberAddress) {
 	logger.Default().Warn("SBR: DownMember: address not found in gossip", slog.String("host", addr.Host), slog.Int("port", int(addr.Port)))
 }
 
+// IsRemotePeerDeparting reports whether a remote peer at (host, port) is
+// in any non-membership-active state in the current gossip view — i.e.
+// Leaving, Exiting, Down, Removed, or not present in members at all.
+// Transport-level callers use this to distinguish "peer is in a normal
+// teardown / departure window" (expected close) from "peer is Up and
+// should be reachable" (genuine network failure) when classifying write
+// errors and Quarantined notifications.
+//
+// Returns true when:
+//   - the peer is not present in cm.State.Members (already pruned), OR
+//   - the peer's status is Leaving, Exiting, Down, or Removed.
+//
+// Returns false when the peer is Up, WeaklyUp, or Joining (i.e., expected
+// to be reachable).
+func (cm *ClusterManager) IsRemotePeerDeparting(host string, port uint32) bool {
+	cm.Mu.RLock()
+	defer cm.Mu.RUnlock()
+	for _, m := range cm.State.GetMembers() {
+		idx := int(m.GetAddressIndex())
+		if idx < 0 || idx >= len(cm.State.AllAddresses) {
+			continue
+		}
+		a := cm.State.AllAddresses[idx].GetAddress()
+		if a.GetHostname() == host && a.GetPort() == port {
+			switch m.GetStatus() {
+			case gproto_cluster.MemberStatus_Up,
+				gproto_cluster.MemberStatus_WeaklyUp,
+				gproto_cluster.MemberStatus_Joining:
+				return false
+			default:
+				return true
+			}
+		}
+	}
+	// Not in members at all — either never joined, or already dropped
+	// post-Removal.  Treat as departing.
+	return true
+}
+
 // WaitForSelfRemoved polls the gossip state every 200 ms until this node's
 // own membership entry is absent or in Removed status, or the context expires.
 // It is called by the coordinated-shutdown cluster-leave phase to block until

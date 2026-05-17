@@ -35,9 +35,13 @@ func TestPhiAccrualFailureDetector_IsAvailableWithMargin(t *testing.T) {
 	fd.Reconfigure(2.0, 1000, 50*time.Millisecond)
 	node := "node1"
 
-	// Unseen target: false regardless of margin.
-	if fd.IsAvailableWithMargin(node, time.Second) {
-		t.Error("unseen node must be unavailable even with margin")
+	// Unseen target: AVAILABLE (mirrors Pekko's PhiAccrualFailureDetector
+	// default state — a node that hasn't sent its first heartbeat yet
+	// must not be flagged unavailable, otherwise SBR Downs every
+	// freshly-joined cluster member before it has a chance to heartbeat.
+	// The previous assertion documented gekka's old buggy behaviour.
+	if !fd.IsAvailableWithMargin(node, time.Second) {
+		t.Error("unseen node must be available — no heartbeat history yet, no basis to declare it dead")
 	}
 
 	trainPhiHotPath(fd, node)

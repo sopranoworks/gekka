@@ -102,7 +102,7 @@ func TestClusterRouter_HealthFiltering(t *testing.T) {
 	cm.Mu.Lock()
 	cm.State.Members[0].Status = gproto_cluster.MemberStatus_Up.Enum()
 
-	// Add a remote node but don't give it heartbeats
+	// Add a remote node but don't give it heartbeats yet.
 	cm.State.AllAddresses = append(cm.State.AllAddresses,
 		newUniqueAddress(&gproto_cluster.Address{Hostname: proto.String("127.0.0.1"), Port: proto.Uint32(2601), System: proto.String("sys"), Protocol: proto.String("pekko")}, 2))
 	cm.State.Members = append(cm.State.Members,
@@ -114,24 +114,41 @@ func TestClusterRouter_HealthFiltering(t *testing.T) {
 		AllowLocalRoutees: proto.Bool(false), // Only remote
 	}
 
-	_, err := router.SelectRoutee(settings)
-	if err == nil {
-		t.Fatal("expected error since no remote nodes are healthy")
-	}
-
-	// Now make it healthy
-	ua := cm.State.AllAddresses[1]
-	key := fmt.Sprintf("%s:%d-%d", ua.GetAddress().GetHostname(), ua.GetAddress().GetPort(), ua.GetUid())
-	for i := 0; i < 10; i++ {
-		cm.Fd.Heartbeat(key)
-	}
-
+	// A freshly-added Up member with no heartbeat history must be eligible
+	// for routing.  This mirrors Pekko's PhiAccrualFailureDetector default
+	// state (available until enough samples accumulate to compute phi):
+	// reporting "not yet seen" as unhealthy here was the same buggy semantics
+	// that caused SBR to spuriously Down newly-joined members within
+	// milliseconds of their Joining → Up transition.
 	uaSelected, err := router.SelectRoutee(settings)
 	if err != nil {
-		t.Fatalf("failed to select now-healthy sys: %v", err)
+		t.Fatalf("freshly-joined node with no heartbeats yet should be selectable, got error: %v", err)
 	}
 	if uaSelected.GetAddress().GetPort() != 2601 {
 		t.Errorf("expected port 2601, got %d", uaSelected.GetAddress().GetPort())
+	}
+
+	// Now exercise the negative branch: explicitly mark the remote node
+	// Unreachable via ObserverReachability and verify routing filters it.
+	cm.Mu.Lock()
+	cm.updateReachability(int32(1), gproto_cluster.ReachabilityStatus_Unreachable)
+	cm.Mu.Unlock()
+
+	if _, err := router.SelectRoutee(settings); err == nil {
+		t.Fatal("expected error after the only remote routee was marked Unreachable")
+	}
+
+	// Flipping the reachability back to Reachable restores routing.
+	cm.Mu.Lock()
+	cm.updateReachability(int32(1), gproto_cluster.ReachabilityStatus_Reachable)
+	cm.Mu.Unlock()
+
+	uaSelected, err = router.SelectRoutee(settings)
+	if err != nil {
+		t.Fatalf("failed to select node after Reachable flip: %v", err)
+	}
+	if uaSelected.GetAddress().GetPort() != 2601 {
+		t.Errorf("expected port 2601 after flip back to Reachable, got %d", uaSelected.GetAddress().GetPort())
 	}
 }
 

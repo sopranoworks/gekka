@@ -167,7 +167,19 @@ func (fd *PhiAccrualFailureDetector) IsAvailable(nodeKey string) bool {
 	d, ok := fd.detectors[nodeKey]
 	fd.mu.RUnlock()
 	if !ok {
-		return false
+		// No heartbeat history — treat as AVAILABLE.  A node that has
+		// only just been added to the gossip view (and therefore the
+		// failure-detector's address list) has not yet had time to
+		// exchange heartbeats.  Reporting it unavailable here causes
+		// CheckReachability to mark it Unreachable, which fires SBR
+		// the moment the leader promotes it from Joining → Up: SBR
+		// runs decide() inside the same gossip tick, sees an
+		// "unreachable" Up member, and immediately Downs it.  This is
+		// the bug behind the Joining→Up→Down-in-300ms cascade observed
+		// in iter1d's TestPersistenceProxy*/Ask/Singleton/etc. tests.
+		// Mirrors Pekko's PhiAccrualFailureDetector default state
+		// (available until enough samples accumulate to compute phi).
+		return true
 	}
 	return d.IsAvailable()
 }
@@ -178,14 +190,17 @@ func (fd *PhiAccrualFailureDetector) IsAvailable(nodeKey string) bool {
 // heartbeat is within `margin`. Used by the cluster manager to apply
 // `pekko.cluster.multi-data-center.failure-detector.acceptable-heartbeat-pause`
 // to cross-DC targets so they tolerate a longer pause before flipping
-// unreachable. A non-positive margin degrades to plain IsAvailable; an unseen
-// nodeKey is reported unavailable regardless of margin.
+// unreachable. A non-positive margin degrades to plain IsAvailable.
+// An unseen nodeKey is reported AVAILABLE (mirrors the IsAvailable
+// rationale: no heartbeat history yet means the node has only just
+// joined; treating it unavailable causes spurious SBR Down on freshly
+// joined members).
 func (fd *PhiAccrualFailureDetector) IsAvailableWithMargin(nodeKey string, margin time.Duration) bool {
 	fd.mu.RLock()
 	d, ok := fd.detectors[nodeKey]
 	fd.mu.RUnlock()
 	if !ok {
-		return false
+		return true
 	}
 	return d.IsAvailableWithMargin(margin)
 }

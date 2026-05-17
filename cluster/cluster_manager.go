@@ -3069,12 +3069,22 @@ func (cm *ClusterManager) dropRemovedMembersLocked() bool {
 }
 
 // pruneOrphanReachabilityLocked drops every ObserverReachability entry whose
-// Observer AddressIndex no longer maps to a present member, and from every
-// surviving entry drops each SubjectReachability whose Subject AddressIndex
-// no longer maps to a present member.  Must be called with cm.Mu held and
-// only after cm.State.Members has been pruned to its final shape.
+// Observer AddressIndex no longer maps to a present member, drops each
+// SubjectReachability whose Subject AddressIndex no longer maps to a present
+// member, and strips Overview.Seen of any address index that no longer maps
+// to a present member.  Must be called with cm.Mu held and only after
+// cm.State.Members has been pruned to its final shape.
+//
+// Pekko's ClusterMessageSerializer.gossipToProto rejects any GossipEnvelope
+// whose reachability OR seen-set references a UniqueAddress not in the
+// derived-from-members address index, throwing IllegalArgumentException at
+// ClusterMessageSerializer.scala:403 (mapWithErrorMessage).  Two distinct
+// closures inside gossipToProto trip this: $anonfun$gossipToProto$6 (line
+// 486, reachability) and $anonfun$gossipToProto$9 (line 502, seen set).
+// This helper restores Akka's Gossip invariant that both data structures
+// only reference current members.
 func (cm *ClusterManager) pruneOrphanReachabilityLocked() {
-	if cm.State.Overview == nil || len(cm.State.Overview.ObserverReachability) == 0 {
+	if cm.State.Overview == nil {
 		return
 	}
 
@@ -3085,26 +3095,43 @@ func (cm *ClusterManager) pruneOrphanReachabilityLocked() {
 		presentIdx[m.GetAddressIndex()] = struct{}{}
 	}
 
-	keptObservers := cm.State.Overview.ObserverReachability[:0]
-	for _, obs := range cm.State.Overview.ObserverReachability {
-		if _, ok := presentIdx[obs.GetAddressIndex()]; !ok {
-			// Observer itself was Removed — drop the whole record.
-			continue
-		}
-		keptSubjects := obs.SubjectReachability[:0]
-		for _, sub := range obs.SubjectReachability {
-			if _, ok := presentIdx[sub.GetAddressIndex()]; !ok {
+	// 1) ObserverReachability + nested SubjectReachability.
+	if len(cm.State.Overview.ObserverReachability) > 0 {
+		keptObservers := cm.State.Overview.ObserverReachability[:0]
+		for _, obs := range cm.State.Overview.ObserverReachability {
+			if _, ok := presentIdx[obs.GetAddressIndex()]; !ok {
+				// Observer itself was Removed — drop the whole record.
 				continue
 			}
-			keptSubjects = append(keptSubjects, sub)
+			keptSubjects := obs.SubjectReachability[:0]
+			for _, sub := range obs.SubjectReachability {
+				if _, ok := presentIdx[sub.GetAddressIndex()]; !ok {
+					continue
+				}
+				keptSubjects = append(keptSubjects, sub)
+			}
+			obs.SubjectReachability = keptSubjects
+			// Keep observer even if its subject list is now empty: Pekko
+			// tolerates that, and the empty record may legitimately come
+			// back via a later updateReachability call.
+			keptObservers = append(keptObservers, obs)
 		}
-		obs.SubjectReachability = keptSubjects
-		// Keep observer even if its subject list is now empty: Pekko
-		// tolerates that, and the empty record may legitimately come
-		// back via a later updateReachability call.
-		keptObservers = append(keptObservers, obs)
+		cm.State.Overview.ObserverReachability = keptObservers
 	}
-	cm.State.Overview.ObserverReachability = keptObservers
+
+	// 2) Seen set.  Pekko's gossipToProto closure 9 maps each Seen entry
+	//    through allHashesByAddress; an orphan trips
+	//    "Unknown address ... in cluster message".
+	if len(cm.State.Overview.Seen) > 0 {
+		keptSeen := cm.State.Overview.Seen[:0]
+		for _, idx := range cm.State.Overview.Seen {
+			if _, ok := presentIdx[idx]; !ok {
+				continue
+			}
+			keptSeen = append(keptSeen, idx)
+		}
+		cm.State.Overview.Seen = keptSeen
+	}
 }
 
 // pruneGossipTombstonesLocked removes tombstone entries older than

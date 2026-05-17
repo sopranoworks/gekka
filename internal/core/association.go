@@ -1198,7 +1198,11 @@ func (nm *NodeManager) SweepIdleOutboundStop() int {
 			continue
 		}
 		if conn != nil {
-			_ = conn.Close()
+			// Proactive close of an idle OUTBOUND association.  The peer
+			// is still associated on its side, so use the half-close
+			// pattern to land in PeerClosed (no WARN) rather than
+			// Aborted on the peer's inbound TcpStages.
+			gracefulCloseConn(conn)
 			assoc.conn = nil
 		}
 		assoc.mu.Unlock()
@@ -1237,7 +1241,10 @@ func (nm *NodeManager) SweepStopQuarantinedAfterIdle() int {
 	for _, assoc := range targets {
 		assoc.mu.Lock()
 		if assoc.conn != nil {
-			_ = assoc.conn.Close()
+			// QUARANTINED-idle sweep: peer already saw our quarantine
+			// frame; use gracefulCloseConn for a clean FIN sequence on
+			// the slim chance peer's stream is still draining.
+			gracefulCloseConn(assoc.conn)
 			assoc.conn = nil
 			closed++
 		}
@@ -2271,7 +2278,10 @@ func (assoc *GekkaAssociation) quarantineForSystemRedelivery(reason string) {
 		}
 	}
 	if conn != nil {
-		_ = conn.Close()
+		// We just classified the assoc as QUARANTINED on our side; use
+		// the half-close pattern so the peer's inbound stream observes
+		// PeerClosed (no WARN) instead of Aborted (Materializer WARN).
+		gracefulCloseConn(conn)
 	}
 	assoc.emitFlight(SeverityError, CatQuarantine, "QUARANTINED", map[string]any{
 		"remote": remoteKey,
@@ -3427,7 +3437,15 @@ func (assoc *GekkaAssociation) startLaneWriter(ctx context.Context, lane *outbou
 					logger.Default().Error("artery: write error", "error", err, "lane", lane.idx)
 				}
 				if lane.conn != nil {
-					_ = lane.conn.Close()
+					// gracefulCloseConn = CloseWrite + Close.  After a
+					// write error the lane is dead in both directions
+					// anyway, but Pekko's TcpStages distinguishes
+					// PeerClosed (clean FIN) from Aborted/RST; the
+					// half-close-then-close pattern signals the cleaner
+					// shutdown to the peer's inbound stream and avoids
+					// the "connection has been aborted" WARN that
+					// otherwise follows every lane teardown.
+					gracefulCloseConn(lane.conn)
 				}
 				return
 			}

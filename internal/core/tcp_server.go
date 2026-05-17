@@ -192,6 +192,14 @@ func (s *TcpServer) Shutdown() error {
 
 	graceful := s.cfg.GracefulCloseTimeout
 	if graceful == 0 {
+		// 500 ms — most peers FIN back within a single scheduler tick
+		// after our Phase 1 CloseWrite, so this budget is sufficient
+		// for natural drain.  Phase 3 below adds SetReadDeadline-wake
+		// + a secondary 250 ms poll so handlers stuck in Read still
+		// get a chance to run their defer Close (which is RST-free
+		// when the kernel recv buffer is empty).  Bumping this default
+		// blows the integration test budget — Akka multi-jvm tests
+		// shut down dozens of conns per spec.
 		graceful = 500 * time.Millisecond
 	}
 
@@ -228,8 +236,12 @@ func (s *TcpServer) Shutdown() error {
 		}
 	}
 
-	// Phase 3: force-close any conns that didn't drain (graceful=0 or
-	// peer never FIN'd back within the budget).
+	// Phase 3: handlers still in Read after the graceful budget.  Wake
+	// each blocked Read by setting the deadline in the past, then give
+	// handlers a brief window to drain naturally (their defer runs
+	// Close, which after a CloseWrite-then-drain is RST-free).  Any
+	// handler still parked after the secondary window falls through to
+	// abrupt Close — last-resort, accepts the RST risk.
 	s.mu.Lock()
 	forceConns := make([]net.Conn, 0, len(s.conns))
 	for c := range s.conns {
@@ -237,7 +249,37 @@ func (s *TcpServer) Shutdown() error {
 	}
 	s.mu.Unlock()
 	for _, c := range forceConns {
-		s.logf("force-closing connection %p (shutdown timeout)", c)
+		s.logf("waking handler via SetReadDeadline %p (graceful budget elapsed)", c)
+		if dc, ok := c.(interface{ SetReadDeadline(time.Time) error }); ok {
+			_ = dc.SetReadDeadline(time.Now())
+		}
+	}
+	// Secondary poll: 50 ms for the deadline-woken handlers to exit
+	// and run their defer Close.  A handler blocked in Read returns
+	// within a single scheduler tick (~10 µs) of the deadline being
+	// set, so 50 ms covers a few schedule misses without bloating
+	// total Shutdown time across the integration suite.
+	secondaryDeadline := time.Now().Add(50 * time.Millisecond)
+	for {
+		s.mu.Lock()
+		remaining := len(s.conns)
+		s.mu.Unlock()
+		if remaining == 0 {
+			return nil
+		}
+		if time.Now().After(secondaryDeadline) {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	s.mu.Lock()
+	stragglers := make([]net.Conn, 0, len(s.conns))
+	for c := range s.conns {
+		stragglers = append(stragglers, c)
+	}
+	s.mu.Unlock()
+	for _, c := range stragglers {
+		s.logf("force-closing straggler connection %p (handler did not exit)", c)
 		_ = c.Close()
 	}
 	return nil

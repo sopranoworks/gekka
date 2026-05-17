@@ -107,6 +107,12 @@ const (
 	// ArteryInternalSerializerID is the standard serializer ID for Artery control messages.
 	ArteryInternalSerializerID int32 = 17
 
+	// PekkoSystemMessageSerializerID is Pekko's SystemMessageSerializer
+	// (reference.conf binding "pekko-system-msg" -> 22).  Encodes
+	// WATCH/UNWATCH/DEATHWATCH_NOTIFICATION etc. as the raw SystemMessage
+	// proto with no manifest (includeManifest = false).
+	PekkoSystemMessageSerializerID int32 = 22
+
 	// ClusterSerializerID is the Pekko ClusterMessageSerializer ID.
 	ClusterSerializerID int32 = 5
 

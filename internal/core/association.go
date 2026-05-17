@@ -2707,6 +2707,40 @@ func (assoc *GekkaAssociation) dispatch(ctx context.Context, meta *ArteryMetadat
 		}
 		return assoc.handleControlMessage(ctx, meta)
 
+	case actor.PekkoSystemMessageSerializerID:
+		// Pekko-format system message: raw SystemMessage proto, no
+		// manifest, no SystemMessageEnvelope wrapper.  Reuse the
+		// existing system-message dispatch by parsing the proto and
+		// invoking the SystemMessageCallback directly.  Untrusted-mode
+		// gate is applied as for legacy 17/"SystemMessage".
+		if assoc.nodeMgr.untrustedModeDrop(actor.PekkoSystemMessageSerializerID, "") {
+			var recipient, sender string
+			if meta.Recipient != nil {
+				recipient = meta.Recipient.GetPath()
+			}
+			if meta.Sender != nil {
+				sender = meta.Sender.GetPath()
+			}
+			assoc.nodeMgr.recordUntrustedDrop(actor.PekkoSystemMessageSerializerID, "",
+				"PossiblyHarmful system message", recipient, sender)
+			return nil
+		}
+		sm := &gproto_remote.SystemMessage{}
+		if err := proto.Unmarshal(meta.Payload, sm); err != nil {
+			return fmt.Errorf("failed to unmarshal Pekko-format SystemMessage: %w", err)
+		}
+		logger.Default().Debug("artery: received Pekko-format system message", "type", sm.GetType())
+		if assoc.nodeMgr.SystemMessageCallback != nil {
+			// No SystemMessageEnvelope here — pass a minimal one that
+			// carries only what the callback uses for routing/dedup.
+			env := &gproto_remote.SystemMessageEnvelope{
+				SerializerId:    proto.Int32(actor.PekkoSystemMessageSerializerID),
+				MessageManifest: nil,
+			}
+			return assoc.nodeMgr.SystemMessageCallback(assoc.remote.Load(), env, sm)
+		}
+		return nil
+
 	case 6: // MessageContainerSerializer
 		env := &gproto_remote.SelectionEnvelope{}
 		if err := proto.Unmarshal(meta.Payload, env); err != nil {

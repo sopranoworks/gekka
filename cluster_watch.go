@@ -193,34 +193,30 @@ func (c *Cluster) watchRemote(watcher ActorRef, target ActorRef) {
 			},
 		},
 	}
+	// Encode as Pekko-format SystemMessage: serializer id 22
+	// (org.apache.pekko.remote.serialization.SystemMessageSerializer) with
+	// includeManifest=false (empty manifest).  The wire payload is the raw
+	// SystemMessage proto — Pekko's SystemMessageFormats.SystemMessage and
+	// gekka's gproto_remote.SystemMessage share field numbers, so a single
+	// proto.Marshal works for both sides.  This replaces gekka's prior
+	// id-17 + manifest "SystemMessage" + SystemMessageEnvelope wrapper
+	// shape, which Pekko's serializer id 17 (ArteryMessageSerializer)
+	// rejected with "Manifest 'SystemMessage' not defined".  Receivers
+	// continue to accept the legacy 17/"SystemMessage" form for backward
+	// compatibility (see association.go dispatch).
 	smBytes, err := proto.Marshal(sm)
 	if err != nil {
 		return
 	}
 
 	seq := c.lastSystemSeqNo.Add(1)
-	env := &gproto_remote.SystemMessageEnvelope{
-		Message:         smBytes,
-		SerializerId:    proto.Int32(2), // Protobuf
-		MessageManifest: []byte("SystemMessage"),
-		SeqNo:           proto.Uint64(seq),
-		AckReplyTo: &gproto_remote.UniqueAddress{
-			Address: c.nm.LocalAddr,
-			Uid:     proto.Uint64(assoc.LocalUid()),
-		},
-	}
-	payload, err := proto.Marshal(env)
-	if err != nil {
-		return
-	}
-
 	frame, err := core.BuildArteryFrame(
 		int64(assoc.LocalUid()),
-		17, // ArteryInternalSerializerID
+		actor.PekkoSystemMessageSerializerID,
 		"",
 		target.Path(),
-		"SystemMessage",
-		payload,
+		"",
+		smBytes,
 		true,
 	)
 	if err != nil {
@@ -277,28 +273,13 @@ func (c *Cluster) unwatchRemote(watcher ActorRef, target ActorRef) {
 	}
 
 	seq := c.lastSystemSeqNo.Add(1)
-	env := &gproto_remote.SystemMessageEnvelope{
-		Message:         smBytes,
-		SerializerId:    proto.Int32(2), // Protobuf
-		MessageManifest: []byte("SystemMessage"),
-		SeqNo:           proto.Uint64(seq),
-		AckReplyTo: &gproto_remote.UniqueAddress{
-			Address: c.nm.LocalAddr,
-			Uid:     proto.Uint64(assoc.LocalUid()),
-		},
-	}
-	payload, err := proto.Marshal(env)
-	if err != nil {
-		return
-	}
-
 	frame, err := core.BuildArteryFrame(
 		int64(assoc.LocalUid()),
-		17, // ArteryInternalSerializerID
+		actor.PekkoSystemMessageSerializerID,
 		"",
 		target.Path(),
-		"SystemMessage",
-		payload,
+		"",
+		smBytes,
 		true,
 	)
 	if err != nil {
@@ -471,30 +452,15 @@ func (c *Cluster) emitRemoteDeathWatchNotifications(nodeWatchers map[string][]*g
 			}
 
 			seq := c.lastSystemSeqNo.Add(1)
-			env := &gproto_remote.SystemMessageEnvelope{
-				Message:         smBytes,
-				SerializerId:    proto.Int32(2), // Protobuf
-				MessageManifest: []byte("SystemMessage"),
-				SeqNo:           proto.Uint64(seq),
-				AckReplyTo: &gproto_remote.UniqueAddress{
-					Address: c.nm.LocalAddr,
-					Uid:     proto.Uint64(assoc.LocalUid()),
-				},
-			}
-
-			payload, err := proto.Marshal(env)
-			if err != nil {
-				continue
-			}
-
-			// Wrap in Artery frame with manifest "SystemMessage"
+			// Pekko-format SystemMessage (serializer 22, no manifest,
+			// raw proto) — see watchRemote rationale above.
 			frame, err := core.BuildArteryFrame(
 				int64(assoc.LocalUid()),
-				17, // ArteryInternalSerializerID
+				actor.PekkoSystemMessageSerializerID,
 				"",
 				watcher.GetPath(),
-				"SystemMessage",
-				payload,
+				"",
+				smBytes,
 				true,
 			)
 			if err != nil {

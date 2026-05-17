@@ -3321,22 +3321,35 @@ func (assoc *GekkaAssociation) startLaneWriter(ctx context.Context, lane *outbou
 			if err != nil {
 				// Classify the failure using positive evidence from gekka's
 				// own state, not by pattern-matching the error string:
-				//   - parent ctx is canceled  => CoordinatedShutdown's
-				//     actor-system-terminate phase has fired; the conn is
-				//     being torn down by us, so a final in-flight write
-				//     racing with the close is expected.
+				//
+				//   - nm.IsShuttingDown()  => CoordinatedShutdown is
+				//     running.  Every phase from cluster-leave through
+				//     actor-system-terminate can race with peer-initiated
+				//     close (Pekko also tears down its remoting transport
+				//     and sends Quarantined / closes conns).  ctx.Err()
+				//     alone is insufficient because the lane writer's ctx
+				//     is the NodeManager-lifetime ctx — it does not fire
+				//     until actor-system-terminate (the last phase).
+				//
+				//   - ctx.Err() != nil  => the NodeManager-level ctx has
+				//     been canceled.  Covers the actor-system-terminate
+				//     phase plus any external cancellation.
+				//
 				//   - assoc.state == QUARANTINED  => an upstream
 				//     "artery: received Quarantined" already fired the
 				//     load-bearing alarm; this is the inevitable write
 				//     attempt against the now-closed conn.
+				//
 				// Anything else stays ERROR — real network failures during
 				// steady-state operation must surface.
 				assoc.mu.RLock()
 				state := assoc.state
 				assoc.mu.RUnlock()
 				switch {
-				case ctx.Err() != nil:
+				case nm != nil && nm.IsShuttingDown():
 					logger.Default().Info("artery: lane write ended (shutdown)", "error", err, "lane", lane.idx)
+				case ctx.Err() != nil:
+					logger.Default().Info("artery: lane write ended (ctx canceled)", "error", err, "lane", lane.idx)
 				case state == QUARANTINED:
 					logger.Default().Info("artery: lane write ended (quarantined)", "error", err, "lane", lane.idx)
 				default:

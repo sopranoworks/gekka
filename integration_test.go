@@ -906,6 +906,34 @@ func countUpMembers(node *Cluster) int {
 	return count
 }
 
+// waitForGossipPurged polls until node's gossip view has dropped every
+// member except the `keep` set of "host:port" strings.  A Leaving/Exiting/
+// Removed member entry still shadows the address in gossip and Pekko
+// joiners that pick up such gossip will try to dial it -> ECONNREFUSED.
+// Wait for this purge before starting another node on a fresh port.
+func waitForGossipPurged(node *Cluster, keep map[string]struct{}, timeout time.Duration) error {
+	deadline := time.After(timeout)
+	for {
+		extra := 0
+		for _, m := range node.cm.GetState().GetMembers() {
+			ua := node.cm.GetState().GetAllAddresses()[m.GetAddressIndex()]
+			a := ua.GetAddress()
+			hp := fmt.Sprintf("%s:%d", a.GetHostname(), a.GetPort())
+			if _, ok := keep[hp]; !ok {
+				extra++
+			}
+		}
+		if extra == 0 {
+			return nil
+		}
+		select {
+		case <-deadline:
+			return fmt.Errorf("timeout: wanted only %v in gossip, have %d extras", keep, extra)
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+}
+
 // waitForScalaStdoutContains scans `stdout` for a line containing `pattern`,
 // echoing every line via fmt.Printf("[SCALA] %s\n", ...) (matching the
 // established style used by every TestIntegration_* test). It blocks until
@@ -1310,6 +1338,16 @@ func TestGoSeed_Churn(t *testing.T) {
 		// second JVM on top of a still-alive but logically Down one. The
 		// jvmproc t.Cleanup hook runs at test exit, not per cycle.
 		scalaProc.Stop()
+		// Wait for the Removed cycle-N entry to drop entirely from the
+		// Go-Seed gossip view before the next cycle spawns.  Without
+		// this, cycle N+1's Scala joins, receives gossip that still
+		// shows cycle N as Leaving/Exiting, and Pekko's Materializer
+		// opens an outbound stream to the (already-dead) cycle-N port
+		// -> ECONNREFUSED -> WARN.
+		goSeedHP := fmt.Sprintf("127.0.0.1:%d", goSeedPort)
+		if err := waitForGossipPurged(goSeed, map[string]struct{}{goSeedHP: {}}, 10*time.Second); err != nil {
+			t.Fatalf("[CHURN cycle=%d] gossip purge: %v", i, err)
+		}
 		log.Printf("[CHURN cycle=%d] complete — back to 1 Up member.", i)
 	}
 	log.Printf("[SUCCESS] TestGoSeed_Churn passed (%d cycles).", cycles)

@@ -4312,14 +4312,47 @@ func (c *Cluster) registerBuiltinShutdownTasks() {
 	})
 
 	// ── cluster-leave ───────────────────────────────────────────────────────
-	// Send a Leave message to all Up/WeaklyUp members, then wait for this
-	// node's own status to reach Removed (driven by the cluster leader).
+	// Send a Leave message to all Up/WeaklyUp members, then wait — best
+	// effort — for this node's own status to reach Removed (driven by the
+	// cluster leader's gossip).
+	//
+	// The wait is intentionally best-effort: if the cluster leader is
+	// unreachable, quarantined, or absent (single-node cluster), the
+	// Removed gossip can never arrive, and there is no useful work this
+	// node can do beyond what LeaveCluster has already done.  Logging an
+	// ERROR for that case would mark every test-suite shutdown — and
+	// every single-node graceful exit in production — as a failure,
+	// which is noise.  Instead we cap the wait at slightly less than the
+	// phase deadline so the task always exits cleanly (giving runPhase a
+	// chance to register a clean "phase done" before its own phaseCtx
+	// fires), log the un-observed Removed status at INFO, and return nil.
 	c.cs.AddTask("cluster-leave", "send-leave-and-wait", func(ctx context.Context) error {
 		if err := c.cm.LeaveCluster(); err != nil {
 			// Non-fatal: we might not be fully joined yet.
 			logger.Default().Error("[CoordinatedShutdown] LeaveCluster failed", slog.Any("err", err))
 		}
-		return c.cm.WaitForSelfRemoved(ctx)
+
+		// Reserve a slack window before the phase deadline so this task
+		// always returns before runPhase's phaseCtx.Done() fires.  Without
+		// the slack, the goroutine race between close(done) and phaseCtx
+		// expiry can spuriously surface a "phase timeout" WARN even when
+		// we exited on our own internal budget.
+		waitCtx := ctx
+		var cancel context.CancelFunc
+		if dl, ok := ctx.Deadline(); ok {
+			budget := time.Until(dl) - 500*time.Millisecond
+			if budget > 0 {
+				waitCtx, cancel = context.WithTimeout(ctx, budget)
+				defer cancel()
+			}
+		}
+
+		if err := c.cm.WaitForSelfRemoved(waitCtx); err != nil {
+			logger.Default().Info(
+				"[CoordinatedShutdown] cluster-leave: Removed status not observed within budget; proceeding",
+				slog.Any("err", err))
+		}
+		return nil
 	})
 
 	// ── cluster-shutdown ────────────────────────────────────────────────────

@@ -84,6 +84,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Spawn the AskActor (FT2 receiver) before waiting for self-Up so the
+	// ask-pattern responder is online as soon as membership reaches Up.
+	if _, err := cluster.System.ActorOf(gekka.Props{
+		New: func() actor.Actor {
+			return &AskActor{BaseActor: actor.NewBaseActor()}
+		},
+	}, "ask"); err != nil {
+		fmt.Fprintf(os.Stderr, "ActorOf ask: %v\n", err)
+		os.Exit(1)
+	}
+
 	// Wait until the cluster reports this node Up.
 	waitCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -117,6 +128,23 @@ func main() {
 		}
 		if sender != nil {
 			sender.StartTickers()
+		}
+
+		// Spawn the AskSenderActor (FT2 requester) only when peers are
+		// configured. It mirrors the TellSender wiring but uses
+		// cluster.Ask for request-reply with a 5-second per-call timeout.
+		var asker *AskSenderActor
+		if _, err := cluster.System.ActorOf(gekka.Props{
+			New: func() actor.Actor {
+				asker = NewAskSenderActor(cluster, peers, origin)
+				return asker
+			},
+		}, "askSender"); err != nil {
+			fmt.Fprintf(os.Stderr, "ActorOf askSender: %v\n", err)
+			os.Exit(1)
+		}
+		if asker != nil {
+			asker.StartTickers()
 		}
 	}
 

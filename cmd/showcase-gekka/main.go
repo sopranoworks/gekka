@@ -76,7 +76,7 @@ func main() {
 	waitCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	for {
-		if cluster.IsUp() {
+		if cluster.IsLocalNodeUp() {
 			break
 		}
 		select {

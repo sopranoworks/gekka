@@ -11,6 +11,9 @@ object ShowcaseNode {
     val system = ActorSystem("ShowcaseCluster", config)
     val cluster = Cluster(system)
 
+    // FT1 receiver
+    system.actorOf(EchoActor.props, "echo")
+
     cluster.registerOnMemberUp {
       println(s"--- SHOWCASE NODE READY: $nodeLabel ---")
       Console.flush()

@@ -154,6 +154,30 @@ func main() {
 	// cluster membership reaches Up.
 	startDdata(cluster, *nodeLabel)
 
+	// FT4: spawn a ClusterSingletonManager for this node's own role. The
+	// manager is responsible for hosting the actual ShowcaseSingletonActor
+	// when this node becomes the oldest member with role=singleton-<label>.
+	// The manager is spawned UNCONDITIONALLY (no role-membership pre-check)
+	// because the gekka SingletonManager itself queries cluster.OldestNode
+	// and only spawns the child when isLocalOldest() is true; if this node
+	// does not carry the matching role the manager will simply never elect.
+	ownRole := "singleton-" + *nodeLabel
+	singletonMgr := cluster.SingletonManager(gekka.Props{
+		New: func() actor.Actor {
+			return &ShowcaseSingletonActor{BaseActor: actor.NewBaseActor()}
+		},
+	}, ownRole)
+	if _, err := cluster.System.ActorOf(gekka.Props{
+		New: func() actor.Actor { return singletonMgr },
+	}, "singleton-manager-"+ownRole); err != nil {
+		fmt.Fprintf(os.Stderr, "ActorOf singleton-manager-%s: %v\n", ownRole, err)
+		os.Exit(1)
+	}
+
+	// FT4 ClientActor: every node pings every singleton role on a 4s tick,
+	// with a 30s warmup grace that suppresses unestablished-role timeouts.
+	startClient(cluster, *nodeLabel)
+
 	fmt.Printf("--- SHOWCASE NODE READY: %s ---\n", *nodeLabel)
 	os.Stdout.Sync()
 

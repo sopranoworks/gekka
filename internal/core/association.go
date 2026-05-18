@@ -607,9 +607,7 @@ type NodeManager struct {
 	// shuttingDown is set to 1 by Cluster.Shutdown when CoordinatedShutdown
 	// has begun.  Read by code paths that need to distinguish "this peer
 	// event is expected because we are tearing down" from "this peer event
-	// is a genuine alarm".  Notably: the artery: received Quarantined log
-	// site downgrades to INFO when shuttingDown is set, because Pekko sends
-	// Quarantined as part of its own transport shutdown handshake.
+	// is a genuine alarm" (e.g. lane write-error classification).
 	shuttingDown atomic.Int32
 }
 
@@ -3587,32 +3585,23 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 		if err := proto.Unmarshal(meta.Payload, quar); err != nil {
 			return err
 		}
-		// Classify by gekka's own state.  Two positive-evidence paths
-		// route the message to INFO; everything else stays at WARN.
+		// Classify by gekka's own state.  Positive cluster-state evidence
+		// routes the message to INFO; everything else stays at WARN.
 		//
-		//   1. nm.IsShuttingDown() — Cluster.Shutdown has begun.  Pekko
-		//      emits Quarantined to every still-associated peer as part
-		//      of its remoting-transport shutdown handshake; under our
-		//      own teardown that is expected, not an alarm.
-		//
-		//   2. peer's cluster-member status is non-Up — gekka has already
-		//      decided the peer is departing (Leaving/Exiting/Down/Removed)
-		//      or it is no longer in the gossip view at all.  The
-		//      Quarantined message is the protocol confirmation that the
-		//      peer has finished tearing down.
+		//   - peer's cluster-member status is non-Up — gekka has already
+		//     decided the peer is departing (Leaving/Exiting/Down/Removed)
+		//     or it is no longer in the gossip view at all.  The
+		//     Quarantined message is the protocol confirmation that the
+		//     peer has finished tearing down.
 		//
 		// Anything else is a genuine peer-initiated quarantine (UID
 		// conflict, SBR Down decision while we were Up, etc.) and stays
 		// at WARN.
 		fromAddr := quar.GetFrom().GetAddress()
 		expected := false
-		if assoc.nodeMgr != nil {
-			if assoc.nodeMgr.IsShuttingDown() {
-				expected = true
-			} else if assoc.nodeMgr.clusterMgr != nil && fromAddr != nil {
-				expected = assoc.nodeMgr.clusterMgr.IsRemotePeerDeparting(
-					fromAddr.GetHostname(), fromAddr.GetPort())
-			}
+		if assoc.nodeMgr != nil && assoc.nodeMgr.clusterMgr != nil && fromAddr != nil {
+			expected = assoc.nodeMgr.clusterMgr.IsRemotePeerDeparting(
+				fromAddr.GetHostname(), fromAddr.GetPort())
 		}
 		if expected {
 			logger.Default().Info("artery: received Quarantined (expected teardown)", "from", quar.From, "to", quar.To)

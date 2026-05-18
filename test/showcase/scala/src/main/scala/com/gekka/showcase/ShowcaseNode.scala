@@ -22,6 +22,10 @@ object ShowcaseNode {
     if (peers.nonEmpty)
       system.actorOf(TellSenderActor.props(nodeLabel, peers), TellSenderActor.name)
 
+    system.actorOf(AskActor.props, AskActor.name)
+    if (peers.nonEmpty)
+      system.actorOf(AskSenderActor.props(nodeLabel, peers), AskSenderActor.name)
+
     cluster.registerOnMemberUp {
       println(s"--- SHOWCASE NODE READY: $nodeLabel ---")
       Console.flush()

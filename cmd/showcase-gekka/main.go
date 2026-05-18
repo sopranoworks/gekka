@@ -24,10 +24,11 @@ func main() {
 	mgmtPort := flag.Int("mgmt-port", 0, "management HTTP port")
 	seeds := flag.String("seeds", "", "comma-separated seed list host:port,host:port")
 	rolesCSV := flag.String("roles", "showcase-member", "comma-separated cluster roles")
+	peersCSV := flag.String("peers", "", "comma-separated peer URIs (e.g. pekko://ShowcaseCluster@127.0.0.1:2552); empty disables TellSender")
 	flag.Parse()
 
 	if *nodeLabel == "" || *port == 0 || *mgmtPort == 0 || *seeds == "" {
-		fmt.Fprintln(os.Stderr, "usage: showcase-gekka --node g1 --port 2541 --mgmt-port 9541 --seeds host:port,...")
+		fmt.Fprintln(os.Stderr, "usage: showcase-gekka --node g1 --port 2541 --mgmt-port 9541 --seeds host:port,... [--peers uri,uri]")
 		os.Exit(2)
 	}
 
@@ -72,6 +73,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Spawn the EchoActor before waiting for self-Up so the receiver side
+	// of FT1 is online the moment cluster membership transitions to Up.
+	if _, err := cluster.System.ActorOf(gekka.Props{
+		New: func() actor.Actor {
+			return &EchoActor{BaseActor: actor.NewBaseActor()}
+		},
+	}, "echo"); err != nil {
+		fmt.Fprintf(os.Stderr, "ActorOf echo: %v\n", err)
+		os.Exit(1)
+	}
+
 	// Wait until the cluster reports this node Up.
 	waitCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -86,6 +98,28 @@ func main() {
 		case <-time.After(200 * time.Millisecond):
 		}
 	}
+
+	// Spawn the TellSenderActor only when at least one peer is configured.
+	peers := parsePeers(*peersCSV)
+	if len(peers) > 0 {
+		self := cluster.SelfAddress()
+		origin := fmt.Sprintf("%s://%s@%s:%d",
+			self.Protocol, self.System, self.Host, self.Port)
+		var sender *TellSenderActor
+		if _, err := cluster.System.ActorOf(gekka.Props{
+			New: func() actor.Actor {
+				sender = NewTellSenderActor(cluster, peers, origin)
+				return sender
+			},
+		}, "tellSender"); err != nil {
+			fmt.Fprintf(os.Stderr, "ActorOf tellSender: %v\n", err)
+			os.Exit(1)
+		}
+		if sender != nil {
+			sender.StartTickers()
+		}
+	}
+
 	fmt.Printf("--- SHOWCASE NODE READY: %s ---\n", *nodeLabel)
 	os.Stdout.Sync()
 
@@ -94,4 +128,22 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	<-sigCh
 	_ = cluster.Shutdown()
+}
+
+// parsePeers splits a comma-separated peer list, trims whitespace, and
+// returns the non-empty entries. An empty or whitespace-only input yields
+// an empty slice.
+func parsePeers(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

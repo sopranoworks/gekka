@@ -30,6 +30,19 @@ object ShowcaseNode {
       system.actorOf(p, n.replace('/', '-')) // Pekko paths can't contain '/' inside one segment; use 'ddata-gcounter' etc.
     }
 
+    import org.apache.pekko.cluster.singleton.{ClusterSingletonManager, ClusterSingletonManagerSettings}
+    val ownRole = s"singleton-$nodeLabel"
+    system.actorOf(
+      ClusterSingletonManager.props(
+        singletonProps = SingletonActor.props,
+        terminationMessage = org.apache.pekko.actor.PoisonPill,
+        settings = ClusterSingletonManagerSettings(system).withRole(ownRole),
+      ),
+      name = s"singleton-manager-$ownRole",
+    )
+
+    system.actorOf(ClientActor.props(nodeLabel), "client")
+
     cluster.registerOnMemberUp {
       println(s"--- SHOWCASE NODE READY: $nodeLabel ---")
       Console.flush()

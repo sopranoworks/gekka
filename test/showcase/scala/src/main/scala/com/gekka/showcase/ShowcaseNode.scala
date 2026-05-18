@@ -26,6 +26,10 @@ object ShowcaseNode {
     if (peers.nonEmpty)
       system.actorOf(AskSenderActor.props(nodeLabel, peers), AskSenderActor.name)
 
+    DdataActors.all(nodeLabel).zip(DdataActors.names).foreach { case (p, n) =>
+      system.actorOf(p, n.replace('/', '-')) // Pekko paths can't contain '/' inside one segment; use 'ddata-gcounter' etc.
+    }
+
     cluster.registerOnMemberUp {
       println(s"--- SHOWCASE NODE READY: $nodeLabel ---")
       Console.flush()

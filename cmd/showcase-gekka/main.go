@@ -148,6 +148,12 @@ func main() {
 		}
 	}
 
+	// FT3: Distributed Data CRDT actors. Runs unconditionally — even on a
+	// peerless solo node — because the local Replicator gossip loop is always
+	// active and convergence with future peers happens automatically once the
+	// cluster membership reaches Up.
+	startDdata(cluster, *nodeLabel)
+
 	fmt.Printf("--- SHOWCASE NODE READY: %s ---\n", *nodeLabel)
 	os.Stdout.Sync()
 

@@ -62,9 +62,3 @@ type runnerCfg struct {
 	ArtifactDir string
 	Logger      *slog.Logger
 }
-
-// runPhases is implemented in phases.go (Task 21). For now, stub it.
-func runPhases(ctx context.Context, cfg runnerCfg) int {
-	cfg.Logger.Warn("runPhases not yet wired up — see Task 21")
-	return 10
-}

@@ -26,31 +26,19 @@ import (
 	"github.com/sopranoworks/gekka/logger"
 )
 
-// AskEnvelope mirrors the Scala case class used by the ask-pattern showcase.
-//
-// As with EchoEnvelope, the cross-language CBOR codec gap (Scala's
-// jackson-cbor serializer is not yet registered on the Gekka side) means that
-// a Scala-originated AskEnvelope arrives as a raw *gekka.IncomingMessage; the
-// architectural concern is tracked in the plan and surfaced explicitly by the
-// receiver below, not silently dropped.
-type AskEnvelope struct {
-	SeqNo       int64       `json:"seqNo"`
-	Originator  string      `json:"originator"`
-	Direction   string      `json:"direction"`
-	PayloadKind string      `json:"payloadKind"`
-	Payload     interface{} `json:"payload"`
-}
-
 // AskActor handles the receiver half of FT2. It accepts a SEND-direction
 // AskEnvelope, flips Direction to REPLY, and Tells it back to the Sender.
 // Replies travel via the Sender() reference so the ask-pattern caller's temp
 // reply path receives them.
+//
+// AskEnvelope is defined in envelope.go alongside the other showcase wire
+// types. The Phase 3 JacksonCborSerializer registration in main.go makes
+// Scala-emitted jackson-cbor frames decode directly into *AskEnvelope.
 type AskActor struct {
 	actor.BaseActor
 }
 
-// Receive handles ask-pattern requests and surfaces raw remote deliveries
-// (no codec) as structured errors.
+// Receive handles ask-pattern requests.
 func (a *AskActor) Receive(msg any) {
 	switch m := msg.(type) {
 	case *AskEnvelope:
@@ -70,16 +58,6 @@ func (a *AskActor) Receive(msg any) {
 		logger.Default().Error("AskActor: no sender on SEND envelope",
 			"seq", m.SeqNo,
 			"originator", m.Originator)
-
-	case *gekka.IncomingMessage:
-		// Raw remote delivery — the deserializer for this serializer ID is
-		// not registered on the Gekka side. Surface a structured error so
-		// the smoke test catches it; do not crash the actor.
-		logger.Default().Error("AskActor: unsupported remote envelope",
-			"serializerId", m.SerializerId,
-			"manifest", m.Manifest,
-			"payloadLen", len(m.Payload),
-			"recipient", m.RecipientPath)
 
 	default:
 		logger.Default().Error("AskActor: unexpected message",
@@ -188,14 +166,8 @@ func (a *AskSenderActor) tickRound() {
 		a.mu.Unlock()
 
 		kind := payloadKindForSeq(seq)
-		payload := payloadValueForKind(kind, seq)
-		env := &AskEnvelope{
-			SeqNo:       seq,
-			Originator:  a.origin,
-			Direction:   "SEND",
-			PayloadKind: kind,
-			Payload:     payload,
-		}
+		payload := payloadValueForKind(kind, seq, a.origin)
+		env := NewAskEnvelope(seq, a.origin, "SEND", kind, payload)
 		path := peerAskPath(peer)
 
 		go a.doAsk(seq, peer, kind, path, env)
@@ -221,36 +193,30 @@ func (a *AskSenderActor) doAsk(seq int64, peer, kind, path string, env *AskEnvel
 		return
 	}
 
-	// Local replies arrive as the deserialized payload; remote replies
-	// (without a registered CBOR codec) arrive as raw bytes. Both cases
-	// are logged distinctly so the smoke test can tell them apart.
 	if reply == nil {
 		logger.Default().Error("AskSender: nil reply",
 			"peer", peer, "seq", seq, "payloadKind", kind)
 		return
 	}
-	if env, ok := reply.DeserializedMessage.(*AskEnvelope); ok {
-		if env.Direction != "REPLY" {
-			logger.Default().Error("AskSender: non-REPLY direction",
-				"peer", peer, "seq", env.SeqNo, "direction", env.Direction)
-			return
-		}
-		logger.Default().Info("AskSender: REPLY",
-			"seq", env.SeqNo,
+	replyEnv, ok := reply.DeserializedMessage.(*AskEnvelope)
+	if !ok {
+		logger.Default().Error("AskSender: unexpected reply type",
 			"peer", peer,
-			"payloadKind", env.PayloadKind,
-			"latencyMs", latency.Milliseconds())
+			"seq", seq,
+			"payloadKind", kind,
+			"got", fmtType(reply.DeserializedMessage))
 		return
 	}
-	// Remote raw-bytes reply: same cross-language codec gap as the Tell
-	// path. Log as ERROR so the architectural concern is visible.
-	logger.Default().Error("AskSender: unsupported remote reply",
+	if replyEnv.Direction != "REPLY" {
+		logger.Default().Error("AskSender: non-REPLY direction",
+			"peer", peer, "seq", replyEnv.SeqNo, "direction", replyEnv.Direction)
+		return
+	}
+	logger.Default().Info("AskSender: REPLY",
+		"seq", replyEnv.SeqNo,
 		"peer", peer,
-		"seq", seq,
-		"payloadKind", kind,
-		"serializerId", reply.SerializerId,
-		"manifest", reply.Manifest,
-		"payloadLen", len(reply.Payload))
+		"payloadKind", replyEnv.PayloadKind,
+		"latencyMs", latency.Milliseconds())
 }
 
 // peerAskPath builds the full /user/ask URI for a peer base URL like

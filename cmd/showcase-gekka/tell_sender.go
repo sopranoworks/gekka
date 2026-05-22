@@ -11,6 +11,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -159,14 +160,6 @@ func (a *TellSenderActor) Receive(msg any) {
 			"payloadKind", entry.payloadKind,
 			"latencyMs", latency.Milliseconds())
 
-	case *gekka.IncomingMessage:
-		// Cross-language CBOR replies arrive as raw bytes — surface as ERROR
-		// (matches the architectural concern documented in echo_actor.go).
-		logger.Default().Error("TellSender: unsupported remote reply",
-			"serializerId", m.SerializerId,
-			"manifest", m.Manifest,
-			"payloadLen", len(m.Payload))
-
 	default:
 		logger.Default().Error("TellSender: unexpected message",
 			"type", fmtType(msg))
@@ -183,22 +176,20 @@ func (a *TellSenderActor) sendOnce() {
 		return
 	}
 
-	a.mu.Lock()
-	a.nextSeq++
-	seq := a.nextSeq
-	a.mu.Unlock()
-
-	kind := payloadKindForSeq(seq)
-	payload := payloadValueForKind(kind, seq)
-
+	// Allocate a unique seq per (tick, peer). The pending map is keyed by
+	// seq alone, so reusing one seq across N peers (the prior shape) made
+	// the last peer's pendingEntry overwrite the others — surfaces as
+	// "REPLY for unknown seq" floods once cross-language replies actually
+	// flow (which they didn't before Phase 3's JacksonCborSerializer wiring).
 	for _, peer := range a.peers {
-		env := &EchoEnvelope{
-			SeqNo:       seq,
-			Originator:  a.origin,
-			Direction:   "SEND",
-			PayloadKind: kind,
-			Payload:     payload,
-		}
+		a.mu.Lock()
+		a.nextSeq++
+		seq := a.nextSeq
+		a.mu.Unlock()
+
+		kind := payloadKindForSeq(seq)
+		payload := payloadValueForKind(kind, seq, a.origin)
+		env := NewEchoEnvelope(seq, a.origin, "SEND", kind, payload)
 		path := peerEchoPath(peer)
 
 		a.mu.Lock()
@@ -271,18 +262,23 @@ func payloadKindForSeq(seq int64) string {
 }
 
 // payloadValueForKind returns a representative payload value for a given
-// payload kind. The plan does not pin exact byte-level values, just that
-// the kinds rotate, so we generate simple deterministic values.
-func payloadValueForKind(kind string, seq int64) interface{} {
+// payload kind. Each kind matches the Scala-side TellSenderActor.scala:50-55
+// rotation so cross-language echo round-trips exercise the same wire shapes
+// in both directions.
+func payloadValueForKind(kind string, seq int64, originator string) interface{} {
 	switch kind {
 	case "string":
-		return "hello-from-gekka"
+		return fmt.Sprintf("hello-%d-%s", seq, originator)
 	case "long":
-		return seq * 100
+		return seq
 	case "system":
-		return map[string]interface{}{"kind": "system", "seq": seq}
+		return NewSystemMessagePing(seq, originator)
 	case "custom":
-		return map[string]interface{}{"kind": "custom", "value": "custom-payload", "seq": seq}
+		bytes := make([]byte, 16)
+		for i := range bytes {
+			bytes[i] = 0x42
+		}
+		return NewShowcaseEchoCustom(seq, originator, bytes)
 	default:
 		return seq
 	}

@@ -222,21 +222,30 @@ gate2:
 	}
 }
 
+// awaitReady waits for the child's READY sentinel on its dedicated tap
+// (`c.ready`, closed by pipeReader). It concurrently drains `c.lines` so the
+// producer can keep reading the OS pipe — setup-phase lines are not
+// classified, mirroring the prior behaviour where awaitReady discarded them.
+//
+// The `label` parameter is kept for diagnostic context; the actual sentinel
+// match is performed inline by pipeReader (responsibility split).
 func awaitReady(ctx context.Context, c *child, label string) error {
-	deadline := time.Now().Add(60 * time.Second)
-	for time.Now().Before(deadline) {
+	_ = label
+	timeout := time.After(60 * time.Second)
+	for {
 		select {
-		case ln, ok := <-c.lines:
+		case <-c.ready:
+			return nil
+		case _, ok := <-c.lines:
 			if !ok {
 				return errors.New("child exited before ready")
 			}
-			if strings.Contains(ln.text, "--- SHOWCASE NODE READY: "+label+" ---") {
-				return nil
-			}
+		case <-c.done:
+			return errors.New("child exited before ready")
+		case <-timeout:
+			return errors.New("ready timeout")
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(500 * time.Millisecond):
 		}
 	}
-	return errors.New("ready timeout")
 }

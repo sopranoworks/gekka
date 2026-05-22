@@ -33,7 +33,6 @@ package main
 
 import (
 	"context"
-	"reflect"
 	"sync"
 	"time"
 
@@ -43,21 +42,10 @@ import (
 	"github.com/sopranoworks/gekka/logger"
 )
 
-// Ping is the request shape sent by ClientActor to a singleton. The wire
-// representation is JSONSerializerID (the default for unregistered user
-// structs); both fields are cross-language-safe primitives so the same
-// payload round-trips through the Scala-side JSON codec when CBOR is not
-// in play.
-type Ping struct {
-	SeqNo  int64  `json:"seqNo"`
-	Origin string `json:"origin"`
-}
-
-// Pong is the reply shape produced by the singleton.
-type Pong struct {
-	SeqNo  int64  `json:"seqNo"`
-	Origin string `json:"origin"`
-}
+// Ping and Pong are defined in envelope.go alongside the other showcase
+// wire types. They embed jacksoncbor.JVMClassManifest and are registered
+// with the JacksonCborSerializer in main.go so cross-language FT4 traffic
+// flows over Pekko's jackson-cbor wire (the same path FT1/FT2 use).
 
 // ShowcaseSingletonActor is the singleton actor hosted by each
 // ClusterSingletonManager. It accepts a Ping and replies with a matching
@@ -66,29 +54,18 @@ type ShowcaseSingletonActor struct {
 	actor.BaseActor
 }
 
-// Receive handles Ping (local typed delivery or remote JSON-deserialized
-// delivery) and surfaces the raw-bytes path so a missing manifest
-// registration on either side is visible in logs rather than silently
-// swallowed.
+// Receive handles Ping (typed delivery via JacksonCborSerializer for both
+// local and remote, after Phase 3 wiring). Replies with a Pong carrying
+// matching seq/origin.
 func (a *ShowcaseSingletonActor) Receive(msg any) {
 	switch m := msg.(type) {
 	case *Ping:
 		if s := a.Sender(); s != nil && s.Path() != "" {
-			s.Tell(&Pong{SeqNo: m.SeqNo, Origin: m.Origin}, a.Self())
+			s.Tell(NewPong(m.SeqNo, m.Origin), a.Self())
 			return
 		}
 		logger.Default().Error("ShowcaseSingletonActor: Ping with no sender",
 			"seq", m.SeqNo, "origin", m.Origin)
-
-	case *gekka.IncomingMessage:
-		// Remote Ping arrived but the JSON manifest is not registered on
-		// this node. Surface a structured error so the smoke test catches
-		// the codec gap.
-		logger.Default().Error("ShowcaseSingletonActor: unsupported remote envelope",
-			"serializerId", m.SerializerId,
-			"manifest", m.Manifest,
-			"payloadLen", len(m.Payload),
-			"recipient", m.RecipientPath)
 
 	default:
 		logger.Default().Error("ShowcaseSingletonActor: unexpected message",
@@ -137,12 +114,10 @@ type showcaseClient struct {
 //
 // success → set established[role]=true (and never reset)
 func startClient(cluster *gekka.Cluster, selfLabel string) {
-	// Register the manifests on this node so remote JSON Pong replies
-	// deserialize into *Pong, and remote JSON Ping requests deserialize
-	// into *Ping. The manifest matches the default Router emits for
-	// unregistered user structs: msgType.String() → "*main.Ping" etc.
-	cluster.RegisterType("*main.Ping", reflect.TypeOf((*Ping)(nil)))
-	cluster.RegisterType("*main.Pong", reflect.TypeOf((*Pong)(nil)))
+	// Ping/Pong registration with the gekka SerializationRegistry happens
+	// in main.go via the JacksonCborSerializer; no JSON-manifest fallback
+	// is needed because Pekko's jackson-cbor wire path handles both
+	// in-language and cross-language deliveries.
 
 	c := &showcaseClient{
 		cluster:      cluster,
@@ -234,7 +209,7 @@ func (c *showcaseClient) doPing(role string, p gcluster.ClusterSingletonProxyInt
 		return
 	}
 
-	ping := &Ping{SeqNo: seq, Origin: c.selfLabel}
+	ping := NewPing(seq, c.selfLabel)
 	reply, err := c.cluster.Ask(ctx, path, ping)
 	if err != nil {
 		c.classifyUnresolved(role, seq, err)

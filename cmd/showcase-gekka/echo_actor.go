@@ -12,39 +12,23 @@ package main
 import (
 	"fmt"
 
-	gekka "github.com/sopranoworks/gekka"
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/logger"
 )
 
-// EchoEnvelope mirrors the Scala case class.
-//
-// NOTE: Scala binds ShowcaseMessage to jackson-cbor (serializer ID ~33). The
-// Gekka SerializationRegistry does not yet know that serializer, so when a
-// Scala EchoEnvelope arrives at this actor over Artery it is delivered as a
-// *gekka.IncomingMessage carrying the raw CBOR bytes. The cross-language
-// codec wiring is a plan-level concern tracked separately; this actor
-// handles both the typed-local case (*EchoEnvelope) and the raw-remote case
-// (*gekka.IncomingMessage) so it cannot silently drop messages.
-type EchoEnvelope struct {
-	SeqNo       int64       `json:"seqNo"`
-	Originator  string      `json:"originator"`
-	Direction   string      `json:"direction"`
-	PayloadKind string      `json:"payloadKind"`
-	Payload     interface{} `json:"payload"`
-}
-
 // EchoActor receives an EchoEnvelope, flips its Direction to REPLY, and tells
 // it back to the sender. Mirrors the Scala-side EchoActor.
+//
+// EchoEnvelope is defined in envelope.go; the Phase 3 JacksonCborSerializer
+// + showcase-gekka wiring decodes Scala-emitted jackson-cbor frames directly
+// into *EchoEnvelope. Polymorphic payloads (the AnyRef slot) arrive as
+// loose map[interface{}]interface{} or scalar; CoercePayload turns them
+// into typed Go values when the actor needs them.
 type EchoActor struct {
 	actor.BaseActor
 }
 
-// Receive handles incoming messages. The typed *EchoEnvelope branch covers
-// local in-process testing and the future case where a CBOR-compatible
-// serializer is registered; the *gekka.IncomingMessage branch documents the
-// raw-bytes path so an architectural failure surfaces as a structured ERROR
-// log rather than a silent drop.
+// Receive handles incoming EchoEnvelope messages.
 func (a *EchoActor) Receive(msg any) {
 	switch m := msg.(type) {
 	case *EchoEnvelope:
@@ -64,16 +48,6 @@ func (a *EchoActor) Receive(msg any) {
 		logger.Default().Error("EchoActor: no sender on SEND envelope",
 			"seq", m.SeqNo,
 			"originator", m.Originator)
-
-	case *gekka.IncomingMessage:
-		// Raw remote delivery — the deserializer for this serializer ID is
-		// not registered on the Gekka side. Surface a structured error so
-		// the smoke test catches it; do not crash the actor.
-		logger.Default().Error("EchoActor: unsupported remote envelope",
-			"serializerId", m.SerializerId,
-			"manifest", m.Manifest,
-			"payloadLen", len(m.Payload),
-			"recipient", m.RecipientPath)
 
 	default:
 		logger.Default().Error("EchoActor: unexpected message",

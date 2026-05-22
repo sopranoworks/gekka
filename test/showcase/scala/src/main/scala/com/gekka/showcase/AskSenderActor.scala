@@ -43,7 +43,7 @@ class AskSenderActor(selfLabel: String, peers: List[String]) extends Actor with 
         val payload: AnyRef = kind match {
           case "string" => s"ask-$seq-$selfLabel"
           case "long"   => java.lang.Long.valueOf(seq)
-          case "system" => "system-msg-stub"
+          case "system" => SystemMessagePing(seq, selfLabel)
           case "custom" => ShowcaseEchoCustom(seq, selfLabel, Vector.fill(16)(0x42.toByte))
         }
         val env = AskEnvelope(seq, selfLabel, "SEND", kind, payload)

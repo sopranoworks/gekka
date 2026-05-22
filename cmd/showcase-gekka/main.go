@@ -15,6 +15,8 @@ import (
 	gekka "github.com/sopranoworks/gekka"
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/internal/core"
+	jcbor "github.com/sopranoworks/gekka/serialization/jackson-cbor"
+	"reflect"
 )
 
 func main() {
@@ -54,6 +56,27 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "NewCluster: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Register the Pekko jackson-cbor serializer at the same ID
+	// (33) Pekko's reference.conf class-defines. Both peers see the same
+	// value because both load Pekko's reference.conf; gekka mirrors it via
+	// jcbor.DefaultID. Then register each showcase Go type so the serializer
+	// can decode inbound Scala-emitted bytes and emit outbound Go-side
+	// values with the right JVM manifest.
+	jcborSer := jcbor.New(jcbor.DefaultID)
+	RegisterShowcaseTypes(jcborSer)
+	cluster.RegisterSerializerByValue(jcborSer)
+	registry := cluster.Serialization()
+	for manifest, goType := range map[string]reflect.Type{
+		JVMEchoEnvelope:       reflect.TypeOf((*EchoEnvelope)(nil)),
+		JVMAskEnvelope:        reflect.TypeOf((*AskEnvelope)(nil)),
+		JVMShowcaseEchoCustom: reflect.TypeOf((*ShowcaseEchoCustom)(nil)),
+		JVMSystemMessagePing:  reflect.TypeOf((*SystemMessagePing)(nil)),
+		JVMPing:               reflect.TypeOf((*Ping)(nil)),
+		JVMPong:               reflect.TypeOf((*Pong)(nil)),
+	} {
+		registry.RegisterManifest(manifest, goType, jcbor.DefaultID)
 	}
 
 	// Join the first seed.

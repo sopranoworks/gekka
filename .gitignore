@@ -13,6 +13,11 @@ debug_envelope.go
 # Gekka Binaries (root-level only)
 /gekka-cli
 /gekka-metrics
+/showcase-gekka
+/showcase-runner
+
+# Showcase test-run output (iteration logs, triage notes, summaries)
+.testrun/
 
 
 # Temporary files

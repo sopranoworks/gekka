@@ -1,0 +1,13 @@
+{
+  "fixture_name": "pong",
+  "source_type": "com.gekka.showcase.Pong",
+  "manifest": "com.gekka.showcase.Pong",
+  "serializer_id": 33,
+  "serializer_class": "org.apache.pekko.serialization.jackson.JacksonCborSerializer",
+  "cbor_byte_length": 20,
+  "cbor_hex": "bf657365714e6f182a666f726967696e626731ff",
+  "source_fields": {
+    "origin": "g1",
+    "seqNo": "42"
+  }
+}

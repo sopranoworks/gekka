@@ -1,0 +1,19 @@
+{
+  "fixture_name": "askenvelope_custom",
+  "source_type": "com.gekka.showcase.AskEnvelope",
+  "manifest": "com.gekka.showcase.AskEnvelope",
+  "serializer_id": 33,
+  "serializer_class": "org.apache.pekko.serialization.jackson.JacksonCborSerializer",
+  "cbor_byte_length": 131,
+  "cbor_hex": "bf657365714e6f18686a6f726967696e61746f7262733169646972656374696f6e6453454e446b7061796c6f61644b696e6466637573746f6d677061796c6f6164bf657365714e6f0b6a6f726967696e61746f72627331677061796c6f61649f1842184218421842184218421842184218421842184218421842184218421842ffffff",
+  "source_fields": {
+    "direction": "SEND",
+    "originator": "s1",
+    "payload.@class": "com.gekka.showcase.ShowcaseEchoCustom",
+    "payload.bytes_hex": "42424242424242424242424242424242",
+    "payload.originator": "s1",
+    "payload.seqNo": "11",
+    "payloadKind": "custom",
+    "seqNo": "104"
+  }
+}

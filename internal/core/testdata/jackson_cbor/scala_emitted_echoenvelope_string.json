@@ -1,0 +1,16 @@
+{
+  "fixture_name": "echoenvelope_string",
+  "source_type": "com.gekka.showcase.EchoEnvelope",
+  "manifest": "com.gekka.showcase.EchoEnvelope",
+  "serializer_id": 33,
+  "serializer_class": "org.apache.pekko.serialization.jackson.JacksonCborSerializer",
+  "cbor_byte_length": 76,
+  "cbor_hex": "bf657365714e6f016a6f726967696e61746f7262733169646972656374696f6e6453454e446b7061796c6f61644b696e6466737472696e67677061796c6f61646a68656c6c6f2d312d7331ff",
+  "source_fields": {
+    "direction": "SEND",
+    "originator": "s1",
+    "payload": "hello-1-s1",
+    "payloadKind": "string",
+    "seqNo": "1"
+  }
+}

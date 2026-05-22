@@ -1,0 +1,13 @@
+{
+  "fixture_name": "ping",
+  "source_type": "com.gekka.showcase.Ping",
+  "manifest": "com.gekka.showcase.Ping",
+  "serializer_id": 33,
+  "serializer_class": "org.apache.pekko.serialization.jackson.JacksonCborSerializer",
+  "cbor_byte_length": 20,
+  "cbor_hex": "bf657365714e6f182a666f726967696e627331ff",
+  "source_fields": {
+    "origin": "s1",
+    "seqNo": "42"
+  }
+}

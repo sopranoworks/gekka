@@ -1,0 +1,11 @@
+{
+  "fixture_name": "ping",
+  "source_type": "github.com/sopranoworks/gekka/serialization/jackson-cbor:ping",
+  "manifest": "com.gekka.showcase.Ping",
+  "serializer_id": 33,
+  "cbor_byte_length": 19,
+  "source_fields": {
+    "seqNo": "88",
+    "origin": "g2"
+  }
+}

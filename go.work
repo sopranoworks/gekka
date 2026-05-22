@@ -3,7 +3,7 @@ go 1.26.1
 use (
 	.
 	./http
-	./serialization/cbor
+	./serialization
 	./extensions/cluster/aws
 	./extensions/cluster/consul
 	./extensions/cluster/k8s

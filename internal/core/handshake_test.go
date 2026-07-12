@@ -10,8 +10,6 @@ package core
 
 import (
 	"context"
-	"encoding/binary"
-	"io"
 	"net"
 	"testing"
 	"time"
@@ -44,25 +42,6 @@ func sendArteryFrame(t *testing.T, conn net.Conn, manifest string, msg proto.Mes
 	if err := WriteFrame(conn, frame); err != nil {
 		t.Fatalf("WriteFrame: %v", err)
 	}
-}
-
-// readArteryFrame reads one length-prefixed Artery frame and parses it.
-func readArteryFrame(t *testing.T, conn net.Conn) *ArteryMetadata {
-	t.Helper()
-	header := make([]byte, 4)
-	if _, err := io.ReadFull(conn, header); err != nil {
-		t.Fatalf("readArteryFrame header: %v", err)
-	}
-	length := binary.LittleEndian.Uint32(header)
-	frameBytes := make([]byte, length)
-	if _, err := io.ReadFull(conn, frameBytes); err != nil {
-		t.Fatalf("readArteryFrame payload: %v", err)
-	}
-	meta, err := ParseArteryFrame(frameBytes, nil, 0)
-	if err != nil {
-		t.Fatalf("ParseArteryFrame: %v", err)
-	}
-	return meta
 }
 
 func TestArteryHandshake_Success(t *testing.T) {

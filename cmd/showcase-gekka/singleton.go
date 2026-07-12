@@ -132,12 +132,8 @@ func startClient(cluster *gekka.Cluster, selfLabel string) {
 	// Ask calls through cluster.OldestNode(role) re-resolution on each call.
 	proxies := make(map[string]gcluster.ClusterSingletonProxyInterface, len(allRoles))
 	for _, role := range allRoles {
-		p := cluster.SingletonProxy("/user/singleton-manager-"+role, role)
-		if p == nil {
-			logger.Default().Error("ClientActor: SingletonProxy returned nil", "role", role)
-			continue
-		}
-		proxies[role] = p
+		// SingletonProxy always returns a non-nil, already-Start()'ed proxy.
+		proxies[role] = cluster.SingletonProxy("/user/singleton-manager-"+role, role)
 	}
 
 	logger.Default().Info("SingletonClient: started",

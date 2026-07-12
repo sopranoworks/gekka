@@ -4,6 +4,7 @@ go 1.26.1
 
 require (
 	github.com/sopranoworks/gekka-config v1.0.4
+	github.com/sopranoworks/gekka/serialization v0.0.0-00010101000000-000000000000
 	github.com/stretchr/testify v1.11.1
 	go.etcd.io/bbolt v1.4.3
 	google.golang.org/protobuf v1.36.11
@@ -101,3 +102,5 @@ require (
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.0 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
+
+replace github.com/sopranoworks/gekka/serialization => ./serialization

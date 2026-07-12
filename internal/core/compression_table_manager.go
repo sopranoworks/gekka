@@ -309,7 +309,7 @@ func (ctm *CompressionTableManager) HandleAdvertisement(ctx context.Context, adv
 		return nil
 	}
 	assoc, ok := nm.GetAssociationByHost(target.GetHostname(), target.GetPort())
-	if !ok || assoc == nil {
+	if !ok {
 		// Peer association not yet established; the next gossip cycle
 		// will trigger a fresh advertisement which we'll Ack then.
 		return nil

@@ -10,9 +10,6 @@ import (
 )
 
 type memberStatus struct {
-	state struct {
-		body []byte
-	}
 	upCount     int
 	nonUp       []memberRow
 	unreachable []string

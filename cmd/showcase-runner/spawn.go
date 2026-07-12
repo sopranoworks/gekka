@@ -100,11 +100,32 @@ func pipeReader(r io.ReadCloser, stream, name string, out chan<- logLine, dup io
 }
 
 func (c *child) stop(grace time.Duration) {
+	// Drain c.lines for the duration of teardown. After a pre-Gate-2 exit
+	// (Setup or Gate 1 failure) nothing else consumes c.lines, so a still-live
+	// child fills the cap-256 buffer and the pipeReaders block forever on their
+	// `out <- logLine` send — they never reach pipe EOF, so c.done never closes.
+	// The old `<-c.done` below then blocked indefinitely *even after SIGKILL*,
+	// stranding child processes (observed: a Gate-1-failed run left the runner
+	// and two gekka nodes alive for ~5.5h, holding their ports — which is the
+	// leftover-incarnation source behind the smoke-2 g3 quarantine cycle).
+	// Draining lets the readers reach EOF once the process dies so c.done closes.
+	go func() {
+		for range c.lines {
+		}
+	}()
+
 	_ = c.cmd.Process.Signal(syscall.SIGTERM)
 	select {
 	case <-c.done:
+		return
 	case <-time.After(grace):
-		_ = c.cmd.Process.Kill()
-		<-c.done
+	}
+
+	// Grace expired: SIGKILL, then wait for the reader pipeline to close with a
+	// hard cap so teardown can never wedge regardless of pipe/FD state.
+	_ = c.cmd.Process.Kill()
+	select {
+	case <-c.done:
+	case <-time.After(5 * time.Second):
 	}
 }

@@ -18,7 +18,7 @@ debug_envelope.go
 
 # Showcase test-run output (iteration logs, triage notes, summaries)
 .testrun/
-
+.testrun-archive-*/
 
 # Temporary files
 .!*

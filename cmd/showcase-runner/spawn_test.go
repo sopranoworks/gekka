@@ -2,8 +2,10 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"os/exec"
 	"sync"
 	"testing"
 	"time"
@@ -90,4 +92,52 @@ func TestPipeReader_ReadyOnceSemantics(t *testing.T) {
 
 	wg.Wait()
 	close(out)
+}
+
+// TestChildStop_ReturnsWhenLinesUnconsumed is the regression for the teardown
+// wedge. It reproduces the post-Gate-2-exit state: a still-live child that
+// ignores SIGTERM and floods stdout, with NO consumer of c.lines. The cap-256
+// channel fills, the pipeReader blocks on its send and never reaches pipe EOF,
+// so c.done never closes. The old stop() blocked on `<-c.done` forever even
+// after SIGKILL (observed: child processes stranded ~5.5h holding their ports).
+// stop() must instead drain c.lines, SIGKILL after grace, and return promptly.
+func TestChildStop_ReturnsWhenLinesUnconsumed(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+	// `trap '' TERM` ignores SIGTERM so stop() is forced down the SIGKILL path;
+	// the tight echo loop floods stdout to fill c.lines past its cap.
+	cmd := exec.Command("sh", "-c", "trap '' TERM; while :; do echo flood-line-to-fill-the-channel-buffer; done")
+	c, err := spawnChild(context.Background(), "wedge", cmd, t.TempDir())
+	if err != nil {
+		t.Fatalf("spawnChild: %v", err)
+	}
+	t.Cleanup(func() { _ = c.cmd.Wait() }) // reap the killed child
+
+	// Let the child overflow c.lines (cap 256) so the pipeReader is blocked on
+	// its send — the precise wedge condition. We deliberately do NOT drain it.
+	time.Sleep(300 * time.Millisecond)
+
+	returned := make(chan struct{})
+	start := time.Now()
+	go func() {
+		c.stop(500 * time.Millisecond)
+		close(returned)
+	}()
+
+	select {
+	case <-returned:
+		if elapsed := time.Since(start); elapsed > 8*time.Second {
+			t.Fatalf("stop() took %v; expected ~grace+kill (<8s)", elapsed)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("stop() did not return within 15s — teardown wedge regression")
+	}
+
+	// stop() draining c.lines must let the reader pipeline close (process dead).
+	select {
+	case <-c.done:
+	case <-time.After(time.Second):
+		t.Error("c.done not closed after stop() returned — reader pipeline did not finish")
+	}
 }

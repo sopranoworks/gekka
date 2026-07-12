@@ -273,6 +273,21 @@ type ClusterConfig struct {
 	// TLS holds TLS parameters; only used when Transport == "tls-tcp".
 	TLS core.TLSConfig
 
+	// RawTLSConfig, when non-nil, is used verbatim as the Artery TLS config
+	// for both the listener and the dialer, bypassing BuildTLSConfig's
+	// standard CA-chain construction. It is an opt-in escape hatch for
+	// external callers (which cannot import internal/core) that need custom
+	// peer verification — e.g. a VerifyPeerCertificate/VerifyConnection
+	// callback that pins a public-key fingerprint instead of validating a CA
+	// chain. This is the Go-idiom analog of Pekko/Akka's programmatic
+	// SSLEngineProviderSetup (supplying a custom SSLEngineProvider), for which
+	// CA-less pinning likewise requires caller-supplied verification code.
+	//
+	// Only consulted when Transport == "tls-tcp", and purely additive: when
+	// nil, TLS behavior is exactly as before. Mutually exclusive with the
+	// HOCON tls.* fields (TLS): setting both is a configuration error.
+	RawTLSConfig *tls.Config
+
 	// FlightRecorder configures the Artery flight recorder.
 	// Parse from HOCON:
 	//
@@ -2581,11 +2596,14 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	// ctx so it exits when the cluster shuts down.
 	core.StartLifecycleSweepers(ctx, nm)
 
-	// Build TLS config when transport is "tls-tcp".
+	// Build TLS config when transport is "tls-tcp". RawTLSConfig, when set,
+	// takes over verbatim (custom peer verification / CA-less pinning);
+	// otherwise BuildTLSConfig constructs it from the HOCON tls.* fields.
+	// Supplying both is rejected as ambiguous. See resolveArteryTLSConfig.
 	var tlsCfg *tls.Config
 	if strings.EqualFold(cfg.Transport, "tls-tcp") {
 		var tlsErr error
-		tlsCfg, tlsErr = core.BuildTLSConfig(cfg.TLS)
+		tlsCfg, tlsErr = resolveArteryTLSConfig(cfg.RawTLSConfig, cfg.TLS)
 		if tlsErr != nil {
 			cancel()
 			return nil, fmt.Errorf("gekka: TLS config: %w", tlsErr)

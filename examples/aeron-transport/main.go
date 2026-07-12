@@ -42,16 +42,16 @@ import (
 // ── Actor definitions ─────────────────────────────────────────────────────────
 
 // echoActor receives messages (local or remote) and logs them.
-// When a remote IncomingMessage arrives it replies with "Ack: <payload>".
+// When a remote []byte payload arrives it replies with "Ack: <payload>".
 type echoActor struct {
 	actor.BaseActor
 }
 
 func (a *echoActor) Receive(msg any) {
 	switch m := msg.(type) {
-	case *gekka.IncomingMessage:
-		text := string(m.Payload)
-		a.Log().Info("received", "serializerId", m.SerializerId, "payload", text)
+	case []byte:
+		text := string(m)
+		a.Log().Info("received", "payload", text)
 		if s := a.Sender(); s != nil && s.Path() != "" {
 			reply := []byte("Ack: " + text)
 			a.Log().Info("replying", "to", s.Path())

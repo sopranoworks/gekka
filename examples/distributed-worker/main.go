@@ -54,17 +54,16 @@ type AckActor struct {
 
 // Receive is called once per inbound message in the actor's goroutine.
 func (a *AckActor) Receive(msg any) {
-	incoming, ok := msg.(*gekka.IncomingMessage)
+	payload, ok := msg.([]byte)
 	if !ok {
 		return
 	}
 	var ack Ack
-	if err := json.Unmarshal(incoming.Payload, &ack); err == nil && ack.JobID != "" {
+	if err := json.Unmarshal(payload, &ack); err == nil && ack.JobID != "" {
 		log.Printf("[worker] <- ack  job_id=%q  status=%q  msg=%q",
 			ack.JobID, ack.Status, ack.Message)
 	} else {
-		log.Printf("[worker] <- received (serializerId=%d): %q",
-			incoming.SerializerId, incoming.Payload)
+		log.Printf("[worker] <- received: %q", payload)
 	}
 }
 

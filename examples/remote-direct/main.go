@@ -20,11 +20,12 @@ type EchoActor struct {
 
 func (a *EchoActor) Receive(msg any) {
 	switch m := msg.(type) {
-	case *gekka.IncomingMessage:
-		text := string(m.Payload)
-		a.Log().Info("Node A received remote message", "payload", text, "sender", m.Sender.Path())
+	case []byte:
+		text := string(m)
+		s := a.Sender()
+		a.Log().Info("Node A received remote message", "payload", text, "sender", s.Path())
 
-		if s := a.Sender(); s != nil {
+		if s != nil {
 			reply := []byte("Ack: " + text)
 			a.Log().Info("Node A replying to", "target", s.Path())
 			s.Tell(reply, a.Self())

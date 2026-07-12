@@ -67,13 +67,14 @@ type EchoActor struct {
 }
 
 // Receive is called once per message in a dedicated goroutine.
-// Messages from Artery arrive as *gekka.IncomingMessage; direct local Tell
-// calls arrive as their original type.
+// Messages from Artery arrive as their deserialized native type (e.g. []byte
+// for the raw-bytes serializer); direct local Tell calls arrive as their
+// original type. The sender — local or remote — is available via a.Sender().
 func (a *EchoActor) Receive(msg any) {
 	switch m := msg.(type) {
-	case *gekka.IncomingMessage:
-		text := string(m.Payload)
-		a.Log().Info("received", "serializerId", m.SerializerId, "payload", text)
+	case []byte:
+		text := string(m)
+		a.Log().Info("received", "payload", text)
 
 		// Reply to whoever sent the message.  If the sender is known (non-nil),
 		// use Tell with a.Self() so the remote side can identify the reply origin.
@@ -85,9 +86,9 @@ func (a *EchoActor) Receive(msg any) {
 		}
 
 	default:
-		// Local Tell without an IncomingMessage wrapper (e.g. from tests or
-		// internal actors).  Sender() is still set if Tell was called with a
-		// sender argument.
+		// Local Tell of a non-[]byte payload (e.g. from tests or internal
+		// actors).  Sender() is still set if Tell was called with a sender
+		// argument.
 		a.Log().Info("local message", "msg", m)
 	}
 }

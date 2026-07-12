@@ -105,19 +105,69 @@
 
 ---
 
+## Release Candidates — v1.0.0
+
+The 1.0.0 line is being stabilized through a release-candidate series. No public
+API breakage is expected across the candidates.
+
+### v1.0.0-rc1 (2026-04-19)
+- HTTP server & routing DSL, Cassandra persistence plugin, stream connectors
+  (Kafka/Kinesis/AMQP/S3/SQS), Flight Recorder, and the extraction of
+  `gekka-cli` / `gekka-metrics` / compat-test binaries into independent
+  repositories/modules.
+
+### v1.0.0-rc2 (2026-05-10)
+- Pekko config-completeness honesty pass; slog-based logging foundation
+  (`pekko.loglevel` / `pekko.stdout-loglevel`); Artery multi-TCP outbound
+  transport (`outbound-lanes`); Artery TLS cipher suites; Pekko-compatible
+  cluster bootstrap/config; integration-test runtime reliability rework.
+
+### v1.0.0-rc3 (in preparation — not yet tagged)
+Cross-language interoperability and reliability hardening (104 commits since
+rc2). Highlights:
+- **TLS / mTLS — substantially addressed.** The `RawTLSConfig` escape hatch
+  (Go-native analog of Pekko's `SSLEngineProviderSetup`) enables CA-less
+  public-key/fingerprint pinning over `tls-tcp`, complementing rc2's HOCON
+  cipher-suite support. Verified end-to-end (matching vs. mismatched pin).
+- Pekko-compatible **jackson-cbor** serializer for cross-language messaging.
+- **Sharding ↔ Pekko interop** (`ShardingSerializer` id 13 + `PekkoCoordinatorShim`).
+- Real-Akka-cluster **join hardening** (OUTBOUND control-lane routing,
+  heartbeat sender, `UpNumber`-at-Join) and Artery wire-protocol correctness
+  (manifests, reincarnation, dashboard self-down).
+- Reliability-gate campaign (transport/cluster/deathwatch correctness + log
+  noise) and a cross-language **showcase harness** + Go-seed integration suite.
+
+## Known Open Issues
+
+- **Clean-boot cluster convergence gap** (OPEN, tracked): on a clean-boot
+  cluster, gekka nodes print their local-ready sentinel (gated on
+  `IsLocalNodeUp`) but do not always converge to gossiped `Up` membership
+  within a 30 s window — 0 `MemberUp`/leader lines appear in their own logs,
+  suggesting no leader is elected rather than merely slow convergence. This is
+  the current blocker preventing the cross-language showcase from reaching a
+  full pass. Distinct from the (resolved) g3 quarantine-cycle artifact and the
+  (fixed) runner-teardown hang. Next steps: reconcile `IsLocalNodeUp` against
+  the gossiped membership state machine, check gossip-interval vs. the 30 s
+  gate, and reproduce with a minimal 2-gekka-node topology to isolate
+  gekka-specific convergence logic.
+
 ## Upcoming
 
-### v1.0.0 — Production Readiness & Stability
+### v1.0.0 (stable) — Production Readiness & Stability
 
 **Target:** 2027
 
 #### 1. API Stabilization
 Finalize public interfaces and package structures for the first stable 1.0 release.
 
-#### 2. Performance Tuning
+#### 2. Cluster Convergence Robustness
+Close the clean-boot convergence gap above and add convergence-timing coverage
+to the multi-JVM gate.
+
+#### 3. Performance Tuning
 Exhaustive benchmarking and optimization of the mailbox processing loop and gossip propagation.
 
-#### 3. Documentation & Guides
+#### 4. Documentation & Guides
 Comprehensive user manual, architectural deep-dives, and production deployment best practices.
 
 ---

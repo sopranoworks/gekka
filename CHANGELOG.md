@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0-rc3] - 2026-07-12
+
+Cross-language interoperability and reliability hardening — 104 commits since `v1.0.0-rc2`, no public API breakage. (No `1.0.0-rc2` CHANGELOG entry was recorded; its highlights live in the README release notes and git history.)
+
+### Added
+
+- 🚀 **`RawTLSConfig` — CA-less TLS pinning escape hatch** (`27cd05d`): `ClusterConfig.RawTLSConfig *tls.Config` is used verbatim for the Artery listener and dialer over `tls-tcp`, bypassing the HOCON CA-chain builder so callers can supply a custom `VerifyPeerCertificate`/`VerifyConnection` (e.g. public-key fingerprint pinning with no CA). Root-package `TLSConfig` alias lets external callers name the HOCON-equivalent struct without importing `internal/core`; Raw and HOCON TLS are mutually exclusive. Covered by an end-to-end two-node join test asserting success on a matching pinned fingerprint and failure on a mismatch (`30ca735`).
+- 🚀 **jackson-cbor serializer** (`serialization/jackson-cbor`, `9e7049b`): Pekko-compatible CBOR codec matching the Jackson-CBOR wire binding, enabling cross-language message exchange with Scala nodes; cross-language round-trip exercised in the showcase (`6e2c46f`).
+- 🚀 **Sharding ↔ Pekko interop**: `ShardingSerializer` (serializer id 13) registered at cluster startup, plus a `PekkoCoordinatorShim` translation actor, making Go cluster-sharding wire-compatible with Pekko's `ShardCoordinator`.
+- 🚀 **Cross-language showcase harness** (`cmd/showcase-gekka`, `cmd/showcase-runner`): Scala + gekka nodes exercising FT1 (tell/echo), FT2 (ask), FT3 (six CRDTs), and cluster singleton across a mixed cluster, driven by a runner with allowlist-gated log parsing and a Setup → Gate 1 → Gate 2 phase machine.
+- 🚀 **Go-seed cross-language integration suite**: `//go:build integration` coverage driving Scala/Pekko nodes from a Go-seeded Artery cluster — join/leave, failure recovery, churn, singleton handover, distributed data, ask, sharding — plus an Akka strict-HOCON JOIN reproducer pinned to Akka 2.6.14 and 2.6.21.
+
+### Changed
+
+- 🔄 **Reliability-gate campaign**: correctness and log-noise hardening across transport/cluster/deathwatch — graceful `CloseWrite` on shutdown/quarantine close paths, Pekko-compatible `Watch`/`Unwatch`/`Terminated` framing (`29ffe3b`), orphan `Seen`/`ObserverReachability` scrubbing on member removal, and disciplined downgrading of by-design shutdown WARN/ERROR to DEBUG.
+- 🔄 **UID entropy** (`57891b4`): `ActorSystem`/node UID now XORs `crypto/rand` bytes into the timestamp to avoid same-namespace collisions.
+- 🔄 **Documentation**: version headers bumped to `v1.0.0-rc3`; jackson-cbor SDK guide added; README "What's New" rewritten for rc3.
+
+### Bug Fixes
+
+- 🐛 **Real-Akka-cluster join**: route `HandshakeRsp`/`ArteryHeartbeatRsp`/`SendQuarantined` via the OUTBOUND control sibling to close premature-quarantine and outbox-saturation storms (`cb82ddf`/`f69bed6`/`c289a78`); set the local sender on outgoing `ArteryHeartbeat` to stop an Akka dead-letter flood (`054e6da`); correct the `UpNumber`-at-Join computation (`f7ba762`).
+- 🐛 **Artery wire protocol**: Akka-compatible compression manifests + literal `deadLetters`; correct `CompressionTableAdvertisementAck`/`Quarantined` outbound manifests; node reincarnation + bootstrap self-promote gating (`d7fab7f`/`e02c1f2`/`0e2bebd`).
+- 🐛 **Dashboard self-down**: proper `Leave`, no decoder noise, and stale `Removed` members pruned at gossip ingress (`4ab36c6`/`fd979e8`).
+- 🐛 **Failure detector**: default unseen nodes to AVAILABLE rather than unavailable (`fa77246`).
+- 🐛 **Showcase runner teardown** (`7135eb1`): drain `child.lines` during teardown so a post-Gate wedge no longer hangs the runner.
+- 🐛 **CI / build hygiene** (`20fff4a`): declare the intra-repo `serialization` module dependency via a local `replace` so `go mod tidy` is stable; clear golangci-lint `SA4023` impossible-nil comparisons and remove dead code (behavior-preserving; CI config not loosened).
+
 ## [1.0.0-rc1] - 2026-04-19
 
 ### Added
@@ -423,6 +450,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Message Dispatch**: Fixed a critical bug where messages were not correctly routed to registered actors by default when incoming envelopes contained full URIs.
 
 
+[1.0.0-rc3]: https://github.com/sopranoworks/gekka/compare/v1.0.0-rc2...HEAD
 [1.0.0-rc1]: https://github.com/sopranoworks/gekka/compare/v0.16.0...v1.0.0-rc1
 [0.16.0]: https://github.com/sopranoworks/gekka/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/sopranoworks/gekka/compare/v0.14.0...v0.15.0

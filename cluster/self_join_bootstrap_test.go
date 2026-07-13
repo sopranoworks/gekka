@@ -49,8 +49,8 @@ func TestSelfJoin_JoinerMustNotStealLeadershipWithUpNumber(t *testing.T) {
 	router := func(ctx context.Context, path string, msg any) error { return nil }
 	cm := NewClusterManager(local, router)
 
-	// Set joinAttempted=true to mirror the production Cluster.Join(self)
-	// path that gates canBootstrap.
+	// Production Cluster.Join(self) path — a self-join does NOT arm the
+	// remote-join pre-Welcome gate, so leader actions stay enabled.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	selfHost := local.GetAddress().GetHostname()
@@ -87,8 +87,9 @@ func TestSelfJoin_JoinerMustNotStealLeadershipWithUpNumber(t *testing.T) {
 			peerMember.GetUpNumber())
 	}
 
-	// With UpNumber=0 on both members, DetermineLeader's tiebreaker
-	// (host → port → uid) must pick the lower-port local node as leader.
+	// With both members Joining (no Up/Leaving yet), DetermineLeader's
+	// bootstrap fallback orders by address (host → port → uid) and must
+	// pick the lower-port local node as leader.
 	leader := cm.DetermineLeader()
 	if leader == nil {
 		t.Fatal("DetermineLeader returned nil — bootstrap fallback broken")
@@ -98,10 +99,10 @@ func TestSelfJoin_JoinerMustNotStealLeadershipWithUpNumber(t *testing.T) {
 			leader.GetAddress().GetPort(), selfPort)
 	}
 
-	// Leader-action must promote local to Up. With local-as-leader and
-	// canBootstrap closed (joinAttempted=true), the convergence branch
-	// must succeed because no Up/Leaving members exist yet (Seen check is
-	// trivially satisfied).
+	// Leader-action must promote local to Up. With local-as-leader (a
+	// self-join keeps leader actions enabled) and canBootstrap closed
+	// (two members in view), the convergence branch must succeed because
+	// no Up/Leaving members exist yet (Seen check is trivially satisfied).
 	cm.performLeaderActions()
 
 	cm.Mu.RLock()

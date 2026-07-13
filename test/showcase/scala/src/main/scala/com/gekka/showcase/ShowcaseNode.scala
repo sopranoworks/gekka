@@ -12,6 +12,12 @@ object ShowcaseNode {
     val system = ActorSystem("ShowcaseCluster", config)
     val cluster = Cluster(system)
 
+    // Cluster HTTP Management (GET /cluster/members etc.) — the runner's
+    // Gate 1 membership poll depends on this endpoint.  Pekko Management
+    // does not start automatically; without this call the configured
+    // pekko.management.http.port is never bound.
+    org.apache.pekko.management.scaladsl.PekkoManagement(system).start()
+
     // FT1 receiver
     system.actorOf(EchoActor.props, EchoActor.name)
 

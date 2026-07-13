@@ -1060,38 +1060,45 @@ func TestCheckConfigCompat_CustomProviderRejected(t *testing.T) {
 	}
 }
 
-// ── DetermineLeader — upNumber ordering (Issue 3 live-diag regression) ────────
+// ── DetermineLeader — Pekko leaderOf address ordering ────────────────────────
 
-// TestDetermineLeader_LowPortJoinerDoesNotDisplaceSeed reproduces the
-// live-diag dolce failure where gekka pinned to port 2560 joined a real
-// production cluster whose seed of record listened on port 37777, and
-// within ~1.7 s of receiving Welcome gekka self-elected as cluster leader
-// and drove every dolce member from Down → Removed.
+// TestDetermineLeader_AddressLowestUpMemberLeads pins Pekko's actual leader
+// contract (MembershipState.leaderOf / Member.leaderStatusOrdering): the
+// FIRST member in address ordering (hostname, port, uid) whose status is
+// Up/Leaving. UpNumber plays NO role in leader election — it is ageOrdering,
+// used for singleton-oldest (OldestNode) only.
 //
-// The root cause was that DetermineLeader sorted Up members by
-// (hostname, port, uid) and returned the smallest.  Gekka's port (2560)
-// being numerically smaller than every dolce port (37564…37777) meant the
-// address tiebreak alone elected the freshly-joined node — even though
-// every dolce member had a smaller UpNumber.  Pekko's MembershipState
-// leaderOrdering prefers upNumber first; this test pins the contract.
+// History: a973dea changed this ordering to upNumber-first to stop the
+// 2026-05-16 live-diag cascade (gekka at :2560 became leader of a production
+// cluster and drove stale Down slots → Removed, collapsing four JVMs). That
+// hid the symptom but diverged from the protocol: every JVM peer computes
+// leaderOf by address, so once the low-address gekka member is Up the JVM
+// side unilaterally hands it leadership and stops promoting joiners — and a
+// gekka that defers to the upNumber-lowest member leaves the cluster with NO
+// acting leader. That deadlock is the clean-boot showcase convergence
+// failure (findings/2026-07-12-open-clean-boot-convergence-issue.md,
+// re-confirmed 3/3 on 2026-07-13). The destructive cascade a973dea targeted
+// is prevented at its actual roots instead: stale-Removed-slot filtering on
+// merge (TestDropRemovedMembersLocked_*, intakeRemovedFromIncomingLocked)
+// and the pre-Welcome leader-action gate
+// (TestPerformLeaderActions_NoLeaderActionsWhileRemoteJoinPending).
 //
-// Setup mirrors the live cluster: local=2560 promoted via the bootstrap
-// path so it carries the post-Welcome upNumber assignment (large), seed at
-// :37777 with the genuine upNumber=1 and a few more Up dolce peers at
-// :37564/:37565/:37567 with upNumbers 2/3/4.  Expected leader: the seed.
-func TestDetermineLeader_LowPortJoinerDoesNotDisplaceSeed(t *testing.T) {
+// Same dolce-shaped topology as the old test: local=2560 Up with upNumber=5,
+// seed at :37777 with upNumber=1, more Up peers at :37564/:37565/:37567.
+// Expected leader per the protocol: the address-lowest Up member — local.
+func TestDetermineLeader_AddressLowestUpMemberLeads(t *testing.T) {
 	router := func(_ context.Context, _ string, _ any) error { return nil }
 	local := makeUAWithDC("127.0.0.1", 2560, 99)
 	cm := NewClusterManager(local, router)
 
 	cm.Mu.Lock()
-	// Local: low port, large upNumber (the fresh joiner).
+	// Local: low port, large upNumber (the fresh joiner, already promoted Up).
 	cm.State.Members[0].Status = gproto_cluster.MemberStatus_Up.Enum()
 	cm.State.Members[0].UpNumber = proto.Int32(5)
 	// Seed of record: high port, genuine upNumber=1.
 	seed := makeUAWithDC("127.0.0.1", 37777, 1)
 	addMemberUpWithRoles(cm, seed, 1, nil)
-	// Additional Up dolce peers; ports are all > local's 2560.
+	// Additional Up peers; ports are all > local's 2560.
 	for i, port := range []uint32{37564, 37565, 37567} {
 		peer := makeUAWithDC("127.0.0.1", port, uint32(100+i))
 		addMemberUpWithRoles(cm, peer, int32(2+i), nil)
@@ -1103,26 +1110,27 @@ func TestDetermineLeader_LowPortJoinerDoesNotDisplaceSeed(t *testing.T) {
 		t.Fatal("DetermineLeader returned nil with five Up members in state")
 	}
 	a := got.GetAddress()
-	if a.GetHostname() != "127.0.0.1" || a.GetPort() != 37777 {
-		t.Fatalf("DetermineLeader returned %s:%d (uid=%d) — must return the seed at 127.0.0.1:37777 (smallest upNumber), not the low-port joiner",
+	if a.GetHostname() != "127.0.0.1" || a.GetPort() != 2560 {
+		t.Fatalf("DetermineLeader returned %s:%d (uid=%d) — Pekko leaderOf selects the address-lowest Up member (2560); upNumber must not participate in leader election",
 			a.GetHostname(), a.GetPort(), got.GetUid())
 	}
 }
 
-// TestDetermineLeader_UpNumberZeroSortsLast covers the bootstrap window
+// TestDetermineLeader_JoiningMemberCannotDisplaceUpMember covers the window
 // where the local node has been added to cm.State.Members but not yet
-// promoted (UpNumber=0) while a peer carries an assigned UpNumber.  The
-// peer must win leader election; UpNumber=0 (unassigned) sorts last.
-func TestDetermineLeader_UpNumberZeroSortsLast(t *testing.T) {
+// promoted (Joining, UpNumber=0) while a peer is Up. The Up peer must win
+// leader election even though the local node sorts first by address —
+// Joining members are only a bootstrap fallback when NO Up/Leaving member
+// exists (Pekko leaderMemberStatus).
+func TestDetermineLeader_JoiningMemberCannotDisplaceUpMember(t *testing.T) {
 	router := func(_ context.Context, _ string, _ any) error { return nil }
 	local := makeUAWithDC("10.0.0.1", 2552, 1)
 	cm := NewClusterManager(local, router)
 
 	cm.Mu.Lock()
-	cm.State.Members[0].Status = gproto_cluster.MemberStatus_Up.Enum()
-	cm.State.Members[0].UpNumber = proto.Int32(0) // unassigned
+	// Local stays Joining (the NewClusterManager default), UpNumber=0.
 	peer := makeUAWithDC("10.0.0.2", 2552, 2)
-	addMemberUpWithRoles(cm, peer, 3, nil) // assigned upNumber=3
+	addMemberUpWithRoles(cm, peer, 3, nil)
 	cm.Mu.Unlock()
 
 	got := cm.DetermineLeader()
@@ -1130,16 +1138,15 @@ func TestDetermineLeader_UpNumberZeroSortsLast(t *testing.T) {
 		t.Fatal("DetermineLeader returned nil")
 	}
 	if got.GetAddress().GetPort() != 2552 || got.GetAddress().GetHostname() != "10.0.0.2" {
-		t.Fatalf("DetermineLeader returned %s:%d; want the peer with assigned upNumber=3 (UpNumber=0 must sort last)",
+		t.Fatalf("DetermineLeader returned %s:%d; want the Up peer at 10.0.0.2 (a Joining member must not displace an Up member)",
 			got.GetAddress().GetHostname(), got.GetAddress().GetPort())
 	}
 }
 
-// TestDetermineLeader_EqualUpNumberFallsBackToAddress confirms the
-// deterministic tiebreak when two members share an UpNumber (e.g. during
-// a brief multi-node bootstrap before the leader assigns canonical
-// numbers).  The smallest address (hostname, port, uid) wins.
-func TestDetermineLeader_EqualUpNumberFallsBackToAddress(t *testing.T) {
+// TestDetermineLeader_AddressOrderingIgnoresUpNumber confirms the
+// deterministic ordering among Up members is purely (hostname, port, uid):
+// the smaller hostname wins even when it carries the LARGER upNumber.
+func TestDetermineLeader_AddressOrderingIgnoresUpNumber(t *testing.T) {
 	router := func(_ context.Context, _ string, _ any) error { return nil }
 	local := makeUAWithDC("10.0.0.2", 2552, 5)
 	cm := NewClusterManager(local, router)
@@ -1147,8 +1154,8 @@ func TestDetermineLeader_EqualUpNumberFallsBackToAddress(t *testing.T) {
 	cm.Mu.Lock()
 	cm.State.Members[0].Status = gproto_cluster.MemberStatus_Up.Enum()
 	cm.State.Members[0].UpNumber = proto.Int32(1)
-	peer := makeUAWithDC("10.0.0.1", 2552, 7) // smaller hostname
-	addMemberUpWithRoles(cm, peer, 1, nil)
+	peer := makeUAWithDC("10.0.0.1", 2552, 7) // smaller hostname, larger upNumber
+	addMemberUpWithRoles(cm, peer, 7, nil)
 	cm.Mu.Unlock()
 
 	got := cm.DetermineLeader()
@@ -1156,7 +1163,7 @@ func TestDetermineLeader_EqualUpNumberFallsBackToAddress(t *testing.T) {
 		t.Fatal("DetermineLeader returned nil")
 	}
 	if got.GetAddress().GetHostname() != "10.0.0.1" {
-		t.Fatalf("DetermineLeader returned %s; want 10.0.0.1 (smaller hostname wins on equal upNumber)",
+		t.Fatalf("DetermineLeader returned %s; want 10.0.0.1 (smallest address wins regardless of upNumber)",
 			got.GetAddress().GetHostname())
 	}
 }

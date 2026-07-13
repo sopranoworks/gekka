@@ -68,14 +68,16 @@ type ClusterManager struct {
 	WatchFd         *WatchFailureDetector // remote-watch FD; pekko.remote.watch-failure-detector.*
 	Sys             actor.ActorContext    // bridge back to the node's actor system
 	WelcomeReceived atomic.Bool
-	// joinAttempted is set true the first time JoinCluster is called.
-	// Used by the leader-action loop to gate the "len(members)==1 ->
-	// self-promote" bootstrap path: when joinAttempted is true the
-	// node has explicitly tried to join a remote (or itself) and must
-	// wait for Welcome before treating its local single-member view as
-	// authoritative.  Without this gate, gekka self-promotes as
-	// upNumber=1 in the brief window before Welcome arrives, then SBR
-	// detects the view conflict against the seed's gossip and self-downs.
+	// joinAttempted is set true when JoinCluster targets a REMOTE seed
+	// (self-join bootstrap does not arm it).  While it is true and
+	// WelcomeReceived is still false, the node is not yet a cluster
+	// member and performLeaderActions performs NO leader actions — in
+	// particular it must not self-promote off its local single-member
+	// view.  Without this gate, gekka self-promotes as upNumber=1 in
+	// the window before Welcome arrives (whenever the InitJoin/Welcome
+	// exchange takes longer than one leader tick), diverging its local
+	// view from the seed's gossip; SBR later detects the conflict and
+	// self-downs.
 	joinAttempted   atomic.Bool
 	CancelHeartbeat context.CancelFunc
 
@@ -697,7 +699,14 @@ func toClusterAddress(a *gproto_cluster.Address) *gproto_cluster.Address {
 
 // JoinCluster initiates the joining protocol to a seed node.
 func (cm *ClusterManager) JoinCluster(ctx context.Context, seedHost string, seedPort uint32) error {
-	cm.joinAttempted.Store(true)
+	// Only a REMOTE join arms the pre-Welcome gate. Joining ONESELF is the
+	// Pekko "is JOINING itself and forming new cluster" bootstrap: there is
+	// no peer to be welcomed by, so the node must remain free to
+	// self-promote on its first leader tick (performLeaderActions).
+	localAddr := cm.LocalAddress.GetAddress()
+	if seedHost != localAddr.GetHostname() || seedPort != localAddr.GetPort() {
+		cm.joinAttempted.Store(true)
+	}
 	system := cm.LocalAddress.GetAddress().GetSystem()
 	path := cm.ClusterCorePath(system, seedHost, seedPort)
 	if cm.LogInfo {
@@ -2327,88 +2336,62 @@ func (cm *ClusterManager) incrementVersionWithLockHeld() {
 
 }
 
-// DetermineLeader selects the cluster leader using Pekko semantics: the
-// Up/WeaklyUp member with the smallest UpNumber wins, with address
-// (hostname, port, uid) as the deterministic tiebreaker.  When NO member
-// has been promoted yet (UpNumber=0 across the board, e.g. a one-node
-// bootstrap window before the first leader-action), the address tiebreak
-// alone picks a deterministic leader.
+// DetermineLeader selects the cluster leader using Pekko's leaderOf
+// semantics (MembershipState.leaderOf / Member.leaderStatusOrdering): the
+// FIRST member in address ordering (hostname, port, uid) whose status
+// allows leadership.  Up and Leaving members are preferred; when none
+// exist yet (bootstrap window) Joining and WeaklyUp members are considered
+// so the very first node has a deterministic self-leader for the
+// canBootstrap promotion path.  Down/Exiting/Removed members never lead.
 //
-// Why the upNumber-first ordering matters (dashboard self-down Issue 3,
-// 2026-05-16): the previous implementation sorted purely by
-// (hostname, port, uid), so a fresh joiner that happened to bind to a
-// numerically smaller port than the existing seed-of-record was elected
-// "leader" within seconds of receiving Welcome, then drove Down → Removed
-// on the cluster's real members.  Pekko's MembershipState.leaderOf
-// instead picks the first Up member in leaderOrdering — i.e. lowest
-// UpNumber — so a joiner with UpNumber assigned mid-cluster (always >=
-// existing-member upNumber) can never displace an existing leader on
-// address alone.  Live diag against the production cluster on
-// 127.0.0.1:37777 with gekka pinned to 2560 reproduces the misroll
-// deterministically until this fix lands.
+// UpNumber deliberately plays NO role here: that is Pekko's ageOrdering,
+// used for singleton-oldest selection (OldestNode), not leader election.
+// An earlier revision (a973dea) ordered leaders by upNumber to stop the
+// 2026-05-16 live-diag cascade, but that diverges from every JVM peer's
+// leaderOf computation and deadlocks mixed clusters: once the
+// address-lowest gekka member is Up, the JVM side unilaterally treats it
+// as leader and stops promoting joiners, while gekka defers to the
+// upNumber-lowest member — so no node performs Joining → Up transitions
+// at all (the 2026-07-13 clean-boot showcase convergence failure).  The
+// destructive cascade a973dea targeted is prevented at its actual roots:
+// stale-Removed-slot filtering on merge (intakeRemovedFromIncomingLocked,
+// dropRemovedMembersLocked) and the pre-Welcome leader-action gate in
+// performLeaderActions.
 func (cm *ClusterManager) DetermineLeader() *gproto_cluster.UniqueAddress {
 	cm.Mu.RLock()
 	defer cm.Mu.RUnlock()
 
-	type cand struct {
-		ua       *gproto_cluster.UniqueAddress
-		upNumber int32
-	}
-	var candidates []cand
+	var leading []*gproto_cluster.UniqueAddress  // Up | Leaving
+	var fallback []*gproto_cluster.UniqueAddress // Joining | WeaklyUp (bootstrap)
 	for _, m := range cm.State.Members {
-		if m.GetStatus() == gproto_cluster.MemberStatus_Up || m.GetStatus() == gproto_cluster.MemberStatus_WeaklyUp {
-			candidates = append(candidates, cand{
-				ua:       cm.State.AllAddresses[m.GetAddressIndex()],
-				upNumber: m.GetUpNumber(),
-			})
+		switch m.GetStatus() {
+		case gproto_cluster.MemberStatus_Up, gproto_cluster.MemberStatus_Leaving:
+			leading = append(leading, cm.State.AllAddresses[m.GetAddressIndex()])
+		case gproto_cluster.MemberStatus_Joining, gproto_cluster.MemberStatus_WeaklyUp:
+			fallback = append(fallback, cm.State.AllAddresses[m.GetAddressIndex()])
 		}
 	}
 
-	if len(candidates) == 0 {
-		// No Up/WeaklyUp members yet (bootstrap window).  Fall back to the
-		// full member list so the very first node has a deterministic
-		// self-leader for self-promotion via the canBootstrap path.
-		for _, m := range cm.State.Members {
-			candidates = append(candidates, cand{
-				ua:       cm.State.AllAddresses[m.GetAddressIndex()],
-				upNumber: m.GetUpNumber(),
-			})
-		}
+	pool := leading
+	if len(pool) == 0 {
+		pool = fallback
 	}
-
-	if len(candidates) == 0 {
+	if len(pool) == 0 {
 		return nil
 	}
 
-	sort.Slice(candidates, func(i, j int) bool {
-		a, b := candidates[i], candidates[j]
-		// Smallest UpNumber wins (Pekko's leaderOrdering).  UpNumber 0
-		// (unassigned) sorts last among assigned values because all
-		// real promotions yield UpNumber >= 1; treat 0 as "infinitely
-		// large" so an unpromoted joiner never beats a promoted peer.
-		ai, bi := a.upNumber, b.upNumber
-		const sentinel = int32(0x7fffffff)
-		if ai == 0 {
-			ai = sentinel
-		}
-		if bi == 0 {
-			bi = sentinel
-		}
-		if ai != bi {
-			return ai < bi
-		}
-		// Deterministic tiebreak on address: hostname → port → uid.
-		aa, ba := a.ua.GetAddress(), b.ua.GetAddress()
+	sort.Slice(pool, func(i, j int) bool {
+		aa, ba := pool[i].GetAddress(), pool[j].GetAddress()
 		if aa.GetHostname() != ba.GetHostname() {
 			return aa.GetHostname() < ba.GetHostname()
 		}
 		if aa.GetPort() != ba.GetPort() {
 			return aa.GetPort() < ba.GetPort()
 		}
-		return a.ua.GetUid() < b.ua.GetUid()
+		return pool[i].GetUid() < pool[j].GetUid()
 	})
 
-	return candidates[0].ua
+	return pool[0]
 }
 
 // OldestNode returns the oldest Up/WeaklyUp member, optionally filtered by role.
@@ -2710,6 +2693,16 @@ func (cm *ClusterManager) promoteDCMembers(dc string) {
 }
 
 func (cm *ClusterManager) performLeaderActions() {
+	// A node that has asked to join a remote seed is not a cluster member
+	// until the seed's Welcome arrives — Pekko nodes perform no leader (or
+	// DC-leader) actions in that window.  Acting on the provisional
+	// single-member view here is what produced the bogus pre-Welcome
+	// Joining → Up self-promotions (upNumber=1) behind the clean-boot
+	// showcase convergence failure.
+	if cm.joinAttempted.Load() && !cm.WelcomeReceived.Load() {
+		return
+	}
+
 	leader := cm.DetermineLeader()
 	if leader == nil {
 		return
@@ -2729,6 +2722,12 @@ func (cm *ClusterManager) performLeaderActions() {
 		cm.Mu.Lock()
 		var events []ClusterDomainEvent
 		changed := false
+		// Convergence is evaluated ONCE per leader pass, against the state as
+		// gossiped — matching Pekko's leaderActionsOnConvergence, which moves
+		// every eligible member in the same pass.  Re-checking inside the loop
+		// would let an earlier promotion (now Up, but not yet in Overview.Seen)
+		// veto the remaining Joining members of the very same converged round.
+		convergedAtPassStart := cm.CheckConvergenceLocked()
 		for _, m := range cm.State.Members {
 			ua := cm.State.AllAddresses[m.GetAddressIndex()]
 			ma := memberAddressFromUA(ua)
@@ -2744,15 +2743,13 @@ func (cm *ClusterManager) performLeaderActions() {
 				}
 				meetsMinMembers := len(cm.State.Members) >= minMembers && cm.meetsRoleMinNrOfMembersLocked()
 				// Bootstrap shortcut: if we are a 1-member cluster, self-promote
-				// without waiting for convergence.  GATE: only when no remote
-				// JOIN has been attempted, OR Welcome from the seed has already
-				// arrived.  Without this gate, gekka self-promotes as upNumber=1
-				// in the window between JoinCluster and Welcome — then when
-				// Welcome arrives and reveals the seed's larger cluster view,
-				// SBR detects the upNumber-1 conflict and self-downs.
-				canBootstrap := len(cm.State.Members) == 1 &&
-					(!cm.joinAttempted.Load() || cm.WelcomeReceived.Load())
-				if meetsMinMembers && (canBootstrap || cm.CheckConvergenceLocked()) {
+				// without waiting for convergence.  The pre-Welcome window
+				// (remote join attempted, Welcome not yet received) is excluded
+				// wholesale by the gate at the top of performLeaderActions, so
+				// reaching this point with a single-member view means the node
+				// is genuinely bootstrapping (never joined, or joined itself).
+				canBootstrap := len(cm.State.Members) == 1
+				if meetsMinMembers && (canBootstrap || convergedAtPassStart) {
 					m.Status = gproto_cluster.MemberStatus_Up.Enum()
 					m.UpNumber = proto.Int32(int32(len(cm.State.Members))) // Simplified upNumber
 					events = append(events, MemberUp{Member: ma})
@@ -2787,7 +2784,7 @@ func (cm *ClusterManager) performLeaderActions() {
 				}
 			case gproto_cluster.MemberStatus_WeaklyUp:
 				// Promote WeaklyUp → Up once convergence is achieved.
-				if cm.CheckConvergenceLocked() {
+				if convergedAtPassStart {
 					m.Status = gproto_cluster.MemberStatus_Up.Enum()
 					m.UpNumber = proto.Int32(int32(len(cm.State.Members)))
 					events = append(events, MemberUp{Member: ma})

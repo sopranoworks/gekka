@@ -6,6 +6,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	gekka "github.com/sopranoworks/gekka"
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/internal/core"
+	"github.com/sopranoworks/gekka/logger"
 	jcbor "github.com/sopranoworks/gekka/serialization/jackson-cbor"
 	"reflect"
 )
@@ -27,6 +29,7 @@ func main() {
 	seeds := flag.String("seeds", "", "comma-separated seed list host:port,host:port")
 	rolesCSV := flag.String("roles", "showcase-member", "comma-separated cluster roles")
 	peersCSV := flag.String("peers", "", "comma-separated peer URIs (e.g. pekko://ShowcaseCluster@127.0.0.1:2552); empty disables TellSender")
+	verbose := flag.Bool("verbose", false, "enable verbose cluster logging (gossip/heartbeat/phi debug lines)")
 	flag.Parse()
 
 	if *nodeLabel == "" || *port == 0 || *mgmtPort == 0 || *seeds == "" {
@@ -37,7 +40,8 @@ func main() {
 	roles := strings.Split(*rolesCSV, ",")
 
 	cfg := gekka.ClusterConfig{
-		SystemName: *systemName,
+		LogInfoVerbose: *verbose,
+		SystemName:     *systemName,
 		Address: actor.Address{
 			Protocol: "pekko",
 			System:   *systemName,
@@ -56,6 +60,15 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "NewCluster: %v\n", err)
 		os.Exit(1)
+	}
+
+	if *verbose {
+		// LogInfoVerbose gates Debug-level log calls; the logger's default
+		// level (INFO) would silently drop them without this.  Must run
+		// AFTER NewCluster: its config load re-installs the logger with the
+		// configured (INFO) level, overwriting any earlier Set.
+		logger.MainLevelVar().Set(slog.LevelDebug)
+		logger.StdoutLevelVar().Set(slog.LevelDebug)
 	}
 
 	// Register the Pekko jackson-cbor serializer at the same ID

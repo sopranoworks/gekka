@@ -5,8 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -85,6 +87,11 @@ func buildGekkaCmd(cfg runnerCfg, n topoNode, topo []topoNode) *exec.Cmd {
 		"--roles", "showcase-member,singleton-" + n.label,
 		"--peers", strings.Join(peersFor(n.label, topo), ","),
 	}
+	// Diagnostic escape hatch: SHOWCASE_GEKKA_VERBOSE=1 turns on the gekka
+	// nodes' verbose cluster logging (gossip/heartbeat/phi debug lines).
+	if os.Getenv("SHOWCASE_GEKKA_VERBOSE") == "1" {
+		args = append(args, "--verbose")
+	}
 	return exec.Command(cfg.GekkaBin, args...)
 }
 
@@ -106,6 +113,42 @@ func runPhases(ctx context.Context, cfg runnerCfg) int {
 	}
 	defer stopAll(teardownBudget)
 
+	// Every child's lines channel must be consumed CONTINUOUSLY from spawn
+	// to process exit. The channel holds 256 lines; once it fills, the
+	// pipeReaders stop reading the OS pipe, the pipe buffer fills, and the
+	// child's own stdout writes BLOCK — freezing whatever goroutine inside
+	// the child is logging (observed: a gekka node's heartbeat and inbound
+	// control-stream goroutines wedged mid-Gate-1 for 72s, so every JVM
+	// peer's failure detector flagged it and SBR downed the cluster).
+	// Each pump discards lines until Gate 2 arms classification, then
+	// applies the log invariant to lines within the gate window only.
+	var gate2Active atomic.Bool
+	logFail := make(chan classification, 1)
+	pump := func(c *child) {
+		go func() {
+			for ln := range c.lines {
+				if !gate2Active.Load() {
+					continue
+				}
+				cls := classifyLine(ln.text)
+				if cls.level == "" {
+					continue
+				}
+				if cls.level == "ERROR" || !isAllowed(cls, allowlist) {
+					select {
+					case logFail <- cls:
+					default:
+					}
+					// Keep draining so the child never wedges; classification
+					// stops after the first violation is reported.
+					for range c.lines {
+					}
+					return
+				}
+			}
+		}()
+	}
+
 	// ---- Phase A: Setup ----
 	setupCtx, cancel := context.WithTimeout(ctx, setupBudget)
 	defer cancel()
@@ -120,6 +163,7 @@ func runPhases(ctx context.Context, cfg runnerCfg) int {
 			return exitSetupFailed
 		}
 		children = append(children, c)
+		pump(c)
 		if err := awaitReady(setupCtx, c, n.label); err != nil {
 			cfg.Logger.Error("setup ready timeout", "node", n.label, "err", err)
 			return exitSetupFailed
@@ -135,6 +179,7 @@ func runPhases(ctx context.Context, cfg runnerCfg) int {
 			return exitSetupFailed
 		}
 		children = append(children, c)
+		pump(c)
 		if err := awaitReady(setupCtx, c, n.label); err != nil {
 			cfg.Logger.Error("setup ready timeout", "node", n.label, "err", err)
 			return exitSetupFailed
@@ -148,10 +193,12 @@ func runPhases(ctx context.Context, cfg runnerCfg) int {
 	}
 	gate1Deadline := time.Now().Add(gate1Budget)
 	for time.Now().Before(gate1Deadline) {
-		if err := pollAll(ctx, endpoints, len(topo)); err == nil {
+		err := pollAll(ctx, endpoints, len(topo))
+		if err == nil {
 			cfg.Logger.Info("gate 1 PASS — all 8 Up")
 			goto gate2
 		}
+		cfg.Logger.Info("gate 1 poll not converged yet", "err", err.Error())
 		select {
 		case <-ctx.Done():
 			return exitInternalError
@@ -187,25 +234,12 @@ gate2:
 		}
 	}()
 
-	// Log invariant: fan-in every child's line channel through classifyLine.
-	logFail := make(chan classification, 1)
-	for _, c := range children {
-		go func(c *child) {
-			for ln := range c.lines {
-				cls := classifyLine(ln.text)
-				if cls.level == "" {
-					continue
-				}
-				if cls.level == "ERROR" || !isAllowed(cls, allowlist) {
-					select {
-					case logFail <- cls:
-					default:
-					}
-					return
-				}
-			}
-		}(c)
-	}
+	// Log invariant: the per-child pumps have been discarding lines since
+	// spawn; arming gate2Active scopes classification to the 10-minute
+	// steady-state window (spec §5). Setup-phase warmup noise (e.g. ask
+	// timeouts to peers that had not reached Up yet) predates the window
+	// and must not fail it.
+	gate2Active.Store(true)
 
 	select {
 	case <-gate2Ctx.Done():

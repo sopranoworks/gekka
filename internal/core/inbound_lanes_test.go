@@ -376,6 +376,19 @@ func TestInboundLanes_LaneFullFallsBackInline(t *testing.T) {
 		t.Errorf("after inline-fallback: receivedCount = %d, want 1 (the inline message ran but blocked-callback message is still gated)", got)
 	}
 
+	// Frame 3's callback already sent to doneCh synchronously (inline dispatch
+	// happened within the dispatchSharded call above). Drain that signal now
+	// so the post-gate loop below only counts frame 1 and frame 2 — leaving
+	// it undrained here would let the post-gate loop's first receive consume
+	// this stale frame-3 signal instead of frame 1's, desynchronizing the
+	// final receivedCount check from one of the two still-pending callbacks
+	// and racing it against that callback's own receivedCount.Add(1).
+	select {
+	case <-doneCh:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("frame 3's inline-dispatch doneCh signal did not arrive")
+	}
+
 	postEvents := nm.FlightRec.Snapshot(assoc.remoteKey())
 	postLaneFullCount := countByCategory(postEvents, CatInboundLaneFull)
 	if postLaneFullCount <= preLaneFullCount {
@@ -383,7 +396,8 @@ func TestInboundLanes_LaneFullFallsBackInline(t *testing.T) {
 			preLaneFullCount, postLaneFullCount)
 	}
 
-	// Release the gate; lane goroutine drains the buffered frame 2.
+	// Release the gate; lane goroutine finishes frame 1's callback then
+	// drains and processes the buffered frame 2.
 	close(gate)
 	for i := 0; i < 2; i++ {
 		select {

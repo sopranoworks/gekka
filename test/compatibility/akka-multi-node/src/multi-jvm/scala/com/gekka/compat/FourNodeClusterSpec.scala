@@ -14,7 +14,6 @@ package com.gekka.compat
 import scala.collection.mutable.ListBuffer
 import scala.concurrent.duration._
 import scala.sys.process._
-import scala.util.Try
 
 import com.typesafe.config.ConfigFactory
 import akka.actor.Address
@@ -89,25 +88,25 @@ abstract class FourNodeClusterSpec
   override def beforeAll(): Unit = multiNodeSpecBeforeAll()
   override def afterAll(): Unit  = multiNodeSpecAfterAll()
 
-  /** Locate the gekka-compat-test binary. */
-  private def findGoBinary: String = {
-    val candidates = Seq(
-      sys.env.getOrElse("GEKKA_COMPAT_TEST_BIN", ""),
-      "../../../bin/gekka-compat-test",
-      "../../bin/gekka-compat-test",
-      "gekka-compat-test",
-    ).filter(_.nonEmpty)
-
-    candidates.find { p =>
-      val f = new java.io.File(p)
-      f.canExecute || (!f.isAbsolute && Try(s"which $p".!!).isSuccess)
-    }.getOrElse {
+  /** Locate the gekka-compat-test binary — see GoCompatBinary for the
+   *  search order and on-demand build behavior. A genuine `go build`
+   *  compile error is surfaced distinctly from the binary simply being
+   *  absent with no source to build.
+   */
+  private def findGoBinary: String = GoCompatBinary.locate() match {
+    case GoCompatBinary.Found(p) => p
+    case GoCompatBinary.BuildFailed(command, output) =>
       fail(
-        "gekka-compat-test binary not found. " +
+        s"go build failed for gekka-compat-test — this is a genuine Go " +
+          s"compile error, not a missing binary.\nCommand: $command\n\n$output"
+      )
+    case GoCompatBinary.NotFoundNoSource(searchedFrom) =>
+      fail(
+        s"gekka-compat-test binary not found, and its source directory " +
+          s"could not be located (searched from $searchedFrom). " +
           "Build it with:  go build -o bin/gekka-compat-test ./test/compat-bin/gekka-compat-test  " +
           "or set GEKKA_COMPAT_TEST_BIN env var."
       )
-    }
   }
 
   /** Spawn a Go node as an external process. */

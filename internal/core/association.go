@@ -3933,8 +3933,10 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 
 		for k, a := range nm.associations {
 			a.mu.RLock()
-			isOutbound := a.role == OUTBOUND
-			isWaiting := a.state == INITIATED || a.state == WAITING_FOR_HANDSHAKE
+			aRole := a.role
+			aState := a.state
+			isOutbound := aRole == OUTBOUND
+			isWaiting := aState == INITIATED || aState == WAITING_FOR_HANDSHAKE
 			var hostMatch bool
 			var aHost string
 			var aPort uint32
@@ -3947,7 +3949,10 @@ func (assoc *GekkaAssociation) handleHandshakeReq(req *gproto_remote.HandshakeRe
 			}
 			a.mu.RUnlock()
 
-			logger.Default().Debug("artery: handleHandshakeReq candidate", "key", k, "role", a.role, "state", a.state, "host", aHost, "port", aPort, "match", hostMatch)
+			// Log the role/state captured above (while locked), not a fresh
+			// unsynchronized re-read — a concurrent handleHandshakeRsp on
+			// the same association may be writing a.state right now.
+			logger.Default().Debug("artery: handleHandshakeReq candidate", "key", k, "role", aRole, "state", aState, "host", aHost, "port", aPort, "match", hostMatch)
 
 			if isOutbound && hostMatch {
 				if outboundToRemote == nil {
@@ -4195,8 +4200,9 @@ func (assoc *GekkaAssociation) handleHandshakeRsp(mwa *gproto_remote.MessageWith
 	var matched *GekkaAssociation
 	for _, a := range candidates {
 		a.mu.RLock()
+		aState := a.state
 		isOutbound := a.role == OUTBOUND
-		isWaiting := a.state == INITIATED || a.state == WAITING_FOR_HANDSHAKE || a.state == ASSOCIATED
+		isWaiting := aState == INITIATED || aState == WAITING_FOR_HANDSHAKE || aState == ASSOCIATED
 
 		var match bool
 		aRemote := a.remote.Load()
@@ -4218,7 +4224,10 @@ func (assoc *GekkaAssociation) handleHandshakeRsp(mwa *gproto_remote.MessageWith
 		a.mu.RUnlock()
 
 		if isOutbound && isWaiting && match {
-			logger.Default().Info("artery: found matching outbound association", "state", a.state)
+			// Log aState captured above (while locked) — a fresh
+			// unsynchronized re-read of a.state here races against a
+			// concurrent handleHandshakeReq writing it on the same assoc.
+			logger.Default().Info("artery: found matching outbound association", "state", aState)
 			matched = a
 			break
 		}

@@ -12,6 +12,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
@@ -60,8 +62,8 @@ func gzipCompress(data []byte) ([]byte, error) {
 type ClusterManager struct {
 	Mu              sync.RWMutex
 	LocalAddress    *gproto_cluster.UniqueAddress
-	LocalHash       int32  // for VectorClock version (initial UID-based hash)
-	LocalHashStr    string // Pekko-assigned hash for this node (murmur format); overrides LocalHash
+	LocalHash       int32  // legacy UID-based fallback for the clock node name (LocalHashStr takes precedence)
+	LocalHashStr    string // this node's vector-clock node name: MD5 of Pekko's vclockName, fixed at construction
 	State           *gproto_cluster.Gossip
 	Metrics         Metrics
 	Fd              *PhiAccrualFailureDetector
@@ -426,9 +428,38 @@ func extractHOCONValue(hoconStr, key string) string {
 	return strings.TrimSpace(rest)
 }
 
-// localHashString returns the hash string used for this node's VectorClock entry.
-// If a Pekko-assigned hash has been adopted it takes precedence; otherwise the
-// UID-based fallback is used.
+// pekkoVclockNodeHash computes a node's vector-clock node name exactly as
+// Pekko does: MD5 hex of Gossip.vclockName(node) = s"${node.address}-${node.longUid}"
+// (VectorClock.Node.hash).  The address renders in Pekko's canonical
+// Address.toString form `protocol://system@host:port` and longUid is the
+// SIGNED 64-bit decimal.  Cross-validated against live Pekko 1.1.2 output:
+// see TestLocalClockNodeName_MatchesPekkoVclockName.
+func pekkoVclockNodeHash(ua *gproto_cluster.UniqueAddress) string {
+	a := ua.GetAddress()
+	protocol := a.GetProtocol()
+	if protocol == "" {
+		protocol = "pekko"
+	}
+	longUid := int64(uint64(ua.GetUid()) | uint64(ua.GetUid2())<<32)
+	name := fmt.Sprintf("%s://%s@%s:%d-%d", protocol, a.GetSystem(), a.GetHostname(), a.GetPort(), longUid)
+	sum := md5.Sum([]byte(name))
+	return hex.EncodeToString(sum[:])
+}
+
+// localHashString returns this node's vector-clock node name.  It is
+// computed deterministically from the node's own identity at construction
+// (Pekko's vclockName MD5) and NEVER changes afterwards.
+//
+// It must never be "adopted" from an incoming gossip's AllHashes table by
+// the position of our address: Pekko's allHashes is
+// gossip.version.versions.keys — the clock's node-name table in TreeMap
+// (sorted-string) order — and has no positional relationship to
+// allAddresses.  A previous revision did exactly that positional adoption,
+// which made gekka nodes bump OTHER members' clock components on every
+// local state change; the fabricated causal history let a stale member set
+// spuriously dominate a genuinely newer concurrent branch, flickering
+// freshly-Joining members out of JVM peers' membership (findings/
+// 2026-07-13-open-member-flicker-on-join.md).
 func (cm *ClusterManager) localHashString() string {
 	if cm.LocalHashStr != "" {
 		return cm.LocalHashStr
@@ -436,10 +467,6 @@ func (cm *ClusterManager) localHashString() string {
 	return fmt.Sprintf("%d", cm.LocalHash)
 }
 
-// syncLocalHashFromStateLocked scans cm.State.AllAddresses for the local
-// node and, if a non-empty hash is found in AllHashes at the corresponding
-// index, adopts it as LocalHashStr and updates the AllHashes entry in
-// cm.State.  Must be called with cm.Mu held (write).
 // repairSelfReincarnationLocked is invoked after we adopt an incoming
 // gossip wholesale (ClockBefore) or merge it (ClockConcurrent).  Its
 // job: if the incoming gossip carried an entry for our host:port with
@@ -482,10 +509,9 @@ func (cm *ClusterManager) repairSelfReincarnationLocked() {
 			Uid2:    proto.Uint32(myUid2),
 		}
 		cm.State.AllAddresses = append(cm.State.AllAddresses, newUA)
-		// Pad AllHashes to keep the indexes aligned.
-		for len(cm.State.AllHashes) < len(cm.State.AllAddresses) {
-			cm.State.AllHashes = append(cm.State.AllHashes, cm.localHashString())
-		}
+		// AllHashes is the vector-clock node table, not address-parallel —
+		// a new address needs no hash entry (its clock node appears only
+		// when that node itself bumps its clock).
 		newIdx := int32(len(cm.State.AllAddresses) - 1)
 		cm.State.Members = append(cm.State.Members, &gproto_cluster.Member{
 			AddressIndex: proto.Int32(newIdx),
@@ -548,79 +574,28 @@ func (cm *ClusterManager) repairSelfReincarnationLocked() {
 	}
 }
 
-func (cm *ClusterManager) syncLocalHashFromStateLocked() {
-	localHost := cm.LocalAddress.GetAddress().GetHostname()
-	localPort := cm.LocalAddress.GetAddress().GetPort()
-	for i, ua := range cm.State.AllAddresses {
-		if ua.GetAddress().GetHostname() != localHost || ua.GetAddress().GetPort() != localPort {
-			continue
-		}
-		if i >= len(cm.State.AllHashes) || cm.State.AllHashes[i] == "" {
-			break
-		}
-		newHash := cm.State.AllHashes[i]
-		oldHash := cm.localHashString()
-		if newHash == oldHash {
-			return
-		}
-		logger.Default().Debug("cluster: adopting Pekko hash for local node", "new", newHash, "old", oldHash)
-		cm.LocalHashStr = newHash
-		// Replace the old hash key in the VectorClock Version entries.
-		for _, ver := range cm.State.Version.GetVersions() {
-			if int(ver.GetHashIndex()) < len(cm.State.AllHashes) &&
-				cm.State.AllHashes[ver.GetHashIndex()] == oldHash {
-				// AllHashes[i] is already newHash; nothing else to change.
-				break
-			}
-		}
-		break
-	}
-}
-
-// adoptHashFromGossipLocked looks for the local node's address in an
-// incoming gossip message.  If found, and the corresponding AllHashes entry
-// differs from the current LocalHashStr, it updates LocalHashStr and patches
-// the same index in cm.State.AllHashes so future VectorClock increments use
-// the Pekko-compatible murmur hash.  Must be called with cm.Mu held (write).
-func (cm *ClusterManager) adoptHashFromGossipLocked(incoming *gproto_cluster.Gossip) {
-	localHost := cm.LocalAddress.GetAddress().GetHostname()
-	localPort := cm.LocalAddress.GetAddress().GetPort()
-
-	// Find our address in the incoming gossip.
-	var pekkoHash string
-	for i, ua := range incoming.AllAddresses {
-		if ua.GetAddress().GetHostname() == localHost && ua.GetAddress().GetPort() == localPort {
-			if i < len(incoming.AllHashes) && incoming.AllHashes[i] != "" {
-				pekkoHash = incoming.AllHashes[i]
-			}
-			break
-		}
-	}
-	if pekkoHash == "" || pekkoHash == cm.localHashString() {
-		return
-	}
-	logger.Default().Debug("cluster: adopting Pekko hash for local node", "new", pekkoHash, "old", cm.localHashString())
-	oldHash := cm.localHashString()
-	cm.LocalHashStr = pekkoHash
-
-	// Update the AllHashes entry for our address in cm.State so that
-	// vectorClockToMap and incrementVersionWithLockHeld use the new hash.
-	for i, ua := range cm.State.AllAddresses {
-		if ua.GetAddress().GetHostname() == localHost && ua.GetAddress().GetPort() == localPort {
-			if i < len(cm.State.AllHashes) && cm.State.AllHashes[i] == oldHash {
-				cm.State.AllHashes[i] = pekkoHash
-			}
-			break
-		}
-	}
-}
+// NOTE: this file used to contain syncLocalHashFromStateLocked and
+// adoptHashFromGossipLocked, which "adopted" the incoming gossip's
+// AllHashes entry at the local address's POSITION as this node's own
+// vector-clock node name.  That misread the wire format: Pekko's allHashes
+// is gossip.version.versions.keys — the clock node table in TreeMap order —
+// with no positional relationship to allAddresses.  The adopted string was
+// therefore an arbitrary (usually ANOTHER member's) clock node, so every
+// subsequent local bump advanced that member's component, fabricating
+// causal history that let stale member sets spuriously dominate genuinely
+// newer concurrent branches (join-time member flicker).  The local node
+// name is now computed deterministically via pekkoVclockNodeHash and never
+// changes.
 
 func NewClusterManager(local *gproto_cluster.UniqueAddress, router func(context.Context, string, any) error) *ClusterManager {
 	clLocal := local                   // Already a gproto_cluster.UniqueAddress
-	localHash := int32(local.GetUid()) // UID-based hash fallback (used only when leader)
+	localHash := int32(local.GetUid()) // legacy UID-based fallback (LocalHashStr below takes precedence)
 	return &ClusterManager{
-		LocalAddress:         local,
-		LocalHash:            localHash,
+		LocalAddress: local,
+		LocalHash:    localHash,
+		// The node's vector-clock node name, computed exactly as Pekko's
+		// vclockNode (MD5 of vclockName).  Fixed for the node's lifetime.
+		LocalHashStr:         pekkoVclockNodeHash(local),
 		Router:               router,
 		Fd:                   NewPhiAccrualFailureDetector(8.0, 1000),
 		WatchFd:              NewWatchFailureDetector(WatchFailureDetectorConfig{}),
@@ -635,11 +610,9 @@ func NewClusterManager(local *gproto_cluster.UniqueAddress, router func(context.
 				},
 			},
 			AllAddresses: []*gproto_cluster.UniqueAddress{clLocal},
-			// Start with no AllHashes/Version so that the first incoming gossip
-			// from the Pekko seed is always ClockBefore → we replace our state
-			// with Pekko's canonical state including Pekko's murmur hashes.
-			// incrementVersionWithLockHeld becomes a no-op until we adopt a hash
-			// from an incoming gossip state via syncLocalHashFromStateLocked.
+			// The clock starts empty (no AllHashes/Version): a joiner's
+			// first incoming Welcome/gossip therefore compares ClockBefore
+			// and is adopted wholesale, matching a fresh Pekko node.
 			AllHashes: []string{},
 			Overview:  &gproto_cluster.GossipOverview{},
 			Version:   &gproto_cluster.VectorClock{},
@@ -1340,12 +1313,11 @@ func (cm *ClusterManager) addMemberToGossipLocked(joiningAddr *gproto_cluster.Un
 			// Already known — add Member if not present.
 			for _, m := range cm.State.Members {
 				if m.GetAddressIndex() == int32(i) {
-					// Already a member; still ensure the local hash is present
-					// and bump the version so that the Welcome we're about to
-					// send is guaranteed to be ClockAfter the joiner's empty
-					// initial state (handles races where the joiner's address
-					// was inserted into our state before the Join arrived).
-					cm.ensureLocalHashInAllHashesLocked()
+					// Already a member; still bump the version so that the
+					// Welcome we're about to send is guaranteed to be
+					// ClockAfter the joiner's empty initial state (handles
+					// races where the joiner's address was inserted into our
+					// state before the Join arrived).
 					cm.incrementVersionWithLockHeld()
 					return
 				}
@@ -1371,16 +1343,17 @@ func (cm *ClusterManager) addMemberToGossipLocked(joiningAddr *gproto_cluster.Un
 				newMem.AppVersionIndex = appVerIdx
 			}
 			cm.State.Members = append(cm.State.Members, newMem)
-			cm.ensureLocalHashInAllHashesLocked()
 			cm.incrementVersionWithLockHeld()
 			return
 		}
 	}
 
-	// New address — append to AllAddresses and create a Member.
+	// New address — append to AllAddresses and create a Member.  No
+	// AllHashes entry: that table holds vector-clock node names, not
+	// per-address hashes, and the joiner's clock node appears only when
+	// the joiner itself bumps its clock.
 	addrIdx := int32(len(cm.State.AllAddresses))
 	cm.State.AllAddresses = append(cm.State.AllAddresses, joiningAddr)
-	cm.State.AllHashes = append(cm.State.AllHashes, fmt.Sprintf("%d", joiningAddr.GetUid()))
 	newMem := &gproto_cluster.Member{
 		AddressIndex: proto.Int32(addrIdx),
 		Status:       gproto_cluster.MemberStatus_Joining.Enum(),
@@ -1393,7 +1366,6 @@ func (cm *ClusterManager) addMemberToGossipLocked(joiningAddr *gproto_cluster.Un
 		newMem.AppVersionIndex = appVerIdx
 	}
 	cm.State.Members = append(cm.State.Members, newMem)
-	cm.ensureLocalHashInAllHashesLocked()
 	cm.incrementVersionWithLockHeld()
 }
 
@@ -1512,22 +1484,6 @@ func seenDigestHasNew(local, remote []byte) bool {
 		}
 	}
 	return false
-}
-
-// ensureLocalHashInAllHashesLocked adds the local node's hash to AllHashes if
-// it is not already present. This is needed when AllHashes starts empty (e.g.
-// after adopting a Pekko seed's canonical gossip state) and this node is acting
-// as a seed for another Go node — incrementVersionWithLockHeld silently drops
-// increments for hashes that are not listed in AllHashes.
-// Must be called with cm.Mu held (write).
-func (cm *ClusterManager) ensureLocalHashInAllHashesLocked() {
-	localHashStr := cm.localHashString()
-	for _, h := range cm.State.AllHashes {
-		if h == localHashStr {
-			return
-		}
-	}
-	cm.State.AllHashes = append(cm.State.AllHashes, localHashStr)
 }
 
 // markMemberLeavingLocked transitions an Up/WeaklyUp member to Leaving status.
@@ -1736,6 +1692,21 @@ func (cm *ClusterManager) processIncomingGossip(gossip *gproto_cluster.Gossip, r
 	m2 := cm.vectorClockToMap(gossip.Version, gossip.AllHashes)
 	ordering := cm.compareResolvedClocks(m1, m2)
 
+	if cm.LogInfoVerbose {
+		from := ""
+		if remoteAddr != nil {
+			from = fmt.Sprintf("%s:%d", remoteAddr.GetAddress().GetHostname(), remoteAddr.GetAddress().GetPort())
+		}
+		logger.Default().Debug("Cluster: gossip ordering",
+			slog.String("ordering", ordering.String()),
+			slog.String("from", from),
+			slog.Int("localMembers", len(cm.State.Members)),
+			slog.Int("remoteMembers", len(gossip.Members)),
+			slog.String("selfNode", cm.localHashString()),
+			slog.String("localClock", formatClockMap(m1)),
+			slog.String("remoteClock", formatClockMap(m2)))
+	}
+
 	var events []ClusterDomainEvent
 	if ordering == ClockBefore {
 		// Incoming is newer — diff before replacing so we can emit events.
@@ -1753,9 +1724,6 @@ func (cm *ClusterManager) processIncomingGossip(gossip *gproto_cluster.Gossip, r
 		// kills the freshly-joined node within ~1s of receiving the seed's
 		// gossip — exactly the dashboard symptom.
 		cm.repairSelfReincarnationLocked()
-		// Adopt Pekko's hash for our own address so future VectorClock comparisons
-		// use a format compatible with Pekko's murmur-hash scheme.
-		cm.syncLocalHashFromStateLocked()
 		// Mark this node as having "seen" the gossip so Pekko's leader can achieve
 		// convergence (Pekko requires all members to be in Overview.Seen before
 		// promoting Joining→Up). Without this, Pekko's convergence check fails
@@ -1771,10 +1739,10 @@ func (cm *ClusterManager) processIncomingGossip(gossip *gproto_cluster.Gossip, r
 		events = diffGossipMembers(cm.State, merged)
 		cm.State = merged
 		cm.repairSelfReincarnationLocked()
-		// Adopt Pekko's hash for our own address if the incoming gossip carries it.
-		// This must happen before incrementVersionWithLockHeld so the new hash is used.
-		cm.adoptHashFromGossipLocked(gossip)
-		cm.incrementVersionWithLockHeld()
+		// Pekko's receiveGossip merge case does NOT bump the local clock
+		// component: a merge is not a local state change (`:+ vclockNode`
+		// happens only in updateLatestGossip).  Bumping here made every
+		// merged state spuriously dominate all concurrent peer branches.
 		cm.mergeSeenLocked(gossip)
 		cm.markLocalSeenLocked()
 		cm.connectToNewMembers(merged)
@@ -2068,6 +2036,42 @@ const (
 	ClockConcurrent
 )
 
+func (o ClockOrdering) String() string {
+	switch o {
+	case ClockSame:
+		return "Same"
+	case ClockBefore:
+		return "Before"
+	case ClockAfter:
+		return "After"
+	case ClockConcurrent:
+		return "Concurrent"
+	}
+	return fmt.Sprintf("ClockOrdering(%d)", int(o))
+}
+
+// formatClockMap renders a resolved vector clock as sorted "hash:ts" pairs
+// (hash truncated to 8 chars) for verbose gossip diagnostics.
+func formatClockMap(m map[string]int64) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	for i, k := range keys {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		h := k
+		if len(h) > 8 {
+			h = h[:8]
+		}
+		fmt.Fprintf(&b, "%s:%d", h, m[k])
+	}
+	return b.String()
+}
+
 func CompareVectorClock(v1, v2 *gproto_cluster.VectorClock) ClockOrdering {
 	m1 := make(map[int32]int64)
 	if v1 != nil {
@@ -2115,6 +2119,10 @@ func CompareVectorClock(v1, v2 *gproto_cluster.VectorClock) ClockOrdering {
 	return ClockSame
 }
 
+// vectorClockToMap resolves a wire-format VectorClock (index-based entries
+// plus the message's own AllHashes node-name table) to a map keyed by node
+// name.  Defensive: out-of-range indexes are skipped and duplicate node
+// names keep the highest timestamp — a well-formed gossip contains neither.
 func (cm *ClusterManager) vectorClockToMap(v *gproto_cluster.VectorClock, hashes []string) map[string]int64 {
 	m := make(map[string]int64)
 	if v == nil {
@@ -2123,10 +2131,35 @@ func (cm *ClusterManager) vectorClockToMap(v *gproto_cluster.VectorClock, hashes
 	for _, entry := range v.Versions {
 		idx := entry.GetHashIndex()
 		if int(idx) < len(hashes) {
-			m[hashes[idx]] = entry.GetTimestamp()
+			k := hashes[idx]
+			if ts := entry.GetTimestamp(); ts > m[k] {
+				m[k] = ts
+			}
 		}
 	}
 	return m
+}
+
+// clockFromResolvedMap converts a node-name→timestamp map back to the wire
+// representation: AllHashes is exactly the clock's node-name table in
+// sorted order (mirroring Pekko's serializer, where allHashes =
+// version.versions.keys from a sorted TreeMap) and every Version entry
+// indexes into it.  AllHashes has NO positional relationship to
+// AllAddresses.
+func clockFromResolvedMap(m map[string]int64) ([]string, *gproto_cluster.VectorClock) {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	vc := &gproto_cluster.VectorClock{}
+	for i, k := range keys {
+		vc.Versions = append(vc.Versions, &gproto_cluster.VectorClock_Version{
+			HashIndex: proto.Int32(int32(i)),
+			Timestamp: proto.Int64(m[k]),
+		})
+	}
+	return keys, vc
 }
 
 func (cm *ClusterManager) compareResolvedClocks(m1, m2 map[string]int64) ClockOrdering {
@@ -2166,58 +2199,43 @@ func (cm *ClusterManager) compareResolvedClocks(m1, m2 map[string]int64) ClockOr
 func (cm *ClusterManager) mergeGossipStates(s1, s2 *gproto_cluster.Gossip) *gproto_cluster.Gossip {
 	merged := proto.Clone(s1).(*gproto_cluster.Gossip)
 
-	// Combine AllAddresses and AllHashes, keeping indices stable.
+	// Combine AllAddresses, keeping s1's indices stable.
 	addrMap := make(map[string]int32)
 	for i, ua := range merged.AllAddresses {
 		key := fmt.Sprintf("%s:%d-%d", ua.GetAddress().GetHostname(), ua.GetAddress().GetPort(), ua.GetUid())
 		addrMap[key] = int32(i)
 	}
 
-	for i, ua := range s2.AllAddresses {
+	for _, ua := range s2.AllAddresses {
 		key := fmt.Sprintf("%s:%d-%d", ua.GetAddress().GetHostname(), ua.GetAddress().GetPort(), ua.GetUid())
 		if _, ok := addrMap[key]; !ok {
 			addrMap[key] = int32(len(merged.AllAddresses))
 			merged.AllAddresses = append(merged.AllAddresses, ua)
-			// AllHashes may be shorter than AllAddresses in Pekko 1.1.x gossip
-			// when tombstone entries are present without a corresponding hash.
-			var hash string
-			if i < len(s2.AllHashes) {
-				hash = s2.AllHashes[i]
-			}
-			merged.AllHashes = append(merged.AllHashes, hash)
 		}
 	}
 
-	// Pairwise-max VectorClock
+	// String-keyed pairwise-max VectorClock (Pekko VectorClock.merge).
+	// Each branch's clock resolves against ITS OWN AllHashes table; the
+	// merged clock is the union keyed by node name, with the higher
+	// timestamp winning.  The merged AllHashes is rebuilt as exactly the
+	// merged clock's node table — it is NOT address-parallel, so appending
+	// addresses above adds no hash entries.  A previous revision rebuilt
+	// the clock by first-match lookup in an address-parallel table, which
+	// silently dropped components whose node name was absent and
+	// misattached components on duplicate/empty entries — destroying the
+	// causal history that keeps concurrent branches mergeable.
 	m1 := cm.vectorClockToMap(s1.Version, s1.AllHashes)
 	m2 := cm.vectorClockToMap(s2.Version, s2.AllHashes)
-	allKeys := make(map[string]bool)
-	for k := range m1 {
-		allKeys[k] = true
+	mm := make(map[string]int64, len(m1)+len(m2))
+	for k, v := range m1 {
+		mm[k] = v
 	}
-	for k := range m2 {
-		allKeys[k] = true
-	}
-
-	merged.Version = &gproto_cluster.VectorClock{}
-	for k := range allKeys {
-		v1 := m1[k]
-		v2 := m2[k]
-		maxV := v1
-		if v2 > maxV {
-			maxV = v2
-		}
-		// find index in merged.AllHashes
-		for i, h := range merged.AllHashes {
-			if h == k {
-				merged.Version.Versions = append(merged.Version.Versions, &gproto_cluster.VectorClock_Version{
-					HashIndex: proto.Int32(int32(i)),
-					Timestamp: proto.Int64(maxV),
-				})
-				break
-			}
+	for k, v := range m2 {
+		if v > mm[k] {
+			mm[k] = v
 		}
 	}
+	merged.AllHashes, merged.Version = clockFromResolvedMap(mm)
 
 	// Merge AllRoles from s2 into merged, building a remap table so that
 	// RolesIndexes carried by s2 members can be translated to merged indices.
@@ -2319,21 +2337,16 @@ func (cm *ClusterManager) mergeGossipStates(s1, s2 *gproto_cluster.Gossip) *gpro
 	return merged
 }
 
+// incrementVersionWithLockHeld bumps the LOCAL node's clock component,
+// implementing Pekko's `VectorClock :+ vclockNode`: the component is
+// inserted when absent (a previous revision silently dropped the bump when
+// the local node name was missing from AllHashes, leaving local state
+// changes causally invisible).  Callers invoke this only on genuine local
+// state changes — never when merely merging received gossip.
 func (cm *ClusterManager) incrementVersionWithLockHeld() {
 	m := cm.vectorClockToMap(cm.State.Version, cm.State.AllHashes)
-	localHashStr := cm.localHashString()
-	m[localHashStr]++
-
-	cm.State.Version = &gproto_cluster.VectorClock{}
-	for i, h := range cm.State.AllHashes {
-		if v, ok := m[h]; ok {
-			cm.State.Version.Versions = append(cm.State.Version.Versions, &gproto_cluster.VectorClock_Version{
-				HashIndex: proto.Int32(int32(i)),
-				Timestamp: proto.Int64(v),
-			})
-		}
-	}
-
+	m[cm.localHashString()]++
+	cm.State.AllHashes, cm.State.Version = clockFromResolvedMap(m)
 }
 
 // DetermineLeader selects the cluster leader using Pekko's leaderOf
@@ -3676,6 +3689,13 @@ func (cm *ClusterManager) gossipTick(runLeaderActions bool) {
 	if localInSeen {
 		cm.Mu.RLock()
 		statePayload, err := proto.Marshal(cm.State)
+		if cm.LogInfoVerbose {
+			logger.Default().Debug("Cluster: sending GossipEnvelope",
+				slog.String("to", fmt.Sprintf("%s:%d", targetAddr.GetAddress().GetHostname(), targetAddr.GetAddress().GetPort())),
+				slog.Int("members", len(cm.State.Members)),
+				slog.String("selfNode", cm.localHashString()),
+				slog.String("clock", formatClockMap(cm.vectorClockToMap(cm.State.Version, cm.State.AllHashes))))
+		}
 		cm.Mu.RUnlock()
 		if err == nil {
 			compressedGossip, err := gzipCompress(statePayload)

@@ -68,14 +68,14 @@ func TestWriteDebugEnvelope_WithWarnings(t *testing.T) {
 // It is used by tests that only care about HTTP routing, not cluster state.
 type minimalClusterProvider struct{}
 
-func (minimalClusterProvider) ClusterManager() *cluster.ClusterManager        { return nil }
-func (minimalClusterProvider) NodeManager() *core.NodeManager                  { return nil }
-func (minimalClusterProvider) LeaveMember(_ string) error                      { return nil }
-func (minimalClusterProvider) DownMember(_ string) error                       { return nil }
-func (minimalClusterProvider) HasQuarantinedAssociation() bool                 { return false }
-func (minimalClusterProvider) Services() map[string][]string                   { return nil }
-func (minimalClusterProvider) ConfigEntries() map[string]any                   { return nil }
-func (minimalClusterProvider) UpdateConfigEntry(_ string, _ any)               {}
+func (minimalClusterProvider) ClusterManager() *cluster.ClusterManager { return nil }
+func (minimalClusterProvider) NodeManager() *core.NodeManager          { return nil }
+func (minimalClusterProvider) LeaveMember(_ string) error              { return nil }
+func (minimalClusterProvider) DownMember(_ string) error               { return nil }
+func (minimalClusterProvider) HasQuarantinedAssociation() bool         { return false }
+func (minimalClusterProvider) Services() map[string][]string           { return nil }
+func (minimalClusterProvider) ConfigEntries() map[string]any           { return nil }
+func (minimalClusterProvider) UpdateConfigEntry(_ string, _ any)       {}
 func (minimalClusterProvider) ShardDistribution(_ string) (map[string]string, bool) {
 	return nil, false
 }
@@ -94,9 +94,9 @@ func newMockClusterProvider() ClusterStateProvider {
 // stubDebugProvider satisfies DebugProvider for route-registration tests.
 type stubDebugProvider struct{}
 
-func (stubDebugProvider) CRDTList() []CRDTEntry                  { return nil }
-func (stubDebugProvider) CRDT(_ string) (*CRDTValue, error)      { return nil, nil }
-func (stubDebugProvider) Actors(_ bool) []ActorEntry             { return nil }
+func (stubDebugProvider) CRDTList() []CRDTEntry             { return nil }
+func (stubDebugProvider) CRDT(_ string) (*CRDTValue, error) { return nil, nil }
+func (stubDebugProvider) Actors(_ bool) []ActorEntry        { return nil }
 
 func TestDebugDisabled_Returns404(t *testing.T) {
 	ms, err := NewManagementServer(newMockClusterProvider(), "127.0.0.1", 0)

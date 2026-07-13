@@ -237,11 +237,11 @@ func TestAeronFragmentFlags(t *testing.T) {
 // the Aeron wire specification.
 func TestAeronDataHeader_BinaryLayout(t *testing.T) {
 	hdr := AeronDataHeader{
-		FrameLength:   int32(0x00000120),   // 288
+		FrameLength:   int32(0x00000120), // 288
 		Version:       0x00,
-		Flags:         AeronFlagComplete,   // 0xC0
-		FrameType:     AeronHdrTypeData,    // 0x0000
-		TermOffset:    int32(0x00000040),   // 64
+		Flags:         AeronFlagComplete, // 0xC0
+		FrameType:     AeronHdrTypeData,  // 0x0000
+		TermOffset:    int32(0x00000040), // 64
 		SessionId:     int32(0x12345678),
 		StreamId:      AeronStreamOrdinary, // 2
 		TermId:        int32(0x0000002A),   // 42

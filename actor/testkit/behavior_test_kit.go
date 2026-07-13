@@ -23,12 +23,12 @@ import (
 // behaviors without requiring a full actor system.  It runs behaviors directly
 // in the test goroutine, capturing side-effects for assertion.
 type BehaviorTestKit[T any] struct {
-	t          *testing.T
-	behavior   typed.Behavior[T]
-	returned   typed.Behavior[T]
-	ctx        *testKitContext[T]
-	effects    []Effect
-	mu         sync.Mutex
+	t        *testing.T
+	behavior typed.Behavior[T]
+	returned typed.Behavior[T]
+	ctx      *testKitContext[T]
+	effects  []Effect
+	mu       sync.Mutex
 }
 
 // Effect records a side-effect observed during behavior execution.
@@ -210,8 +210,8 @@ func (c *testKitActorContext) Watch(watcher actor.Ref, target actor.Ref) {}
 // noopTimerScheduler is a no-op timer scheduler for testing.
 type noopTimerScheduler[T any] struct{}
 
-func (n *noopTimerScheduler[T]) StartSingleTimer(key any, msg T, delay time.Duration) {}
+func (n *noopTimerScheduler[T]) StartSingleTimer(key any, msg T, delay time.Duration)      {}
 func (n *noopTimerScheduler[T]) StartPeriodicTimer(key any, msg T, interval time.Duration) {}
-func (n *noopTimerScheduler[T]) IsTimerActive(key any) bool { return false }
-func (n *noopTimerScheduler[T]) Cancel(key any) {}
-func (n *noopTimerScheduler[T]) CancelAll() {}
+func (n *noopTimerScheduler[T]) IsTimerActive(key any) bool                                { return false }
+func (n *noopTimerScheduler[T]) Cancel(key any)                                            {}
+func (n *noopTimerScheduler[T]) CancelAll()                                                {}

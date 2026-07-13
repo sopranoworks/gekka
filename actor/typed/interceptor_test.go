@@ -23,20 +23,20 @@ type mockTypedContext struct {
 	timers TimerScheduler[string]
 }
 
-func (m *mockTypedContext) Self() TypedActorRef[string]                              { return TypedActorRef[string]{} }
-func (m *mockTypedContext) System() actor.ActorContext                               { return nil }
-func (m *mockTypedContext) Log() *slog.Logger                                        { return m.log }
-func (m *mockTypedContext) Watch(target actor.Ref)                                   {}
-func (m *mockTypedContext) Unwatch(target actor.Ref)                                 {}
-func (m *mockTypedContext) Stop(target actor.Ref)                                    {}
-func (m *mockTypedContext) Passivate()                                               {}
-func (m *mockTypedContext) Timers() TimerScheduler[string]                           { return m.timers }
-func (m *mockTypedContext) Stash() StashBuffer[string]                               { return nil }
-func (m *mockTypedContext) Sender() actor.Ref                                        { return nil }
+func (m *mockTypedContext) Self() TypedActorRef[string]                                       { return TypedActorRef[string]{} }
+func (m *mockTypedContext) System() actor.ActorContext                                        { return nil }
+func (m *mockTypedContext) Log() *slog.Logger                                                 { return m.log }
+func (m *mockTypedContext) Watch(target actor.Ref)                                            {}
+func (m *mockTypedContext) Unwatch(target actor.Ref)                                          {}
+func (m *mockTypedContext) Stop(target actor.Ref)                                             {}
+func (m *mockTypedContext) Passivate()                                                        {}
+func (m *mockTypedContext) Timers() TimerScheduler[string]                                    { return m.timers }
+func (m *mockTypedContext) Stash() StashBuffer[string]                                        { return nil }
+func (m *mockTypedContext) Sender() actor.Ref                                                 { return nil }
 func (m *mockTypedContext) Ask(_ actor.Ref, _ func(actor.Ref) any, _ func(any, error) string) {}
-func (m *mockTypedContext) Spawn(_ any, _ string) (actor.Ref, error)                { return nil, nil }
-func (m *mockTypedContext) SpawnAnonymous(_ any) (actor.Ref, error)                 { return nil, nil }
-func (m *mockTypedContext) SystemActorOf(_ any, _ string) (actor.Ref, error)        { return nil, nil }
+func (m *mockTypedContext) Spawn(_ any, _ string) (actor.Ref, error)                          { return nil, nil }
+func (m *mockTypedContext) SpawnAnonymous(_ any) (actor.Ref, error)                           { return nil, nil }
+func (m *mockTypedContext) SystemActorOf(_ any, _ string) (actor.Ref, error)                  { return nil, nil }
 
 func newMockCtx() *mockTypedContext {
 	return &mockTypedContext{log: slog.Default()}

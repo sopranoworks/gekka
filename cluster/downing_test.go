@@ -313,7 +313,6 @@ func TestBuildSBRDowningProvider_AllStrategiesResolveByName(t *testing.T) {
 	silenceLogForTest(t)
 	cm := newTestClusterManager(t)
 
-
 	cases := []struct {
 		strategy string
 		extra    func(c *SBRConfig)
@@ -355,7 +354,6 @@ func TestBuildSBRDowningProvider_AllStrategiesResolveByName(t *testing.T) {
 // provider" plus a fallback log line.
 func TestBuildSBRDowningProvider_DisabledStrategyStillRegisters(t *testing.T) {
 	cm := newTestClusterManager(t)
-
 
 	provider := BuildSBRDowningProvider(cm, SBRConfig{}, SBRDefaults{})
 	if provider == nil {

@@ -25,7 +25,7 @@ type durableStub struct {
 	msgs []any
 }
 
-func (r *durableStub) Path() string             { return r.path }
+func (r *durableStub) Path() string                 { return r.path }
 func (r *durableStub) Tell(msg any, _ ...actor.Ref) { r.msgs = append(r.msgs, msg) }
 
 func newDurableState(t *testing.T, j persistence.Journal) *durableQueueState {

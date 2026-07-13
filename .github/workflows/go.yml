@@ -42,6 +42,59 @@ jobs:
           file: ./coverage.txt
           fail_ci_if_error: false
 
+  # The main module (root go.mod) is the only one `go build/test/vet ./...`
+  # reaches from the repo root — every other entry in go.work's `use` block
+  # has its own go.mod, so it's invisible to the `build` job above. This job
+  # closes that gap: build + vet, run from each module's own root, for every
+  # remaining go.work member. `go test` is deliberately NOT run here for the
+  # extension modules (cassandra/spanner/kafka/s3/sqs/amqp) — their test
+  # files are gated behind `//go:build integration` (or `spanner`) precisely
+  # because they need live external services; `go vet` still type-checks
+  # those files even though they're not executed, which is the coverage that
+  # matters for this job. `test/compat-bin` and `test/bench` DO run
+  # `go test ./...` (short/no-docker-required paths only) since neither
+  # needs an external service to at least compile and run what it can.
+  workspace-modules:
+    name: Workspace module (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - http
+          - serialization
+          - extensions/cluster/aws
+          - extensions/cluster/consul
+          - extensions/cluster/k8s
+          - extensions/persistence/cassandra
+          - extensions/persistence/redis
+          - extensions/persistence/spanner
+          - extensions/stream/amqp
+          - extensions/stream/kafka
+          - extensions/stream/kinesis
+          - extensions/stream/s3
+          - extensions/stream/sqs
+          - extensions/telemetry/otel
+          - test/bench
+          - test/compat-bin
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          check-latest: true
+
+      - name: go build ./...
+        working-directory: ${{ matrix.module }}
+        run: go build ./...
+
+      - name: go vet ./...
+        working-directory: ${{ matrix.module }}
+        run: go vet ./...
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -53,6 +106,24 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: 'go.mod'
+
+      # golangci-lint's default linter set (and this repo's .golangci.yml)
+      # does not include gofmt/goimports, and golangci-lint respects Go
+      # module boundaries the same way `go build`/`go vet` do, so it only
+      # ever covers the root module regardless. `gofmt -l` is a plain
+      # filesystem walk with no module-boundary awareness, so one step here
+      # covers formatting across the root module AND every go.work member
+      # in a single pass.
+      - name: gofmt
+        run: |
+          UNFORMATTED="$(gofmt -l .)"
+          if [ -n "$UNFORMATTED" ]; then
+            echo "The following files are not gofmt-formatted:"
+            echo "$UNFORMATTED"
+            echo
+            echo "Run: gofmt -w ."
+            exit 1
+          fi
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6

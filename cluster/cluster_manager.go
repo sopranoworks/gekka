@@ -76,7 +76,7 @@ type ClusterManager struct {
 	// authoritative.  Without this gate, gekka self-promotes as
 	// upNumber=1 in the brief window before Welcome arrives, then SBR
 	// detects the view conflict against the seed's gossip and self-downs.
-	joinAttempted atomic.Bool
+	joinAttempted   atomic.Bool
 	CancelHeartbeat context.CancelFunc
 
 	// Protocol is the configured actor-path scheme ("pekko" or "akka").

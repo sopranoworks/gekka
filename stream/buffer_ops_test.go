@@ -33,10 +33,10 @@ func collectAny[T any](t *testing.T, src stream.Source[T, stream.NotUsed]) []T {
 func TestBatch_BasicAggregation(t *testing.T) {
 	src := stream.FromSlice([]int{1, 2, 3, 4, 5})
 	batched := stream.Via(src, stream.Batch[int, int](
-		3,                                         // max weight
-		func(i int) int64 { return 1 },            // each element costs 1
-		func(i int) int { return i },              // seed
-		func(acc, i int) int { return acc + i },   // aggregate
+		3,                                       // max weight
+		func(i int) int64 { return 1 },          // each element costs 1
+		func(i int) int { return i },            // seed
+		func(acc, i int) int { return acc + i }, // aggregate
 	))
 
 	got := collectAny(t, batched)
@@ -78,10 +78,10 @@ func TestBatch_WeightedCost(t *testing.T) {
 	// Elements with varying cost
 	src := stream.FromSlice([]int{1, 2, 3, 4})
 	batched := stream.Via(src, stream.Batch[int, []int](
-		5,                                                          // max weight
-		func(i int) int64 { return int64(i) },                     // cost = element value
-		func(i int) []int { return []int{i} },                     // seed
-		func(acc []int, i int) []int { return append(acc, i) },    // aggregate
+		5,                                     // max weight
+		func(i int) int64 { return int64(i) }, // cost = element value
+		func(i int) []int { return []int{i} }, // seed
+		func(acc []int, i int) []int { return append(acc, i) }, // aggregate
 	))
 
 	got := collectAny(t, batched)

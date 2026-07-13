@@ -39,10 +39,12 @@ type mergeSortedHeap[T any] struct {
 	less    func(T, T) bool
 }
 
-func (h *mergeSortedHeap[T]) Len() int            { return len(h.entries) }
-func (h *mergeSortedHeap[T]) Less(i, j int) bool   { return h.less(h.entries[i].value, h.entries[j].value) }
-func (h *mergeSortedHeap[T]) Swap(i, j int)        { h.entries[i], h.entries[j] = h.entries[j], h.entries[i] }
-func (h *mergeSortedHeap[T]) Push(x any)            { h.entries = append(h.entries, x.(mergeSortedEntry[T])) }
+func (h *mergeSortedHeap[T]) Len() int { return len(h.entries) }
+func (h *mergeSortedHeap[T]) Less(i, j int) bool {
+	return h.less(h.entries[i].value, h.entries[j].value)
+}
+func (h *mergeSortedHeap[T]) Swap(i, j int) { h.entries[i], h.entries[j] = h.entries[j], h.entries[i] }
+func (h *mergeSortedHeap[T]) Push(x any)    { h.entries = append(h.entries, x.(mergeSortedEntry[T])) }
 func (h *mergeSortedHeap[T]) Pop() any {
 	old := h.entries
 	n := len(old)

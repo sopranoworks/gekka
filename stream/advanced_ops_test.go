@@ -17,10 +17,12 @@ import (
 
 func TestGroupBy(t *testing.T) {
 	src := FromSlice([]int{1, 2, 3, 4, 5, 6})
-	
+
 	substreams, err := RunWith(
 		GroupBy(src, 2, func(n int) string {
-			if n%2 == 0 { return "even" }
+			if n%2 == 0 {
+				return "even"
+			}
 			return "odd"
 		}),
 		Collect[SubStream[int]](),
@@ -54,24 +56,24 @@ func TestFlattenMerge(t *testing.T) {
 func TestConflate(t *testing.T) {
 	// Use a slow sink to trigger conflation
 	src := FromSlice([]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
-	
+
 	// conflate sum
 	c := Conflate(src, func(i int) int { return i }, func(s int, i int) int { return s + i })
-	
+
 	// To reliably test conflation in a sync materializer might be tricky
 	// because it pulls as fast as it can.
 	// But our conflateIterator has a chan 1, so it might work if we add a delay in pull.
-	
+
 	it, _ := c.factory()
-	
+
 	// First pull
 	v, ok, err := it.next()
 	require.NoError(t, err)
 	assert.True(t, ok)
-	
+
 	// Since SyncMaterializer pulls sequentially, we might just get all elements summed or individually.
 	// In this implementation, the conflate goroutine runs ahead.
-	
+
 	total := v
 	for {
 		v, ok, err = it.next()

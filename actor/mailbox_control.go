@@ -32,7 +32,7 @@ func NewControlAwareMailbox() MailboxFactory {
 type controlAwareFactory struct{}
 
 func (f *controlAwareFactory) installInto(b *BaseActor) {
-	out := make(chan any)      // Start() reads from this via Mailbox()
+	out := make(chan any)       // Start() reads from this via Mailbox()
 	done := make(chan struct{}) // closed by CloseMailbox to stop the drain goroutine
 	signal := make(chan struct{}, 1)
 

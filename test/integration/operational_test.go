@@ -24,8 +24,8 @@ import (
 	gekka "github.com/sopranoworks/gekka"
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/internal/core"
-	"github.com/sopranoworks/gekka/management/client"
 	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
+	"github.com/sopranoworks/gekka/management/client"
 )
 
 // freePort returns an available TCP port on localhost by briefly listening

@@ -155,7 +155,7 @@ type ManagementServer struct {
 	provider     ClusterStateProvider
 	srv          *http.Server
 	listener     net.Listener
-	healthChecks bool // whether /health/* endpoints are registered
+	healthChecks bool           // whether /health/* endpoints are registered
 	mux          *http.ServeMux // stored so EnableDebug can register routes post-construction
 	debug        DebugProvider  // non-nil when debug routes have been enabled
 

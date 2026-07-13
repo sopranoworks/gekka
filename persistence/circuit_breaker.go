@@ -93,10 +93,10 @@ var ErrCircuitBreakerCallTimeout = errors.New("persistence: circuit breaker call
 type CircuitBreaker struct {
 	cfg CircuitBreakerConfig
 
-	mu              sync.Mutex
-	state           breakerState
-	failures        int
-	openedAt        time.Time
+	mu               sync.Mutex
+	state            breakerState
+	failures         int
+	openedAt         time.Time
 	halfOpenInFlight bool
 
 	// nowFn is overridable in tests.

@@ -1373,7 +1373,7 @@ pekko {
 	// User extras are matched by IsSensitiveConfigPath
 	for _, path := range []string{
 		"my.app.api-key",
-		"my.app.db-password.value",   // prefix match
+		"my.app.db-password.value", // prefix match
 		"lib.token",
 	} {
 		if !cfg.ConfigCompatCheck.IsSensitiveConfigPath(path) {

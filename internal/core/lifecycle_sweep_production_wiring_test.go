@@ -61,9 +61,9 @@ func stubConn(t *testing.T) net.Conn {
 func TestStartLifecycleSweepers_StopIdleOutboundAfter_FiresFromTicker(t *testing.T) {
 	nm := NewNodeManager(sweepTestAddr("127.0.0.1", 2552, "S"), 1)
 	nm.StopIdleOutboundAfter = 80 * time.Millisecond
-	nm.QuarantineIdleOutboundAfter = time.Hour          // skipped
-	nm.StopQuarantinedAfterIdle = time.Hour             // skipped
-	nm.RemoveQuarantinedAssociationAfter = time.Hour    // skipped
+	nm.QuarantineIdleOutboundAfter = time.Hour       // skipped
+	nm.StopQuarantinedAfterIdle = time.Hour          // skipped
+	nm.RemoveQuarantinedAssociationAfter = time.Hour // skipped
 
 	remote := &gproto_remote.UniqueAddress{
 		Address: sweepTestAddr("10.0.0.1", 2551, "Remote"),
@@ -114,10 +114,10 @@ func TestStartLifecycleSweepers_StopIdleOutboundAfter_FiresFromTicker(t *testing
 // UID registered. The entry stays in the registry (split-phase).
 func TestStartLifecycleSweepers_QuarantineIdleOutboundAfter_FiresFromTicker(t *testing.T) {
 	nm := NewNodeManager(sweepTestAddr("127.0.0.1", 2552, "S"), 1)
-	nm.StopIdleOutboundAfter = time.Hour                // skipped
+	nm.StopIdleOutboundAfter = time.Hour // skipped
 	nm.QuarantineIdleOutboundAfter = 80 * time.Millisecond
-	nm.StopQuarantinedAfterIdle = time.Hour             // skipped (no transitions yet)
-	nm.RemoveQuarantinedAssociationAfter = time.Hour    // skipped
+	nm.StopQuarantinedAfterIdle = time.Hour          // skipped (no transitions yet)
+	nm.RemoveQuarantinedAssociationAfter = time.Hour // skipped
 
 	remote := &gproto_remote.UniqueAddress{
 		Address: sweepTestAddr("10.0.0.2", 2551, "Remote"),
@@ -158,10 +158,10 @@ func TestStartLifecycleSweepers_QuarantineIdleOutboundAfter_FiresFromTicker(t *t
 // closed by the ticker once stop-quarantined-after-idle elapses.
 func TestStartLifecycleSweepers_StopQuarantinedAfterIdle_ClosesConn(t *testing.T) {
 	nm := NewNodeManager(sweepTestAddr("127.0.0.1", 2552, "S"), 1)
-	nm.StopIdleOutboundAfter = time.Hour                // skipped
-	nm.QuarantineIdleOutboundAfter = time.Hour          // skipped (assoc is already QUARANTINED)
+	nm.StopIdleOutboundAfter = time.Hour       // skipped
+	nm.QuarantineIdleOutboundAfter = time.Hour // skipped (assoc is already QUARANTINED)
 	nm.StopQuarantinedAfterIdle = 80 * time.Millisecond
-	nm.RemoveQuarantinedAssociationAfter = time.Hour    // skipped
+	nm.RemoveQuarantinedAssociationAfter = time.Hour // skipped
 
 	remote := &gproto_remote.UniqueAddress{
 		Address: sweepTestAddr("10.0.0.3", 2551, "Remote"),
@@ -208,9 +208,9 @@ func TestStartLifecycleSweepers_StopQuarantinedAfterIdle_ClosesConn(t *testing.T
 // handshake from the same UID can succeed.
 func TestStartLifecycleSweepers_RemoveQuarantinedAssociationAfter_ExpiresUID(t *testing.T) {
 	nm := NewNodeManager(sweepTestAddr("127.0.0.1", 2552, "S"), 1)
-	nm.StopIdleOutboundAfter = time.Hour                // skipped
-	nm.QuarantineIdleOutboundAfter = time.Hour          // skipped (assoc is already QUARANTINED)
-	nm.StopQuarantinedAfterIdle = time.Hour             // skipped (no open conn)
+	nm.StopIdleOutboundAfter = time.Hour       // skipped
+	nm.QuarantineIdleOutboundAfter = time.Hour // skipped (assoc is already QUARANTINED)
+	nm.StopQuarantinedAfterIdle = time.Hour    // skipped (no open conn)
 	nm.RemoveQuarantinedAssociationAfter = 80 * time.Millisecond
 
 	remote := &gproto_remote.UniqueAddress{

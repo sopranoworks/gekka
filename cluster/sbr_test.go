@@ -741,9 +741,9 @@ func TestDownAllWhenUnstableDuration_DerivedMinimum4s(t *testing.T) {
 
 func TestDownAllWhenUnstableDuration_ExplicitDuration(t *testing.T) {
 	m := &SBRManager{cfg: SBRConfig{
-		ActiveStrategy:            "keep-majority",
-		StableAfter:               20 * time.Second,
-		DownAllWhenUnstable:       10 * time.Second,
+		ActiveStrategy:             "keep-majority",
+		StableAfter:                20 * time.Second,
+		DownAllWhenUnstable:        10 * time.Second,
 		DownAllWhenUnstableEnabled: boolPtr(true),
 	}}
 	got := m.downAllWhenUnstableDuration()
@@ -754,8 +754,8 @@ func TestDownAllWhenUnstableDuration_ExplicitDuration(t *testing.T) {
 
 func TestDownAllWhenUnstableDuration_Off(t *testing.T) {
 	m := &SBRManager{cfg: SBRConfig{
-		ActiveStrategy:            "keep-majority",
-		StableAfter:               20 * time.Second,
+		ActiveStrategy:             "keep-majority",
+		StableAfter:                20 * time.Second,
 		DownAllWhenUnstableEnabled: boolPtr(false),
 	}}
 	got := m.downAllWhenUnstableDuration()

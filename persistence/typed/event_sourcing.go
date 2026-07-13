@@ -114,12 +114,12 @@ func None[Event any, State any]() Effect[Event, State] {
 // persistentActor is the internal implementation of a persistent actor.
 type persistentActor[Command any, Event any, State any] struct {
 	actor.BaseActor
-	behavior      *EventSourcedBehavior[Command, Event, State]
-	state         State
-	seqNr         uint64
-	lastSnapSeqNr uint64
-	recovering    bool
-	tctx          typed.TypedContext[Command]
+	behavior          *EventSourcedBehavior[Command, Event, State]
+	state             State
+	seqNr             uint64
+	lastSnapSeqNr     uint64
+	recovering        bool
+	tctx              typed.TypedContext[Command]
 	stash             []Command // internal recovery stash; separate from user StashBuffer
 	timers            *actor.TimerSchedulerImpl[Command]
 	userStash         *actor.StashBufferImpl[Command]

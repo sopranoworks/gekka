@@ -119,16 +119,16 @@ type behaviorTestCtx[T any] struct {
 	logger *slog.Logger
 }
 
-func (m *behaviorTestCtx[T]) Self() TypedActorRef[T]    { return TypedActorRef[T]{} }
+func (m *behaviorTestCtx[T]) Self() TypedActorRef[T]     { return TypedActorRef[T]{} }
 func (m *behaviorTestCtx[T]) System() actor.ActorContext { return nil }
-func (m *behaviorTestCtx[T]) Log() *slog.Logger         { return m.logger }
-func (m *behaviorTestCtx[T]) Watch(target actor.Ref)    {}
-func (m *behaviorTestCtx[T]) Unwatch(target actor.Ref)  {}
-func (m *behaviorTestCtx[T]) Stop(target actor.Ref)     {}
-func (m *behaviorTestCtx[T]) Passivate()                {}
-func (m *behaviorTestCtx[T]) Timers() TimerScheduler[T] { return nil }
-func (m *behaviorTestCtx[T]) Stash() StashBuffer[T]     { return nil }
-func (m *behaviorTestCtx[T]) Sender() actor.Ref         { return nil }
+func (m *behaviorTestCtx[T]) Log() *slog.Logger          { return m.logger }
+func (m *behaviorTestCtx[T]) Watch(target actor.Ref)     {}
+func (m *behaviorTestCtx[T]) Unwatch(target actor.Ref)   {}
+func (m *behaviorTestCtx[T]) Stop(target actor.Ref)      {}
+func (m *behaviorTestCtx[T]) Passivate()                 {}
+func (m *behaviorTestCtx[T]) Timers() TimerScheduler[T]  { return nil }
+func (m *behaviorTestCtx[T]) Stash() StashBuffer[T]      { return nil }
+func (m *behaviorTestCtx[T]) Sender() actor.Ref          { return nil }
 func (m *behaviorTestCtx[T]) Ask(target actor.Ref, msgFactory func(replyTo actor.Ref) any, transform func(any, error) T) {
 }
 func (m *behaviorTestCtx[T]) Spawn(behavior any, name string) (actor.Ref, error) {
@@ -153,15 +153,15 @@ func newMdcTestCtx[T any](logger *slog.Logger) *mdcTestCtx[T] {
 	}
 }
 
-func (m *mdcTestCtx[T]) Self() TypedActorRef[T]    { return TypedActorRef[T]{} }
+func (m *mdcTestCtx[T]) Self() TypedActorRef[T]     { return TypedActorRef[T]{} }
 func (m *mdcTestCtx[T]) System() actor.ActorContext { return nil }
-func (m *mdcTestCtx[T]) Watch(target actor.Ref)    {}
-func (m *mdcTestCtx[T]) Unwatch(target actor.Ref)  {}
-func (m *mdcTestCtx[T]) Stop(target actor.Ref)     {}
-func (m *mdcTestCtx[T]) Passivate()                {}
-func (m *mdcTestCtx[T]) Timers() TimerScheduler[T] { return nil }
-func (m *mdcTestCtx[T]) Stash() StashBuffer[T]     { return nil }
-func (m *mdcTestCtx[T]) Sender() actor.Ref         { return nil }
+func (m *mdcTestCtx[T]) Watch(target actor.Ref)     {}
+func (m *mdcTestCtx[T]) Unwatch(target actor.Ref)   {}
+func (m *mdcTestCtx[T]) Stop(target actor.Ref)      {}
+func (m *mdcTestCtx[T]) Passivate()                 {}
+func (m *mdcTestCtx[T]) Timers() TimerScheduler[T]  { return nil }
+func (m *mdcTestCtx[T]) Stash() StashBuffer[T]      { return nil }
+func (m *mdcTestCtx[T]) Sender() actor.Ref          { return nil }
 func (m *mdcTestCtx[T]) Ask(target actor.Ref, msgFactory func(replyTo actor.Ref) any, transform func(any, error) T) {
 }
 func (m *mdcTestCtx[T]) Spawn(behavior any, name string) (actor.Ref, error) {

@@ -37,8 +37,8 @@ func (r *gracefulStopRef) Tell(msg any, sender ...Ref) {
 	default:
 	}
 }
-func (r *gracefulStopRef) Path() string  { return r.path }
-func (r *gracefulStopRef) Actor() Actor  { return r.actor }
+func (r *gracefulStopRef) Path() string { return r.path }
+func (r *gracefulStopRef) Actor() Actor { return r.actor }
 
 func TestGracefulStop_Success(t *testing.T) {
 	a := &gracefulStopActor{BaseActor: NewBaseActor()}

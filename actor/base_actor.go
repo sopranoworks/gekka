@@ -75,10 +75,10 @@ type Actor interface {
 // saturated user mailbox — Pekko's actor-cell-level priority semantics.
 type BaseActor struct {
 	mailbox            chan any
-	systemMailbox      chan any       // priority channel for PoisonPill, Kill, supervisor signals
-	systemCloseOnce    sync.Once      // guards close(systemMailbox)
-	mbSend             func(any) bool // non-nil when a custom mailbox is installed
-	mbClose            func()         // non-nil when a custom mailbox needs special teardown
+	systemMailbox      chan any        // priority channel for PoisonPill, Kill, supervisor signals
+	systemCloseOnce    sync.Once       // guards close(systemMailbox)
+	mbSend             func(any) bool  // non-nil when a custom mailbox is installed
+	mbClose            func()          // non-nil when a custom mailbox needs special teardown
 	currentSender      Ref             // set for the duration of each Receive call; nil otherwise
 	currentCtx         context.Context // trace context for the current message; nil outside Receive
 	selfRef            Ref             // this actor's own reference, injected by SpawnActor/ActorOf
@@ -91,15 +91,15 @@ type BaseActor struct {
 	children           map[string]Ref   // children spawned by this actor
 	childProps         map[string]Props // props used to spawn children, for Restart
 	onStop             func()
-	receiveStack       []func(msg any)  // behavior stack for become/unbecome
+	receiveStack       []func(msg any)       // behavior stack for become/unbecome
 	receiveTimeout     *receiveTimeoutConfig // classic receive timeout state
 
 	// Classic stash support
-	classicStash        *StashBufferImpl[any] // nil until first Stash() call
-	classicStashPending []any                 // populated by redeliver callback
-	drainingClassicStash bool                 // prevents recursive drain
-	currentMessage      any                   // set during Receive so Stash() can grab it
-	drainDispatch       func(any) bool        // set by Start(); used by drain to re-enter dispatch
+	classicStash         *StashBufferImpl[any] // nil until first Stash() call
+	classicStashPending  []any                 // populated by redeliver callback
+	drainingClassicStash bool                  // prevents recursive drain
+	currentMessage       any                   // set during Receive so Stash() can grab it
+	drainDispatch        func(any) bool        // set by Start(); used by drain to re-enter dispatch
 }
 
 // systemMailboxBufferSize is the fixed buffer for the priority channel.

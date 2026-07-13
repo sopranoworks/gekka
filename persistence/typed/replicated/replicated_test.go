@@ -68,8 +68,8 @@ func newBehavior(replicaId ReplicaId, journal persistence.Journal, allReplicas [
 			EntityId:  "c1",
 			ReplicaId: replicaId,
 		},
-		Journal:     journal,
-		AllReplicas: allReplicas,
+		Journal:      journal,
+		AllReplicas:  allReplicas,
 		InitialState: counterState{Total: 0},
 		CommandHandler: func(ctx typed.TypedContext[addCmd], state counterState, cmd addCmd) ptypes.Effect[addedEvt, counterState] {
 			return ptypes.Persist[addedEvt, counterState](addedEvt(cmd))

@@ -35,8 +35,8 @@ import (
 	"github.com/sopranoworks/gekka"
 	"github.com/sopranoworks/gekka/actor"
 	"github.com/sopranoworks/gekka/actor/typed"
-	ptyped "github.com/sopranoworks/gekka/persistence/typed"
 	"github.com/sopranoworks/gekka/cluster/sharding"
+	ptyped "github.com/sopranoworks/gekka/persistence/typed"
 )
 
 // ── minimal actor infrastructure ─────────────────────────────────────────────
@@ -45,9 +45,9 @@ import (
 // It assigns unique paths and calls PreStart synchronously (no goroutines),
 // matching the pattern used in persistent_sharding_test.go.
 type benchActorContext struct {
-	mu      sync.Mutex
-	seq     atomic.Int64
-	actors  map[string]actor.Ref
+	mu     sync.Mutex
+	seq    atomic.Int64
+	actors map[string]actor.Ref
 }
 
 func newBenchActorContext() *benchActorContext {

@@ -28,45 +28,45 @@ import (
 
 type echoEnvelope struct {
 	jcbor.JVMClassManifest `cbor:"-"`
-	SeqNo              int64       `cbor:"seqNo"`
-	Originator         string      `cbor:"originator"`
-	Direction          string      `cbor:"direction"`
-	PayloadKind        string      `cbor:"payloadKind"`
-	Payload            interface{} `cbor:"payload"`
+	SeqNo                  int64       `cbor:"seqNo"`
+	Originator             string      `cbor:"originator"`
+	Direction              string      `cbor:"direction"`
+	PayloadKind            string      `cbor:"payloadKind"`
+	Payload                interface{} `cbor:"payload"`
 }
 
 type askEnvelope struct {
 	jcbor.JVMClassManifest `cbor:"-"`
-	SeqNo              int64       `cbor:"seqNo"`
-	Originator         string      `cbor:"originator"`
-	Direction          string      `cbor:"direction"`
-	PayloadKind        string      `cbor:"payloadKind"`
-	Payload            interface{} `cbor:"payload"`
+	SeqNo                  int64       `cbor:"seqNo"`
+	Originator             string      `cbor:"originator"`
+	Direction              string      `cbor:"direction"`
+	PayloadKind            string      `cbor:"payloadKind"`
+	Payload                interface{} `cbor:"payload"`
 }
 
 type systemMessagePing struct {
 	jcbor.JVMClassManifest `cbor:"-"`
-	SeqNo              int64  `cbor:"seqNo"`
-	Origin             string `cbor:"origin"`
+	SeqNo                  int64  `cbor:"seqNo"`
+	Origin                 string `cbor:"origin"`
 }
 
 type showcaseEchoCustom struct {
 	jcbor.JVMClassManifest `cbor:"-"`
-	SeqNo              int64         `cbor:"seqNo"`
-	Originator         string        `cbor:"originator"`
-	Payload            []interface{} `cbor:"payload"` // Vector[Byte] arrives as CBOR array of small ints
+	SeqNo                  int64         `cbor:"seqNo"`
+	Originator             string        `cbor:"originator"`
+	Payload                []interface{} `cbor:"payload"` // Vector[Byte] arrives as CBOR array of small ints
 }
 
 type ping struct {
 	jcbor.JVMClassManifest `cbor:"-"`
-	SeqNo              int64  `cbor:"seqNo"`
-	Origin             string `cbor:"origin"`
+	SeqNo                  int64  `cbor:"seqNo"`
+	Origin                 string `cbor:"origin"`
 }
 
 type pong struct {
 	jcbor.JVMClassManifest `cbor:"-"`
-	SeqNo              int64  `cbor:"seqNo"`
-	Origin             string `cbor:"origin"`
+	SeqNo                  int64  `cbor:"seqNo"`
+	Origin                 string `cbor:"origin"`
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -441,8 +441,8 @@ func TestJacksonCbor_SystemMessage_GoEmits_Stable(t *testing.T) {
 	s := newRegisteredSerializer(t)
 	src := &systemMessagePing{
 		JVMClassManifest: jcbor.JVMClassManifest{Class: "com.gekka.showcase.SystemMessagePing"},
-		SeqNo:        77,
-		Origin:       "g1",
+		SeqNo:            77,
+		Origin:           "g1",
 	}
 	wire, err := s.ToBinary(src)
 	if err != nil {
@@ -489,8 +489,8 @@ func TestJacksonCbor_Ping_GoEmits_Stable(t *testing.T) {
 	s := newRegisteredSerializer(t)
 	src := &ping{
 		JVMClassManifest: jcbor.JVMClassManifest{Class: "com.gekka.showcase.Ping"},
-		SeqNo:        88,
-		Origin:       "g2",
+		SeqNo:            88,
+		Origin:           "g2",
 	}
 	wire, err := s.ToBinary(src)
 	if err != nil {

@@ -104,10 +104,10 @@ type mockTxOffsetStore struct {
 	mockOffsetStore
 	// pendingOffset holds an offset that has been "written within a tx" but
 	// not yet committed.
-	pendingMu      sync.Mutex
-	pendingName    string
-	pendingOffset  query.Offset
-	saveTxCallCnt  int
+	pendingMu     sync.Mutex
+	pendingName   string
+	pendingOffset query.Offset
+	saveTxCallCnt int
 }
 
 func (s *mockTxOffsetStore) SaveOffsetTx(_ context.Context, _ *sql.Tx, projectionName string, offset query.Offset) error {

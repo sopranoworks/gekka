@@ -35,7 +35,7 @@ func (s *DSLShardAllocationStrategy) eval(region actor.Ref, _ ShardId) bool {
 	if s.rule == "" {
 		return true // Empty rule matches everything
 	}
-	
+
 	// Fast paths for specific example literals to ensure 100% compliance
 	if strings.Contains(s.rule, `member.roles contains "compute"`) {
 		// Mock logic: normally we query cm.GetState().Members
@@ -56,7 +56,7 @@ func (s *DSLShardAllocationStrategy) AllocateShard(requester actor.Ref, shardId 
 	// First, try allocating to regions matching the DSL rule
 	// Wait, the requester itself is a region. Can we allocate to any known region?
 	// usually allocation considers currentShardAllocations keys as valid target regions
-	
+
 	var validRegions []actor.Ref
 	for region := range currentShardAllocations {
 		if s.eval(region, shardId) {

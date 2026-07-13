@@ -114,9 +114,9 @@ type PersistentFSM[S comparable, D any, E any] struct {
 	asyncOnce    sync.Once
 
 	// pekko.persistence.fsm.snapshot-after support.
-	snapshotStore        SnapshotStore
-	snapshotAfter        int // 0 = use package default
-	eventsSinceSnapshot  int
+	snapshotStore       SnapshotStore
+	snapshotAfter       int // 0 = use package default
+	eventsSinceSnapshot int
 }
 
 // NewPersistentFSM creates a PersistentFSM that stores events under persistenceID
@@ -284,7 +284,7 @@ func (f *PersistentFSM[S, D, E]) PersistAsync(event E, handler func(E)) {
 		SequenceNr:    f.seqNr,
 		Payload:       event,
 	}
-	ev := event  // capture for closure
+	ev := event   // capture for closure
 	fn := handler // capture for closure
 	bound := func() { fn(ev) }
 	f.startAsyncWriter()
@@ -305,7 +305,7 @@ func (f *PersistentFSM[S, D, E]) PersistAllAsync(events []E, handler func(E)) {
 	handlers := make([]func(), len(events))
 	for i, event := range events {
 		f.seqNr++
-		ev := event  // capture
+		ev := event   // capture
 		fn := handler // capture
 		reprs[i] = PersistentRepr{
 			PersistenceID: f.persistenceID,

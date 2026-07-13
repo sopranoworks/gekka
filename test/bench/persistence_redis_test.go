@@ -14,10 +14,11 @@ import (
 	"sync"
 	"testing"
 
+	mobyClient "github.com/moby/moby/client"
 	"github.com/redis/go-redis/v9"
 	redisstore "github.com/sopranoworks/gekka-extensions-persistence-redis"
-	"github.com/sopranoworks/gekka/persistence"
 	spannerstore "github.com/sopranoworks/gekka-extensions-persistence-spanner"
+	"github.com/sopranoworks/gekka/persistence"
 	"github.com/testcontainers/testcontainers-go"
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 )
@@ -40,7 +41,7 @@ func initRedisBench() {
 	if err != nil {
 		return
 	}
-	if _, err := cli.Ping(ctx); err != nil {
+	if _, err := cli.Ping(ctx, mobyClient.PingOptions{}); err != nil {
 		cli.Close()
 		return
 	}

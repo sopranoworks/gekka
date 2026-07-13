@@ -20,8 +20,8 @@ type testMessage struct {
 
 type jsonSerializer struct{}
 
-func (j *jsonSerializer) Identifier() int32                { return 100 }
-func (j *jsonSerializer) Manifest(obj any) string          { return "test-message" }
+func (j *jsonSerializer) Identifier() int32       { return 100 }
+func (j *jsonSerializer) Manifest(obj any) string { return "test-message" }
 func (j *jsonSerializer) Serialize(obj any) ([]byte, error) {
 	return json.Marshal(obj)
 }

@@ -41,7 +41,7 @@ type checkClientHeartbeats struct{}
 
 // clientEntry tracks an active ClusterClient connection.
 type clientEntry struct {
-	senderPath   string
+	senderPath    string
 	lastHeartbeat time.Time
 }
 
@@ -193,7 +193,7 @@ func (r *ClusterReceptionist) handleHeartbeat() {
 		e.lastHeartbeat = time.Now()
 	} else {
 		r.clients[senderPath] = &clientEntry{
-			senderPath:   senderPath,
+			senderPath:    senderPath,
 			lastHeartbeat: time.Now(),
 		}
 		logger.Default().Debug("ClusterReceptionist: new client registered", "path", senderPath)

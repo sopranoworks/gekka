@@ -1,3 +1,5 @@
+//go:build spanner
+
 /*
  * spanner_test.go
  * This file is part of the gekka project.
@@ -5,8 +7,6 @@
  * Copyright (c) 2026 Sopranoworks, Osamu Takahashi
  * SPDX-License-Identifier: MIT
  */
-
-//go:build spanner
 
 package spannerstore_test
 
@@ -22,8 +22,8 @@ import (
 	databasepb "cloud.google.com/go/spanner/admin/database/apiv1/databasepb"
 	instance "cloud.google.com/go/spanner/admin/instance/apiv1"
 	instancepb "cloud.google.com/go/spanner/admin/instance/apiv1/instancepb"
-	"github.com/sopranoworks/gekka/persistence"
 	spannerstore "github.com/sopranoworks/gekka-extensions-persistence-spanner"
+	"github.com/sopranoworks/gekka/persistence"
 	tc "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 	"google.golang.org/api/option"

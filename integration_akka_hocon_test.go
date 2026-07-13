@@ -85,12 +85,12 @@ func renderStrictHoconConf(t *testing.T, localPort, seedPort int) string {
 
 // jvmSignals collects parseable lines emitted by AkkaStrictHoconJoinNode.
 type jvmSignals struct {
-	ready                chan struct{}
-	foreignMemberUp      chan string // payload: "<host>:<port>"
-	foreignMemberUpSeen  sync.Map    // dedupe by host:port
-	stdoutTail           []string    // last N lines, kept for failure diagnostics
-	stdoutMu             sync.Mutex
-	stdoutTailMaxLines   int
+	ready               chan struct{}
+	foreignMemberUp     chan string // payload: "<host>:<port>"
+	foreignMemberUpSeen sync.Map    // dedupe by host:port
+	stdoutTail          []string    // last N lines, kept for failure diagnostics
+	stdoutMu            sync.Mutex
+	stdoutTailMaxLines  int
 }
 
 func newJvmSignals() *jvmSignals {

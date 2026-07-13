@@ -47,7 +47,6 @@ func (r *fakeRouter) SendWithSender(_ context.Context, path, senderPath string, 
 	return nil
 }
 
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 // TestDefaultConfig verifies the factory values match Pekko's reference.conf.

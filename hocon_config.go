@@ -362,10 +362,10 @@ func hoconToClusterConfig(cfg *hocon.Config) (ClusterConfig, error) {
 	nodeCfg.Persistence.TypedLogStashing = false
 	nodeCfg.Persistence.FSMSnapshotAfter = 0
 	var persistAuto struct {
-		PekkoJournals    []string `hocon:"pekko.persistence.journal.auto-start-journals"`
-		AkkaJournals     []string `hocon:"akka.persistence.journal.auto-start-journals"`
-		PekkoSnapshots   []string `hocon:"pekko.persistence.snapshot-store.auto-start-snapshot-stores"`
-		AkkaSnapshots    []string `hocon:"akka.persistence.snapshot-store.auto-start-snapshot-stores"`
+		PekkoJournals  []string `hocon:"pekko.persistence.journal.auto-start-journals"`
+		AkkaJournals   []string `hocon:"akka.persistence.journal.auto-start-journals"`
+		PekkoSnapshots []string `hocon:"pekko.persistence.snapshot-store.auto-start-snapshot-stores"`
+		AkkaSnapshots  []string `hocon:"akka.persistence.snapshot-store.auto-start-snapshot-stores"`
 	}
 	_ = cfg.Unmarshal(&persistAuto)
 	if prefix == "pekko" {

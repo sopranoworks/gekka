@@ -44,7 +44,7 @@ func init() {
 type CborSerializer struct {
 	id int32
 
-	mu       sync.RWMutex
+	mu         sync.RWMutex
 	byManifest map[string]reflect.Type
 	byType     map[reflect.Type]string
 

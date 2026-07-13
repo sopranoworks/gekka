@@ -16,8 +16,8 @@ import (
 
 	mobyClient "github.com/moby/moby/client"
 	"github.com/redis/go-redis/v9"
-	"github.com/sopranoworks/gekka/persistence"
 	redisstore "github.com/sopranoworks/gekka-extensions-persistence-redis"
+	"github.com/sopranoworks/gekka/persistence"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"

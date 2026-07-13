@@ -142,10 +142,10 @@ type outboundLane struct {
 
 // GekkaAssociation tracks the state of a single connection.
 type GekkaAssociation struct {
-	mu        sync.RWMutex
-	state     AssociationState
-	role      AssociationRole
-	conn      net.Conn
+	mu    sync.RWMutex
+	state AssociationState
+	role  AssociationRole
+	conn  net.Conn
 	// remote is the remote node's UniqueAddress. Set once by handshake
 	// processing (handleHandshakeReq / handleHandshakeRsp) and read
 	// concurrently from many goroutines (every inbound dispatch path,

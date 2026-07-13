@@ -59,8 +59,8 @@ func StartCompressionTableManager(ctx context.Context, nm *NodeManager, router *
 // Akka 2.6.x's ArteryMessageSerializer (id 17) splits compression
 // advertisements into two distinct messages with single-letter manifests:
 //
-//   "f"  ActorRefCompressionAdvertisement
-//   "h"  ClassManifestCompressionAdvertisement
+//	"f"  ActorRefCompressionAdvertisement
+//	"h"  ClassManifestCompressionAdvertisement
 //
 // (See akka-remote/src/main/scala/akka/remote/serialization/ArteryMessageSerializer.scala.)
 //

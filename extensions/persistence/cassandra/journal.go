@@ -227,7 +227,7 @@ func (j *CassandraJournal) ReplayMessages(
 			j.keyspace, j.table,
 		)
 		iter := j.session.Query(q, pid, partNr, int64(fromSeqNr), int64(toSeqNr)). //nolint:gosec
-											WithContext(ctx).Iter()
+												WithContext(ctx).Iter()
 
 		var (
 			seqNr         int64

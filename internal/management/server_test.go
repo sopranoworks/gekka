@@ -955,7 +955,6 @@ func TestPostShardingRebalance_MethodNotAllowed(t *testing.T) {
 	}
 }
 
-
 func TestHealthReady_FailsWhenShardingNotReady(t *testing.T) {
 	// Node is Up, no unreachable, no quarantine, but the sharding
 	// healthcheck (pekko.cluster.sharding.healthcheck.names) reports a

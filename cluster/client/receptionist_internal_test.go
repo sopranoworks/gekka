@@ -21,7 +21,7 @@ import (
 // nopRouter satisfies cluster.Router with no-op delivery.
 type nopRouter struct{}
 
-func (nopRouter) Send(_ context.Context, _ string, _ any) error                { return nil }
+func (nopRouter) Send(_ context.Context, _ string, _ any) error              { return nil }
 func (nopRouter) SendWithSender(_ context.Context, _, _ string, _ any) error { return nil }
 
 // makeMember constructs a Member referencing a freshly-appended address slot.

@@ -22,11 +22,11 @@ import (
 // call so tests can assert that proxy operations actually flowed through
 // to the target.
 type countingSnapshotStore struct {
-	inner     *InMemorySnapshotStore
-	loads     atomic.Int64
-	saves     atomic.Int64
-	deletes   atomic.Int64
-	delMulti  atomic.Int64
+	inner    *InMemorySnapshotStore
+	loads    atomic.Int64
+	saves    atomic.Int64
+	deletes  atomic.Int64
+	delMulti atomic.Int64
 }
 
 func newCountingSnapshotStore() *countingSnapshotStore {

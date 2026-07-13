@@ -81,11 +81,11 @@ func Unhandled[State any]() Effect[State] {
 // durableStateActor is the internal implementation of a state-persistent actor.
 type durableStateActor[Command any, State any] struct {
 	actor.BaseActor
-	behavior   *DurableStateBehavior[Command, State]
-	state      State
-	revision   uint64
-	recovering bool
-	tctx       typed.TypedContext[Command]
+	behavior          *DurableStateBehavior[Command, State]
+	state             State
+	revision          uint64
+	recovering        bool
+	tctx              typed.TypedContext[Command]
 	timers            *actor.TimerSchedulerImpl[Command]
 	userStash         *actor.StashBufferImpl[Command]
 	userStashPending  []Command

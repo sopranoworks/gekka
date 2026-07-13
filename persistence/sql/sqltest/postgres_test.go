@@ -1,3 +1,5 @@
+//go:build postgres
+
 /*
  * postgres_test.go
  * This file is part of the gekka project.
@@ -5,8 +7,6 @@
  * Copyright (c) 2026 Sopranoworks, Osamu Takahashi
  * SPDX-License-Identifier: MIT
  */
-
-//go:build postgres
 
 package sqltest_test
 

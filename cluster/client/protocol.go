@@ -37,13 +37,13 @@ const ClusterClientSerializerID = int32(15)
 
 // Manifest codes matching Pekko's ClusterClientMessageSerializer exactly.
 const (
-	SendManifest        = "SC"
-	SendToAllManifest   = "SA"
-	PublishManifest     = "P"
-	HeartbeatManifest   = "HB"
+	SendManifest         = "SC"
+	SendToAllManifest    = "SA"
+	PublishManifest      = "P"
+	HeartbeatManifest    = "HB"
 	HeartbeatRspManifest = "HBR"
-	GetContactsManifest = "GC"
-	ContactsManifest    = "C"
+	GetContactsManifest  = "GC"
+	ContactsManifest     = "C"
 )
 
 // ── User-facing message types ─────────────────────────────────────────────────

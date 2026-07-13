@@ -92,10 +92,10 @@ type CassandraConfig struct {
 	GcGraceSeconds      int
 
 	// Snapshot keyspace / tables
-	SnapshotKeyspace    string
-	SnapshotTable       string
+	SnapshotKeyspace     string
+	SnapshotTable        string
 	SnapshotAutoKeyspace bool
-	SnapshotAutoTables  bool
+	SnapshotAutoTables   bool
 
 	// Tag / scanning tables
 	TagTable      string

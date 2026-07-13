@@ -16,21 +16,21 @@ import (
 
 func TestGraphDSL_Simple(t *testing.T) {
 	b := stream.NewBuilder()
-	
+
 	src := stream.Add[stream.SourceShape[int], stream.NotUsed](b, stream.FromSlice([]int{1, 2, 3}))
 	sink := stream.Add[stream.SinkShape[int], []int](b, stream.Collect[int]())
-	
+
 	stream.Connect(b, src.Out, sink.In)
-	
+
 	g, err := b.Build()
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
-	
+
 	// How to get the materialized value from the sink?
 	// Currently Build() returns RunnableGraph[NotUsed].
 	// This is a limitation of the current design.
-	
+
 	_, err = g.Run(stream.SyncMaterializer{})
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)

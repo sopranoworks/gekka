@@ -22,14 +22,14 @@ import (
 // ResizerConfig holds the HOCON-parsed auto-resizer settings.
 // An empty/zero value means no resizer is configured.
 type ResizerConfig struct {
-	Enabled            bool
-	LowerBound         int
-	UpperBound         int
-	PressureThreshold  int
-	RampupRate         float64
-	BackoffRate        float64
-	BackoffThreshold   float64
-	MessagesPerResize  int
+	Enabled           bool
+	LowerBound        int
+	UpperBound        int
+	PressureThreshold int
+	RampupRate        float64
+	BackoffRate       float64
+	BackoffThreshold  float64
+	MessagesPerResize int
 }
 
 // ClusterRouterSettings holds the cluster-aware routing configuration.

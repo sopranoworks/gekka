@@ -68,7 +68,7 @@ type bpTestActorRef struct {
 }
 
 func (r *bpTestActorRef) Tell(msg any, _ ...actor.Ref) { r.tellFn(msg) }
-func (r *bpTestActorRef) Path() string                  { return "/test/bp-actor" }
+func (r *bpTestActorRef) Path() string                 { return "/test/bp-actor" }
 
 // ─��─ RestartSink ───────��─────────────────────��───────────────────────────
 

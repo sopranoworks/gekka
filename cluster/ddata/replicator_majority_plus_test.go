@@ -68,8 +68,8 @@ func TestEffectiveMajorityQuorumPlus_AllSentinelClampsToTotal(t *testing.T) {
 		numPeers int
 		want     int
 	}{
-		{0, 1},  // total=1
-		{6, 7},  // total=7
+		{0, 1}, // total=1
+		{6, 7}, // total=7
 		{10, 11},
 	}
 	for _, tc := range cases {

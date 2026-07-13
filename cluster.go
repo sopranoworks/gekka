@@ -39,11 +39,11 @@ import (
 	"github.com/sopranoworks/gekka/discovery"
 	"github.com/sopranoworks/gekka/internal/core"
 	"github.com/sopranoworks/gekka/internal/management"
+	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
+	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 	"github.com/sopranoworks/gekka/logger"
 	"github.com/sopranoworks/gekka/persistence"
 	persistencetyped "github.com/sopranoworks/gekka/persistence/typed"
-	gproto_cluster "github.com/sopranoworks/gekka/internal/proto/cluster"
-	gproto_remote "github.com/sopranoworks/gekka/internal/proto/remote"
 	"github.com/sopranoworks/gekka/stream"
 	"github.com/sopranoworks/gekka/telemetry"
 
@@ -2201,8 +2201,8 @@ type Cluster struct {
 	// NewCluster. Shutdown invokes it; install.go's version-aware semantics
 	// make it a no-op when a subsequent Install has superseded it.
 	uninstallLogger func()
-	onMessage         func(ctx context.Context, msg *IncomingMessage) error
-	deployments       map[string]core.DeploymentConfig // keyed by actor path; nil = no deployments
+	onMessage       func(ctx context.Context, msg *IncomingMessage) error
+	deployments     map[string]core.DeploymentConfig // keyed by actor path; nil = no deployments
 
 	// Coordinated shutdown — drives the graceful exit sequence.
 	cs *actor.CoordinatedShutdown
@@ -2678,10 +2678,10 @@ func NewCluster(cfg ClusterConfig) (*Cluster, error) {
 	// keep the persistence-package defaults so reference.conf wins when
 	// HOCON omits a key.
 	persistence.SetDefaultAtLeastOnceConfig(persistence.AtLeastOnceConfig{
-		RedeliverInterval:                       cfg.Persistence.AtLeastOnceRedeliverInterval,
-		RedeliveryBurstLimit:                    cfg.Persistence.AtLeastOnceRedeliveryBurstLimit,
-		WarnAfterNumberOfUnconfirmedAttempts:    cfg.Persistence.AtLeastOnceWarnAfterNumberOfUnconfirmedAttempts,
-		MaxUnconfirmedMessages:                  cfg.Persistence.AtLeastOnceMaxUnconfirmedMessages,
+		RedeliverInterval:                    cfg.Persistence.AtLeastOnceRedeliverInterval,
+		RedeliveryBurstLimit:                 cfg.Persistence.AtLeastOnceRedeliveryBurstLimit,
+		WarnAfterNumberOfUnconfirmedAttempts: cfg.Persistence.AtLeastOnceWarnAfterNumberOfUnconfirmedAttempts,
+		MaxUnconfirmedMessages:               cfg.Persistence.AtLeastOnceMaxUnconfirmedMessages,
 	})
 
 	if len(cfg.Persistence.AutoStartJournals) > 0 {

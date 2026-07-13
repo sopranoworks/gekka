@@ -16,8 +16,8 @@ import (
 
 type becomeTestActor struct {
 	BaseActor
-	mu      sync.Mutex
-	log     []string
+	mu  sync.Mutex
+	log []string
 }
 
 func (a *becomeTestActor) Receive(msg any) {

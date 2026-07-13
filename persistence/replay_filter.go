@@ -250,14 +250,14 @@ var _ Journal = (*FilteringJournal)(nil)
 // SequenceNr in the trailing window is remembered, plus a bounded set
 // of "old" writer UUIDs to suppress without re-warning.
 type filterState struct {
-	cfg              ReplayFilterConfig
+	cfg                ReplayFilterConfig
 	latestWriterPerSeq map[uint64]string
-	seqOrder         []uint64
-	oldWriters       []string
-	lastSeq          uint64
-	haveLastSeq      bool
-	lastWriter       string
-	lastDiscarded    bool
+	seqOrder           []uint64
+	oldWriters         []string
+	lastSeq            uint64
+	haveLastSeq        bool
+	lastWriter         string
+	lastDiscarded      bool
 }
 
 func newFilterState(cfg ReplayFilterConfig) *filterState {

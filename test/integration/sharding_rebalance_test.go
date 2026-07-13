@@ -173,7 +173,7 @@ func TestAdaptiveShardingRebalance(t *testing.T) {
 
 	// Wait for metrics to propagate and rebalance to trigger
 	t.Log("Waiting for rebalance...")
-	
+
 	// Speed up rebalance tick for test
 	coord.RebalanceInterval = 1 * time.Second
 
@@ -243,4 +243,3 @@ func contains(s, substr string) bool {
 		return false
 	}()
 }
-

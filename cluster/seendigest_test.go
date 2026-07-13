@@ -21,7 +21,7 @@ func TestBuildSeenDigest(t *testing.T) {
 		Overview:     &gproto_cluster.GossipOverview{Seen: []int32{0, 3, 9}},
 	}}
 	digest := cm.buildSeenDigest()
-	assert.Equal(t, 2, len(digest)) // ceil(10/8) = 2 bytes
+	assert.Equal(t, 2, len(digest))              // ceil(10/8) = 2 bytes
 	assert.Equal(t, byte(0b00001001), digest[0]) // bits 0 and 3
 	assert.Equal(t, byte(0b00000010), digest[1]) // bit 9 (= bit 1 of byte 1)
 }

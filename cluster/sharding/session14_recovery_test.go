@@ -75,9 +75,9 @@ func TestEntityRecoveryStrategy_ConstantSpawnsFirstBatchAndDefersRest(t *testing
 	ids := []EntityId{"e1", "e2", "e3", "e4", "e5", "e6", "e7"}
 	store := &memShardStore{shardID: "shard-0", entities: ids}
 	settings := ShardSettings{
-		RememberEntities:                           true,
-		Store:                                      store,
-		EntityRecoveryStrategy:                     EntityRecoveryStrategyConstant,
+		RememberEntities:       true,
+		Store:                  store,
+		EntityRecoveryStrategy: EntityRecoveryStrategyConstant,
 		EntityRecoveryConstantRateNumberOfEntities: 3,
 		// Use a long frequency to keep the timer dormant for the test;
 		// drainEntityRecoveryBatch is invoked synchronously below.
@@ -176,9 +176,9 @@ func TestEntityRecoveryStrategy_ConstantPaceMeasured(t *testing.T) {
 	ids := []EntityId{"e1", "e2", "e3", "e4", "e5", "e6"}
 	store := &memShardStore{shardID: "shard-0", entities: ids}
 	settings := ShardSettings{
-		RememberEntities:                           true,
-		Store:                                      store,
-		EntityRecoveryStrategy:                     EntityRecoveryStrategyConstant,
+		RememberEntities:       true,
+		Store:                  store,
+		EntityRecoveryStrategy: EntityRecoveryStrategyConstant,
 		EntityRecoveryConstantRateNumberOfEntities: 2,
 		EntityRecoveryConstantRateFrequency:        50 * time.Millisecond,
 	}

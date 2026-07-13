@@ -354,7 +354,7 @@ func TestShardSettings_Defaults(t *testing.T) {
 // and the active entity count exceeds the limit, the oldest entity is evicted.
 func TestLRUPassivation(t *testing.T) {
 	shard, mctx := newTestShard(t, "TestType", "shard-0", ShardSettings{
-		PassivationStrategy:         "custom-lru-strategy",
+		PassivationStrategy:          "custom-lru-strategy",
 		PassivationActiveEntityLimit: 3,
 	})
 	shard.PreStart()
@@ -431,11 +431,11 @@ func TestIsLRUStrategy(t *testing.T) {
 		name string
 		want bool
 	}{
-		{LRUStrategyName, true},          // Pekko canonical
-		{LegacyLRUStrategyName, true},    // gekka legacy alias
+		{LRUStrategyName, true},       // Pekko canonical
+		{LegacyLRUStrategyName, true}, // gekka legacy alias
 		{"default-idle-strategy", false},
-		{MRUStrategyName, false},         // session 25
-		{LFUStrategyName, false},         // session 25
+		{MRUStrategyName, false}, // session 25
+		{LFUStrategyName, false}, // session 25
 		{"", false},
 	}
 	for _, c := range cases {
@@ -627,11 +627,11 @@ func TestPassivation_StrategyDispatchIsolation(t *testing.T) {
 // Shard.handlePassivate path the simpler strategies use.
 func TestCompositePassivation_EvictsOnLimitOverflow(t *testing.T) {
 	shard, mctx := newTestShard(t, "TestType", "shard-0", ShardSettings{
-		PassivationStrategy:                   DefaultStrategyName,
-		PassivationActiveEntityLimit:          3,
-		PassivationWindowProportion:           0.5, // window cap=1; main cap=2
-		PassivationFilter:                     "off",
-		PassivationFrequencySketchDepth:       4,
+		PassivationStrategy:                       DefaultStrategyName,
+		PassivationActiveEntityLimit:              3,
+		PassivationWindowProportion:               0.5, // window cap=1; main cap=2
+		PassivationFilter:                         "off",
+		PassivationFrequencySketchDepth:           4,
 		PassivationFrequencySketchWidthMultiplier: 4,
 		PassivationFrequencySketchResetMultiplier: 10,
 	})

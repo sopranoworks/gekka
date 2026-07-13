@@ -124,7 +124,7 @@ func TestMultiJvmCompat(t *testing.T) {
 			"observedSuccess=%v", observedSuccess)
 	case !observedSuccess:
 		dumpTail()
-		t.Fatalf("multi-jvm:test exited 0 but no [success] line was seen; "+
+		t.Fatalf("multi-jvm:test exited 0 but no [success] line was seen; " +
 			"sbt may have skipped the suite")
 	}
 }

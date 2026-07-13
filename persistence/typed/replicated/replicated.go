@@ -39,9 +39,9 @@ func (r ReplicationId) PersistenceId() string {
 
 // ReplicatedEvent wraps an event with its origin replica metadata.
 type ReplicatedEvent[E any] struct {
-	Event    E
-	Origin   ReplicaId
-	SeqNr    uint64
+	Event  E
+	Origin ReplicaId
+	SeqNr  uint64
 }
 
 // ReplicaConfig maps a replica to its journal for replication reads.
@@ -80,12 +80,12 @@ type replicatedActor[Command any, Event any, State any] struct {
 	seqNr    uint64 // local sequence number
 
 	// Track highest seen seqNr per replica for replication polling.
-	mu              sync.Mutex
-	replicaSeqNrs   map[ReplicaId]uint64
-	recovering      bool
-	tctx            typed.TypedContext[Command]
-	stash           []Command
-	cancel          context.CancelFunc
+	mu            sync.Mutex
+	replicaSeqNrs map[ReplicaId]uint64
+	recovering    bool
+	tctx          typed.TypedContext[Command]
+	stash         []Command
+	cancel        context.CancelFunc
 }
 
 func NewReplicatedActor[Command any, Event any, State any](
@@ -115,10 +115,10 @@ func (c *replicatedTypedContext[C, E, S]) System() actor.ActorContext {
 func (c *replicatedTypedContext[C, E, S]) Log() *slog.Logger {
 	return c.actor.Log().Logger()
 }
-func (c *replicatedTypedContext[C, E, S]) Watch(target actor.Ref)   { /* no-op for now */ }
-func (c *replicatedTypedContext[C, E, S]) Unwatch(target actor.Ref) { /* no-op */ }
-func (c *replicatedTypedContext[C, E, S]) Stop(target actor.Ref)    { /* no-op */ }
-func (c *replicatedTypedContext[C, E, S]) Passivate()               {}
+func (c *replicatedTypedContext[C, E, S]) Watch(target actor.Ref)          { /* no-op for now */ }
+func (c *replicatedTypedContext[C, E, S]) Unwatch(target actor.Ref)        { /* no-op */ }
+func (c *replicatedTypedContext[C, E, S]) Stop(target actor.Ref)           { /* no-op */ }
+func (c *replicatedTypedContext[C, E, S]) Passivate()                      {}
 func (c *replicatedTypedContext[C, E, S]) Timers() typed.TimerScheduler[C] { return nil }
 func (c *replicatedTypedContext[C, E, S]) Stash() typed.StashBuffer[C]     { return nil }
 func (c *replicatedTypedContext[C, E, S]) Sender() actor.Ref               { return nil }

@@ -69,6 +69,6 @@ func (r *InMemoryReadJournal) EventsByTag(tag string, offset query.Offset) strea
 }
 
 var (
-	_ query.ReadJournal    = (*InMemoryReadJournal)(nil)
+	_ query.ReadJournal      = (*InMemoryReadJournal)(nil)
 	_ query.EventsByTagQuery = (*InMemoryReadJournal)(nil)
 )

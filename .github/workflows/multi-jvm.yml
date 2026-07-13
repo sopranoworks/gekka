@@ -1,0 +1,41 @@
+# Cross-language Go<->JVM Artery/Aeron compatibility gate. Not run on every
+# push/PR (unlike go.yml): sbt multi-jvm:test takes ~4-5 minutes end-to-end,
+# needs a JDK + sbt toolchain the go.yml jobs don't otherwise pull in, and
+# spins up embedded Aeron media drivers under /dev/shm. Runs on a daily
+# schedule plus manual dispatch so this whole test category (previously
+# zero CI enforcement of any kind — only ever run by a human/agent locally)
+# gets caught within a day of a regression rather than never.
+name: Multi-JVM Compat
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  multi-jvm:
+    name: sbt multi-jvm:test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          check-latest: true
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up sbt
+        uses: sbt/setup-sbt@v1
+
+      - name: sbt multi-jvm:test
+        working-directory: test/compatibility/akka-multi-node
+        run: sbt "multi-jvm:test"

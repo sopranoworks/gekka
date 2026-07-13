@@ -220,7 +220,7 @@ type TypedActor[T any] struct {
 	stopped          bool
 	terminatedHooks  map[string]func() // path → callback for Monitor
 	receiveTimeout   *receiveTimeoutState[T]
-	postStopCallback func()            // optional callback for StoppedWithPostStop
+	postStopCallback func() // optional callback for StoppedWithPostStop
 }
 
 // NewTypedActorInternal creates a new TypedActor instance with the given initial behavior.

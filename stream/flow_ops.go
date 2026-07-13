@@ -32,10 +32,10 @@ func IntersperseAll[T any](src Source[T, NotUsed], start, sep, end T) Source[T, 
 }
 
 type intersperseIterator[T any] struct {
-	upstream  iterator[T]
-	sep       T
+	upstream     iterator[T]
+	sep          T
 	emittedFirst bool
-	pending   *T
+	pending      *T
 }
 
 func (it *intersperseIterator[T]) next() (T, bool, error) {

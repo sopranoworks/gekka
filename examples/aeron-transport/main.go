@@ -14,12 +14,12 @@
 // Transport details
 // ─────────────────
 // When transport = aeron-udp:
-//   • The Gekka node speaks the Aeron 1.30.0 wire protocol over UDP.
-//   • Three logical Artery streams are multiplexed over a single UDP port:
-//       Stream 1 — Control  (handshake, cluster messages, heartbeats)
-//       Stream 2 — Ordinary (user-level actor messages)
-//       Stream 3 — Large    (fragmented messages)
-//   • Reliability is achieved via NACK-based retransmission and Status Message
+//   - The Gekka node speaks the Aeron 1.30.0 wire protocol over UDP.
+//   - Three logical Artery streams are multiplexed over a single UDP port:
+//     Stream 1 — Control  (handshake, cluster messages, heartbeats)
+//     Stream 2 — Ordinary (user-level actor messages)
+//     Stream 3 — Large    (fragmented messages)
+//   - Reliability is achieved via NACK-based retransmission and Status Message
 //     (SM) flow-control frames — no JVM Media Driver is required.
 //
 // See docs/PROTOCOL.md §"Aeron (UDP) Framing" for the full wire-format reference.

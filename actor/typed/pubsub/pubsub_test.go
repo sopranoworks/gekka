@@ -67,7 +67,7 @@ func (m *mockMediator) Unsubscribe(_ context.Context, topic, group, path string)
 
 type pathRef struct{ path string }
 
-func (r *pathRef) Path() string                      { return r.path }
+func (r *pathRef) Path() string               { return r.path }
 func (r *pathRef) Tell(_ any, _ ...actor.Ref) {}
 
 // ─── tests ──────────────────────────────────────────────────────────────────

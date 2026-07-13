@@ -210,10 +210,10 @@ func TestGossipMerge_AppVersions(t *testing.T) {
 		AllAppVersions: []string{"3.0.0"},
 		Members: []*gproto_cluster.Member{
 			{
-				AddressIndex:   proto.Int32(0),
-				Status:         gproto_cluster.MemberStatus_Up.Enum(),
-				UpNumber:       proto.Int32(2),
-				RolesIndexes:   []int32{0},
+				AddressIndex:    proto.Int32(0),
+				Status:          gproto_cluster.MemberStatus_Up.Enum(),
+				UpNumber:        proto.Int32(2),
+				RolesIndexes:    []int32{0},
 				AppVersionIndex: proto.Int32(0),
 			},
 		},
@@ -265,8 +265,8 @@ func TestDiffGossipMembers_AppVersionChanged(t *testing.T) {
 		AllAppVersions: []string{"1.0.0"},
 		Members: []*gproto_cluster.Member{
 			{
-				AddressIndex:   proto.Int32(0),
-				Status:         gproto_cluster.MemberStatus_Up.Enum(),
+				AddressIndex:    proto.Int32(0),
+				Status:          gproto_cluster.MemberStatus_Up.Enum(),
 				AppVersionIndex: proto.Int32(0),
 			},
 		},
@@ -277,8 +277,8 @@ func TestDiffGossipMembers_AppVersionChanged(t *testing.T) {
 		AllAppVersions: []string{"1.0.0", "2.0.0"},
 		Members: []*gproto_cluster.Member{
 			{
-				AddressIndex:   proto.Int32(0),
-				Status:         gproto_cluster.MemberStatus_Up.Enum(),
+				AddressIndex:    proto.Int32(0),
+				Status:          gproto_cluster.MemberStatus_Up.Enum(),
 				AppVersionIndex: proto.Int32(1), // changed from 0 to 1
 			},
 		},

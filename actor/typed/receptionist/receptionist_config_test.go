@@ -21,7 +21,7 @@ import (
 // the receptionist's ddata path. ORSet reads delegate to a real replicator
 // so subscribers and Find calls behave normally.
 type capturingWriter struct {
-	inner *ddata.Replicator
+	inner    *ddata.Replicator
 	addCalls []writeCall
 	rmCalls  []writeCall
 }

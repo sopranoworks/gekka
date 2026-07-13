@@ -114,7 +114,7 @@ func TestDeadLetter_MailboxFull(t *testing.T) {
 
 	ref.Tell("msg1") // actor picks this up; Receive blocks on gate
 	time.Sleep(30 * time.Millisecond)
-	ref.Tell("msg2")    // fills the 1-slot buffer
+	ref.Tell("msg2")     // fills the 1-slot buffer
 	ref.Tell("overflow") // mailbox full → DeadLetter
 	time.Sleep(60 * time.Millisecond)
 	close(gate) // unblock actor so test can clean up

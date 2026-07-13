@@ -290,7 +290,7 @@ func TestClusterPoolRouter_AutoResize(t *testing.T) {
 	// Props factory is never called: resizer returns 0, so AdjustPoolSize is
 	// never triggered and no routees are spawned.
 	router := NewClusterPoolRouterWithResizer(
-		nil,                                // cm=nil: no cluster, no PreStart subscription
+		nil, // cm=nil: no cluster, no PreStart subscription
 		&actor.RoundRobinRoutingLogic{},
 		0, true, "", actor.Props{},
 		resizer,

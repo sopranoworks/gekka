@@ -50,24 +50,24 @@ func RegisterSerializerFactory(name string, factory SerializerFactory) {
 
 // Artery Control Serializer ID
 const (
-        ProtobufSerializerID = 2
-        RawSerializerID      = 4
-        ClusterSerializerID  = 5
-        MessageContainerSerializerID = 6
-        JSONSerializerID     = 9
-        ArteryInternalSerializerID   = 17
-        // JavaStringSerializerID is Akka's classic JavaSerializer (ID=1).
-        // Used only for DECODING inbound strings serialised with Java Object
-        // Serialization (AC ED 00 05 74 ...).
-        JavaStringSerializerID = 1
+	ProtobufSerializerID         = 2
+	RawSerializerID              = 4
+	ClusterSerializerID          = 5
+	MessageContainerSerializerID = 6
+	JSONSerializerID             = 9
+	ArteryInternalSerializerID   = 17
+	// JavaStringSerializerID is Akka's classic JavaSerializer (ID=1).
+	// Used only for DECODING inbound strings serialised with Java Object
+	// Serialization (AC ED 00 05 74 ...).
+	JavaStringSerializerID = 1
 
-        // StringSerializerID is Akka 2.6's built-in StringSerializer (ID=20).
-        // Akka uses this for java.lang.String messages in Artery: the payload
-        // is simply the raw UTF-8 bytes, with no Java-serialization overhead.
-        // Go uses this ID when sending strings to Akka nodes.
-        StringSerializerID = 20
+	// StringSerializerID is Akka 2.6's built-in StringSerializer (ID=20).
+	// Akka uses this for java.lang.String messages in Artery: the payload
+	// is simply the raw UTF-8 bytes, with no Java-serialization overhead.
+	// Go uses this ID when sending strings to Akka nodes.
+	StringSerializerID = 20
 
-        // Pekko Distributed Data Serializers
+	// Pekko Distributed Data Serializers
 
 	DDataReplicatedSerializerID    = 11
 	DDataReplicatorMsgSerializerID = 12
@@ -87,14 +87,14 @@ type Serializer interface {
 // SerializationRegistry manages the mapping between message types and manifest strings.
 // It is used by Artery handlers to serialize and deserialize messages.
 type SerializationRegistry struct {
-	mu                 sync.RWMutex
-	manifestsToType    map[string]reflect.Type
-	typeToManifests    map[reflect.Type]string
-	manifestToSerializerId map[string]int32
-	serializers        map[int32]Serializer
-	jsonSerializer     *JSONSerializer
-	rawSerializer      *RawSerializer
-	protobufSerializer *ProtobufSerializer
+	mu                         sync.RWMutex
+	manifestsToType            map[string]reflect.Type
+	typeToManifests            map[reflect.Type]string
+	manifestToSerializerId     map[string]int32
+	serializers                map[int32]Serializer
+	jsonSerializer             *JSONSerializer
+	rawSerializer              *RawSerializer
+	protobufSerializer         *ProtobufSerializer
 	messageContainerSerializer *MessageContainerSerializer
 }
 

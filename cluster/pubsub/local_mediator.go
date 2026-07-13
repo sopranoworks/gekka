@@ -33,7 +33,7 @@ type subEntry struct {
 //	m.Publish(ctx, "events", "hello")  // ch receives "hello"
 type LocalMediator struct {
 	mu        sync.RWMutex
-	subs      map[string][]subEntry   // topic → subscriptions
+	subs      map[string][]subEntry    // topic → subscriptions
 	receivers map[string]func(msg any) // receiverPath → delivery function
 	rrIndex   map[string]int           // per-topic round-robin index for SendOne
 }

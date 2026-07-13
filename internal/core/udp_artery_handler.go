@@ -119,12 +119,12 @@ func outSessionKey(addr *net.UDPAddr, streamId int32) string {
 // transport layer for Artery messages.  One instance is shared across all
 // logical Aeron streams (1, 2, 3) on a single UDP socket.
 type UdpArteryHandler struct {
-	mu         sync.RWMutex
-	conn       *net.UDPConn
-	localAddr  *net.UDPAddr
-	nm         *NodeManager
-	handler    FrameHandler
-	ctm        *CompressionTableManager
+	mu        sync.RWMutex
+	conn      *net.UDPConn
+	localAddr *net.UDPAddr
+	nm        *NodeManager
+	handler   FrameHandler
+	ctm       *CompressionTableManager
 
 	inSessions  map[string]*aeronInboundSession
 	outSessions map[string]*aeronOutSession
@@ -624,11 +624,11 @@ func (h *UdpArteryHandler) ensureOutSession(dst *net.UDPAddr, streamId int32) (*
 
 	// Send SETUP and wait for SM — up to 30 s with 250 ms retry intervals.
 	const (
-		smWait    = 30 * time.Second
-		smRetry   = 250 * time.Millisecond
+		smWait  = 30 * time.Second
+		smRetry = 250 * time.Millisecond
 	)
 	deadline := time.Now().Add(smWait)
-	attempt  := 0
+	attempt := 0
 	for time.Now().Before(deadline) {
 		if err := h.sendSetup(dst, sess); err != nil {
 			return nil, fmt.Errorf("aeron-udp: SETUP send (attempt %d): %w", attempt, err)

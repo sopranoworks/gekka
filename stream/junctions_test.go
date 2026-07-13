@@ -20,16 +20,16 @@ func TestJunctions_Broadcast(t *testing.T) {
 	b := stream.NewBuilder()
 	src := stream.Add[stream.SourceShape[int], stream.NotUsed](b, stream.FromSlice([]int{1, 2, 3}))
 	bcast := stream.Add[stream.FanOutShape[int], stream.NotUsed](b, stream.NewBroadcast[int](2))
-	
+
 	var r1, r2 []int
 	var mu sync.Mutex
-	
+
 	sink1 := stream.Add[stream.SinkShape[int], stream.Future[stream.NotUsed]](b, stream.Foreach(func(i int) {
 		mu.Lock()
 		r1 = append(r1, i)
 		mu.Unlock()
 	}))
-	
+
 	sink2 := stream.Add[stream.SinkShape[int], stream.Future[stream.NotUsed]](b, stream.Foreach(func(i int) {
 		mu.Lock()
 		r2 = append(r2, i)
@@ -55,7 +55,7 @@ func TestJunctions_Merge(t *testing.T) {
 	src1 := stream.Add[stream.SourceShape[int], stream.NotUsed](b, stream.FromSlice([]int{1, 2}))
 	src2 := stream.Add[stream.SourceShape[int], stream.NotUsed](b, stream.FromSlice([]int{3, 4}))
 	merge := stream.Add[stream.FanInShape[int], stream.NotUsed](b, stream.NewMerge[int](2))
-	
+
 	var res []int
 	var mu sync.Mutex
 	sink := stream.Add[stream.SinkShape[int], stream.Future[stream.NotUsed]](b, stream.Foreach(func(i int) {
@@ -82,7 +82,7 @@ func TestJunctions_Zip(t *testing.T) {
 	srcA := stream.Add[stream.SourceShape[string], stream.NotUsed](b, stream.FromSlice([]string{"a", "b", "c"}))
 	srcB := stream.Add[stream.SourceShape[int], stream.NotUsed](b, stream.FromSlice([]int{1, 2}))
 	zip := stream.Add[stream.FanIn2Shape[string, int, stream.Pair[string, int]], stream.NotUsed](b, stream.NewZip[string, int]())
-	
+
 	var res []stream.Pair[string, int]
 	var mu sync.Mutex
 	sink := stream.Add[stream.SinkShape[stream.Pair[string, int]], stream.Future[stream.NotUsed]](b, stream.Foreach(func(p stream.Pair[string, int]) {

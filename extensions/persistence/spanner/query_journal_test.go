@@ -1,3 +1,5 @@
+//go:build spanner
+
 /*
  * query_journal_test.go
  * This file is part of the gekka project.
@@ -6,8 +8,6 @@
  * SPDX-License-Identifier: MIT
  */
 
-//go:build spanner
-
 package spannerstore_test
 
 import (
@@ -15,10 +15,10 @@ import (
 	"testing"
 	"time"
 
+	spannerstore "github.com/sopranoworks/gekka-extensions-persistence-spanner"
 	"github.com/sopranoworks/gekka/persistence"
 	"github.com/sopranoworks/gekka/persistence/query"
 	"github.com/sopranoworks/gekka/stream"
-	spannerstore "github.com/sopranoworks/gekka-extensions-persistence-spanner"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -50,7 +50,7 @@ func TestSpanner_ReadJournal_EventsByTag(t *testing.T) {
 
 	// Query events by tag
 	src := readJournal.EventsByTag(tag, query.NoOffset{})
-	
+
 	// Collect events from the source.
 	// Since it's a live stream, we'll take exactly 3 and then stop.
 	m := stream.SyncMaterializer{}
@@ -60,10 +60,10 @@ func TestSpanner_ReadJournal_EventsByTag(t *testing.T) {
 	}
 
 	assert.Equal(t, 3, len(collected))
-	
+
 	// Verify global ordering by checking commit timestamps (Offsets)
 	for i := 0; i < len(collected)-1; i++ {
-		assert.True(t, collected[i+1].Offset.IsAfter(collected[i].Offset), 
+		assert.True(t, collected[i+1].Offset.IsAfter(collected[i].Offset),
 			"Event %d should be after event %d", i+1, i)
 	}
 

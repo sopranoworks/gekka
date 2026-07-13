@@ -21,8 +21,8 @@ import (
 // methods are no-ops.
 type scriptedJournal struct {
 	stream    []PersistentRepr
-	delay     time.Duration   // per-event delay
-	startWait time.Duration   // delay before first event
+	delay     time.Duration // per-event delay
+	startWait time.Duration // delay before first event
 }
 
 func (s *scriptedJournal) AsyncWriteMessages(ctx context.Context, messages []PersistentRepr) error {

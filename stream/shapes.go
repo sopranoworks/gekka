@@ -20,7 +20,7 @@ type Inlet[T any] struct {
 }
 
 func (i *Inlet[T]) setID(id int) { i.id = id }
-func (i *Inlet[T]) getID() int  { return i.id }
+func (i *Inlet[T]) getID() int   { return i.id }
 
 // Outlet[T] represents a typed output port on a stream stage.
 type Outlet[T any] struct {
@@ -28,7 +28,7 @@ type Outlet[T any] struct {
 }
 
 func (o *Outlet[T]) setID(id int) { o.id = id }
-func (o *Outlet[T]) getID() int  { return o.id }
+func (o *Outlet[T]) getID() int   { return o.id }
 
 // Shape represents the set of input and output ports of a stream stage.
 type Shape interface {

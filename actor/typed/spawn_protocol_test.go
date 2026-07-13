@@ -119,7 +119,7 @@ type replyCapture[T any] struct {
 	captured *T
 }
 
-func (r *replyCapture[T]) Path() string                      { return "/temp/reply" }
+func (r *replyCapture[T]) Path() string { return "/temp/reply" }
 func (r *replyCapture[T]) Tell(msg any, sender ...actor.Ref) {
 	if v, ok := msg.(T); ok {
 		*r.captured = v

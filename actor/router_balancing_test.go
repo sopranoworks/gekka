@@ -68,7 +68,7 @@ func TestSmallestMailbox_MixedRefs(t *testing.T) {
 	logic := &SmallestMailboxRoutingLogic{}
 	routees := []Ref{
 		&sizableRef{path: "/a", size: 5},
-		&plainRef{path: "/b"},         // size = 0 (not sizable)
+		&plainRef{path: "/b"}, // size = 0 (not sizable)
 		&sizableRef{path: "/c", size: 3},
 	}
 

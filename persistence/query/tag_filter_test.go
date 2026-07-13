@@ -24,7 +24,7 @@ import (
 //
 // Setup:
 //   - actor "order-service"   persists events tagged ["critical", "internal"]
-//                             and ["internal"] and ["critical"]
+//     and ["internal"] and ["critical"]
 //   - actor "payment-service" persists events tagged ["critical"] twice
 //   - actor "audit-log"       persists one event tagged ["internal"]
 //

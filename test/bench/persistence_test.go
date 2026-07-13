@@ -24,9 +24,9 @@ import (
 	instancepb "cloud.google.com/go/spanner/admin/instance/apiv1/instancepb"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/sopranoworks/gekka"
+	spannerstore "github.com/sopranoworks/gekka-extensions-persistence-spanner"
 	"github.com/sopranoworks/gekka/actor/typed"
 	"github.com/sopranoworks/gekka/persistence"
-	spannerstore "github.com/sopranoworks/gekka-extensions-persistence-spanner"
 	sqlstore "github.com/sopranoworks/gekka/persistence/sql"
 	tc "github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
@@ -35,7 +35,8 @@ import (
 	"google.golang.org/api/option"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	)
+)
+
 // ── Benchmark configuration ──────────────────────────────────────────────────
 
 const (

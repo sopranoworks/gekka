@@ -36,9 +36,9 @@ func (framingOps) DelimiterFraming(delimiter []byte, maximumFrameLength int, all
 	return Flow[[]byte, []byte, NotUsed]{
 		attach: func(up iterator[[]byte]) (iterator[[]byte], NotUsed) {
 			return &delimiterFramingIter{
-				upstream:  up,
-				delimiter: delimiter,
-				maxFrame:  maximumFrameLength,
+				upstream:   up,
+				delimiter:  delimiter,
+				maxFrame:   maximumFrameLength,
 				allowTrunc: allowTruncation,
 			}, NotUsed{}
 		},

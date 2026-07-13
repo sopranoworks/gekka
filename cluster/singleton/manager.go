@@ -43,8 +43,8 @@ type ClusterSingletonManager struct {
 	role           string      // optional role filter; empty = any node
 	dataCenter     string      // optional DC filter; empty = any DC
 	singletonProps actor.Props // factory for the singleton actor
-	singletonRef   actor.Ref  // non-nil when the singleton is running on this node
-	singletonName  string     // child actor name, default "singleton"
+	singletonRef   actor.Ref   // non-nil when the singleton is running on this node
+	singletonName  string      // child actor name, default "singleton"
 
 	// HandOverRetryInterval is how often the manager retries handover
 	// coordination during leadership transfer. Default: 1s.
@@ -56,9 +56,9 @@ type ClusterSingletonManager struct {
 
 	// Lease-based coordination (optional). When set, the manager must acquire
 	// the lease before starting the singleton and releases it on handoff/stop.
-	lease            icluster.Lease
-	leaseRetryDelay  time.Duration // backoff between retries; default 5s
-	leaseHeld        bool
+	lease           icluster.Lease
+	leaseRetryDelay time.Duration // backoff between retries; default 5s
+	leaseHeld       bool
 }
 
 // NewClusterSingletonManager creates a manager actor that will spawn/stop the
@@ -115,7 +115,9 @@ func (m *ClusterSingletonManager) SingletonName() string { return m.singletonNam
 func (m *ClusterSingletonManager) MinHandOverRetries() int { return m.minHandOverRetries }
 
 // HandOverRetryInterval returns the configured hand-over retry interval.
-func (m *ClusterSingletonManager) HandOverRetryInterval() time.Duration { return m.handOverRetryInterval }
+func (m *ClusterSingletonManager) HandOverRetryInterval() time.Duration {
+	return m.handOverRetryInterval
+}
 
 // WithDataCenter restricts this manager to host the singleton only when this
 // node is the oldest member of the given data center.

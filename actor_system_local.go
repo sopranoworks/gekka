@@ -34,12 +34,12 @@ var referenceConfContent string
 
 // localActorSystem implements ActorSystem for local-only use without networking.
 type localActorSystem struct {
-	name          string
-	ctx           context.Context
-	cancel        context.CancelFunc
-	actors        map[string]actor.Actor
-	actorsMu      sync.RWMutex
-	logHandler    slog.Handler
+	name              string
+	ctx               context.Context
+	cancel            context.CancelFunc
+	actors            map[string]actor.Actor
+	actorsMu          sync.RWMutex
+	logHandler        slog.Handler
 	sched             *systemScheduler
 	journal           persistence.Journal
 	snapshotStore     persistence.SnapshotStore

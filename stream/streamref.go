@@ -45,7 +45,7 @@ type SinkRef struct {
 }
 
 func (m *SinkRef) ArterySerializerID() int32 { return StreamRefSerializerID }
-func (m *SinkRef) ArteryManifest() string     { return "F" }
+func (m *SinkRef) ArteryManifest() string    { return "F" }
 
 // SourceRef is an actor-level message that carries the address of a remote
 // stream origin.  The receiver uses it to subscribe and receive data.
@@ -59,7 +59,7 @@ type SourceRef struct {
 }
 
 func (m *SourceRef) ArterySerializerID() int32 { return StreamRefSerializerID }
-func (m *SourceRef) ArteryManifest() string     { return "E" }
+func (m *SourceRef) ArteryManifest() string    { return "E" }
 
 // StreamRefSerializer implements the core.Serializer interface for the
 // StreamRef protocol (serializer ID 36).
@@ -147,35 +147,35 @@ type SequencedOnNext struct {
 }
 
 func (m *SequencedOnNext) ArterySerializerID() int32 { return StreamRefSerializerID }
-func (m *SequencedOnNext) ArteryManifest() string     { return "A" }
+func (m *SequencedOnNext) ArteryManifest() string    { return "A" }
 
 type CumulativeDemand struct {
 	SeqNr int64
 }
 
 func (m *CumulativeDemand) ArterySerializerID() int32 { return StreamRefSerializerID }
-func (m *CumulativeDemand) ArteryManifest() string     { return "B" }
+func (m *CumulativeDemand) ArteryManifest() string    { return "B" }
 
 type RemoteStreamFailure struct {
 	Cause string
 }
 
 func (m *RemoteStreamFailure) ArterySerializerID() int32 { return StreamRefSerializerID }
-func (m *RemoteStreamFailure) ArteryManifest() string     { return "C" }
+func (m *RemoteStreamFailure) ArteryManifest() string    { return "C" }
 
 type RemoteStreamCompleted struct {
 	SeqNr int64
 }
 
 func (m *RemoteStreamCompleted) ArterySerializerID() int32 { return StreamRefSerializerID }
-func (m *RemoteStreamCompleted) ArteryManifest() string     { return "D" }
+func (m *RemoteStreamCompleted) ArteryManifest() string    { return "D" }
 
 type OnSubscribeHandshake struct {
 	TargetRef string
 }
 
 func (m *OnSubscribeHandshake) ArterySerializerID() int32 { return StreamRefSerializerID }
-func (m *OnSubscribeHandshake) ArteryManifest() string     { return "G" }
+func (m *OnSubscribeHandshake) ArteryManifest() string    { return "G" }
 
 // ─── Proto encoding helpers ───────────────────────────────────────────────
 //

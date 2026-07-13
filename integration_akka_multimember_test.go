@@ -40,13 +40,13 @@ import (
 
 // multiMemberSignals is the channel set used by the Scala-stdout reader.
 type multiMemberSignals struct {
-	ready          chan struct{}    // closed once MULTI_NODE_READY arrives
-	foreignDowned  chan string      // host:port payloads for FOREIGN_MEMBER_DOWNED
-	foreignLeaving chan string      // host:port payloads for FOREIGN_MEMBER_LEFT
-	foreignUp      chan string      // host:port payloads for FOREIGN_MEMBER_UP
-	tail           []string         // most recent 200 log lines for failure reporting
-	tailMu         sync.Mutex       //
-	readyOnce      atomic.Bool      // guards readyClose
+	ready          chan struct{} // closed once MULTI_NODE_READY arrives
+	foreignDowned  chan string   // host:port payloads for FOREIGN_MEMBER_DOWNED
+	foreignLeaving chan string   // host:port payloads for FOREIGN_MEMBER_LEFT
+	foreignUp      chan string   // host:port payloads for FOREIGN_MEMBER_UP
+	tail           []string      // most recent 200 log lines for failure reporting
+	tailMu         sync.Mutex    //
+	readyOnce      atomic.Bool   // guards readyClose
 	readyPayload   atomic.Pointer[string]
 }
 

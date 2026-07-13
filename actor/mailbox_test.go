@@ -97,8 +97,8 @@ func TestBoundedMailbox_DropNewest_DropsOverflow(t *testing.T) {
 	a := newCallback(func(msg any) {
 		if first {
 			first = false
-			close(ready)   // signal: actor is processing first message
-			<-proceed      // hold actor until we've saturated the mailbox
+			close(ready) // signal: actor is processing first message
+			<-proceed    // hold actor until we've saturated the mailbox
 		}
 		mu.Lock()
 		received = append(received, msg)
@@ -338,7 +338,7 @@ func TestPriorityMailbox_SwapsOnHigherPriorityArrival(t *testing.T) {
 	actor.Start(a)
 
 	// Send a low-priority item first; drain goroutine picks it up.
-	a.Send(10) // actor processes this immediately
+	a.Send(10)                       // actor processes this immediately
 	time.Sleep(5 * time.Millisecond) // let actor start (holds on <-gate)
 
 	// Now send a higher-priority item; drain goroutine should swap.

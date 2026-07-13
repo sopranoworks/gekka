@@ -135,9 +135,9 @@ func TestRecoveryCompleted_DisabledRecovery(t *testing.T) {
 
 	var signalReceived PersistenceSignal
 	behavior := &EventSourcedBehavior[int, int, counterState]{
-		PersistenceID:    "rc-2",
-		Journal:          journal,
-		InitialState:     counterState{Value: 0},
+		PersistenceID: "rc-2",
+		Journal:       journal,
+		InitialState:  counterState{Value: 0},
 		CommandHandler: func(ctx typed.TypedContext[int], state counterState, cmd int) Effect[int, counterState] {
 			return Persist[int, counterState](cmd)
 		},

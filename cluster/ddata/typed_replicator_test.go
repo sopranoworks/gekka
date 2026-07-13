@@ -38,14 +38,14 @@ func newFakeTypedContext[Cmd any](selfRef typed.TypedActorRef[Cmd]) *fakeTypedCo
 	}
 }
 
-func (c *fakeTypedContext[Cmd]) Self() typed.TypedActorRef[Cmd]  { return c.selfRef }
-func (c *fakeTypedContext[Cmd]) System() actor.ActorContext       { return nil }
-func (c *fakeTypedContext[Cmd]) Log() *slog.Logger               { return c.logger }
-func (c *fakeTypedContext[Cmd]) Watch(actor.Ref)                 {}
-func (c *fakeTypedContext[Cmd]) Unwatch(actor.Ref)               {}
-func (c *fakeTypedContext[Cmd]) Stop(actor.Ref)                  {}
-func (c *fakeTypedContext[Cmd]) Passivate()                      {}
-func (c *fakeTypedContext[Cmd]) Sender() actor.Ref               { return nil }
+func (c *fakeTypedContext[Cmd]) Self() typed.TypedActorRef[Cmd] { return c.selfRef }
+func (c *fakeTypedContext[Cmd]) System() actor.ActorContext     { return nil }
+func (c *fakeTypedContext[Cmd]) Log() *slog.Logger              { return c.logger }
+func (c *fakeTypedContext[Cmd]) Watch(actor.Ref)                {}
+func (c *fakeTypedContext[Cmd]) Unwatch(actor.Ref)              {}
+func (c *fakeTypedContext[Cmd]) Stop(actor.Ref)                 {}
+func (c *fakeTypedContext[Cmd]) Passivate()                     {}
+func (c *fakeTypedContext[Cmd]) Sender() actor.Ref              { return nil }
 func (c *fakeTypedContext[Cmd]) Spawn(any, string) (actor.Ref, error) {
 	return nil, nil
 }

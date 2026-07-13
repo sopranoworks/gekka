@@ -154,4 +154,3 @@ func matchSegment(pattern, seg string) bool {
 	}
 	return true
 }
-

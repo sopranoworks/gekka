@@ -52,14 +52,14 @@ func ParseEventLevel(s string) EventLevel {
 type EventCategory string
 
 const (
-	CatHandshake               EventCategory = "handshake"
-	CatQuarantine              EventCategory = "quarantine"
-	CatHeartbeat               EventCategory = "heartbeat"
-	CatCompression             EventCategory = "compression"
-	CatLargeFrame              EventCategory = "large-frame"
-	CatFrame                   EventCategory = "frame"
-	CatInboundRestartExceeded  EventCategory = "inbound-restart-exceeded"
-	CatInboundLaneFull         EventCategory = "inbound-lane-full"
+	CatHandshake              EventCategory = "handshake"
+	CatQuarantine             EventCategory = "quarantine"
+	CatHeartbeat              EventCategory = "heartbeat"
+	CatCompression            EventCategory = "compression"
+	CatLargeFrame             EventCategory = "large-frame"
+	CatFrame                  EventCategory = "frame"
+	CatInboundRestartExceeded EventCategory = "inbound-restart-exceeded"
+	CatInboundLaneFull        EventCategory = "inbound-lane-full"
 )
 
 // EventSeverity is the human-visible log level for an event.
@@ -154,7 +154,7 @@ type FlightRecorder struct {
 	mu       sync.RWMutex
 	logs     map[string]*RingBuffer
 	enabled  bool
-	level    atomic.Int32  // stores EventLevel
+	level    atomic.Int32 // stores EventLevel
 	sampleN  atomic.Uint64
 	counters map[string]*uint64 // per-association atomic frame counters
 }

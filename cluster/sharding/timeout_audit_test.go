@@ -33,8 +33,8 @@ type slowJournal struct {
 	inner persistence.Journal
 	delay time.Duration
 
-	writeCalls int32
-	readCalls  int32
+	writeCalls  int32
+	readCalls   int32
 	replayCalls int32
 }
 
@@ -255,4 +255,3 @@ func TestShardRegion_QueryTimeoutDropsStalePending(t *testing.T) {
 		t.Errorf("shard-region-query-timeout: expected pending queue drained after timeout; len=%d", got)
 	}
 }
-

@@ -24,8 +24,8 @@ import (
 // `sender ! ArteryHeartbeatRsp` send routes to /deadLetters on the Akka
 // side, generating a continuous WARN log:
 //
-//   received dead letter from Actor[akka://.../system/remote-watcher]:
-//   ArteryHeartbeatRsp(<uid>)
+//	received dead letter from Actor[akka://.../system/remote-watcher]:
+//	ArteryHeartbeatRsp(<uid>)
 //
 // At ~30 warnings/second the Akka logger thread starves the ProcessLogger
 // callback that the multi-jvm GekkaCompatSpec relies on to append to its

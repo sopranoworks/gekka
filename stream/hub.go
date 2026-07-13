@@ -81,7 +81,7 @@ type broadcastHub[T any] struct {
 	// startCh is closed when the first subscriber registers, unblocking the
 	// broadcast goroutine. This prevents the goroutine from consuming the
 	// upstream before any consumer is ready.
-	startCh chan struct{}
+	startCh   chan struct{}
 	startOnce sync.Once
 }
 

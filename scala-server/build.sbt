@@ -8,7 +8,7 @@ lazy val root = (project in file("."))
   .settings(
     name         := "scala-server",
     version      := "0.1",
-    scalaVersion := "2.13.12",
+    scalaVersion := "2.13.18",
     libraryDependencies ++= Seq(
       "org.apache.pekko" %% "pekko-actor"                 % PekkoVersion,
       "org.apache.pekko" %% "pekko-actor-typed"           % PekkoVersion,
@@ -48,7 +48,7 @@ lazy val akkaServer = (project in file("akka-server"))
   .settings(
     name         := "akka-server",
     version      := "0.1",
-    scalaVersion := "2.13.12",
+    scalaVersion := "2.13.18",
     libraryDependencies ++= Seq(
       "com.typesafe.akka" %% "akka-actor"         % AkkaVersion,
       "com.typesafe.akka" %% "akka-remote"        % AkkaVersion,
@@ -82,7 +82,7 @@ lazy val akka2614Server = (project in file("akka-2614-server"))
   .settings(
     name         := "akka-2614-server",
     version      := "0.1",
-    scalaVersion := "2.13.12",
+    scalaVersion := "2.13.18",
     libraryDependencies ++= Seq(
       "com.typesafe.akka" %% "akka-actor"         % "2.6.14",
       "com.typesafe.akka" %% "akka-remote"        % "2.6.14",

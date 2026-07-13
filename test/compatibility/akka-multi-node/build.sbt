@@ -14,7 +14,7 @@ lazy val root = (project in file("."))
   .settings(
     name         := "akka-multi-node-compat",
     version      := "0.1",
-    scalaVersion := "2.13.12",
+    scalaVersion := "2.13.18",
     organization := "com.gekka",
 
     libraryDependencies ++= Seq(

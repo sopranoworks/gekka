@@ -48,11 +48,17 @@ class AskSenderActor(selfLabel: String, peers: List[String]) extends Actor with 
         }
         val env = AskEnvelope(seq, selfLabel, "SEND", kind, payload)
         val target = context.actorSelection(peer + "/user/ask")
+        val sentAt = System.currentTimeMillis()
         val fut = Patterns.ask(target, env, AskTimeout.duration.toMillis)
         fut.onComplete {
           case Success(_) => // ok
           case Failure(ex) =>
-            log.error(s"AskSender: ask to $peer timed out for seq=$seq type=$kind: ${ex.getMessage}")
+            // Spec §4: asks issued before the steady-state anchor are
+            // setup-phase traffic and must not fail the strict window.
+            if (SteadyAnchor.countsForStrictWindow(sentAt))
+              log.error(s"AskSender: ask to $peer timed out for seq=$seq type=$kind: ${ex.getMessage}")
+            else
+              log.debug(s"AskSender: setup-phase ask miss (not counted) peer=$peer seq=$seq")
         }
       }
 

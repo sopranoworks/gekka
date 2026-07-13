@@ -65,7 +65,13 @@ class TellSenderActor(selfLabel: String, peers: List[String]) extends Actor with
       val now = System.currentTimeMillis()
       val expired = pending.values.filter(p => now - p.sentAt > EchoTimeoutMs).toList
       expired.foreach { p =>
-        log.error(s"EchoSender: no reply from ${p.peer} for seq=${p.seqNo} type=${p.payloadKind}")
+        // Spec §4: sends predating the steady-state anchor are setup-phase
+        // traffic; their timeouts must not fail the strict window (a peer
+        // that had not booted when the envelope left cannot fail the run).
+        if (SteadyAnchor.countsForStrictWindow(p.sentAt))
+          log.error(s"EchoSender: no reply from ${p.peer} for seq=${p.seqNo} type=${p.payloadKind}")
+        else
+          log.debug(s"EchoSender: setup-phase echo miss (not counted) peer=${p.peer} seq=${p.seqNo}")
         pending.remove(p.seqNo)
       }
 

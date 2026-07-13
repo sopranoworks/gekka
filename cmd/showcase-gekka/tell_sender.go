@@ -48,6 +48,10 @@ type TellSenderActor struct {
 	cluster *gekka.Cluster
 	peers   []string // full pekko URIs, e.g. "pekko://ShowcaseCluster@127.0.0.1:2552"
 	origin  string   // self-address string used as Originator in envelopes
+	// anchor scopes ERROR accounting to the strict Gate-2 window: echoes
+	// SENT before the local all-members-Up observation are setup-phase
+	// traffic and their timeouts must not ERROR (spec §4). See anchor.go.
+	anchor *steadyAnchor
 
 	mu       sync.Mutex
 	nextSeq  int64
@@ -59,12 +63,13 @@ type TellSenderActor struct {
 
 // NewTellSenderActor constructs a TellSenderActor. The actor is inert until
 // StartTickers is invoked after it has been registered via ActorOf.
-func NewTellSenderActor(cluster *gekka.Cluster, peers []string, origin string) *TellSenderActor {
+func NewTellSenderActor(cluster *gekka.Cluster, peers []string, origin string, anchor *steadyAnchor) *TellSenderActor {
 	return &TellSenderActor{
 		BaseActor: actor.NewBaseActor(),
 		cluster:   cluster,
 		peers:     peers,
 		origin:    origin,
+		anchor:    anchor,
 		pending:   make(map[int64]pendingEntry),
 		stopCh:    make(chan struct{}),
 	}
@@ -207,6 +212,11 @@ func (a *TellSenderActor) sendOnce() {
 		sel := a.cluster.ActorSelection(path)
 		ref, err := sel.Resolve(a.cluster.Context())
 		if err != nil {
+			if !a.anchor.countsForStrictWindow(time.Now()) {
+				logger.Default().Debug("TellSender: setup-phase resolve failure (not counted)",
+					"peer", peer, "path", path, "err", err.Error())
+				continue
+			}
 			logger.Default().Error("TellSender: resolve peer failed",
 				"peer", peer, "path", path, "err", err.Error())
 			continue
@@ -238,6 +248,16 @@ func (a *TellSenderActor) sweep() {
 	a.mu.Unlock()
 
 	for _, e := range exp {
+		// Setup-phase sends (pre-anchor) expire silently — spec §4: the
+		// strict window begins at Gate 1 PASS, and a peer that had not
+		// even booted when the envelope left cannot fail the run.
+		if !a.anchor.countsForStrictWindow(e.entry.sentAt) {
+			logger.Default().Debug("TellSender: setup-phase echo miss (not counted)",
+				"seq", e.seq,
+				"peer", e.entry.peer,
+				"payloadKind", e.entry.payloadKind)
+			continue
+		}
 		logger.Default().Error("TellSender: echo timeout",
 			"seq", e.seq,
 			"peer", e.entry.peer,

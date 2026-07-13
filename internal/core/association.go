@@ -155,16 +155,29 @@ type GekkaAssociation struct {
 	// inside handleHandshakeReq, which on multi-lane connections caused
 	// corrupted protobuf field access and downstream test flakiness
 	// (TestAdaptiveShardingRebalance).
-	remote    atomic.Pointer[gproto_remote.UniqueAddress]
-	lastSeen  time.Time
-	nodeMgr   *NodeManager
-	Handshake chan struct{} // signaled when associated
-	nextSeq   uint64        // for user messages
-	nextSeqNo uint64        // for system messages
-	pending   [][]byte      // buffered frames during Handshake
-	localUid  uint64
-	outbox    chan []byte
-	streamId  int32
+	remote   atomic.Pointer[gproto_remote.UniqueAddress]
+	lastSeen time.Time
+	// lastSendNanos (atomic, unix nanos) records the last time this
+	// association was USED FOR SENDING — a successful outbox/lane
+	// enqueue, a system-message buffer, or a transport heartbeat.
+	// Artery TCP outbound connections are write-only, so lastSeen
+	// (inbound activity) never advances on them; the idle-outbound
+	// sweeps must judge "used" by the LATER of lastSeen and this stamp,
+	// matching Pekko's stop-idle-outbound-after semantics ("Outbound
+	// streams are stopped when they haven't been used ... started again
+	// when new messages are sent"). Judging by lastSeen alone closed
+	// every outbound association exactly stop-idle-outbound-after after
+	// creation — live heartbeat streams included — and collapsed the
+	// showcase cluster at join+5min (2026-07-13).
+	lastSendNanos int64
+	nodeMgr       *NodeManager
+	Handshake     chan struct{} // signaled when associated
+	nextSeq       uint64        // for user messages
+	nextSeqNo     uint64        // for system messages
+	pending       [][]byte      // buffered frames during Handshake
+	localUid      uint64
+	outbox        chan []byte
+	streamId      int32
 
 	// quarantinedSince is the wall-clock time at which this association
 	// was transitioned into the QUARANTINED state. Zero when state is
@@ -1143,13 +1156,16 @@ func (nm *NodeManager) SweepIdleOutboundQuarantine() int {
 		assoc.mu.Lock()
 		role := assoc.role
 		state := assoc.state
-		lastSeen := assoc.lastSeen
+		// Pekko's "haven't been used" covers sends — outbound Artery TCP
+		// conns are write-only, so inbound lastSeen alone would judge
+		// every actively-sending association idle.
+		lastUsed := assoc.lastActivityLocked()
 		remote := assoc.remote.Load()
 		if role != OUTBOUND || state == QUARANTINED {
 			assoc.mu.Unlock()
 			continue
 		}
-		if !lastSeen.Before(cutoff) {
+		if !lastUsed.Before(cutoff) {
 			assoc.mu.Unlock()
 			continue
 		}
@@ -1189,9 +1205,14 @@ func (nm *NodeManager) SweepIdleOutboundStop() int {
 		assoc.mu.Lock()
 		role := assoc.role
 		state := assoc.state
-		lastSeen := assoc.lastSeen
+		// "Idle" means not USED — see lastActivityLocked. Judging by
+		// inbound lastSeen alone stopped every outbound association
+		// (heartbeat-carrying control streams included) exactly
+		// stop-idle-outbound-after after creation and collapsed the
+		// cluster (2026-07-13 showcase obs1b).
+		lastUsed := assoc.lastActivityLocked()
 		conn := assoc.conn
-		if role != OUTBOUND || state != ASSOCIATED || !lastSeen.Before(cutoff) {
+		if role != OUTBOUND || state != ASSOCIATED || !lastUsed.Before(cutoff) {
 			assoc.mu.Unlock()
 			continue
 		}
@@ -1202,6 +1223,14 @@ func (nm *NodeManager) SweepIdleOutboundStop() int {
 			// Aborted on the peer's inbound TcpStages.
 			gracefulCloseConn(conn)
 			assoc.conn = nil
+		}
+		// Multi-lane siblings hold their conns in lanes, not assoc.conn —
+		// stopping the stream must close those too or the sockets (and
+		// their writer goroutines) leak past deregistration.
+		for _, lane := range assoc.lanes {
+			if lane != nil && lane.conn != nil {
+				gracefulCloseConn(lane.conn)
+			}
 		}
 		assoc.mu.Unlock()
 		delete(nm.associations, key)
@@ -1227,7 +1256,7 @@ func (nm *NodeManager) SweepStopQuarantinedAfterIdle() int {
 	var targets []*GekkaAssociation
 	for _, assoc := range nm.associations {
 		assoc.mu.RLock()
-		eligible := assoc.role == OUTBOUND && assoc.state == QUARANTINED && assoc.conn != nil && assoc.lastSeen.Before(cutoff)
+		eligible := assoc.role == OUTBOUND && assoc.state == QUARANTINED && assoc.conn != nil && assoc.lastActivityLocked().Before(cutoff)
 		assoc.mu.RUnlock()
 		if eligible {
 			targets = append(targets, assoc)
@@ -2017,15 +2046,16 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 		outboxCap = nm.EffectiveOutboundControlQueueSize()
 	}
 	assoc := &GekkaAssociation{
-		state:     INITIATED,
-		role:      role,
-		conn:      conn,
-		nodeMgr:   nm,
-		lastSeen:  time.Now(),
-		Handshake: make(chan struct{}),
-		localUid:  nm.localUid,
-		outbox:    make(chan []byte, outboxCap),
-		streamId:  streamId,
+		state:         INITIATED,
+		role:          role,
+		conn:          conn,
+		nodeMgr:       nm,
+		lastSeen:      time.Now(),
+		lastSendNanos: time.Now().UnixNano(),
+		Handshake:     make(chan struct{}),
+		localUid:      nm.localUid,
+		outbox:        make(chan []byte, outboxCap),
+		streamId:      streamId,
 	}
 	assoc.remote.Store(&gproto_remote.UniqueAddress{Address: remote, Uid: proto.Uint64(0)})
 	// System-message redelivery (Phase 2): only the control stream
@@ -2128,6 +2158,20 @@ func (nm *NodeManager) ProcessConnection(ctx context.Context, conn net.Conn, rol
 						break retryLoop
 					}
 					if time.Now().After(deadline) {
+						// Symmetric-handshake race: when both sides dial
+						// simultaneously, one association object loses —
+						// the HandshakeRsp lands on its sibling and this
+						// object's state never flips. If an ASSOCIATED
+						// association to the same remote+streamId exists,
+						// the remote IS reachable and this is expected
+						// dedup fallout, not a timeout worth a WARN.
+						if ra := assoc.remote.Load(); ra != nil && ra.Address != nil &&
+							nm.hasOtherAssociatedTo(assoc, ra.Address.GetHostname(), ra.Address.GetPort(), assoc.streamId) {
+							logger.Default().Debug("artery: handshake abandoned — sibling association established",
+								"remote", assoc.remoteKey())
+							retryTicker.Stop()
+							return
+						}
 						logger.Default().Warn("artery: handshake timed out",
 							"remote", assoc.remoteKey(),
 							"timeout", nm.EffectiveHandshakeTimeout())
@@ -2225,11 +2269,13 @@ func (assoc *GekkaAssociation) SendSystem(seqNo uint64, frame []byte) error {
 		// callers targeting a non-streamId=1 association still work.
 		select {
 		case assoc.outbox <- frame:
+			assoc.touchSendActivity()
 			return nil
 		default:
 			return fmt.Errorf("artery: outbox full, system message dropped")
 		}
 	}
+	assoc.touchSendActivity()
 	if err := assoc.systemOutbox.Enqueue(seqNo, frame, time.Now()); err != nil {
 		// ErrSystemOutboxFull — Pekko semantics: the receiver has fallen
 		// behind beyond the buffer window, give up and quarantine.
@@ -2597,12 +2643,13 @@ func (nm *NodeManager) dialOrdinarySibling(ctx context.Context, controlAssoc *Ge
 	}
 
 	ordinaryAssoc := &GekkaAssociation{
-		state:     ASSOCIATED, // sibling inherits assoc-level state from control's already-completed handshake
-		role:      OUTBOUND,
-		nodeMgr:   nm,
-		lastSeen:  time.Now(),
-		Handshake: make(chan struct{}),
-		localUid:  nm.localUid,
+		state:         ASSOCIATED, // sibling inherits assoc-level state from control's already-completed handshake
+		role:          OUTBOUND,
+		nodeMgr:       nm,
+		lastSeen:      time.Now(),
+		lastSendNanos: time.Now().UnixNano(),
+		Handshake:     make(chan struct{}),
+		localUid:      nm.localUid,
 		// outbox is unused for streamId=2 sibling — all writes go on
 		// per-lane outboxes via outboxFor's lane pivot. Allocate a small
 		// buffer so any stray write that lands here doesn't deadlock.
@@ -2782,7 +2829,8 @@ func (assoc *GekkaAssociation) dispatch(ctx context.Context, meta *ArteryMetadat
 				remote := assoc.remote.Load()
 				assoc.mu.RUnlock()
 				senderPath := meta.Sender.GetPath()
-				return assoc.nodeMgr.clusterMgr.HandleIncomingClusterMessage(ctx, env.GetEnclosedMessage(), string(env.GetMessageManifest()), ToClusterUniqueAddress(remote), senderPath)
+				return assoc.containClusterDispatchError(string(env.GetMessageManifest()),
+					assoc.nodeMgr.clusterMgr.HandleIncomingClusterMessage(ctx, env.GetEnclosedMessage(), string(env.GetMessageManifest()), ToClusterUniqueAddress(remote), senderPath))
 			}
 			return nil
 		}
@@ -2859,7 +2907,8 @@ func (assoc *GekkaAssociation) dispatch(ctx context.Context, meta *ArteryMetadat
 			remote := assoc.remote.Load()
 			assoc.mu.RUnlock()
 			senderPath := meta.Sender.GetPath()
-			return assoc.nodeMgr.clusterMgr.HandleIncomingClusterMessage(ctx, meta.Payload, string(meta.MessageManifest), ToClusterUniqueAddress(remote), senderPath)
+			return assoc.containClusterDispatchError(string(meta.MessageManifest),
+				assoc.nodeMgr.clusterMgr.HandleIncomingClusterMessage(ctx, meta.Payload, string(meta.MessageManifest), ToClusterUniqueAddress(remote), senderPath))
 		}
 		return nil
 
@@ -3052,6 +3101,7 @@ func (assoc *GekkaAssociation) SendWithSender(recipient, senderPath string, payl
 
 	if assoc.state != ASSOCIATED {
 		assoc.pending = append(assoc.pending, frame)
+		assoc.touchSendActivity()
 		return nil
 	}
 
@@ -3062,6 +3112,7 @@ func (assoc *GekkaAssociation) SendWithSender(recipient, senderPath string, payl
 	outbox := assoc.outboxFor(recipient, serializerId)
 	select {
 	case outbox <- frame:
+		assoc.touchSendActivity()
 		return nil
 	default:
 		return fmt.Errorf("association outbox full")
@@ -3072,6 +3123,77 @@ func (assoc *GekkaAssociation) GetState() AssociationState {
 	assoc.mu.RLock()
 	defer assoc.mu.RUnlock()
 	return assoc.state
+}
+
+// hasOtherAssociatedTo reports whether some OTHER registered association
+// to the same remote host:port with the same streamId has reached
+// ASSOCIATED. Used by the handshake retry loop to distinguish "remote
+// unreachable" (WARN-worthy) from "this object lost the symmetric-
+// handshake race but the remote is connected" (expected dedup fallout).
+func (nm *NodeManager) hasOtherAssociatedTo(exclude *GekkaAssociation, host string, port uint32, streamId int32) bool {
+	nm.mu.RLock()
+	defer nm.mu.RUnlock()
+	for _, a := range nm.associations {
+		if a == exclude {
+			continue
+		}
+		a.mu.RLock()
+		matches := a.state == ASSOCIATED && a.streamId == streamId
+		r := a.remote.Load()
+		a.mu.RUnlock()
+		if !matches || r == nil || r.Address == nil {
+			continue
+		}
+		if r.Address.GetHostname() == host && r.Address.GetPort() == port {
+			return true
+		}
+	}
+	return false
+}
+
+// containClusterDispatchError logs a cluster-message processing failure
+// and swallows it. An inbound cluster message that fails to process — a
+// decode error, or a reply (gossip / heartbeat response) that hits a full
+// outbox — must never propagate out of the frame handler: tcpArteryReadLoop
+// treats any handler error as fatal and tears down the whole inbound
+// connection. During the 2026-07-13 showcase collapse this converted one
+// association's full outbox into a 1 Hz kill-reconnect loop of the peer's
+// perfectly healthy inbound control stream. Pekko's inbound stream likewise
+// survives per-message dispatch failures. The WARN keeps the failure
+// observable (and strict Gate-2-style log monitors will still see it).
+func (assoc *GekkaAssociation) containClusterDispatchError(manifest string, err error) error {
+	if err != nil {
+		logger.Default().Warn("artery: cluster message handling failed (connection kept)",
+			"manifest", manifest, "error", err)
+	}
+	return nil
+}
+
+// touchSendActivity stamps this association as "used for sending" now.
+// Lock-free (atomic) so it is safe from any send path, including inside
+// assoc.mu critical sections and from sibling-lane routing in outboxFor.
+func (assoc *GekkaAssociation) touchSendActivity() {
+	atomic.StoreInt64(&assoc.lastSendNanos, time.Now().UnixNano())
+}
+
+// backdateSendActivityForTest overrides the send-activity stamp. Test
+// helper for the idle-sweep suites; never call from production code.
+func (assoc *GekkaAssociation) backdateSendActivityForTest(t time.Time) {
+	atomic.StoreInt64(&assoc.lastSendNanos, t.UnixNano())
+}
+
+// lastActivity returns the later of the inbound (lastSeen) and outbound
+// (lastSendNanos) activity stamps — the Pekko notion of when the
+// association was last "used". Callers must hold assoc.mu (any mode) for
+// the lastSeen read; the send stamp is atomic.
+func (assoc *GekkaAssociation) lastActivityLocked() time.Time {
+	last := assoc.lastSeen
+	if ns := atomic.LoadInt64(&assoc.lastSendNanos); ns > 0 {
+		if sent := time.Unix(0, ns); sent.After(last) {
+			last = sent
+		}
+	}
+	return last
 }
 
 // SendQuarantined enqueues a "Quarantined" control frame to notify the remote
@@ -3252,12 +3374,14 @@ func (assoc *GekkaAssociation) Send(recipient string, payload []byte, serializer
 	if assoc.state != ASSOCIATED {
 		logger.Default().Debug("artery: buffering message", "state", assoc.state)
 		assoc.pending = append(assoc.pending, frame)
+		assoc.touchSendActivity()
 		return nil
 	}
 
 	outbox := assoc.outboxFor(recipient, serializerId)
 	select {
 	case outbox <- frame:
+		assoc.touchSendActivity()
 		return nil
 	default:
 		return fmt.Errorf("association outbox full")
@@ -3300,6 +3424,11 @@ func (assoc *GekkaAssociation) outboxFor(recipient string, serializerId int32) c
 		if sib != nil {
 			lanes := sib.lanes
 			if len(lanes) > 0 {
+				// The registry entry the idle sweeps judge is the
+				// SIBLING's — user traffic enqueued through the control
+				// assoc must stamp the sibling as used, or the sweep
+				// stops an actively-loaded ordinary stream.
+				sib.touchSendActivity()
 				return lanes[laneIndex(recipient, len(lanes))].outbox
 			}
 		}
@@ -3608,10 +3737,21 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 		} else {
 			logger.Default().Warn("artery: received Quarantined", "from", quar.From, "to", quar.To)
 		}
-		// Register the sender UID permanently so we also refuse future re-association from them.
-		if assoc.nodeMgr != nil {
-			assoc.nodeMgr.RegisterQuarantinedUID(quar.From)
-		}
+		// Tear down the association below, but do NOT register the
+		// sender's UID in the permanent quarantine registry. Pekko sends
+		// Quarantined for HARMLESS association-scoped events too —
+		// observed 2026-07-13 (showcase gate2fix2-v2): a boot-race
+		// handshake timeout led s4 to quarantine g3's UID with reason
+		// "Cluster member removed, new incarnation joined"
+		// (ClusterRemoteWatcher, harmless=true), after which s4 kept
+		// RE-HANDSHAKING to recover — but gekka's permanent reciprocal
+		// registration made handleHandshakeReq refuse every attempt,
+		// turning a transient event into a permanent transport partition
+		// between two Up members (RST loop, ask/echo dead, FD flagged,
+		// SBR downed the cluster). Pekko itself never blacklists the
+		// SENDER of a Quarantined message; the registry is reserved for
+		// gekka's OWN quarantine decisions (restart detection,
+		// system-message loss), which target stale incarnations.
 		assoc.mu.Lock()
 		assoc.state = QUARANTINED
 		closing := assoc.conn
@@ -3696,8 +3836,9 @@ func (assoc *GekkaAssociation) handleControlMessage(ctx context.Context, meta *A
 					remote := assoc.remote.Load()
 					assoc.mu.RUnlock()
 					logger.Default().Debug("artery: forwarding actorSelection cluster message", "manifest", innerManifest)
-					return assoc.nodeMgr.clusterMgr.HandleIncomingClusterMessage(
-						ctx, env.GetEnclosedMessage(), innerManifest, ToClusterUniqueAddress(remote), meta.Sender.GetPath())
+					return assoc.containClusterDispatchError(innerManifest,
+						assoc.nodeMgr.clusterMgr.HandleIncomingClusterMessage(
+							ctx, env.GetEnclosedMessage(), innerManifest, ToClusterUniqueAddress(remote), meta.Sender.GetPath()))
 				}
 
 				// Handle Identify (sid=16) — respond with ActorIdentity so Pekko's
@@ -3759,9 +3900,47 @@ func (assoc *GekkaAssociation) handleIdentify(meta *ArteryMetadata, env *gproto_
 	// Send ActorIdentity via the outbound association to Pekko.
 	// In Artery TCP, connections are unidirectional.
 	remoteAddr := assoc.remote.Load().GetAddress()
+	if remoteAddr.GetHostname() == "" || remoteAddr.GetPort() == 0 {
+		// Inbound association has not completed its handshake yet, so the
+		// peer's address is unknown — nowhere to send the reply. The
+		// proxy's next identify round (after the handshake lands) gets a
+		// normal reply.
+		logger.Default().Debug("artery: Identify before handshake — peer address unknown, dropping reply")
+		return
+	}
 	outAssoc, ok := assoc.nodeMgr.GetGekkaAssociationByHost(remoteAddr.GetHostname(), remoteAddr.GetPort())
 	if !ok {
-		logger.Default().Warn("artery: no outbound association for ActorIdentity reply")
+		// No outbound association yet — the peer identified us before we
+		// had a reason to dial it (typical for a freshly-Up node being
+		// probed by ClusterSingletonProxy). Pekko establishes outbound
+		// associations on demand for exactly this case; dropping the
+		// solicited reply instead forces the proxy through another full
+		// identify round. Dial on a separate goroutine (the read loop
+		// must not block on a TCP connect) and send once associated —
+		// SendWithSender buffers into assoc.pending until the handshake
+		// completes, so the reply flushes as soon as the lane is up.
+		logger.Default().Info("artery: dialing on demand for ActorIdentity reply",
+			"remote", remoteAddr.GetHostname(), "port", remoteAddr.GetPort())
+		nm := assoc.nodeMgr
+		go func() {
+			dialCtx, cancel := context.WithTimeout(context.Background(), nm.EffectiveHandshakeTimeout())
+			defer cancel()
+			dialed, err := nm.DialRemoteWithRestart(dialCtx, remoteAddr)
+			if err != nil {
+				logger.Default().Warn("artery: on-demand dial for ActorIdentity reply failed", "error", err)
+				return
+			}
+			ga, ok := dialed.(*GekkaAssociation)
+			if !ok {
+				logger.Default().Warn("artery: on-demand dial returned unexpected association type")
+				return
+			}
+			if err := ga.SendWithSender(senderPath, actorRefPath, identityBytes, MiscMessageSerializerID, "B"); err != nil {
+				logger.Default().Warn("artery: failed to send ActorIdentity", "error", err)
+				return
+			}
+			logger.Default().Debug("artery: sent ActorIdentity (on-demand dial)", "recipient", senderPath, "actorRef", actorRefPath)
+		}()
 		return
 	}
 
@@ -4335,16 +4514,17 @@ func (nm *NodeManager) GetOrCreateUDPAssociation(src *net.UDPAddr, udpH *UdpArte
 	}
 
 	assoc := &GekkaAssociation{
-		state:      INITIATED,
-		role:       INBOUND,
-		nodeMgr:    nm,
-		lastSeen:   time.Now(),
-		Handshake:  make(chan struct{}),
-		localUid:   nm.localUid,
-		outbox:     make(chan []byte, nm.EffectiveOutboundMessageQueueSize()),
-		streamId:   AeronStreamControl,
-		udpHandler: udpH,
-		udpDst:     src,
+		state:         INITIATED,
+		role:          INBOUND,
+		nodeMgr:       nm,
+		lastSeen:      time.Now(),
+		lastSendNanos: time.Now().UnixNano(),
+		Handshake:     make(chan struct{}),
+		localUid:      nm.localUid,
+		outbox:        make(chan []byte, nm.EffectiveOutboundMessageQueueSize()),
+		streamId:      AeronStreamControl,
+		udpHandler:    udpH,
+		udpDst:        src,
 	}
 	assoc.remote.Store(&gproto_remote.UniqueAddress{
 		Address: &gproto_remote.Address{

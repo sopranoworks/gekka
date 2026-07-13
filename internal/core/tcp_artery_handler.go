@@ -302,6 +302,7 @@ func SendArteryHeartbeat(assoc *GekkaAssociation) error {
 
 	select {
 	case assoc.outbox <- frame:
+		assoc.touchSendActivity()
 		return nil
 	default:
 		return fmt.Errorf("association outbox full")

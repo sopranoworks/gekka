@@ -150,8 +150,19 @@ func TestQuarantine_SendFrameEnqueued(t *testing.T) {
 }
 
 // TestQuarantine_ReceiveQuarantinedFrame verifies that an association which
-// receives a "Quarantined" control frame transitions to QUARANTINED state and
-// registers the sender UID in the permanent registry.
+// receives a "Quarantined" control frame transitions to QUARANTINED state
+// WITHOUT registering the sender's UID in the permanent registry.
+//
+// Pekko sends Quarantined for harmless association-scoped events too (e.g.
+// ClusterRemoteWatcher's "Cluster member removed, new incarnation joined"
+// after a boot-race handshake timeout) and recovers by re-handshaking with
+// the same UID. Permanently blacklisting the sender turned such transient
+// events into a permanent transport partition between two Up members
+// (observed 2026-07-13, showcase run gate2fix2-v2). The permanent registry
+// is reserved for gekka's OWN quarantine decisions (restart detection,
+// system-message loss), which target stale incarnations — see
+// TestReceivedQuarantined_DoesNotPermanentlyBlacklistSender for the
+// recovery-handshake half of this contract.
 func TestQuarantine_ReceiveQuarantinedFrame(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -222,12 +233,14 @@ func TestQuarantine_ReceiveQuarantinedFrame(t *testing.T) {
 	// Give the server goroutine time to process the frame.
 	time.Sleep(200 * time.Millisecond)
 
-	// Verify the UID is now in the permanent quarantine registry.
-	if !nm.IsQuarantined(remoteUID) {
-		t.Fatalf("expected UID %d to be quarantined after receiving Quarantined frame", remoteUID)
+	// The sender's UID must NOT be permanently blacklisted — a recovery
+	// re-handshake from the same (healthy) incarnation must stay possible.
+	if nm.IsQuarantined(remoteUID) {
+		t.Fatalf("UID %d must not be permanently quarantined by a received Quarantined frame", remoteUID)
 	}
 
-	// Verify HasQuarantinedAssociation reflects the state.
+	// The association itself is torn down: HasQuarantinedAssociation
+	// reflects the QUARANTINED state transition.
 	if !nm.HasQuarantinedAssociation() {
 		t.Fatal("expected HasQuarantinedAssociation() = true after Quarantined frame")
 	}

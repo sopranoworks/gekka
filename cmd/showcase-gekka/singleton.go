@@ -96,10 +96,20 @@ var allRoles = []string{
 type showcaseClient struct {
 	cluster   *gekka.Cluster
 	selfLabel string
+	// anchor is the local approximation of Gate 1 PASS (first observation
+	// of the full membership Up). Spec §5.4.2 measures SingletonWarmupGrace
+	// from that instant, and spec §4 excludes setup-phase sends from the
+	// strict window — see anchor.go.
+	anchor *steadyAnchor
 
-	mu           sync.Mutex
-	established  map[string]bool
-	warmupActive bool
+	mu sync.Mutex
+	// establishedAt records, per role, when the FIRST Pong arrived.
+	// Establishment is one-way for the lifetime of the run (§5.4.1); the
+	// timestamp lets the classifier distinguish a regression of a working
+	// singleton (ping sent after establishment) from an in-flight ping
+	// that raced the establishment (§5.4.1 "unresolved").
+	establishedAt map[string]time.Time
+	warmupActive  bool
 }
 
 // startClient registers the Ping/Pong manifests, builds one
@@ -113,17 +123,18 @@ type showcaseClient struct {
 //	established=false, warmup=false → log ERROR ("post-warmup, unresolved")
 //
 // success → set established[role]=true (and never reset)
-func startClient(cluster *gekka.Cluster, selfLabel string) {
+func startClient(cluster *gekka.Cluster, selfLabel string, anchor *steadyAnchor) {
 	// Ping/Pong registration with the gekka SerializationRegistry happens
 	// in main.go via the JacksonCborSerializer; no JSON-manifest fallback
 	// is needed because Pekko's jackson-cbor wire path handles both
 	// in-language and cross-language deliveries.
 
 	c := &showcaseClient{
-		cluster:      cluster,
-		selfLabel:    selfLabel,
-		established:  make(map[string]bool),
-		warmupActive: true,
+		cluster:       cluster,
+		selfLabel:     selfLabel,
+		anchor:        anchor,
+		establishedAt: make(map[string]time.Time),
+		warmupActive:  true,
 	}
 
 	// Build one proxy per role. The manager path mirrors how the Scala
@@ -147,18 +158,27 @@ func startClient(cluster *gekka.Cluster, selfLabel string) {
 	go c.tickLoop(proxies)
 }
 
-// warmupEnder waits the configured grace window, flips warmupActive=false,
-// and emits one ERROR per role that never produced a Pong during warmup.
+// warmupEnder waits for the steady-state anchor (spec §5.4.2: the grace is
+// "measured from Gate 1 PASS", NOT from actor start), then the configured
+// grace window, flips warmupActive=false, and emits one ERROR per role that
+// never produced a Pong during warmup. If the cluster never completes, the
+// warmup never ends — Gate 1 has already failed the run at that point.
 // The unestablished roles are snapshot under the lock to avoid racing with
-// concurrent doAsk goroutines updating established[].
+// concurrent doPing goroutines updating establishedAt[].
 func (c *showcaseClient) warmupEnder() {
+	for {
+		if _, ok := c.anchor.at(); ok {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 	time.Sleep(singletonWarmupGrace)
 
 	c.mu.Lock()
 	c.warmupActive = false
 	unestablished := make([]string, 0, len(allRoles))
 	for _, r := range allRoles {
-		if !c.established[r] {
+		if _, ok := c.establishedAt[r]; !ok {
 			unestablished = append(unestablished, r)
 		}
 	}
@@ -193,6 +213,7 @@ func (c *showcaseClient) tickLoop(proxies map[string]gcluster.ClusterSingletonPr
 // CurrentOldestPath + cluster.Ask so the temp sender path is wired up and
 // the singleton can reply via Sender().Tell(...).
 func (c *showcaseClient) doPing(role string, p gcluster.ClusterSingletonProxyInterface, seq int64) {
+	sentAt := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), singletonPingTimeout)
 	defer cancel()
 
@@ -201,14 +222,14 @@ func (c *showcaseClient) doPing(role string, p gcluster.ClusterSingletonProxyInt
 		// Singleton not yet elected for this role on the current oldest
 		// node. Treat as an unestablished-role outcome and let the
 		// post-warmup classifier decide whether to log it.
-		c.classifyUnresolved(role, seq, err)
+		c.classifyUnresolved(role, seq, sentAt, err)
 		return
 	}
 
 	ping := NewPing(seq, c.selfLabel)
 	reply, err := c.cluster.Ask(ctx, path, ping)
 	if err != nil {
-		c.classifyUnresolved(role, seq, err)
+		c.classifyUnresolved(role, seq, sentAt, err)
 		return
 	}
 
@@ -218,7 +239,9 @@ func (c *showcaseClient) doPing(role string, p gcluster.ClusterSingletonProxyInt
 	// replies arrive as raw bytes via the CBOR gap and surface as a
 	// raw *IncomingMessage with an unregistered manifest.
 	c.mu.Lock()
-	c.established[role] = true
+	if _, ok := c.establishedAt[role]; !ok {
+		c.establishedAt[role] = time.Now()
+	}
 	c.mu.Unlock()
 
 	if reply == nil {
@@ -250,29 +273,30 @@ func (c *showcaseClient) doPing(role string, p gcluster.ClusterSingletonProxyInt
 // classifyUnresolved applies the warm-up state machine to a failed Ask.
 // The decision is made under the same lock that warmupEnder uses so the
 // transition from warmupActive=true → false is consistent with the
-// established[] map snapshot it took.
-func (c *showcaseClient) classifyUnresolved(role string, seq int64, err error) {
+// establishedAt[] map snapshot it took. ERROR-worthiness follows
+// classifyPingTimeout (anchor.go): setup-phase sends are silent (§4),
+// regressions of an established role always ERROR (§5.4.2), unresolved
+// misses are silent only inside the grace window (§5.4.1/§5.4.2).
+func (c *showcaseClient) classifyUnresolved(role string, seq int64, sentAt time.Time, err error) {
 	c.mu.Lock()
-	established := c.established[role]
-	warmup := c.warmupActive
+	estAt, established := c.establishedAt[role]
+	warmupOver := !c.warmupActive
 	c.mu.Unlock()
 
-	switch {
-	case established:
+	if !classifyPingTimeout(sentAt, c.anchor, warmupOver, established, estAt) {
+		return
+	}
+	if established && sentAt.After(estAt) {
 		logger.Default().Error("SingletonClient: ping timed out",
 			"role", role,
 			"seq", seq,
 			"err", err.Error(),
 			"selfLabel", c.selfLabel)
-	case warmup:
-		// Silent during warmup grace per spec §5.4.2. The runner will
-		// learn about the miss via the post-warmup "never established"
-		// ERROR if the role never comes online.
-	default:
-		logger.Default().Error("SingletonClient: ping timed out (post-warmup, unresolved)",
-			"role", role,
-			"seq", seq,
-			"err", err.Error(),
-			"selfLabel", c.selfLabel)
+		return
 	}
+	logger.Default().Error("SingletonClient: ping timed out (post-warmup, unresolved)",
+		"role", role,
+		"seq", seq,
+		"err", err.Error(),
+		"selfLabel", c.selfLabel)
 }

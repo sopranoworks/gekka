@@ -82,6 +82,10 @@ type AskSenderActor struct {
 	cluster *gekka.Cluster
 	peers   []string // full pekko URIs (e.g. "pekko://ShowcaseCluster@127.0.0.1:2552")
 	origin  string   // self-address string used as Originator in envelopes
+	// anchor scopes ERROR accounting to the strict Gate-2 window (spec §4);
+	// asks issued before the local all-members-Up observation are
+	// setup-phase traffic and their timeouts must not ERROR. See anchor.go.
+	anchor *steadyAnchor
 
 	mu       sync.Mutex
 	nextSeq  int64
@@ -92,12 +96,13 @@ type AskSenderActor struct {
 
 // NewAskSenderActor constructs an AskSenderActor. The actor is inert until
 // StartTickers is invoked after registration.
-func NewAskSenderActor(cluster *gekka.Cluster, peers []string, origin string) *AskSenderActor {
+func NewAskSenderActor(cluster *gekka.Cluster, peers []string, origin string, anchor *steadyAnchor) *AskSenderActor {
 	return &AskSenderActor{
 		BaseActor: actor.NewBaseActor(),
 		cluster:   cluster,
 		peers:     peers,
 		origin:    origin,
+		anchor:    anchor,
 		stopCh:    make(chan struct{}),
 	}
 }
@@ -184,6 +189,14 @@ func (a *AskSenderActor) doAsk(seq int64, peer, kind, path string, env *AskEnvel
 	reply, err := a.cluster.Ask(ctx, path, env)
 	latency := time.Since(start)
 	if err != nil {
+		// Setup-phase asks (sent pre-anchor) fail silently — spec §4:
+		// the strict window begins at Gate 1 PASS; a peer that had not
+		// booted yet cannot fail the run.
+		if !a.anchor.countsForStrictWindow(start) {
+			logger.Default().Debug("AskSender: setup-phase ask miss (not counted)",
+				"peer", peer, "seq", seq, "payloadKind", kind)
+			return
+		}
 		logger.Default().Error("AskSender: ask timeout/error",
 			"peer", peer,
 			"seq", seq,
@@ -194,6 +207,11 @@ func (a *AskSenderActor) doAsk(seq int64, peer, kind, path string, env *AskEnvel
 	}
 
 	if reply == nil {
+		if !a.anchor.countsForStrictWindow(start) {
+			logger.Default().Debug("AskSender: setup-phase nil reply (not counted)",
+				"peer", peer, "seq", seq, "payloadKind", kind)
+			return
+		}
 		logger.Default().Error("AskSender: nil reply",
 			"peer", peer, "seq", seq, "payloadKind", kind)
 		return

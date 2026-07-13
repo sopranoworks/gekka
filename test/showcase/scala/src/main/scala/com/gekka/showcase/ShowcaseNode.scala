@@ -25,6 +25,12 @@ object ShowcaseNode {
       if (config.hasPath("showcase.peers"))
         config.getStringList("showcase.peers").asScala.toList
       else Nil
+
+    // Steady-state anchor (spec §4 / §5.4.2): traffic-actor ERROR
+    // accounting is scoped to the strict Gate-2 window, approximated
+    // per-node by the first local observation of the full membership Up.
+    SteadyAnchor.startWatch(system, peers.size + 1)
+
     if (peers.nonEmpty)
       system.actorOf(TellSenderActor.props(nodeLabel, peers), TellSenderActor.name)
 

@@ -146,8 +146,16 @@ func main() {
 		}
 	}
 
-	// Spawn the TellSenderActor only when at least one peer is configured.
+	// Steady-state anchor (spec §4 / §5.4.2): the traffic actors' ERROR
+	// accounting is scoped to the strict Gate-2 window, whose per-node
+	// approximation is the first local observation of the full expected
+	// membership Up. Traffic itself starts immediately (spec revision-2:
+	// "DO NOT delay or constrain FT1/2/3").
 	peers := parsePeers(*peersCSV)
+	anchor := &steadyAnchor{}
+	go watchAnchor(anchor, clusterUpCount(cluster), len(peers)+1, nil)
+
+	// Spawn the TellSenderActor only when at least one peer is configured.
 	if len(peers) > 0 {
 		self := cluster.SelfAddress()
 		origin := fmt.Sprintf("%s://%s@%s:%d",
@@ -155,7 +163,7 @@ func main() {
 		var sender *TellSenderActor
 		if _, err := cluster.System.ActorOf(gekka.Props{
 			New: func() actor.Actor {
-				sender = NewTellSenderActor(cluster, peers, origin)
+				sender = NewTellSenderActor(cluster, peers, origin, anchor)
 				return sender
 			},
 		}, "tellSender"); err != nil {
@@ -172,7 +180,7 @@ func main() {
 		var asker *AskSenderActor
 		if _, err := cluster.System.ActorOf(gekka.Props{
 			New: func() actor.Actor {
-				asker = NewAskSenderActor(cluster, peers, origin)
+				asker = NewAskSenderActor(cluster, peers, origin, anchor)
 				return asker
 			},
 		}, "askSender"); err != nil {
@@ -211,8 +219,10 @@ func main() {
 	}
 
 	// FT4 ClientActor: every node pings every singleton role on a 4s tick,
-	// with a 30s warmup grace that suppresses unestablished-role timeouts.
-	startClient(cluster, *nodeLabel)
+	// with a 30s warmup grace (anchored at the local all-members-Up
+	// observation per spec §5.4.2) that suppresses unestablished-role
+	// timeouts.
+	startClient(cluster, *nodeLabel, anchor)
 
 	fmt.Printf("--- SHOWCASE NODE READY: %s ---\n", *nodeLabel)
 	os.Stdout.Sync()

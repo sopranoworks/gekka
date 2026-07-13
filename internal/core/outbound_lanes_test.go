@@ -27,11 +27,23 @@ func dispatchHashRecipientItoa(i int) string { return strconv.Itoa(i) }
 // Artery preamble, and records (conn, observed-streamId) for assertions.
 // Subsequent bytes are drained but not parsed.
 type preambleAcceptingListener struct {
-	ln                 net.Listener
-	t                  *testing.T
-	mu                 sync.Mutex
-	accepted           []net.Conn
-	streams            []byte // observed streamId byte per accepted conn
+	ln       net.Listener
+	t        *testing.T
+	mu       sync.Mutex
+	accepted []net.Conn
+	streams  []byte // observed streamId byte per accepted conn
+	// allConns records every conn returned by Accept, appended
+	// synchronously in run() before its preamble-reading goroutine is even
+	// spawned — unlike accepted, which only gains an entry once that
+	// goroutine's io.ReadFull for the 5-byte preamble completes. Cleanup
+	// closes allConns, not accepted: a conn whose preamble hasn't been
+	// read yet (the client's handshake-writer goroutine simply hasn't
+	// been scheduled yet, which becomes far more likely under CI's CPU
+	// contention than in a quiet local run) would otherwise never be
+	// closed by Cleanup — its io.ReadFull, and the sync.WaitGroup.Wait
+	// waiting on it, block forever, since closing the listener itself has
+	// no effect on a connection Accept already returned.
+	allConns           []net.Conn
 	drainAfterPreamble bool
 	wg                 sync.WaitGroup
 }
@@ -48,10 +60,12 @@ func newPreambleAcceptingListener(t *testing.T) *preambleAcceptingListener {
 	t.Cleanup(func() {
 		_ = ln.Close()
 		pl.mu.Lock()
-		for _, c := range pl.accepted {
+		conns := make([]net.Conn, len(pl.allConns))
+		copy(conns, pl.allConns)
+		pl.mu.Unlock()
+		for _, c := range conns {
 			_ = c.Close()
 		}
-		pl.mu.Unlock()
 		pl.wg.Wait()
 	})
 	return pl
@@ -64,6 +78,9 @@ func (pl *preambleAcceptingListener) run() {
 		if err != nil {
 			return
 		}
+		pl.mu.Lock()
+		pl.allConns = append(pl.allConns, c)
+		pl.mu.Unlock()
 		pl.wg.Add(1)
 		go func(c net.Conn) {
 			defer pl.wg.Done()
@@ -290,6 +307,23 @@ func TestOutboundLanes_PerLaneHandshake(t *testing.T) {
 	if sib == nil {
 		t.Fatalf("ordinarySibling not set on control assoc")
 	}
+	// dialOrdinarySibling spawns startLaneWriter/runLaneReadLoop per lane
+	// with context.Background() (lanes are meant to outlive the caller's
+	// ctx in production, terminating only when QuarantinePeer or similar
+	// closes the lane). This test drives EnsureOrdinarySibling directly
+	// without ever going through that teardown path, so without this
+	// cleanup those goroutines — and their underlying TCP conns — would
+	// leak for the rest of the test binary's process lifetime. Mirrors the
+	// teardown TestOutboundLanes_QuarantineTearsDownAllLanes already uses
+	// for lane.conn; closing lane.outbox additionally is what actually
+	// lets startLaneWriter's select observe closure and return, since it
+	// never re-checks conn state on its own.
+	t.Cleanup(func() {
+		for _, lane := range sib.lanes {
+			_ = lane.conn.Close()
+			close(lane.outbox)
+		}
+	})
 	if got := len(sib.lanes); got != 3 {
 		t.Fatalf("sibling lanes len = %d, want 3", got)
 	}

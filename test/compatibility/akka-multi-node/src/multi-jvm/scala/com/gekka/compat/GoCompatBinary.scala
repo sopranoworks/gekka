@@ -12,9 +12,10 @@ import scala.sys.process._
 import scala.util.{Failure, Success, Try}
 
 /**
- * Shared logic for locating — or, if entirely absent, building — the
- * `gekka-compat-test` Go binary used by `FourNodeClusterSpec`,
- * `FiveNodeClusterSpec`, and `GekkaCompatSpec`.
+ * Shared logic for locating — or, if entirely absent, building — the Go
+ * compat-test binaries: `gekka-compat-test` (used by `FourNodeClusterSpec`,
+ * `FiveNodeClusterSpec`, and `GekkaCompatSpec`) and
+ * `gekka-aeron-compat-test` (used by `AeronClusterSpec`).
  *
  * Building on demand (rather than only ever checking for a pre-built
  * artifact) mirrors this project's own precedent for the scala-server jar:
@@ -38,10 +39,10 @@ object GoCompatBinary {
   final case class BuildFailed(command: String, output: String) extends Result
   final case class NotFoundNoSource(searchedFrom: String) extends Result
 
-  private val relativeCandidates = Seq(
-    "../../../bin/gekka-compat-test",
-    "../../bin/gekka-compat-test",
-    "gekka-compat-test",
+  private def relativeCandidates(binaryName: String) = Seq(
+    s"../../../bin/$binaryName",
+    s"../../bin/$binaryName",
+    binaryName,
   )
 
   private def isUsable(p: String): Boolean = {
@@ -72,26 +73,43 @@ object GoCompatBinary {
    * build it from source (`test/compat-bin/gekka-compat-test`) rather than
    * only reporting it missing.
    */
-  def locate(envVarName: String = "GEKKA_COMPAT_TEST_BIN"): Result = {
-    val candidates = (sys.env.getOrElse(envVarName, "") +: relativeCandidates).filter(_.nonEmpty)
-    candidates.find(isUsable) match {
-      case Some(p) => Found(p)
-      case None    => attemptBuild()
-    }
-  }
+  def locate(envVarName: String = "GEKKA_COMPAT_TEST_BIN"): Result =
+    locateOrBuild("gekka-compat-test",
+      sys.env.getOrElse(envVarName, "") +: relativeCandidates("gekka-compat-test"))
 
-  private def attemptBuild(): Result = {
+  /**
+   * Locate a usable `gekka-aeron-compat-test` binary for `AeronClusterSpec`.
+   * Preserves that spec's historical candidate order — the dedicated Aeron
+   * binary first, then `gekka-compat-test` (which retains an `aeron-udp`
+   * transport mode) as a fallback — and, when none are usable, builds the
+   * dedicated Aeron binary from `test/compat-bin/gekka-aeron-compat-test`.
+   */
+  def locateAeron(): Result =
+    locateOrBuild("gekka-aeron-compat-test",
+      Seq(
+        sys.env.getOrElse("GEKKA_AERON_COMPAT_TEST_BIN", ""),
+        sys.env.getOrElse("GEKKA_COMPAT_TEST_BIN", ""),
+      ) ++ relativeCandidates("gekka-aeron-compat-test")
+        ++ relativeCandidates("gekka-compat-test"))
+
+  private def locateOrBuild(binaryName: String, candidates: Seq[String]): Result =
+    candidates.filter(_.nonEmpty).find(isUsable) match {
+      case Some(p) => Found(p)
+      case None    => attemptBuild(binaryName)
+    }
+
+  private def attemptBuild(binaryName: String): Result = {
     findRepoRoot() match {
       case None =>
         NotFoundNoSource(new java.io.File(".").getCanonicalPath)
       case Some(repoRoot) =>
-        val srcDir = new java.io.File(repoRoot, "test/compat-bin/gekka-compat-test")
+        val srcDir = new java.io.File(repoRoot, s"test/compat-bin/$binaryName")
         if (!srcDir.isDirectory) {
           NotFoundNoSource(srcDir.getPath)
         } else {
-          val target = new java.io.File(repoRoot, "test/compatibility/akka-multi-node/bin/gekka-compat-test")
+          val target = new java.io.File(repoRoot, s"test/compatibility/akka-multi-node/bin/$binaryName")
           target.getParentFile.mkdirs()
-          val cmd = Seq("go", "build", "-o", target.getAbsolutePath, "./test/compat-bin/gekka-compat-test")
+          val cmd = Seq("go", "build", "-o", target.getAbsolutePath, s"./test/compat-bin/$binaryName")
           val commandDescription = cmd.mkString(" ") + " (cwd=" + repoRoot.getPath + ")"
           val output = new ArrayBuffer[String]()
           val logger = ProcessLogger(l => output += l, l => output += l)

@@ -24,9 +24,13 @@
  * Run with:  sbt multi-jvm:test
  *   OR:      sbt "multi-jvm:testOnly com.gekka.compat.AeronSystemMultiJvmNode1"
  *
- * Required binaries (build first):
+ * The Go binary is located via GoCompatBinary.locateAeron(), which builds
+ * `gekka-aeron-compat-test` on demand from
+ * `test/compat-bin/gekka-aeron-compat-test` when no usable binary is found
+ * (same mechanism the TCP specs use for gekka-compat-test). To use a
+ * specific pre-built binary instead:
  *   go build -o bin/gekka-aeron-compat-test ./test/compat-bin/gekka-aeron-compat-test
- *   go build -o bin/gekka-compat-test        ./test/compat-bin/gekka-compat-test
+ *   or set GEKKA_AERON_COMPAT_TEST_BIN.
  */
 package com.gekka.compat
 
@@ -129,29 +133,25 @@ abstract class AeronSystem
 
   // ── Helpers ─────────────────────────────────────────────────────────────
 
-  /** Locate the Go Aeron-UDP compat-test binary. */
-  private def findGoBinary(): String = {
-    val candidates = Seq(
-      sys.env.getOrElse("GEKKA_AERON_COMPAT_TEST_BIN", ""),
-      sys.env.getOrElse("GEKKA_COMPAT_TEST_BIN", ""),
-      "../../../bin/gekka-aeron-compat-test",
-      "../../bin/gekka-aeron-compat-test",
-      "../../../bin/gekka-compat-test",
-      "../../bin/gekka-compat-test",
-      "gekka-aeron-compat-test",
-      "gekka-compat-test",
-    ).filter(_.nonEmpty)
-
-    candidates.find { p =>
-      val f = new java.io.File(p)
-      f.canExecute || (!f.isAbsolute && Try(s"which $p".!!).isSuccess)
-    }.getOrElse {
+  /** Locate the Go Aeron-UDP compat-test binary — see GoCompatBinary for
+   *  the search order and on-demand build behavior. A genuine `go build`
+   *  compile error is surfaced distinctly from the binary simply being
+   *  absent with no source to build.
+   */
+  private def findGoBinary(): String = GoCompatBinary.locateAeron() match {
+    case GoCompatBinary.Found(p) => p
+    case GoCompatBinary.BuildFailed(command, output) =>
       fail(
-        "gekka-aeron-compat-test binary not found. " +
-          "Build with: go build -o bin/gekka-aeron-compat-test ./test/compat-bin/gekka-aeron-compat-test  " +
+        s"go build failed for gekka-aeron-compat-test — this is a genuine Go " +
+          s"compile error, not a missing binary.\nCommand: $command\n\n$output"
+      )
+    case GoCompatBinary.NotFoundNoSource(searchedFrom) =>
+      fail(
+        s"gekka-aeron-compat-test binary not found, and its source directory " +
+          s"could not be located (searched from $searchedFrom). " +
+          "Build it with:  go build -o bin/gekka-aeron-compat-test ./test/compat-bin/gekka-aeron-compat-test  " +
           "or set GEKKA_AERON_COMPAT_TEST_BIN."
       )
-    }
   }
 
   // ── Test cases ───────────────────────────────────────────────────────────

@@ -364,7 +364,11 @@ func TestContextAsk_HALandDave(t *testing.T) {
 		},
 	}
 	hal.SetSelf(halRef_mock)
-	actor.Start(hal)
+	// The mock Self drives Receive synchronously on the caller's goroutine, so
+	// initialize with a direct PreStart rather than actor.Start — Start would
+	// spawn an actor goroutine that runs PreStart concurrently with the
+	// mock-driven Receive, racing the typed context's timer state.
+	hal.PreStart()
 	halRef := ToTyped[halRequest](halRef_mock)
 
 	// Spawn Dave
@@ -377,8 +381,9 @@ func TestContextAsk_HALandDave(t *testing.T) {
 		},
 	}
 	dave.SetSelf(daveRef_mock)
-	dave.PreStart() // Initialize timers
-	actor.Start(dave)
+	dave.PreStart() // Initialize timers (no actor.Start: see hal above — the
+	// mock Self drives Receive directly, so Start would only spawn a goroutine
+	// re-running PreStart concurrently and racing the typed context state).
 
 	// Send command to Dave via mock ref to ensure goroutine safety
 	daveRef_mock.Tell(daveCommand{})

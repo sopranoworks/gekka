@@ -22,12 +22,20 @@ import (
 func TestMergeHub_SingleProducer(t *testing.T) {
 	sink, src := stream.NewMergeHub[int](16)
 
-	var got []int
-	var wg sync.WaitGroup
-	wg.Add(1)
+	// got is written by the consumer goroutine's Foreach and read by this test
+	// goroutine after the drain; the hub source has no exposed completion
+	// signal to join on, so guard the slice with a mutex (same pattern as
+	// TestMergeHub_MultipleProducers) rather than an unsynchronized read.
+	var (
+		mu  sync.Mutex
+		got []int
+	)
 	go func() {
-		defer wg.Done()
-		graph := src.To(stream.Foreach(func(n int) { got = append(got, n) }))
+		graph := src.To(stream.Foreach(func(n int) {
+			mu.Lock()
+			got = append(got, n)
+			mu.Unlock()
+		}))
 		if _, err := graph.Run(stream.SyncMaterializer{}); err != nil {
 			t.Errorf("consumer error: %v", err)
 		}
@@ -46,6 +54,9 @@ func TestMergeHub_SingleProducer(t *testing.T) {
 	// instead we wait a moment for the consumer to drain.
 	time.Sleep(20 * time.Millisecond)
 
+	mu.Lock()
+	got = append([]int(nil), got...)
+	mu.Unlock()
 	sort.Ints(got)
 	want := []int{1, 2, 3, 4, 5}
 	if len(got) != len(want) {

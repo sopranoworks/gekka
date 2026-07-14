@@ -56,6 +56,14 @@ type MailboxCloser interface {
 	CloseMailbox()
 }
 
+// MailboxClosedReporter is an optional interface letting the Tell path ask
+// whether an actor's mailbox has been closed. Used to attribute a Send that
+// returned false to "mailbox-closed" rather than "mailbox-full" now that a
+// closed mailbox no longer signals itself by panicking. BaseActor implements it.
+type MailboxClosedReporter interface {
+	MailboxClosed() bool
+}
+
 // NewBoundedMailbox returns a MailboxFactory for a capacity-limited mailbox.
 //
 //   - capacity: maximum number of messages buffered before the drop strategy kicks in.

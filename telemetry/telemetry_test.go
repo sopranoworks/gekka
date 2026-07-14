@@ -294,3 +294,52 @@ type fakeRef struct{ path string }
 
 func (r *fakeRef) Tell(_ any, _ ...actor.Ref) {}
 func (r *fakeRef) Path() string               { return r.path }
+
+// TestGlobalProvider_ConcurrentSetAndGet is a regression test for the
+// unsynchronized process-global provider data race: SetProvider wrote a
+// plain package variable that Global/GetTracer/GetMeter read without any
+// synchronization, so a goroutine installing a provider (e.g. while
+// constructing an ActorSystem) raced every actor resolving its tracer/meter.
+// It reproduces the exact shape — concurrent writers and readers of the
+// global — and must run clean under `go test -race`. Against the pre-fix
+// code (a bare `var global Provider`) the race detector fails this test;
+// with the atomic.Pointer it passes.
+func TestGlobalProvider_ConcurrentSetAndGet(t *testing.T) {
+	restore := telemetry.Global()
+	defer telemetry.SetProvider(restore)
+
+	const goroutines = 8
+	const iterations = 500
+	var wg sync.WaitGroup
+
+	// Writers: repeatedly install providers (mix of concrete types, exercising
+	// the varying-dynamic-type path atomic.Value would reject).
+	for w := 0; w < goroutines; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			for i := 0; i < iterations; i++ {
+				if (w+i)%2 == 0 {
+					telemetry.SetProvider(&spyProvider{tracer: &spyTracer{}})
+				} else {
+					telemetry.SetProvider(telemetry.NoopProvider{})
+				}
+			}
+		}(w)
+	}
+
+	// Readers: repeatedly resolve through every accessor.
+	for r := 0; r < goroutines; r++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < iterations; i++ {
+				_ = telemetry.Global()
+				_ = telemetry.GetTracer("scope")
+				_ = telemetry.GetMeter("scope")
+			}
+		}()
+	}
+
+	wg.Wait()
+}

@@ -21,7 +21,10 @@
 // imported.
 package telemetry
 
-import "context"
+import (
+	"context"
+	"sync/atomic"
+)
 
 // ── Provider ─────────────────────────────────────────────────────────────────
 
@@ -131,32 +134,52 @@ func BoolAttr(key string, value bool) Attribute { return Attribute{Key: key, Val
 
 // ── Global provider ───────────────────────────────────────────────────────────
 
-var global Provider = NoopProvider{}
+// global holds the process-wide Provider behind an atomic pointer so that
+// SetProvider (writer) and the Global/GetTracer/GetMeter accessors (readers)
+// are safe under concurrent access — e.g. one goroutine constructing an
+// ActorSystem (which calls SetProvider) while another's actors resolve their
+// tracer via GetTracer. A *Provider is stored rather than the interface value
+// directly because the concrete provider type varies (NoopProvider vs an
+// OTEL-backed provider) and atomic.Value forbids inconsistently-typed stores;
+// swapping a pointer to the interface has no such restriction. Reads are
+// lock-free, which matters because the accessors are on the per-operation
+// tracer/meter lookup hot path.
+var global atomic.Pointer[Provider]
+
+func init() {
+	var p Provider = NoopProvider{}
+	global.Store(&p)
+}
 
 // SetProvider installs p as the process-wide telemetry provider.
 //
-// Call this once during application initialisation, before any actors are
-// started. SetProvider is not goroutine-safe; do not call it concurrently
-// with actor operations.
+// Typically called once during application initialisation before any actors
+// are started, but SetProvider is goroutine-safe and may be called
+// concurrently with actor operations and with other SetProvider calls.
 func SetProvider(p Provider) {
 	if p == nil {
 		p = NoopProvider{}
 	}
-	global = p
+	global.Store(&p)
 }
 
 // Global returns the current process-wide Provider.
 // When no provider has been set, this returns a NoopProvider.
-func Global() Provider { return global }
+func Global() Provider {
+	if pp := global.Load(); pp != nil {
+		return *pp
+	}
+	return NoopProvider{}
+}
 
 // GetTracer is a convenience wrapper that returns a Tracer from the global
 // provider for the given instrumentation scope name.
 func GetTracer(instrumentationName string) Tracer {
-	return global.Tracer(instrumentationName)
+	return Global().Tracer(instrumentationName)
 }
 
 // GetMeter is a convenience wrapper that returns a Meter from the global
 // provider for the given instrumentation scope name.
 func GetMeter(instrumentationName string) Meter {
-	return global.Meter(instrumentationName)
+	return Global().Meter(instrumentationName)
 }

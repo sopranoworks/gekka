@@ -9,6 +9,7 @@
 package actor
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -46,8 +47,11 @@ func TestClassicFSM_Lifecycle(t *testing.T) {
 	// Mock environment
 	f.SetSelf(&FunctionalMockRef{PathURI: "/user/fsm", Handler: func(m any) { f.Receive(m) }})
 	InjectSystem(f, &ScatterGatherTestSystem{T: t})
-	f.PreStart() // Manual call for mock test
-	Start(f)
+	// Manual PreStart initializes the FSM. Do NOT also call Start(f): Start
+	// spawns an actor goroutine that runs PreStart a second time concurrently
+	// (re-creating f.timers), and the mock Self drives Receive directly rather
+	// than through Start's mailbox, so Start only introduces a data race here.
+	f.PreStart()
 
 	assert.Equal(t, "Locked", f.currentState)
 	assert.Equal(t, 0, f.stateData)
@@ -89,20 +93,38 @@ func TestClassicFSM_Timeout(t *testing.T) {
 		return f.Stay().Build()
 	})
 
+	// The ForMax state-timeout timer delivers StateTimeout via this mock Self
+	// on a time.AfterFunc goroutine. In production Self is a real actor Ref
+	// whose mailbox serializes delivery onto the single actor goroutine; the
+	// mock invokes Receive synchronously, so guard it with mu and take the
+	// same lock around the test goroutine's Receive/currentState access to
+	// restore that single-writer serialization.
+	var mu sync.Mutex
 	f.SetSelf(&FunctionalMockRef{PathURI: "/user/fsm", Handler: func(m any) {
+		mu.Lock()
+		defer mu.Unlock()
 		f.Receive(m)
 	}})
 	InjectSystem(f, &ScatterGatherTestSystem{T: t})
-	f.PreStart() // Manual call for mock test
-	Start(f)
+	// Manual PreStart creates the FSM timer scheduler. Note: do NOT also call
+	// Start(f) — Start spawns an actor goroutine that runs PreStart a second
+	// time, concurrently re-creating f.timers; the mock Self drives Receive
+	// directly and does not use Start's mailbox, so Start is pure contention.
+	f.PreStart()
 
+	mu.Lock()
 	f.Receive("go-to-b")
-	assert.Equal(t, "StateB", f.currentState)
+	state := f.currentState
+	mu.Unlock()
+	assert.Equal(t, "StateB", state)
 
 	select {
 	case msg := <-received:
 		assert.Equal(t, "timeout", msg)
-		assert.Equal(t, "StateA", f.currentState)
+		mu.Lock()
+		state := f.currentState
+		mu.Unlock()
+		assert.Equal(t, "StateA", state)
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("Timeout message not received")
 	}

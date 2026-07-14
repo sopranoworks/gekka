@@ -129,7 +129,13 @@ func (r ActorRef) Tell(msg any, sender ...actor.Ref) {
 					}
 				}()
 				if !ms.Send(env) {
+					// Send now returns false (rather than panicking on a closed
+					// channel) for both a saturated and a closed mailbox, so
+					// consult the actor to tell the two apart.
 					sendCause = "mailbox-full"
+					if mc, ok := r.local.(actor.MailboxClosedReporter); ok && mc.MailboxClosed() {
+						sendCause = "mailbox-closed"
+					}
 				}
 			}()
 		} else {

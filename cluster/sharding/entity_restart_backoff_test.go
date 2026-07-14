@@ -40,7 +40,11 @@ func TestShard_EntityRestartBackoff_RespawnsAfterDelay(t *testing.T) {
 		EntityRestartBackoff: 60 * time.Millisecond,
 	}
 	shard, mctx := newTestShard(t, "TestType", "shard-0", settings)
-	shard.SetSelf(&shardSelfRef{path: "/user/TestRegion/shard-0", shard: shard})
+	// The backoff timer fires self.Tell on a time.AfterFunc goroutine, so all
+	// reads of shard/context state after the termination that arms it go
+	// through self's locked accessors (see shardSelfRef).
+	self := &shardSelfRef{path: "/user/TestRegion/shard-0", shard: shard}
+	shard.SetSelf(self)
 	shard.PreStart()
 
 	// Spawn an entity by delivering an envelope.
@@ -53,12 +57,12 @@ func TestShard_EntityRestartBackoff_RespawnsAfterDelay(t *testing.T) {
 		t.Fatal("setup: entity ref not stored")
 	}
 
-	// Simulate unexpected entity termination.
+	// Simulate unexpected entity termination (arms the backoff timer).
 	shard.Receive(fakeTerminated{ref: entity})
 
 	// Entity must be removed from the in-memory map immediately so subsequent
 	// envelopes resolve the restart-pending state, not a stale ref.
-	if _, ok := shard.entities["e1"]; ok {
+	if self.entityAlive("e1") {
 		t.Fatal("entity should be removed from in-memory map immediately after termination")
 	}
 
@@ -73,20 +77,20 @@ func TestShard_EntityRestartBackoff_RespawnsAfterDelay(t *testing.T) {
 	// Wait for the backoff plus a small slack and verify the entity respawned.
 	deadline := time.Now().Add(500 * time.Millisecond)
 	for time.Now().Before(deadline) {
-		if _, ok := shard.entities["e1"]; ok {
+		if self.entityAlive("e1") {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if _, ok := shard.entities["e1"]; !ok {
+	if !self.entityAlive("e1") {
 		t.Fatalf("entity-restart-backoff: entity did not respawn after %v (created=%v)",
-			settings.EntityRestartBackoff, mctx.created)
+			settings.EntityRestartBackoff, self.createdCopy(mctx))
 	}
 
 	// Created list must show the restart spawn.
-	if got := len(mctx.created); got < 2 {
+	if got := self.createdLen(mctx); got < 2 {
 		t.Errorf("expected at least 2 spawns (initial + restart), got %d (created=%v)",
-			got, mctx.created)
+			got, self.createdCopy(mctx))
 	}
 }
 
@@ -98,21 +102,26 @@ func TestShard_EntityRestartBackoff_RememberOffRemovesAsBefore(t *testing.T) {
 		EntityRestartBackoff: 30 * time.Millisecond,
 	}
 	shard, mctx := newTestShard(t, "TestType", "shard-0", settings)
-	shard.SetSelf(&shardSelfRef{path: "/user/TestRegion/shard-0", shard: shard})
+	// A backoff timer is still armed (EntityRestartBackoff>0); with
+	// RememberEntities off its respawn is a no-op, but it still fires
+	// self.Tell on a timer goroutine, so read Shard/context state through
+	// self's locked accessors.
+	self := &shardSelfRef{path: "/user/TestRegion/shard-0", shard: shard}
+	shard.SetSelf(self)
 
 	sendEnvelope(shard, "e1", map[string]string{"k": "v"})
 	entity := shard.entities["e1"]
 
 	shard.Receive(fakeTerminated{ref: entity})
-	if _, ok := shard.entities["e1"]; ok {
+	if self.entityAlive("e1") {
 		t.Fatal("entity must be removed from in-memory map after termination")
 	}
 	time.Sleep(80 * time.Millisecond)
-	if _, ok := shard.entities["e1"]; ok {
+	if self.entityAlive("e1") {
 		t.Fatal("entity must NOT respawn when RememberEntities is off")
 	}
 	// Only the initial spawn — no restart.
-	if got, want := len(mctx.created), 1; got != want {
+	if got, want := self.createdLen(mctx), 1; got != want {
 		t.Errorf("expected 1 spawn (no restart with RememberEntities=off), got %d", got)
 	}
 }
@@ -139,7 +148,8 @@ func TestShard_EntityRestartBackoff_SpacingMeasured(t *testing.T) {
 		EntityRestartBackoff: 70 * time.Millisecond,
 	}
 	shard, _ := newTestShard(t, "TestType", "shard-0", settings)
-	shard.SetSelf(&shardSelfRef{path: "/user/TestRegion/shard-0", shard: shard})
+	self := &shardSelfRef{path: "/user/TestRegion/shard-0", shard: shard}
+	shard.SetSelf(self)
 	shard.PreStart()
 
 	sendEnvelope(shard, "e1", map[string]string{"k": "v"})
@@ -148,11 +158,12 @@ func TestShard_EntityRestartBackoff_SpacingMeasured(t *testing.T) {
 	terminationTime := time.Now()
 	shard.Receive(fakeTerminated{ref: entity})
 
-	// Wait for respawn.
+	// Wait for respawn (the backoff timer fires self.Tell on a timer
+	// goroutine, so poll through self's locked accessor).
 	deadline := time.Now().Add(500 * time.Millisecond)
 	var respawnTime time.Time
 	for time.Now().Before(deadline) {
-		if _, ok := shard.entities["e1"]; ok {
+		if self.entityAlive("e1") {
 			respawnTime = time.Now()
 			break
 		}

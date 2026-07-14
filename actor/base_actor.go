@@ -79,6 +79,8 @@ type BaseActor struct {
 	systemCloseOnce    sync.Once       // guards close(systemMailbox)
 	mbSend             func(any) bool  // non-nil when a custom mailbox is installed
 	mbClose            func()          // non-nil when a custom mailbox needs special teardown
+	mbMu               sync.RWMutex    // serializes user-mailbox Send against CloseMailbox
+	mbClosed           bool            // true once CloseMailbox has run; guarded by mbMu
 	currentSender      Ref             // set for the duration of each Receive call; nil otherwise
 	currentCtx         context.Context // trace context for the current message; nil outside Receive
 	selfRef            Ref             // this actor's own reference, injected by SpawnActor/ActorOf
@@ -331,6 +333,20 @@ func (b *BaseActor) initMailbox() {
 //
 // Returns true if the message was accepted, false if it was dropped.
 func (b *BaseActor) Send(msg any) bool {
+	// Hold the read lock across the enqueue so a concurrent CloseMailbox (which
+	// takes the write lock before closing the channel) cannot close the mailbox
+	// mid-send — that would data-race the field and, for the default channel
+	// mailbox, panic with "send on closed channel". A send that loses the race
+	// to close returns false (the message is dropped / dead-lettered), which is
+	// the correct actor-model outcome for delivery to a stopped actor. Multiple
+	// producers still send concurrently (read lock); only close is exclusive.
+	// The non-blocking default-channel send and the async custom mbSend do no
+	// nested Send, so the read lock is never re-entered while a writer waits.
+	b.mbMu.RLock()
+	defer b.mbMu.RUnlock()
+	if b.mbClosed {
+		return false
+	}
 	if b.mbSend != nil {
 		return b.mbSend(msg)
 	}
@@ -355,11 +371,21 @@ func (b *BaseActor) CloseMailbox() {
 	// callback from racing with the mailbox close (which would cause a
 	// "send on closed channel" panic when the timer Tells ReceiveTimeout).
 	b.CancelReceiveTimeout()
+	// Take the write lock so an in-flight Send finishes (or observes mbClosed)
+	// before the channel is closed — see Send. Idempotent: a second
+	// CloseMailbox is a no-op on the user mailbox.
+	b.mbMu.Lock()
+	if b.mbClosed {
+		b.mbMu.Unlock()
+		return
+	}
+	b.mbClosed = true
 	if b.mbClose != nil {
 		b.mbClose()
 	} else {
 		close(b.mailbox)
 	}
+	b.mbMu.Unlock()
 	b.closeSystemMailbox()
 }
 
@@ -372,6 +398,17 @@ func (b *BaseActor) closeSystemMailbox() {
 		return
 	}
 	b.systemCloseOnce.Do(func() { close(b.systemMailbox) })
+}
+
+// MailboxClosed reports whether CloseMailbox has run. The Tell path uses this
+// to attribute a failed Send: now that Send returns false for a closed mailbox
+// instead of panicking on a closed channel (which the send-vs-close lock
+// prevents), the caller can no longer rely on a recovered panic to tell
+// "mailbox-closed" apart from "mailbox-full", so it queries this instead.
+func (b *BaseActor) MailboxClosed() bool {
+	b.mbMu.RLock()
+	defer b.mbMu.RUnlock()
+	return b.mbClosed
 }
 
 // baseActor returns the receiver's *BaseActor pointer. Used by InjectMailbox

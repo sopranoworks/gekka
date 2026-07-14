@@ -20,6 +20,7 @@ package sharding
 
 import (
 	"sort"
+	"sync"
 	"testing"
 	"time"
 
@@ -158,14 +159,53 @@ func TestEntityRecoveryStrategy_ConstantWithUnsetBatchUsesPekkoDefault(t *testin
 // Receive method. Used so that time.AfterFunc-driven entityRecoveryTickMsg
 // messages actually fire the recovery handler in tests (the default mockRef
 // only captures messages without invoking Receive).
+//
+// In production a Shard's Self is a real actor Ref: timer-driven Tells enqueue
+// to the mailbox and are processed one-at-a-time on the actor's own goroutine,
+// serialized with each other and with nothing else touching Shard state. This
+// mock deliberately invokes Receive synchronously, so a time.AfterFunc timer
+// fires it on the timer goroutine — concurrent with the test goroutine reading
+// Shard/context state. mu restores the production single-writer invariant:
+// Tell holds it for the whole Receive, and the test reads Shard/context state
+// through the locked accessors below, so a full message-processing step is
+// mutually exclusive with each assertion — exactly what the real mailbox
+// guarantees.
 type shardSelfRef struct {
 	path  string
 	shard *Shard
+	mu    sync.Mutex
 }
 
 func (r *shardSelfRef) Path() string { return r.path }
 func (r *shardSelfRef) Tell(msg any, _ ...actor.Ref) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.shard.Receive(msg)
+}
+
+// entityAlive reports whether the shard currently holds a live entity for id,
+// read under the same lock that serializes timer-driven Receive calls.
+func (r *shardSelfRef) entityAlive(id EntityId) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.shard.entities[id]
+	return ok
+}
+
+// createdLen returns len(m.created) under the Receive lock. m.created is
+// appended by entityCreator during a (possibly timer-driven) Receive, so it
+// must be read under the same lock.
+func (r *shardSelfRef) createdLen(m *mockActorContext) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(m.created)
+}
+
+// createdCopy returns a snapshot of m.created under the Receive lock.
+func (r *shardSelfRef) createdCopy(m *mockActorContext) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), m.created...)
 }
 
 // TestEntityRecoveryStrategy_ConstantPaceMeasured verifies frequency × batch
@@ -184,24 +224,25 @@ func TestEntityRecoveryStrategy_ConstantPaceMeasured(t *testing.T) {
 	}
 	shard, mctx := newTestShard(t, "TestType", "shard-0", settings)
 	// Replace the capture-only Self with one that routes ticks back into Receive.
-	shard.SetSelf(&shardSelfRef{path: "/user/TestRegion/shard-0", shard: shard})
+	self := &shardSelfRef{path: "/user/TestRegion/shard-0", shard: shard}
+	shard.SetSelf(self)
 
 	start := time.Now()
 	shard.PreStart()
 
 	// First batch must be present immediately.
-	if got, want := len(mctx.created), 2; got != want {
+	if got, want := self.createdLen(mctx), 2; got != want {
 		t.Fatalf("first batch (sync): spawned %d, want %d", got, want)
 	}
 
 	// Wait for full drain — three batches × 50ms; first sync, then 2 ticks → ≥100ms.
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		if len(mctx.created) >= 6 {
+		if self.createdLen(mctx) >= 6 {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for all 6 entities to spawn (got %d)", len(mctx.created))
+			t.Fatalf("timed out waiting for all 6 entities to spawn (got %d)", self.createdLen(mctx))
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -210,7 +251,7 @@ func TestEntityRecoveryStrategy_ConstantPaceMeasured(t *testing.T) {
 	if elapsed < 95*time.Millisecond {
 		t.Errorf("constant-rate paced too fast: elapsed=%v, want ≥100ms (frequency × (batches-1))", elapsed)
 	}
-	if got := len(mctx.created); got != 6 {
+	if got := self.createdLen(mctx); got != 6 {
 		t.Errorf("final spawned count = %d, want 6", got)
 	}
 }

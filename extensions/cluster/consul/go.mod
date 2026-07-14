@@ -3,7 +3,7 @@ module github.com/sopranoworks/gekka-extensions-cluster-consul
 go 1.26.1
 
 require (
-	github.com/sopranoworks/gekka v0.14.0-dev
+	github.com/sopranoworks/gekka v1.0.0-rc4
 	github.com/stretchr/testify v1.11.1
 )
 

@@ -4,7 +4,7 @@ go 1.26.1
 
 require (
 	github.com/segmentio/kafka-go v0.4.47
-	github.com/sopranoworks/gekka v0.0.0
+	github.com/sopranoworks/gekka v1.0.0-rc4
 	github.com/stretchr/testify v1.11.1
 )
 

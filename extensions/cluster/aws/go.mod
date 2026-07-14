@@ -6,7 +6,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.41.5
 	github.com/aws/aws-sdk-go-v2/config v1.32.14
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.214.0
-	github.com/sopranoworks/gekka v0.14.0-dev
+	github.com/sopranoworks/gekka v1.0.0-rc4
 	github.com/stretchr/testify v1.11.1
 )
 

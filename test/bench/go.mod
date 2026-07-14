@@ -5,8 +5,9 @@ go 1.26.1
 require (
 	cloud.google.com/go/spanner v1.88.0
 	github.com/jackc/pgx/v5 v5.8.0
+	github.com/moby/moby/client v0.4.0
 	github.com/redis/go-redis/v9 v9.17.3
-	github.com/sopranoworks/gekka v0.14.0-dev
+	github.com/sopranoworks/gekka v1.0.0-rc4
 	github.com/sopranoworks/gekka-extensions-persistence-redis v0.0.0
 	github.com/sopranoworks/gekka-extensions-persistence-spanner v0.0.0
 	github.com/testcontainers/testcontainers-go v0.42.0
@@ -67,7 +68,6 @@ require (
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/go-archive v0.2.0 // indirect
 	github.com/moby/moby/api v1.54.1 // indirect
-	github.com/moby/moby/client v0.4.0 // indirect
 	github.com/moby/patternmatcher v0.6.1 // indirect
 	github.com/moby/sys/sequential v0.6.0 // indirect
 	github.com/moby/sys/user v0.4.0 // indirect
@@ -86,6 +86,7 @@ require (
 	github.com/tklauser/go-sysconf v0.3.16 // indirect
 	github.com/tklauser/numcpus v0.11.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
+	go.etcd.io/bbolt v1.4.3 // indirect
 	go.opencensus.io v0.24.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/detectors/gcp v1.39.0 // indirect

@@ -1,4 +1,4 @@
-# OpenTelemetry (OTEL) Integration (v1.0.0-rc3)
+# OpenTelemetry (OTEL) Integration (v1.0.0-rc4)
 
 Gekka ships with built-in hooks for distributed tracing and metrics via the
 [OpenTelemetry](https://opentelemetry.io/) API. All instrumentation defaults

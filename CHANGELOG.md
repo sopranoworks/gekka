@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0-rc4] - 2026-07-15
+
+Cluster-convergence correctness and concurrency hardening — 15 commits since `v1.0.0-rc3`, no new public API and no API breakage. Resolves the three cluster bugs rc3 shipped with as open issues (clean-boot convergence, Gate-2 cross-language traffic, join-time member flicker), aligns membership/gossip/failure-detection/upNumber with Pekko's source-level semantics, and makes `go test -race ./...` clean. The full cross-language 8-node showcase (Gate 1 + the 600 s zero-WARN/ERROR Gate 2) now passes.
+
+### Bug Fixes
+
+- 🐛 **Clean-boot convergence deadlock** (`5def7e1`): gekka ordered leader candidates by `upNumber` while Pekko's `leaderOf` orders by address among Up/Leaving members, so in a mixed cluster nobody promoted joiners and membership deadlocked. Now Pekko-correct (address ordering, terminal statuses never lead, Joining/WeaklyUp bootstrap fallback) with a pre-Welcome leader-action gate stopping a slow-Welcome joiner from self-promoting. Resolves rc3's tracked "clean-boot convergence gap."
+- 🐛 **Gate-2 cross-language steady-state killers** (`c56a27c`): idle-outbound sweeps judged idleness by inbound-only `lastSeen` and closed every write-only Artery connection (heartbeats included) 5 min after creation; a handler error tore down healthy inbound streams in a 1 Hz kill/reconnect loop; a received `Quarantined` frame permanently blacklisted the sender's UID, turning Pekko's harmless boot-race quarantines into permanent partitions. All fixed.
+- 🐛 **Join-time member flicker** (`991565d`): gekka read Pekko's wire `allHashes` (the vector clock's node-name table) as index-parallel to `allAddresses` and adopted other nodes' clock identities positionally, fabricating causal history → `MemberRemoved` flicker + "new incarnation joined" quarantine. Fixed by computing the self clock-node deterministically (`MD5` of Pekko's exact `vclockName`) and treating `allHashes` strictly as the clock node table, with a string-keyed pairwise-max merge and no bump-on-merge.
+- 🐛 **Gossip removal & convergence semantics** (`9e7d751`): Pekko-aligned clock-node pruning with wire tombstones, version-scoped `Seen` (reset-to-self on every bump), empty-when-healthy reachability, and `receiveGossip` talkback — stopping unbounded clock growth, premature local convergence, and re-infection of pruned components into JVM peers.
+- 🐛 **upNumber assignment & failure-detector design** (`b732736`): upNumber now uses Pekko's per-pass `1 + youngest` counter (was `len(members)` — non-monotonic and colliding with live members), with host-then-port SBR tie-break and unassigned-sorts-youngest. The cluster failure detector is fed only by heartbeat responses, removes records on ring deselection, seeds a trigger-first record for never-responding peers, and includes `acceptable-heartbeat-pause` in φ. Verifying this unmasked and fixed four transport defects (write-dead outbound left registered; a handover-corpse association; a cap-1 sibling-outbox fallback; a process-global heartbeat-task registry).
+- 🐛 **Data races eliminated — `go test -race ./...` clean** (`351c614`): the process-global telemetry provider (`SetProvider`/`GetTracer`/`GetMeter`) is now an `atomic.Pointer` (a real production race for any process building >1 `ActorSystem`); the `BaseActor` user-mailbox `Send`-vs-`CloseMailbox` path is serialized so a self-stopping actor can no longer race — or panic — a concurrent sender, with the `DeadLetter` closed/full distinction preserved via a new `MailboxClosed()` query; and four unit tests driving an actor from multiple goroutines were corrected to model the real single-goroutine mailbox.
+- 🐛 **Transport/core race** (`04f5dff`): closed a handshake-state data race in the candidate-scan debug logs.
+- 🐛 **Test reliability** (`df9d5c0`, `267a356`): closed `preambleAcceptingListener`'s accept-vs-preamble-read race and synchronized `TestInboundLanes_LaneFullFallsBackInline`'s `doneCh` drain.
+
+### CI / Build
+
+- 🔧 **Cross-language CI enforcement**: a scheduled Multi-JVM Compat workflow now actually runs `sbt multi-jvm:test`, with `AeronClusterSpec` building its Go binary on demand (`de217a0`); CI coverage extended to all 16 `go.work` modules with gofmt enforcement (`4490295`); sbt toolchain bumped to 1.12.13 to survive JDK 25 (`ed33321`); real `go build` errors surfaced from the multi-JVM harness (`5ef745c`); dead `runAeronMode` reference removed (`bb44873`).
+- 🔧 **Examples** (`1654d5f`): updated the raw-bytes `Receive` example from the stale `*IncomingMessage` wrapper.
+
 ## [1.0.0-rc3] - 2026-07-12
 
 Cross-language interoperability and reliability hardening — 104 commits since `v1.0.0-rc2`, no public API breakage. (No `1.0.0-rc2` CHANGELOG entry was recorded; its highlights live in the README release notes and git history.)
@@ -450,7 +470,8 @@ Cross-language interoperability and reliability hardening — 104 commits since 
 - **Message Dispatch**: Fixed a critical bug where messages were not correctly routed to registered actors by default when incoming envelopes contained full URIs.
 
 
-[1.0.0-rc3]: https://github.com/sopranoworks/gekka/compare/v1.0.0-rc2...HEAD
+[1.0.0-rc4]: https://github.com/sopranoworks/gekka/compare/v1.0.0-rc3...v1.0.0-rc4
+[1.0.0-rc3]: https://github.com/sopranoworks/gekka/compare/v1.0.0-rc2...v1.0.0-rc3
 [1.0.0-rc1]: https://github.com/sopranoworks/gekka/compare/v0.16.0...v1.0.0-rc1
 [0.16.0]: https://github.com/sopranoworks/gekka/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/sopranoworks/gekka/compare/v0.14.0...v0.15.0

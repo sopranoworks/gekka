@@ -122,7 +122,7 @@ API breakage is expected across the candidates.
   transport (`outbound-lanes`); Artery TLS cipher suites; Pekko-compatible
   cluster bootstrap/config; integration-test runtime reliability rework.
 
-### v1.0.0-rc3 (in preparation — not yet tagged)
+### v1.0.0-rc3 (2026-07-12)
 Cross-language interoperability and reliability hardening (104 commits since
 rc2). Highlights:
 - **TLS / mTLS — substantially addressed.** The `RawTLSConfig` escape hatch
@@ -137,19 +137,52 @@ rc2). Highlights:
 - Reliability-gate campaign (transport/cluster/deathwatch correctness + log
   noise) and a cross-language **showcase harness** + Go-seed integration suite.
 
+### v1.0.0-rc4 (2026-07-15)
+Cluster-convergence correctness and concurrency hardening (15 commits since
+rc3, no new public API, no API breakage). This candidate closes the three
+cluster bugs rc3 shipped with as open issues and makes `go test -race ./...`
+clean. The full cross-language 8-node showcase (Gate 1 + the 600 s
+zero-WARN/ERROR Gate 2) now passes. Highlights:
+- **Clean-boot convergence deadlock resolved** (`5def7e1`): Pekko-correct
+  address-ordered leader election (was `upNumber`-ordered) + a pre-Welcome
+  leader-action gate.
+- **Gate-2 cross-language steady-state resolved** (`c56a27c`): fixed a
+  5-minute idle-sweep that closed write-only Artery connections, a 1 Hz
+  inbound kill/reconnect loop, and permanent quarantine on Pekko's harmless
+  boot-race `Quarantined` frames.
+- **Join-time member flicker resolved** (`991565d`): stopped adopting other
+  nodes' vector-clock identities via a positional misread of `allHashes`.
+- **Gossip/upNumber/failure-detector Pekko alignment** (`9e7d751`,
+  `b732736`): clock pruning with tombstones, version-scoped `Seen`, per-pass
+  `1 + youngest` upNumber, heartbeat-response-only failure detection with
+  `acceptable-heartbeat-pause` in φ — plus four transport defects the
+  verification unmasked.
+- **Data-race-clean** (`351c614`): `atomic.Pointer` telemetry provider and a
+  serialized `BaseActor` mailbox send/close path; `go test -race ./...` clean.
+- **Cross-language CI enforcement**: a scheduled Multi-JVM Compat workflow
+  (`de217a0`), all 16 `go.work` modules gated with gofmt (`4490295`), and the
+  sbt toolchain on JDK 25 (`ed33321`).
+
 ## Known Open Issues
 
-- **Clean-boot cluster convergence gap** (OPEN, tracked): on a clean-boot
-  cluster, gekka nodes print their local-ready sentinel (gated on
-  `IsLocalNodeUp`) but do not always converge to gossiped `Up` membership
-  within a 30 s window — 0 `MemberUp`/leader lines appear in their own logs,
-  suggesting no leader is elected rather than merely slow convergence. This is
-  the current blocker preventing the cross-language showcase from reaching a
-  full pass. Distinct from the (resolved) g3 quarantine-cycle artifact and the
-  (fixed) runner-teardown hang. Next steps: reconcile `IsLocalNodeUp` against
-  the gossiped membership state machine, check gossip-interval vs. the 30 s
-  gate, and reproduce with a minimal 2-gekka-node topology to isolate
-  gekka-specific convergence logic.
+*None currently tracked as release-blocking.* The three cluster issues open
+when rc3 shipped are resolved in rc4:
+
+- **Clean-boot cluster convergence gap** — RESOLVED (`5def7e1`): leader
+  candidates were ordered by `upNumber` instead of Pekko's address ordering,
+  so in a mixed cluster no leader promoted joiners and membership deadlocked;
+  a slow-Welcome joiner could also self-promote off its single-node view. Both
+  fixed and verified by 3/3 clean-boot Gate-1 passes.
+- **Gate-2 cross-language traffic failures** — RESOLVED (`c56a27c`): three
+  transport time-bombs (inbound-only idle sweep, inbound kill/reconnect loop,
+  permanent received-`Quarantined` blacklisting) fixed; the full 600 s
+  zero-WARN/ERROR Gate-2 window now passes.
+- **Join-time member flicker** — RESOLVED (`991565d`): the positional
+  `allHashes` misread that fabricated causal history and produced spurious
+  `MemberRemoved`/"new incarnation joined" quarantine is fixed.
+
+Follow-up (non-blocking, tracked for a later phase): a Phase 4 external
+log-server / logger-gate ticket (deferred per the current cycle scope).
 
 ## Upcoming
 
@@ -161,8 +194,9 @@ rc2). Highlights:
 Finalize public interfaces and package structures for the first stable 1.0 release.
 
 #### 2. Cluster Convergence Robustness
-Close the clean-boot convergence gap above and add convergence-timing coverage
-to the multi-JVM gate.
+The clean-boot convergence gap is closed as of rc4 (`5def7e1`); remaining work
+is to add convergence-timing coverage to the multi-JVM gate so regressions are
+caught automatically.
 
 #### 3. Performance Tuning
 Exhaustive benchmarking and optimization of the mailbox processing loop and gossip propagation.

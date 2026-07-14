@@ -6,7 +6,7 @@ replace github.com/sopranoworks/gekka => ../
 
 require (
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
-	github.com/sopranoworks/gekka v0.0.0
+	github.com/sopranoworks/gekka v1.0.0-rc4
 	github.com/stretchr/testify v1.11.1
 )
 

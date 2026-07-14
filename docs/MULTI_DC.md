@@ -4,7 +4,7 @@
   SPDX-License-Identifier: MIT
 -->
 
-# Multi-Data-Center (Multi-DC) Cluster Support (v1.0.0-rc3)
+# Multi-Data-Center (Multi-DC) Cluster Support (v1.0.0-rc4)
 
 Gekka supports multi-data-center cluster topologies, matching Apache Pekko's
 `pekko.cluster.multi-data-center` feature.  Each node declares its own data

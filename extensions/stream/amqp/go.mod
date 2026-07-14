@@ -6,7 +6,7 @@ replace github.com/sopranoworks/gekka => ../../../
 
 require (
 	github.com/rabbitmq/amqp091-go v1.10.0
-	github.com/sopranoworks/gekka v0.0.0-00010101000000-000000000000
+	github.com/sopranoworks/gekka v1.0.0-rc4
 	github.com/stretchr/testify v1.11.1
 )
 

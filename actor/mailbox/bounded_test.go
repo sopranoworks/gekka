@@ -357,6 +357,7 @@ func TestBounded_ConcurrentProducersAndConsumers(t *testing.T) {
 
 	var consumed atomic.Int64
 	consumerDone := make(chan struct{})
+	var doneOnce sync.Once // close consumerDone exactly once across all consumers
 	var consumeWG sync.WaitGroup
 	consumeWG.Add(consumers)
 	for c := 0; c < consumers; c++ {
@@ -369,11 +370,11 @@ func TestBounded_ConcurrentProducersAndConsumers(t *testing.T) {
 				}
 				consumed.Add(1)
 				if consumed.Load() >= total {
-					select {
-					case <-consumerDone:
-					default:
-						close(consumerDone)
-					}
+					// A plain select/default guard is not safe here: multiple
+					// consumers can each observe consumerDone still open and all
+					// call close(), double-closing the channel. sync.Once makes
+					// the close idempotent across goroutines.
+					doneOnce.Do(func() { close(consumerDone) })
 				}
 			}
 		}()

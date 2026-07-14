@@ -256,6 +256,16 @@ type ClusterManager struct {
 	// for pruning after PruneGossipTombstonesAfter. Protected by Mu.
 	tombstones map[string]time.Time
 
+	// tombstonedClockNodes tracks the vector-clock node names (Pekko
+	// vclockName MD5) of removed members, keyed by node name with the local
+	// removal-observation time. It is the clock-side analog of Pekko's
+	// UniqueAddress-keyed Gossip.tombstones: mergeGossipStates consults it
+	// so a pruned clock component cannot be reintroduced by an old
+	// in-flight gossip (Pekko's Gossip.merge prunes entries for every
+	// tombstoned node). Entries expire with PruneGossipTombstonesAfter,
+	// like wire tombstones. Protected by Mu.
+	tombstonedClockNodes map[string]time.Time
+
 	// joiningFirstSeen tracks when Joining members were first observed
 	// without convergence, for WeaklyUp promotion timing.
 	// Protected by Mu.
@@ -1692,6 +1702,31 @@ func (cm *ClusterManager) processIncomingGossip(gossip *gproto_cluster.Gossip, r
 	m2 := cm.vectorClockToMap(gossip.Version, gossip.AllHashes)
 	ordering := cm.compareResolvedClocks(m1, m2)
 
+	// Pekko's talkback rule (receiveGossip, ClusterDaemon.scala:1123-1134):
+	// after ingesting, reply with our own state whenever the sender's view
+	// differed.  For newer/same remote gossip the reply is needed exactly
+	// when the incoming gossip does not carry OUR seen-mark; for concurrent
+	// (merge) and older remote gossip it is always needed.  Determine
+	// "sender has seen us" from the incoming gossip BEFORE the branches
+	// below mutate it (ClockBefore adopts the object and then marks self).
+	localHost := cm.LocalAddress.GetAddress().GetHostname()
+	localPort := cm.LocalAddress.GetAddress().GetPort()
+	localUid64 := uint64(cm.LocalAddress.GetUid()) | (uint64(cm.LocalAddress.GetUid2()) << 32)
+	remoteSeenSelf := false
+	if ov := gossip.GetOverview(); ov != nil {
+		for _, si := range ov.GetSeen() {
+			if int(si) >= len(gossip.AllAddresses) {
+				continue
+			}
+			sua := gossip.AllAddresses[si]
+			suid64 := uint64(sua.GetUid()) | (uint64(sua.GetUid2()) << 32)
+			if sua.GetAddress().GetHostname() == localHost && sua.GetAddress().GetPort() == localPort && suid64 == localUid64 {
+				remoteSeenSelf = true
+				break
+			}
+		}
+	}
+
 	if cm.LogInfoVerbose {
 		from := ""
 		if remoteAddr != nil {
@@ -1743,7 +1778,17 @@ func (cm *ClusterManager) processIncomingGossip(gossip *gproto_cluster.Gossip, r
 		// component: a merge is not a local state change (`:+ vclockNode`
 		// happens only in updateLatestGossip).  Bumping here made every
 		// merged state spuriously dominate all concurrent peer branches.
-		cm.mergeSeenLocked(gossip)
+		//
+		// Pekko's Gossip.merge also RESETS Seen — "Nobody can have seen
+		// this new gossip yet" (Gossip.scala:196-197) — and receiveGossip
+		// re-marks only self (ClusterDaemon.scala:1162-1165).  Unioning
+		// both sides' Seen here counted members as having acknowledged a
+		// merged gossip none of them had ever received, feeding the same
+		// premature-convergence path as a missing bump-reset.  Only the
+		// SAME-version case unions Seen (Pekko mergeSeen) — see below.
+		if cm.State.Overview != nil {
+			cm.State.Overview.Seen = nil
+		}
 		cm.markLocalSeenLocked()
 		cm.connectToNewMembers(merged)
 	} else if ordering == ClockSame {
@@ -1793,6 +1838,45 @@ func (cm *ClusterManager) processIncomingGossip(gossip *gproto_cluster.Gossip, r
 	}
 
 	cm.Mu.Unlock()
+
+	// Pekko's receiveGossip talkback: gossipTo(from) when the sender's view
+	// differed (ClusterDaemon.scala:1214-1218) — always on merge (Concurrent)
+	// and on an older remote (ClockAfter, Pekko's Older case), and on a
+	// newer/same remote exactly when it lacked our seen-mark.  Without the
+	// reply, seen acknowledgements only travel on the periodic gossip tick
+	// and re-convergence after every leader action takes many seconds
+	// instead of one round trip — long enough to starve Joining -> Up
+	// promotion into the WeaklyUp fallback under version-scoped Seen.
+	// The exchange terminates: the reply is seen-marked, so the sender's
+	// next comparison finds our mark and suppresses further talkback.
+	talkback := false
+	switch ordering {
+	case ClockBefore, ClockSame:
+		talkback = !remoteSeenSelf
+	case ClockConcurrent, ClockAfter:
+		talkback = true
+	}
+	if talkback && remoteAddr != nil {
+		raddr := remoteAddr.GetAddress()
+		ruid64 := uint64(remoteAddr.GetUid()) | (uint64(remoteAddr.GetUid2()) << 32)
+		if !(raddr.GetHostname() == localHost && raddr.GetPort() == localPort && ruid64 == localUid64) {
+			cm.Mu.RLock()
+			payload, merr := proto.Marshal(cm.State)
+			cm.Mu.RUnlock()
+			if merr == nil {
+				if compressed, gerr := gzipCompress(payload); gerr == nil {
+					env := &gproto_cluster.GossipEnvelope{
+						From:             cm.LocalAddress,
+						To:               remoteAddr,
+						SerializedGossip: compressed,
+					}
+					system := cm.LocalAddress.GetAddress().GetSystem()
+					path := cm.ClusterCorePath(system, raddr.GetHostname(), raddr.GetPort())
+					_ = cm.Router(context.Background(), path, env)
+				}
+			}
+		}
+	}
 
 	// Record convergence timestamp when all Up members have seen this state.
 	if cm.Metrics != nil && cm.CheckConvergence() {
@@ -2214,16 +2298,112 @@ func (cm *ClusterManager) mergeGossipStates(s1, s2 *gproto_cluster.Gossip) *gpro
 		}
 	}
 
-	// String-keyed pairwise-max VectorClock (Pekko VectorClock.merge).
-	// Each branch's clock resolves against ITS OWN AllHashes table; the
-	// merged clock is the union keyed by node name, with the higher
-	// timestamp winning.  The merged AllHashes is rebuilt as exactly the
-	// merged clock's node table — it is NOT address-parallel, so appending
-	// addresses above adds no hash entries.  A previous revision rebuilt
-	// the clock by first-match lookup in an address-parallel table, which
-	// silently dropped components whose node name was absent and
-	// misattached components on duplicate/empty entries — destroying the
-	// causal history that keeps concurrent branches mergeable.
+	// Pekko Gossip.merge step 1 (Gossip.scala:181): union both sides'
+	// removal tombstones.  s1's ride along in the clone; s2's are remapped
+	// into the merged address space and appended (deduped by address).
+	// Alongside, collect the tombstoned nodes' identities for the two
+	// pruning steps below: their vector-clock node names and their
+	// address keys.
+	tombstonedNames := make(map[string]struct{})
+	tombstonedAddrs := make(map[string]struct{})
+	collectTombstone := func(g *gproto_cluster.Gossip, ts *gproto_cluster.Tombstone) (int32, bool) {
+		idx := int(ts.GetAddressIndex())
+		if idx < 0 || idx >= len(g.AllAddresses) {
+			return 0, false
+		}
+		ua := g.AllAddresses[idx]
+		key := fmt.Sprintf("%s:%d-%d", ua.GetAddress().GetHostname(), ua.GetAddress().GetPort(), ua.GetUid())
+		tombstonedAddrs[key] = struct{}{}
+		tombstonedNames[pekkoVclockNodeHash(ua)] = struct{}{}
+		mi, found := addrMap[key]
+		return mi, found
+	}
+	mergedTombstoneIdx := make(map[int32]struct{}, len(merged.Tombstones))
+	for _, ts := range merged.Tombstones { // s1's, cloned with stable indices
+		if mi, ok := collectTombstone(merged, ts); ok {
+			mergedTombstoneIdx[mi] = struct{}{}
+		}
+	}
+	for _, ts := range s2.GetTombstones() {
+		mi, ok := collectTombstone(s2, ts)
+		if !ok {
+			continue
+		}
+		if _, dup := mergedTombstoneIdx[mi]; dup {
+			continue
+		}
+		merged.Tombstones = append(merged.Tombstones, &gproto_cluster.Tombstone{
+			AddressIndex: proto.Int32(mi),
+			Timestamp:    proto.Int64(ts.GetTimestamp()),
+		})
+		mergedTombstoneIdx[mi] = struct{}{}
+	}
+	// Removals this node performed or observed whose wire tombstone may not
+	// be carried by either side (recorded by tombstoneClockNodeLocked).
+	for name := range cm.tombstonedClockNodes {
+		tombstonedNames[name] = struct{}{}
+	}
+
+	// receiveGossip merge-case pre-prune (ClusterDaemon.scala:1141-1154): a
+	// member whose status is Down/Exiting in one gossip and absent from the
+	// other was removed by the other side's leader — replay the leader's
+	// clock prune even when the tombstone has already expired.
+	memberKey := func(g *gproto_cluster.Gossip, m *gproto_cluster.Member) (string, bool) {
+		idx := int(m.GetAddressIndex())
+		if idx < 0 || idx >= len(g.AllAddresses) {
+			return "", false
+		}
+		ua := g.AllAddresses[idx]
+		return fmt.Sprintf("%s:%d-%d", ua.GetAddress().GetHostname(), ua.GetAddress().GetPort(), ua.GetUid()), true
+	}
+	s1MemberKeys := make(map[string]struct{}, len(s1.Members))
+	for _, m := range s1.Members {
+		if k, ok := memberKey(s1, m); ok {
+			s1MemberKeys[k] = struct{}{}
+		}
+	}
+	s2MemberKeys := make(map[string]struct{}, len(s2.Members))
+	for _, m := range s2.Members {
+		if k, ok := memberKey(s2, m); ok {
+			s2MemberKeys[k] = struct{}{}
+		}
+	}
+	prePrune := func(g *gproto_cluster.Gossip, otherKeys map[string]struct{}) {
+		for _, m := range g.Members {
+			st := m.GetStatus()
+			if st != gproto_cluster.MemberStatus_Down && st != gproto_cluster.MemberStatus_Exiting {
+				continue
+			}
+			k, ok := memberKey(g, m)
+			if !ok {
+				continue
+			}
+			if _, present := otherKeys[k]; !present {
+				idx := int(m.GetAddressIndex())
+				tombstonedNames[pekkoVclockNodeHash(g.AllAddresses[idx])] = struct{}{}
+			}
+		}
+	}
+	prePrune(s1, s2MemberKeys)
+	prePrune(s2, s1MemberKeys)
+
+	// Never prune the local node's own live component: gekka lacks Pekko's
+	// "gossip that does not contain myself" ingress guard, so a degenerate
+	// remote branch must not be able to erase our causal history.
+	delete(tombstonedNames, cm.localHashString())
+
+	// String-keyed pairwise-max VectorClock (Pekko VectorClock.merge),
+	// followed by Gossip.merge step 2 (Gossip.scala:183-186): prune the
+	// entries of every tombstoned node.  Each branch's clock resolves
+	// against ITS OWN AllHashes table; the merged clock is the union keyed
+	// by node name, with the higher timestamp winning.  The merged
+	// AllHashes is rebuilt as exactly the merged clock's node table — it is
+	// NOT address-parallel, so appending addresses above adds no hash
+	// entries.  A previous revision rebuilt the clock by first-match lookup
+	// in an address-parallel table, which silently dropped components whose
+	// node name was absent and misattached components on duplicate/empty
+	// entries — destroying the causal history that keeps concurrent
+	// branches mergeable.
 	m1 := cm.vectorClockToMap(s1.Version, s1.AllHashes)
 	m2 := cm.vectorClockToMap(s2.Version, s2.AllHashes)
 	mm := make(map[string]int64, len(m1)+len(m2))
@@ -2234,6 +2414,9 @@ func (cm *ClusterManager) mergeGossipStates(s1, s2 *gproto_cluster.Gossip) *gpro
 		if v > mm[k] {
 			mm[k] = v
 		}
+	}
+	for name := range tombstonedNames {
+		delete(mm, name)
 	}
 	merged.AllHashes, merged.Version = clockFromResolvedMap(mm)
 
@@ -2334,6 +2517,34 @@ func (cm *ClusterManager) mergeGossipStates(s1, s2 *gproto_cluster.Gossip) *gpro
 		}
 	}
 
+	// Member.pickHighestPriority (Member.scala:192-201): a member carried by
+	// only ONE of the two gossips whose exact UniqueAddress is tombstoned
+	// was removed by the other side's leader — the removal wins over the
+	// stale concurrent branch.  Without this, the merged gossip resurrects
+	// the member and JVM peers adopt it wholesale on their After path,
+	// after which nothing ever removes the zombie again.  Members present
+	// in BOTH gossips keep the highest-status resolution above (neither
+	// side considers them removed), and the local node is exempt — self
+	// integrity is owned by repairSelfReincarnationLocked.
+	if len(tombstonedAddrs) > 0 {
+		la := cm.LocalAddress
+		localKey := fmt.Sprintf("%s:%d-%d", la.GetAddress().GetHostname(), la.GetAddress().GetPort(), la.GetUid())
+		keptMembers := merged.Members[:0]
+		for _, m := range merged.Members {
+			if k, ok := memberKey(merged, m); ok && k != localKey {
+				if _, tomb := tombstonedAddrs[k]; tomb {
+					_, in1 := s1MemberKeys[k]
+					_, in2 := s2MemberKeys[k]
+					if in1 != in2 {
+						continue
+					}
+				}
+			}
+			keptMembers = append(keptMembers, m)
+		}
+		merged.Members = keptMembers
+	}
+
 	return merged
 }
 
@@ -2347,6 +2558,19 @@ func (cm *ClusterManager) incrementVersionWithLockHeld() {
 	m := cm.vectorClockToMap(cm.State.Version, cm.State.AllHashes)
 	m[cm.localHashString()]++
 	cm.State.AllHashes, cm.State.Version = clockFromResolvedMap(m)
+	// Pekko pairs EVERY `:+ vclockNode` stamp with onlySeen(self)
+	// (updateLatestGossip, ClusterDaemon.scala:1626-1641): nobody else can
+	// have seen the version this change just created.  Overview.Seen is
+	// version-scoped — without the reset, acknowledgements of the PREVIOUS
+	// version keep satisfying CheckConvergenceLocked for the new one, and
+	// convergence-gated leader actions fire before any peer has actually
+	// seen the state they are gated on (and the inflated Seen set is
+	// adopted verbatim by Pekko peers on their After path, poisoning THEIR
+	// convergence detection too).
+	if cm.State.Overview != nil {
+		cm.State.Overview.Seen = nil
+	}
+	cm.markLocalSeenLocked()
 }
 
 // DetermineLeader selects the cluster leader using Pekko's leaderOf
@@ -2914,6 +3138,57 @@ func (cm *ClusterManager) recordTombstoneLocked(host string, port uint32) {
 	cm.tombstones[key] = time.Now()
 }
 
+// tombstoneClockNodeLocked implements the clock half of Pekko's Gossip.remove
+// (Gossip.scala:249-253): "Clear the VectorClock when member is removed."
+// It records the removed member's vector-clock node name (vclockName MD5) in
+// tombstonedClockNodes and prunes that component from the local clock.
+// mergeGossipStates consults the recorded names so an old in-flight gossip
+// cannot reintroduce the component — Pekko's Gossip.merge does the same via
+// its UniqueAddress-keyed tombstones (Gossip.scala:183-186).
+//
+// The local node's own name is never tombstoned: a stale tombstone matching
+// our CURRENT incarnation must not erase the live component (prior
+// incarnations have different UIDs and therefore different node names).
+// Must be called with cm.Mu held.
+func (cm *ClusterManager) tombstoneClockNodeLocked(ua *gproto_cluster.UniqueAddress) {
+	if ua == nil {
+		return
+	}
+	name := pekkoVclockNodeHash(ua)
+	if name == cm.localHashString() {
+		return
+	}
+	if cm.tombstonedClockNodes == nil {
+		cm.tombstonedClockNodes = make(map[string]time.Time)
+	}
+	cm.tombstonedClockNodes[name] = time.Now()
+	m := cm.vectorClockToMap(cm.State.Version, cm.State.AllHashes)
+	if _, ok := m[name]; ok {
+		delete(m, name)
+		cm.State.AllHashes, cm.State.Version = clockFromResolvedMap(m)
+	}
+}
+
+// addWireTombstoneLocked appends a Gossip.Tombstones entry for the removed
+// member, mirroring Pekko's Gossip.remove step "tombstones + (node ->
+// removalTimestamp)" (Gossip.scala:255). Peers receiving our gossip apply
+// their own merge-time clock pruning and member-resurrection protection from
+// it. AllAddresses retains the removed address (gekka never compacts that
+// table), so the index stays resolvable — matching Pekko's serializer, where
+// allAddresses = members ++ tombstones.keys. Deduped by address index.
+// Must be called with cm.Mu held.
+func (cm *ClusterManager) addWireTombstoneLocked(addrIdx int32) {
+	for _, ts := range cm.State.GetTombstones() {
+		if ts.GetAddressIndex() == addrIdx {
+			return
+		}
+	}
+	cm.State.Tombstones = append(cm.State.Tombstones, &gproto_cluster.Tombstone{
+		AddressIndex: proto.Int32(addrIdx),
+		Timestamp:    proto.Int64(time.Now().UnixMilli()),
+	})
+}
+
 // intakeRemovedFromIncomingLocked filters Removed entries out of an
 // incoming gossip (Welcome or GossipEnvelope payload) BEFORE we merge it
 // into cm.State.  It mirrors Akka's MembershipState invariant that
@@ -2959,6 +3234,7 @@ func (cm *ClusterManager) intakeRemovedFromIncomingLocked(incoming *gproto_clust
 		port uint32
 	}
 	droppedAddrs := make(map[addrKey]struct{})
+	strippedNames := make(map[string]struct{})
 
 	kept := incoming.Members[:0]
 	for _, m := range incoming.Members {
@@ -2981,6 +3257,12 @@ func (cm *ClusterManager) intakeRemovedFromIncomingLocked(incoming *gproto_clust
 			continue
 		}
 		cm.recordTombstoneLocked(host, port)
+		// Clock half of the removal (Pekko Gossip.remove): tombstone the
+		// stripped entry's clock node and prune it from the local clock;
+		// the merge consults the tombstoned names so the component cannot
+		// come back through a later gossip.
+		cm.tombstoneClockNodeLocked(incoming.AllAddresses[idx])
+		strippedNames[pekkoVclockNodeHash(incoming.AllAddresses[idx])] = struct{}{}
 		droppedAddrs[addrKey{host: host, port: port}] = struct{}{}
 	}
 	if len(droppedAddrs) == 0 {
@@ -2990,6 +3272,27 @@ func (cm *ClusterManager) intakeRemovedFromIncomingLocked(incoming *gproto_clust
 		return nil
 	}
 	incoming.Members = kept
+
+	// Prune the stripped entries' clock components from the INCOMING gossip
+	// too: a ClockBefore comparison adopts the incoming state wholesale, so
+	// pruning only cm.State would let the adoption reintroduce the component
+	// we just tombstoned.
+	if len(strippedNames) > 0 {
+		mIn := cm.vectorClockToMap(incoming.Version, incoming.AllHashes)
+		changed := false
+		for name := range strippedNames {
+			if name == cm.localHashString() {
+				continue
+			}
+			if _, ok := mIn[name]; ok {
+				delete(mIn, name)
+				changed = true
+			}
+		}
+		if changed {
+			incoming.AllHashes, incoming.Version = clockFromResolvedMap(mIn)
+		}
+	}
 
 	// Drop local cm.State entries at the stripped addresses; synthesise
 	// MemberRemoved events for any that were not already Removed locally.
@@ -3092,6 +3395,12 @@ func (cm *ClusterManager) dropRemovedMembersLocked() bool {
 				kept = append(kept, m)
 				continue
 			}
+			// Pekko's Gossip.remove: prune the removed member's clock
+			// component and record its removal tombstone so the removal
+			// propagates on the wire and later merges cannot reintroduce
+			// either the member or its clock entry.
+			cm.tombstoneClockNodeLocked(ua)
+			cm.addWireTombstoneLocked(m.GetAddressIndex())
 		}
 		dropped = true
 	}
@@ -3191,11 +3500,34 @@ func (cm *ClusterManager) pruneGossipTombstonesLocked() {
 	if ttl <= 0 {
 		ttl = 24 * time.Hour
 	}
+	now := time.Now()
+
+	// Expire clock-node tombstones with the same TTL (Pekko's
+	// pruneTombstones analog for the names tombstoneClockNodeLocked
+	// recorded).
+	for name, at := range cm.tombstonedClockNodes {
+		if now.Sub(at) >= ttl {
+			delete(cm.tombstonedClockNodes, name)
+		}
+	}
+
+	// Expire wire tombstones (Pekko Gossip.pruneTombstones,
+	// Gossip.scala:276-280: keep entries with timestamp > removeEarlierThan).
+	if len(cm.State.GetTombstones()) > 0 {
+		cutoff := now.Add(-ttl).UnixMilli()
+		keptTs := cm.State.Tombstones[:0]
+		for _, ts := range cm.State.Tombstones {
+			if ts.GetTimestamp() > cutoff {
+				keptTs = append(keptTs, ts)
+			}
+		}
+		cm.State.Tombstones = keptTs
+	}
+
 	if len(cm.tombstones) == 0 {
 		return
 	}
 
-	now := time.Now()
 	var pruneKeys []string
 	for key, removedAt := range cm.tombstones {
 		if now.Sub(removedAt) >= ttl {
@@ -3483,7 +3815,7 @@ func (cm *ClusterManager) updateReachability(addrIdx int32, status gproto_cluste
 					break
 				}
 			}
-			if !found {
+			if !found && status != gproto_cluster.ReachabilityStatus_Reachable {
 				r.SubjectReachability = append(r.SubjectReachability, &gproto_cluster.SubjectReachability{
 					AddressIndex: proto.Int32(addrIdx),
 					Status:       status.Enum(),
@@ -3499,7 +3831,18 @@ func (cm *ClusterManager) updateReachability(addrIdx int32, status gproto_cluste
 		}
 	}
 
-	if !found {
+	// Records are CREATED only for non-Reachable observations, mirroring
+	// Pekko's Reachability semantics: `unreachable(observer, subject)`
+	// allocates records, `reachable` merely transitions existing ones, and
+	// a fully healthy cluster keeps an EMPTY reachability table.
+	// CheckReachability calls this with Reachable for every healthy member
+	// on every tick — creating a record (and bumping the clock) there once
+	// per newly seen member starves convergence, because every bump resets
+	// Seen to only-self (updateLatestGossip's onlySeen).  That spurious-
+	// bump storm during an 8-node join window pushed joiners into the
+	// WeaklyUp fallback and destabilized the JVM-side SBR (divfix-v1
+	// DownAll collapse).
+	if !found && status != gproto_cluster.ReachabilityStatus_Reachable {
 		cm.State.Overview.ObserverReachability = append(cm.State.Overview.ObserverReachability, &gproto_cluster.ObserverReachability{
 			AddressIndex: proto.Int32(localIdx),
 			Version:      proto.Int64(1),

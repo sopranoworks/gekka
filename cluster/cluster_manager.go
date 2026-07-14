@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"math/rand"
 
 	"sort"
@@ -129,6 +130,12 @@ type ClusterManager struct {
 	// the remote failure detector to trigger.  Set by StopHeartbeat, cleared
 	// by StartHeartbeat.
 	heartbeatMuted atomic.Bool
+
+	// heartbeatTasksMu / heartbeatTasks — this manager's per-target
+	// heartbeat sender tasks, keyed "host:port".  Manager-scoped (never
+	// process-global): see StartHeartbeat.
+	heartbeatTasksMu sync.Mutex
+	heartbeatTasks   map[string]heartbeatTask
 
 	// exitingConfirmedSent guards against duplicate ExitingConfirmed sends.
 	// Pekko's leader will only transition this node from Exiting → Removed
@@ -1219,18 +1226,18 @@ func (cm *ClusterManager) handleHeartbeat(payload []byte, manifest string, remot
 		return err
 	}
 
-	// Update Failure Detector
-	if remoteAddr != nil {
+	// Do NOT feed the cluster FD here: receiving a heartbeat says nothing
+	// about a node THIS node monitors.  Pekko's ClusterHeartbeatReceiver
+	// only replies; the FD is fed exclusively from the sender side when
+	// the response arrives (ClusterHeartbeat.scala:316-318).  Feeding on
+	// receipt creates a record for an unmonitored node — a record whose
+	// starvation false-flags the healthy peer the moment it legitimately
+	// stops sending (ring reshuffle after a membership change).
+	if remoteAddr != nil && cm.WatchFd != nil {
 		addr := remoteAddr.GetAddress()
 		uid64 := uint64(remoteAddr.GetUid()) | (uint64(remoteAddr.GetUid2()) << 32)
 		key := fmt.Sprintf("%s:%d-%d", addr.GetHostname(), addr.GetPort(), uid64)
-		// Pass the per-target expected-response-after into the FD so the
-		// per-node detector seeds its first-heartbeat estimate from the
-		// configured value (cross-DC vs intra-DC).
-		cm.Fd.HeartbeatWithEstimate(key, cm.EffectiveExpectedResponseAfter(addr))
-		if cm.WatchFd != nil {
-			cm.WatchFd.Heartbeat(key)
-		}
+		cm.WatchFd.Heartbeat(key)
 	}
 
 	// When heartbeats are muted (StopHeartbeat), suppress the response so the
@@ -1586,12 +1593,11 @@ func (cm *ClusterManager) handleGossipStatus(payload []byte, manifest string) er
 	m2 := cm.vectorClockToMap(status.Version, status.AllHashes)
 	ordering := cm.compareResolvedClocks(m1, m2)
 
-	// Update Failure Detector for the sender
-	from := status.GetFrom()
-	faddr := from.GetAddress()
-	uid64 := uint64(from.GetUid()) | (uint64(from.GetUid2()) << 32)
-	key := fmt.Sprintf("%s:%d-%d", faddr.GetHostname(), faddr.GetPort(), uid64)
-	cm.Fd.Heartbeat(key)
+	// Gossip traffic never feeds the cluster FD — Pekko feeds it only from
+	// heartbeat responses of actively monitored ring targets
+	// (ClusterHeartbeat.scala:316-318).  A record created here belongs to a
+	// node this node may not monitor, and starves into a false Unreachable
+	// flag once the sender's random gossip peer selection moves elsewhere.
 
 	logger.Default().Debug("cluster: handleGossipStatus", "from", status.GetFrom(), "ordering", ordering)
 
@@ -1830,12 +1836,8 @@ func (cm *ClusterManager) processIncomingGossip(gossip *gproto_cluster.Gossip, r
 		cm.lastGossipUpdate = time.Now()
 	}
 
-	if remoteAddr != nil {
-		addr := remoteAddr.GetAddress()
-		uid64 := uint64(remoteAddr.GetUid()) | (uint64(remoteAddr.GetUid2()) << 32)
-		key := fmt.Sprintf("%s:%d-%d", addr.GetHostname(), addr.GetPort(), uid64)
-		cm.Fd.Heartbeat(key)
-	}
+	// Gossip receipt never feeds the cluster FD (see handleGossipStatus) —
+	// only heartbeat responses of actively monitored targets do.
 
 	cm.Mu.Unlock()
 
@@ -2043,18 +2045,25 @@ func (cm *ClusterManager) connectToNewMembers(gossip *gproto_cluster.Gossip) {
 	}
 
 	// Stop heartbeats to nodes no longer in the target set.
-	heartbeatTasksMu.Lock()
-	for key := range heartbeatTasks {
+	cm.heartbeatTasksMu.Lock()
+	tasks := cm.heartbeatTasksLocked()
+	for key := range tasks {
 		if _, selected := selectedSet[key]; !selected {
 			// Only stop if this is a remote peer no longer selected (don't
 			// stop tasks for the seed which may have been started externally).
-			if task, ok := heartbeatTasks[key]; ok {
+			if task, ok := tasks[key]; ok {
 				task.cancel()
-				delete(heartbeatTasks, key)
+				delete(tasks, key)
+				// Forget the deselected target's FD history — Pekko removes
+				// the record whenever a node leaves the monitored set
+				// (ClusterHeartbeat.scala:287-290, 305-309).  A record kept
+				// past its heartbeating starves and false-flags the healthy
+				// node on a later CheckReachability tick.
+				cm.Fd.RemoveByAddress(key)
 			}
 		}
 	}
-	heartbeatTasksMu.Unlock()
+	cm.heartbeatTasksMu.Unlock()
 
 	for _, t := range targets {
 		addr := &gproto_cluster.Address{
@@ -2663,7 +2672,7 @@ func (cm *ClusterManager) OldestNode(role string) *gproto_cluster.UniqueAddress 
 			}
 		}
 		ua := cm.State.AllAddresses[m.GetAddressIndex()]
-		c := &candidate{ua: ua, upNumber: m.GetUpNumber(), addr: ua.GetAddress()}
+		c := &candidate{ua: ua, upNumber: ageUpNumber(m.GetUpNumber()), addr: ua.GetAddress()}
 		if best == nil {
 			best = c
 			continue
@@ -2734,7 +2743,7 @@ func (cm *ClusterManager) OldestNodeInDC(dc, role string) *gproto_cluster.Unique
 			}
 		}
 		ua := cm.State.AllAddresses[m.GetAddressIndex()]
-		c := &candidate{ua: ua, upNumber: m.GetUpNumber(), addr: ua.GetAddress()}
+		c := &candidate{ua: ua, upNumber: ageUpNumber(m.GetUpNumber()), addr: ua.GetAddress()}
 		if best == nil {
 			best = c
 			continue
@@ -2892,6 +2901,7 @@ func (cm *ClusterManager) promoteDCMembers(dc string) {
 	cm.Mu.Lock()
 	var events []ClusterDomainEvent
 	changed := false
+	var passUpNumber int32
 	for _, m := range cm.State.Members {
 		if m.GetStatus() != gproto_cluster.MemberStatus_Joining {
 			continue
@@ -2909,7 +2919,7 @@ func (cm *ClusterManager) promoteDCMembers(dc string) {
 		ua := cm.State.AllAddresses[m.GetAddressIndex()]
 		ma := memberAddressFromUA(ua)
 		m.Status = gproto_cluster.MemberStatus_Up.Enum()
-		m.UpNumber = proto.Int32(int32(len(cm.State.Members)))
+		m.UpNumber = proto.Int32(cm.nextPassUpNumberLocked(&passUpNumber))
 		events = append(events, MemberUp{Member: ma})
 		if cm.Metrics != nil {
 			cm.Metrics.IncrementMemberUp()
@@ -2927,6 +2937,57 @@ func (cm *ClusterManager) promoteDCMembers(dc string) {
 	for _, evt := range events {
 		cm.publishEvent(evt)
 	}
+}
+
+// ageUpNumber maps an upNumber to the value used in age comparisons.
+// gekka keeps not-yet-Up members at 0 and Pekko carries Int.MaxValue until
+// copyUp (Member.scala:103) — both mean "no assigned join order yet", which
+// is the YOUNGEST possible age.  Without this mapping a transient WeaklyUp
+// member (upNumber 0) sorts OLDEST and steals singleton-oldest/keep-oldest
+// decisions during every non-converged window; Pekko's singleton even
+// excludes not-yet-Up members outright (ClusterSingletonManager.scala:339-342).
+func ageUpNumber(up int32) int32 {
+	if up <= 0 {
+		return math.MaxInt32
+	}
+	return up
+}
+
+// youngestAssignedUpNumberLocked returns the highest upNumber assigned to any
+// current member — the seed for leader promotions, mirroring Pekko's
+// MembershipState.youngestMember (MembershipState.scala:207-211) as consumed
+// by leaderActionsOnConvergence (ClusterDaemon.scala:1399-1403).  Unassigned
+// placeholders count as 0: gekka keeps not-yet-Up members at 0, Pekko
+// serializes them as Int.MaxValue.
+func (cm *ClusterManager) youngestAssignedUpNumberLocked() int32 {
+	var youngest int32
+	for _, m := range cm.State.Members {
+		up := m.GetUpNumber()
+		if up <= 0 || up == math.MaxInt32 {
+			continue
+		}
+		if up > youngest {
+			youngest = up
+		}
+	}
+	return youngest
+}
+
+// nextPassUpNumberLocked advances the per-leader-pass upNumber counter:
+// the first promotion of a pass gets 1 + youngestAssignedUpNumber, every
+// further promotion in the same pass increments — each member promoted in
+// one pass receives a DISTINCT, monotonically increasing value
+// (ClusterDaemon.scala:1392-1407).  A shared or non-monotonic value makes a
+// new member spuriously "older than" surviving members in every
+// upNumber-dependent decision (singleton oldest, SBR keep-oldest), since
+// the leader's assignment is gossiped verbatim and adopted cluster-wide.
+func (cm *ClusterManager) nextPassUpNumberLocked(passUpNumber *int32) int32 {
+	if *passUpNumber == 0 {
+		*passUpNumber = 1 + cm.youngestAssignedUpNumberLocked()
+	} else {
+		*passUpNumber++
+	}
+	return *passUpNumber
 }
 
 func (cm *ClusterManager) performLeaderActions() {
@@ -2965,6 +3026,10 @@ func (cm *ClusterManager) performLeaderActions() {
 		// would let an earlier promotion (now Up, but not yet in Overview.Seen)
 		// veto the remaining Joining members of the very same converged round.
 		convergedAtPassStart := cm.CheckConvergenceLocked()
+		// One upNumber counter per leader pass, shared across Joining → Up
+		// and WeaklyUp → Up (Pekko's isJoiningToUp covers both statuses in
+		// one collect with one counter).
+		var passUpNumber int32
 		for _, m := range cm.State.Members {
 			ua := cm.State.AllAddresses[m.GetAddressIndex()]
 			ma := memberAddressFromUA(ua)
@@ -2988,7 +3053,7 @@ func (cm *ClusterManager) performLeaderActions() {
 				canBootstrap := len(cm.State.Members) == 1
 				if meetsMinMembers && (canBootstrap || convergedAtPassStart) {
 					m.Status = gproto_cluster.MemberStatus_Up.Enum()
-					m.UpNumber = proto.Int32(int32(len(cm.State.Members))) // Simplified upNumber
+					m.UpNumber = proto.Int32(cm.nextPassUpNumberLocked(&passUpNumber))
 					events = append(events, MemberUp{Member: ma})
 					if cm.Metrics != nil {
 						cm.Metrics.IncrementMemberUp()
@@ -3023,7 +3088,7 @@ func (cm *ClusterManager) performLeaderActions() {
 				// Promote WeaklyUp → Up once convergence is achieved.
 				if convergedAtPassStart {
 					m.Status = gproto_cluster.MemberStatus_Up.Enum()
-					m.UpNumber = proto.Int32(int32(len(cm.State.Members)))
+					m.UpNumber = proto.Int32(cm.nextPassUpNumberLocked(&passUpNumber))
 					events = append(events, MemberUp{Member: ma})
 					if cm.Metrics != nil {
 						cm.Metrics.IncrementMemberUp()
@@ -3754,10 +3819,12 @@ func (cm *ClusterManager) collectSBRMembersLocked() (all []icluster.Member, unre
 			appVer = state.AllAppVersions[idx]
 		}
 		m := icluster.Member{
-			Host:       a.GetHostname(),
-			Port:       a.GetPort(),
-			Roles:      roles,
-			UpNumber:   mem.GetUpNumber(),
+			Host:  a.GetHostname(),
+			Port:  a.GetPort(),
+			Roles: roles,
+			// Age-normalized: an unassigned upNumber (WeaklyUp member) is
+			// the YOUNGEST possible, never the oldest (see ageUpNumber).
+			UpNumber:   ageUpNumber(mem.GetUpNumber()),
 			AppVersion: appVer,
 		}
 		all = append(all, m)
@@ -4247,22 +4314,33 @@ func (cm *ClusterManager) GetState() *gproto_cluster.Gossip {
 }
 
 // StartHeartbeat begins sending Heartbeat messages to a specific node (usually the seed).
-// Target heartbeating is now handled by a per-target map to support multiple peers.
+// Target heartbeating is handled by a per-target map to support multiple peers.
+// The registry is scoped to the ClusterManager: a process may host several
+// managers (integration suites run many nodes in-process), and a shared
+// process-global registry let whichever manager heartbeated an address
+// FIRST silently disable every later manager's monitoring of it — the
+// later manager sent no heartbeats, seeded no FD record, and could never
+// detect the peer's death.
 type heartbeatTask struct {
 	cancel context.CancelFunc
 }
 
-var (
-	heartbeatTasksMu sync.Mutex
-	heartbeatTasks   = make(map[string]heartbeatTask)
-)
+// heartbeatTasksLocked returns cm's task registry, lazily initialized.
+// Callers must hold cm.heartbeatTasksMu.
+func (cm *ClusterManager) heartbeatTasksLocked() map[string]heartbeatTask {
+	if cm.heartbeatTasks == nil {
+		cm.heartbeatTasks = make(map[string]heartbeatTask)
+	}
+	return cm.heartbeatTasks
+}
 
 func (cm *ClusterManager) StartHeartbeat(target *gproto_cluster.Address) {
 	key := fmt.Sprintf("%s:%d", target.GetHostname(), target.GetPort())
 
-	heartbeatTasksMu.Lock()
-	if _, ok := heartbeatTasks[key]; ok {
-		heartbeatTasksMu.Unlock()
+	cm.heartbeatTasksMu.Lock()
+	tasks := cm.heartbeatTasksLocked()
+	if _, ok := tasks[key]; ok {
+		cm.heartbeatTasksMu.Unlock()
 		// Task already running — do NOT clear heartbeatMuted here.
 		// Clearing it unconditionally caused a bug: connectToNewMembers calls
 		// StartHeartbeat for already-running peers and was inadvertently unblocking
@@ -4276,13 +4354,13 @@ func (cm *ClusterManager) StartHeartbeat(target *gproto_cluster.Address) {
 	// The mute is cleared explicitly by ResumeHeartbeat (called from
 	// Cluster.StartHeartbeat) which sets heartbeatMuted=false first.
 	if cm.heartbeatMuted.Load() {
-		heartbeatTasksMu.Unlock()
+		cm.heartbeatTasksMu.Unlock()
 		return
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	heartbeatTasks[key] = heartbeatTask{cancel: cancel}
-	heartbeatTasksMu.Unlock()
+	tasks[key] = heartbeatTask{cancel: cancel}
+	cm.heartbeatTasksMu.Unlock()
 
 	// Only clear the muted flag when actually starting a new task.  This is the
 	// initial start path (heartbeatMuted is false).
@@ -4303,6 +4381,8 @@ func (cm *ClusterManager) StartHeartbeat(target *gproto_cluster.Address) {
 		defer ticker.Stop()
 		path := cm.HeartbeatPath(target.GetSystem(), target.GetHostname(), target.GetPort())
 		var seq int64 = 0
+		// One outstanding trigger-first-heartbeat one-shot at a time.
+		var triggerPending atomic.Bool
 
 		for {
 			select {
@@ -4327,9 +4407,61 @@ func (cm *ClusterManager) StartHeartbeat(target *gproto_cluster.Address) {
 						logger.Default().Debug("Cluster: heartbeat sent", slog.String("host", target.GetHostname()), slog.Int("port", int(target.GetPort())), slog.Int64("seq", seq))
 					}
 				}
+				// Pekko's trigger-first-heartbeat (ClusterHeartbeat.scala:
+				// 219-228, 250-259): while a target we heartbeat is not yet
+				// monitored (no FD record — no response has ever arrived),
+				// arm a one-shot that seeds the record expected-response-after
+				// later unless a real response created it first.  Without
+				// this, a member that dies before ever responding has no
+				// record, stays vacuously available, and is never flagged.
+				if key, ok := cm.fdKeyForTarget(target); ok && !cm.Fd.HasRecord(key) && triggerPending.CompareAndSwap(false, true) {
+					time.AfterFunc(cm.EffectiveExpectedResponseAfter(target), func() {
+						defer triggerPending.Store(false)
+						// The task may have been canceled (ring deselection
+						// removes the record right after) — never seed a
+						// record for a target we no longer monitor.
+						if ctx.Err() != nil {
+							return
+						}
+						if k, ok := cm.fdKeyForTarget(target); ok && !cm.Fd.HasRecord(k) {
+							cm.Fd.HeartbeatWithEstimate(k, cm.EffectiveExpectedResponseAfter(target))
+						}
+					})
+				}
 			}
 		}
 	}()
+}
+
+// fdKeyForTarget resolves the failure-detector key ("host:port-uid64") for a
+// heartbeat target from the current gossip state.  Returns false when no
+// membership-active member carries that address (e.g. the member was removed
+// while its heartbeat task was shutting down) — no record should be seeded
+// for such a target.
+func (cm *ClusterManager) fdKeyForTarget(target *gproto_cluster.Address) (string, bool) {
+	cm.Mu.RLock()
+	defer cm.Mu.RUnlock()
+	for _, m := range cm.State.Members {
+		switch m.GetStatus() {
+		case gproto_cluster.MemberStatus_Up,
+			gproto_cluster.MemberStatus_WeaklyUp,
+			gproto_cluster.MemberStatus_Joining:
+		default:
+			continue
+		}
+		idx := m.GetAddressIndex()
+		if int(idx) >= len(cm.State.AllAddresses) {
+			continue
+		}
+		ua := cm.State.AllAddresses[idx]
+		a := ua.GetAddress()
+		if a.GetHostname() != target.GetHostname() || a.GetPort() != target.GetPort() {
+			continue
+		}
+		uid64 := uint64(ua.GetUid()) | (uint64(ua.GetUid2()) << 32)
+		return fmt.Sprintf("%s:%d-%d", a.GetHostname(), a.GetPort(), uid64), true
+	}
+	return "", false
 }
 
 // ClearHeartbeatMute explicitly un-mutes heartbeat responses.  Called by
@@ -4343,12 +4475,13 @@ func (cm *ClusterManager) ClearHeartbeatMute() {
 func (cm *ClusterManager) StopHeartbeat(target *gproto_cluster.Address) {
 	cm.heartbeatMuted.Store(true)
 	key := fmt.Sprintf("%s:%d", target.GetHostname(), target.GetPort())
-	heartbeatTasksMu.Lock()
-	if t, ok := heartbeatTasks[key]; ok {
+	cm.heartbeatTasksMu.Lock()
+	tasks := cm.heartbeatTasksLocked()
+	if t, ok := tasks[key]; ok {
 		t.cancel()
-		delete(heartbeatTasks, key)
+		delete(tasks, key)
 	}
-	heartbeatTasksMu.Unlock()
+	cm.heartbeatTasksMu.Unlock()
 }
 
 // GetLocalAddress returns the local unique address.

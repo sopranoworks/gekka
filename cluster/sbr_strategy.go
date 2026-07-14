@@ -493,8 +493,16 @@ func lowestMember(members []Member) Member {
 func oldestMember(members []Member) Member {
 	best := members[0]
 	for _, m := range members[1:] {
-		if m.UpNumber < best.UpNumber ||
-			(m.UpNumber == best.UpNumber && m.Address.Host < best.Address.Host) {
+		mu, bu := ageUpNumber(m.UpNumber), ageUpNumber(best.UpNumber)
+		// Lowest assigned upNumber wins; ties break by Pekko's
+		// Member.addressOrdering = host THEN PORT (Member.scala:83-92,
+		// 132-138).  Ties are normal — concurrent leaders on both sides of
+		// a partition assign from the same youngest seed — and a host-only
+		// tie-break leaves same-host members ordered by slice position,
+		// letting the two sides of a keep-oldest partition disagree.
+		if mu < bu ||
+			(mu == bu && (m.Address.Host < best.Address.Host ||
+				(m.Address.Host == best.Address.Host && m.Address.Port < best.Address.Port))) {
 			best = m
 		}
 	}

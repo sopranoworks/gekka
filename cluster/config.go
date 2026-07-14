@@ -141,7 +141,11 @@ func ApplyDetectorConfig(cm *ClusterManager, cfg FailureDetectorConfig) {
 	if minStdDev <= 0 {
 		minStdDev = 500 * time.Millisecond
 	}
-	cm.Fd.Reconfigure(threshold, maxSamples, minStdDev)
+	acceptablePause := cfg.AcceptableHeartbeatPause
+	if acceptablePause <= 0 {
+		acceptablePause = 3 * time.Second // Pekko reference default
+	}
+	cm.Fd.Reconfigure(threshold, maxSamples, minStdDev, acceptablePause)
 	if cfg.ExpectedResponseAfter > 0 {
 		cm.ExpectedResponseAfter = cfg.ExpectedResponseAfter
 	}

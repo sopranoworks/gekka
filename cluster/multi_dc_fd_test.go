@@ -32,7 +32,7 @@ func trainPhiHotPath(fd *PhiAccrualFailureDetector, key string) {
 // the cluster manager.
 func TestPhiAccrualFailureDetector_IsAvailableWithMargin(t *testing.T) {
 	fd := NewPhiAccrualFailureDetector(2.0, 1000)
-	fd.Reconfigure(2.0, 1000, 50*time.Millisecond)
+	fd.Reconfigure(2.0, 1000, 50*time.Millisecond, 0)
 	node := "node1"
 
 	// Unseen target: AVAILABLE (mirrors Pekko's PhiAccrualFailureDetector
@@ -117,7 +117,7 @@ func TestIsTargetAvailable_CrossDCToleratesLongerPauseThanIntraDC(t *testing.T) 
 
 	// Lower threshold + tight σ floor so phi spikes within ~150ms of pause,
 	// keeping the test fast and stable.
-	cm.Fd.Reconfigure(2.0, 1000, 50*time.Millisecond)
+	cm.Fd.Reconfigure(2.0, 1000, 50*time.Millisecond, 0)
 
 	tokyo2 := makeUAWithDC("10.0.1.2", 2552, 2)
 	osaka1 := makeUAWithDC("10.0.2.1", 2552, 3)
@@ -167,7 +167,7 @@ func TestIsTargetAvailable_IntraDCUnaffectedByCrossDCMargin(t *testing.T) {
 	cm := NewClusterManager(local, func(_ context.Context, _ string, _ any) error { return nil })
 	cm.SetLocalDataCenter("tokyo")
 
-	cm.Fd.Reconfigure(2.0, 1000, 50*time.Millisecond)
+	cm.Fd.Reconfigure(2.0, 1000, 50*time.Millisecond, 0)
 
 	tokyo2 := makeUAWithDC("10.0.1.2", 2552, 2)
 	cm.Mu.Lock()

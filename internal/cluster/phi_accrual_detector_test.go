@@ -187,3 +187,34 @@ func TestSingleHeartbeatSeedsBaseline(t *testing.T) {
 		t.Error("node silent for 5s after one heartbeat must NOT be available")
 	}
 }
+
+// TestPhiAddsAcceptableHeartbeatPauseToMean pins Pekko's φ formula: the
+// acceptable-heartbeat-pause is added to the history mean before computing
+// the suspicion level (PhiAccrualFailureDetector.scala:202). A silence well
+// past the raw mean but inside mean+pause must stay available; a silence
+// past mean+pause must be detected.
+func TestPhiAddsAcceptableHeartbeatPauseToMean(t *testing.T) {
+	d := NewWithPause(8.0, 1000, 100*time.Millisecond, DefaultFirstHeartbeatEstimate, 10*time.Second)
+
+	// Train on 100 heartbeats at exactly 1s intervals (mean = 1s).
+	simulateHeartbeats(d, 100, 1*time.Second)
+
+	// 5s of silence: 40σ past the raw mean, but well inside mean+pause (11s).
+	d.mu.Lock()
+	d.lastHeartbeatAt = time.Now().Add(-5 * time.Second)
+	d.mu.Unlock()
+	if phi := d.Phi(); phi > 1.0 {
+		t.Errorf("φ = %.2f after 5s silence with pause=10s — Pekko computes φ against mean+pause (11s), expected ≈ 0", phi)
+	}
+	if !d.IsAvailable() {
+		t.Error("node unavailable inside the acceptable pause window")
+	}
+
+	// 20s of silence: 90σ past mean+pause — must be detected.
+	d.mu.Lock()
+	d.lastHeartbeatAt = time.Now().Add(-20 * time.Second)
+	d.mu.Unlock()
+	if d.IsAvailable() {
+		t.Errorf("node still available after 20s silence (φ=%.2f) — pause must delay detection, not disable it", d.Phi())
+	}
+}

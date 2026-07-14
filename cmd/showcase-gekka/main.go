@@ -49,6 +49,15 @@ func main() {
 			Port:     *port,
 		},
 		Roles: roles,
+		// Failure-detector parity with the JVM showcase members
+		// (test/showcase/scala application.conf sets
+		// pekko.cluster.failure-detector.acceptable-heartbeat-pause = 20s):
+		// every node in one cluster must tolerate the same heartbeat
+		// silence, or the strictest node's φ flags a healthy peer first
+		// and feeds the JVM SBR.
+		FailureDetector: gekka.FailureDetectorConfig{
+			AcceptableHeartbeatPause: 20 * time.Second,
+		},
 		Management: core.ManagementConfig{
 			Enabled:  true,
 			Hostname: "127.0.0.1",

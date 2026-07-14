@@ -145,7 +145,21 @@ type GekkaAssociation struct {
 	mu    sync.RWMutex
 	state AssociationState
 	role  AssociationRole
-	conn  net.Conn
+
+	// writersStarted / writersLive track the lane-writer goroutines that
+	// drain this association's outboxes.  An OUTBOUND association whose
+	// writers have ALL exited — write error, handshake-race handover,
+	// teardown — can never deliver another frame: it must stop being
+	// selectable for new sends (writerAlive), otherwise every frame routed
+	// to it is enqueued into an outbox nobody drains.  Live case (updfd
+	// probe): the handshake handover killed the early dial's writer 400µs
+	// after the incoming HandshakeReq marked it ASSOCIATED, it remained the
+	// only OUTBOUND candidate for the peer, and all 140 heartbeat frames
+	// toward the peer silently vanished — the FD starved and SBR downed a
+	// healthy member.
+	writersStarted atomic.Int32
+	writersLive    atomic.Int32
+	conn           net.Conn
 	// remote is the remote node's UniqueAddress. Set once by handshake
 	// processing (handleHandshakeReq / handleHandshakeRsp) and read
 	// concurrently from many goroutines (every inbound dispatch path,
@@ -1554,7 +1568,10 @@ func (nm *NodeManager) GetGekkaAssociationByHost(host string, port uint32) (*Gek
 		assoc.mu.RUnlock()
 
 		if remote != nil && remote.Address.GetHostname() == host && remote.Address.GetPort() == port {
-			if role == OUTBOUND && (state == ASSOCIATED || state == INITIATED || state == WAITING_FOR_HANDSHAKE) {
+			// writerAlive: an outbound whose lane writers have all exited
+			// can never deliver — selecting it swallows every frame into
+			// an undrained outbox (the g1→g3 showcase blackout).
+			if role == OUTBOUND && (state == ASSOCIATED || state == INITIATED || state == WAITING_FOR_HANDSHAKE) && assoc.writerAlive() {
 				if streamId == 1 {
 					return assoc, true
 				}
@@ -1562,16 +1579,28 @@ func (nm *NodeManager) GetGekkaAssociationByHost(host string, port uint32) (*Gek
 		}
 	}
 
-	// Fallback to any outbound if control not found
+	// Fallback to any outbound if control not found — EXCEPT multi-lane
+	// streamId=2 ordinary-stream SIBLINGS (lanes set): their base outbox
+	// is a deliberate cap-1 stub (traffic flows through per-lane outboxes
+	// via outboxFor's lane pivot), while cluster/control messages sent
+	// through assoc.Send always target the base outbox, so selecting a
+	// sibling here wedges after one frame ("association outbox full …
+	// stream 2, cap 1" — one failed heartbeat reply per second in the
+	// updfd-v1 run).  Standalone streamId=2 associations (no lanes; the
+	// implicit lane drains the base outbox) remain eligible.  With no
+	// eligible association alive the caller must re-dial a fresh control
+	// stream instead.
 	for _, assoc := range nm.associations {
 		assoc.mu.RLock()
 		remote := assoc.remote.Load()
 		role := assoc.role
 		state := assoc.state
+		streamId := assoc.streamId
+		isLaneSibling := streamId == 2 && len(assoc.lanes) > 0
 		assoc.mu.RUnlock()
 
 		if remote != nil && remote.Address.GetHostname() == host && remote.Address.GetPort() == port {
-			if role == OUTBOUND && (state == ASSOCIATED || state == INITIATED || state == WAITING_FOR_HANDSHAKE) {
+			if role == OUTBOUND && !isLaneSibling && (state == ASSOCIATED || state == INITIATED || state == WAITING_FOR_HANDSHAKE) && assoc.writerAlive() {
 				return assoc, true
 			}
 		}
@@ -1903,6 +1932,38 @@ func UniqueAddressToString(ua *gproto_remote.UniqueAddress) string {
 		return ""
 	}
 	return fmt.Sprintf("%d", ua.GetUid())
+}
+
+// writerAlive reports whether this association can still deliver frames:
+// either no lane writer has started yet (fresh registration — the writer
+// goroutine starts moments after RegisterAssociation) or at least one
+// writer is still draining.  Once writers have started and ALL exited the
+// association is a corpse for outbound purposes.
+func (assoc *GekkaAssociation) writerAlive() bool {
+	return assoc.writersStarted.Load() == 0 || assoc.writersLive.Load() > 0
+}
+
+// UnregisterDeadOutbound removes every registry key still pointing at assoc
+// and is invoked by the lane writer when a write error kills the
+// association's socket.  Leaving the entry registered (state ASSOCIATED,
+// writer goroutine gone) makes GetGekkaAssociationByHost keep preferring it
+// for every new send, so all traffic toward the peer is enqueued into an
+// outbox nobody drains — a silent, permanent, directed blackout (observed
+// live as g1's heartbeats AND heartbeat replies toward g3 vanishing while
+// g3→g1 flowed, starving g1's FD record for g3 into a false Unreachable
+// flag that the JVM SBR acted on).  Removing the registration lets the
+// Router's next send re-dial a fresh association.  Only keys that still
+// point at THIS object are deleted, so a newer association registered under
+// the same key is never disturbed.
+func (nm *NodeManager) UnregisterDeadOutbound(assoc *GekkaAssociation) {
+	nm.mu.Lock()
+	defer nm.mu.Unlock()
+	for k, a := range nm.associations {
+		if a == assoc {
+			delete(nm.associations, k)
+			logger.Default().Debug("node manager: unregistered write-dead outbound association", "key", k)
+		}
+	}
 }
 
 // RegisterAssociation stores an association in the registry.
@@ -3115,7 +3176,8 @@ func (assoc *GekkaAssociation) SendWithSender(recipient, senderPath string, payl
 		assoc.touchSendActivity()
 		return nil
 	default:
-		return fmt.Errorf("association outbox full")
+		return fmt.Errorf("association outbox full (remote %s, stream %d, writersLive %d, cap %d)",
+			assoc.remoteKey(), assoc.streamId, assoc.writersLive.Load(), cap(outbox))
 	}
 }
 
@@ -3384,7 +3446,8 @@ func (assoc *GekkaAssociation) Send(recipient string, payload []byte, serializer
 		assoc.touchSendActivity()
 		return nil
 	default:
-		return fmt.Errorf("association outbox full")
+		return fmt.Errorf("association outbox full (remote %s, stream %d, writersLive %d, cap %d)",
+			assoc.remoteKey(), assoc.streamId, assoc.writersLive.Load(), cap(outbox))
 	}
 }
 
@@ -3455,6 +3518,9 @@ func (assoc *GekkaAssociation) outboxFor(recipient string, serializerId int32) c
 // the opposite direction are still valid and must continue.
 func (assoc *GekkaAssociation) startLaneWriter(ctx context.Context, lane *outboundLane) {
 	nm := assoc.nodeMgr
+	assoc.writersStarted.Add(1)
+	assoc.writersLive.Add(1)
+	defer assoc.writersLive.Add(-1)
 	for {
 		select {
 		case <-ctx.Done():
@@ -3573,6 +3639,18 @@ func (assoc *GekkaAssociation) startLaneWriter(ctx context.Context, lane *outbou
 					// the "connection has been aborted" WARN that
 					// otherwise follows every lane teardown.
 					gracefulCloseConn(lane.conn)
+				}
+				// The writer goroutine is about to exit: this association
+				// can never deliver another frame on this lane, so it must
+				// stop being selectable for new sends.  An OUTBOUND left
+				// registered as ASSOCIATED wins GetGekkaAssociationByHost
+				// forever and swallows all subsequent traffic to the peer
+				// (heartbeats, heartbeat replies, gossip) — the Router's
+				// next send should instead find no association and
+				// re-dial.  Mirrors Pekko, which restarts the whole
+				// outbound stream on any failure.
+				if nm != nil {
+					nm.UnregisterDeadOutbound(assoc)
 				}
 				return
 			}

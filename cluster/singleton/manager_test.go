@@ -224,9 +224,11 @@ func TestSingletonManager_SpawnsWhenOldest(t *testing.T) {
 // TestSingletonManager_NoSpawnWhenNotOldest verifies that the manager does NOT
 // spawn the singleton when a different node has a lower upNumber.
 func TestSingletonManager_NoSpawnWhenNotOldest(t *testing.T) {
-	cm := newSingletonTestCM("127.0.0.1", 2553, 1) // local = upNumber 1
+	cm := newSingletonTestCM("127.0.0.1", 2553, 2) // local = upNumber 2
 
-	// Add an older node (upNumber 0) to the gossip state.
+	// Add an older node (upNumber 1 — assigned ages start at 1; an
+	// upNumber of 0 means UNASSIGNED and sorts youngest, per Pekko's
+	// Int.MaxValue placeholder) to the gossip state.
 	older := &gproto_cluster.UniqueAddress{
 		Address: &gproto_cluster.Address{
 			Protocol: proto.String("pekko"),
@@ -240,7 +242,7 @@ func TestSingletonManager_NoSpawnWhenNotOldest(t *testing.T) {
 	cm.State.Members = append(cm.State.Members, &gproto_cluster.Member{
 		AddressIndex: proto.Int32(1),
 		Status:       gproto_cluster.MemberStatus_Up.Enum(),
-		UpNumber:     proto.Int32(0),
+		UpNumber:     proto.Int32(1),
 	})
 
 	ctx := &singletonTestContext{}
@@ -257,7 +259,7 @@ func TestSingletonManager_NoSpawnWhenNotOldest(t *testing.T) {
 // stopped when a membership event causes another node to become the oldest.
 func TestSingletonManager_StopsOnLeadershipLoss(t *testing.T) {
 	// Local node starts as the only Up member (oldest).
-	cm := newSingletonTestCM("127.0.0.1", 2553, 1)
+	cm := newSingletonTestCM("127.0.0.1", 2553, 2)
 	ctx := &singletonTestContext{}
 	mgr := newWiredManager(cm, ctx)
 
@@ -267,7 +269,9 @@ func TestSingletonManager_StopsOnLeadershipLoss(t *testing.T) {
 		t.Fatalf("expected 1 spawn after PreStart, got %d", ctx.spawnCount())
 	}
 
-	// Simulate a new node joining with a lower upNumber (becomes new oldest).
+	// A member with a LOWER assigned upNumber becomes known through gossip
+	// (e.g. a partition heal surfaces a genuinely older member) — it
+	// becomes the new oldest.
 	newOldest := &gproto_cluster.UniqueAddress{
 		Address: &gproto_cluster.Address{
 			Protocol: proto.String("pekko"),
@@ -282,7 +286,7 @@ func TestSingletonManager_StopsOnLeadershipLoss(t *testing.T) {
 	cm.State.Members = append(cm.State.Members, &gproto_cluster.Member{
 		AddressIndex: proto.Int32(1),
 		Status:       gproto_cluster.MemberStatus_Up.Enum(),
-		UpNumber:     proto.Int32(0),
+		UpNumber:     proto.Int32(1),
 	})
 	cm.Mu.Unlock()
 
@@ -298,9 +302,9 @@ func TestSingletonManager_StopsOnLeadershipLoss(t *testing.T) {
 // singleton was stopped (leadership elsewhere) and then the local node becomes
 // oldest again (e.g. other node left), it re-spawns.
 func TestSingletonManager_RespawnsAfterBecomingOldest(t *testing.T) {
-	cm := newSingletonTestCM("127.0.0.1", 2553, 1)
+	cm := newSingletonTestCM("127.0.0.1", 2553, 2)
 
-	// Add an older node.
+	// Add an older node (lower assigned upNumber).
 	older := &gproto_cluster.UniqueAddress{
 		Address: &gproto_cluster.Address{
 			Protocol: proto.String("pekko"),
@@ -314,7 +318,7 @@ func TestSingletonManager_RespawnsAfterBecomingOldest(t *testing.T) {
 	cm.State.Members = append(cm.State.Members, &gproto_cluster.Member{
 		AddressIndex: proto.Int32(1),
 		Status:       gproto_cluster.MemberStatus_Up.Enum(),
-		UpNumber:     proto.Int32(0),
+		UpNumber:     proto.Int32(1),
 	})
 
 	ctx := &singletonTestContext{}
@@ -330,7 +334,6 @@ func TestSingletonManager_RespawnsAfterBecomingOldest(t *testing.T) {
 	cm.Mu.Lock()
 	cm.State.AllAddresses = cm.State.AllAddresses[:1]
 	cm.State.Members = cm.State.Members[:1]
-	cm.State.Members[0].UpNumber = proto.Int32(0)
 	cm.Mu.Unlock()
 
 	mgr.Receive(cluster.MemberRemoved{Member: cluster.MemberAddress{Host: "127.0.0.1", Port: 2552}})

@@ -9,6 +9,7 @@
 package cluster
 
 import (
+	"strings"
 	"sync"
 	"time"
 
@@ -24,6 +25,10 @@ type PhiAccrualFailureDetector struct {
 	// configuration forwarded to each per-node detector
 	maxSampleSize   int
 	minStdDeviation time.Duration
+	// acceptablePause is added to the history mean inside each per-node φ
+	// computation (Pekko's acceptable-heartbeat-pause; see icluster
+	// NewWithPause).  Defaults to Pekko's cluster reference value of 3s.
+	acceptablePause time.Duration
 }
 
 // FailureDetectorConfig holds tunable parameters for the PhiAccrualFailureDetector.
@@ -79,19 +84,28 @@ func NewPhiAccrualFailureDetector(threshold float64, windowSize int) *PhiAccrual
 		threshold:       threshold,
 		maxSampleSize:   windowSize,
 		minStdDeviation: 500 * time.Millisecond,
+		acceptablePause: 3 * time.Second, // pekko.cluster.failure-detector.acceptable-heartbeat-pause reference default
 	}
 }
 
 // Reconfigure updates the detector parameters and clears all per-node history so
 // subsequent heartbeats use the new settings.  Safe to call before the cluster
 // has been joined (no active detection history is lost in practice).
-func (fd *PhiAccrualFailureDetector) Reconfigure(threshold float64, maxSamples int, minStdDev time.Duration) {
+func (fd *PhiAccrualFailureDetector) Reconfigure(threshold float64, maxSamples int, minStdDev, acceptablePause time.Duration) {
 	fd.mu.Lock()
 	defer fd.mu.Unlock()
 	fd.threshold = threshold
 	fd.maxSampleSize = maxSamples
 	fd.minStdDeviation = minStdDev
+	fd.acceptablePause = acceptablePause
 	fd.detectors = make(map[string]*icluster.PhiAccrualFailureDetector)
+}
+
+// AcceptableHeartbeatPause returns the pause added to each per-node φ mean.
+func (fd *PhiAccrualFailureDetector) AcceptableHeartbeatPause() time.Duration {
+	fd.mu.RLock()
+	defer fd.mu.RUnlock()
+	return fd.acceptablePause
 }
 
 func (fd *PhiAccrualFailureDetector) detectorFor(nodeKey string) *icluster.PhiAccrualFailureDetector {
@@ -116,17 +130,49 @@ func (fd *PhiAccrualFailureDetector) detectorForWithEstimate(nodeKey string, fir
 	if d, ok = fd.detectors[nodeKey]; ok {
 		return d
 	}
-	if firstHeartbeatEstimate <= 0 {
-		d = icluster.New(fd.threshold, fd.maxSampleSize, fd.minStdDeviation)
-	} else {
-		d = icluster.NewWithFirstEstimate(fd.threshold, fd.maxSampleSize, fd.minStdDeviation, firstHeartbeatEstimate)
-	}
+	d = icluster.NewWithPause(fd.threshold, fd.maxSampleSize, fd.minStdDeviation, firstHeartbeatEstimate, fd.acceptablePause)
 	fd.detectors[nodeKey] = d
 	return d
 }
 
 func (fd *PhiAccrualFailureDetector) Heartbeat(nodeKey string) {
 	fd.detectorFor(nodeKey).Heartbeat()
+}
+
+// HasRecord reports whether a per-node detector exists for nodeKey — the
+// wrapper equivalent of Pekko's FailureDetectorRegistry.isMonitoring.
+func (fd *PhiAccrualFailureDetector) HasRecord(nodeKey string) bool {
+	fd.mu.RLock()
+	defer fd.mu.RUnlock()
+	_, ok := fd.detectors[nodeKey]
+	return ok
+}
+
+// Remove drops the per-node detector for nodeKey, forgetting its heartbeat
+// history.  Mirrors Pekko's DefaultFailureDetectorRegistry.remove, which
+// ClusterHeartbeatSender invokes when a member is removed or leaves the
+// monitored ring (ClusterHeartbeat.scala:287-290, 305-309): a node this node
+// no longer monitors must have NO record, so the reachability reaper treats
+// it as vacuously available instead of judging a starving history.
+func (fd *PhiAccrualFailureDetector) Remove(nodeKey string) {
+	fd.mu.Lock()
+	defer fd.mu.Unlock()
+	delete(fd.detectors, nodeKey)
+}
+
+// RemoveByAddress drops every per-node detector belonging to hostPort
+// ("host:port"). Detector keys are "host:port-uid", so this removes all
+// incarnations of the address — used when a heartbeat target is deselected,
+// where only the address (not the UID) identifies the task.
+func (fd *PhiAccrualFailureDetector) RemoveByAddress(hostPort string) {
+	prefix := hostPort + "-"
+	fd.mu.Lock()
+	defer fd.mu.Unlock()
+	for k := range fd.detectors {
+		if strings.HasPrefix(k, prefix) {
+			delete(fd.detectors, k)
+		}
+	}
 }
 
 // HeartbeatWithEstimate records a heartbeat for nodeKey, constructing the

@@ -41,10 +41,17 @@ type PhiAccrualFailureDetector struct {
 	maxSampleSize          int
 	minStdDeviation        time.Duration
 	firstHeartbeatEstimate time.Duration
-	history                []time.Duration // sliding window of inter-arrival times
-	lastHeartbeatAt        time.Time
-	hasFirstBeat           bool
-	mu                     sync.Mutex
+	// acceptableHeartbeatPause is ADDED to the history mean inside the φ
+	// computation, exactly as Pekko's PhiAccrualFailureDetector does
+	// (`phi(timeDiff, mean + acceptableHeartbeatPauseMillis, stdDeviation)`,
+	// PhiAccrualFailureDetector.scala:202).  It is the tolerance for
+	// occasional lost/delayed heartbeats (GC pauses, network hiccups);
+	// without it every silence a few σ past the mean flags the node.
+	acceptableHeartbeatPause time.Duration
+	history                  []time.Duration // sliding window of inter-arrival times
+	lastHeartbeatAt          time.Time
+	hasFirstBeat             bool
+	mu                       sync.Mutex
 }
 
 // New creates a PhiAccrualFailureDetector for a single remote node.
@@ -64,15 +71,27 @@ func New(threshold float64, maxSampleSize int, minStdDeviation time.Duration) *P
 // on the first Heartbeat call so that Phi can compute from the second tick
 // onward instead of staying wedged at 0.
 func NewWithFirstEstimate(threshold float64, maxSampleSize int, minStdDeviation, firstHeartbeatEstimate time.Duration) *PhiAccrualFailureDetector {
+	return NewWithPause(threshold, maxSampleSize, minStdDeviation, firstHeartbeatEstimate, 0)
+}
+
+// NewWithPause creates a PhiAccrualFailureDetector with an explicit
+// acceptableHeartbeatPause in addition to the firstHeartbeatEstimate.  The
+// pause is added to the history mean inside φ (Pekko semantics); a
+// non-positive pause degrades to the raw-mean behavior.
+func NewWithPause(threshold float64, maxSampleSize int, minStdDeviation, firstHeartbeatEstimate, acceptableHeartbeatPause time.Duration) *PhiAccrualFailureDetector {
 	if firstHeartbeatEstimate <= 0 {
 		firstHeartbeatEstimate = DefaultFirstHeartbeatEstimate
 	}
+	if acceptableHeartbeatPause < 0 {
+		acceptableHeartbeatPause = 0
+	}
 	return &PhiAccrualFailureDetector{
-		threshold:              threshold,
-		maxSampleSize:          maxSampleSize,
-		minStdDeviation:        minStdDeviation,
-		firstHeartbeatEstimate: firstHeartbeatEstimate,
-		history:                make([]time.Duration, 0, maxSampleSize),
+		threshold:                threshold,
+		maxSampleSize:            maxSampleSize,
+		minStdDeviation:          minStdDeviation,
+		firstHeartbeatEstimate:   firstHeartbeatEstimate,
+		acceptableHeartbeatPause: acceptableHeartbeatPause,
+		history:                  make([]time.Duration, 0, maxSampleSize),
 	}
 }
 
@@ -128,14 +147,20 @@ func (d *PhiAccrualFailureDetector) Phi() float64 {
 	for _, iv := range history {
 		sum += float64(iv.Milliseconds())
 	}
-	mean := sum / float64(len(history))
+	rawMean := sum / float64(len(history))
 
 	var varSum float64
 	for _, iv := range history {
-		diff := float64(iv.Milliseconds()) - mean
+		diff := float64(iv.Milliseconds()) - rawMean
 		varSum += diff * diff
 	}
 	stdDev := math.Sqrt(varSum / float64(len(history)))
+
+	// Pekko adds acceptable-heartbeat-pause to the mean ONLY for the φ
+	// comparison (PhiAccrualFailureDetector.scala:202) — the pause is the
+	// tolerance for occasional lost/delayed heartbeats.  The variance is
+	// computed against the raw sample mean above.
+	mean := rawMean + float64(d.acceptableHeartbeatPause.Milliseconds())
 
 	minSD := float64(d.minStdDeviation.Milliseconds())
 	if stdDev < minSD {

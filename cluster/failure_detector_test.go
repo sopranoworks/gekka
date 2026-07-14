@@ -15,6 +15,11 @@ import (
 
 func TestPhiAccrualFailureDetector(t *testing.T) {
 	fd := NewPhiAccrualFailureDetector(8.0, 1000)
+	// This test exercises the raw φ mechanics on sub-second timescales, so
+	// disable the acceptable-heartbeat-pause (the default is Pekko's 3s
+	// reference value, which by design keeps φ ≈ 0 through short silences —
+	// pinned separately in TestNewPhiAccrualFailureDetector_DefaultsPauseTo3s).
+	fd.Reconfigure(8.0, 1000, 500*time.Millisecond, 0)
 	node := "node1"
 
 	// 1. Initial state

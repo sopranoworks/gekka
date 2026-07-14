@@ -71,7 +71,7 @@ func TestSingletonManager_LeaseReleasedOnStop(t *testing.T) {
 // TestSingletonManager_LeaseReleasedOnLeadershipLoss verifies that the lease
 // is released when leadership transfers to another node.
 func TestSingletonManager_LeaseReleasedOnLeadershipLoss(t *testing.T) {
-	cm := newSingletonTestCM("127.0.0.1", 2553, 1)
+	cm := newSingletonTestCM("127.0.0.1", 2553, 2)
 	ctx := &singletonTestContext{}
 
 	lease := icluster.NewTestLease(icluster.LeaseSettings{
@@ -88,7 +88,7 @@ func TestSingletonManager_LeaseReleasedOnLeadershipLoss(t *testing.T) {
 		t.Fatal("expected lease held")
 	}
 
-	// Add an older node → local loses leadership
+	// Add an older node (lower assigned upNumber) → local loses leadership
 	older := &gproto_cluster.UniqueAddress{
 		Address: &gproto_cluster.Address{
 			Protocol: proto.String("pekko"),
@@ -103,7 +103,7 @@ func TestSingletonManager_LeaseReleasedOnLeadershipLoss(t *testing.T) {
 	cm.State.Members = append(cm.State.Members, &gproto_cluster.Member{
 		AddressIndex: proto.Int32(1),
 		Status:       gproto_cluster.MemberStatus_Up.Enum(),
-		UpNumber:     proto.Int32(0),
+		UpNumber:     proto.Int32(1),
 	})
 	cm.Mu.Unlock()
 

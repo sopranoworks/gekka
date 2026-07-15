@@ -424,7 +424,10 @@ func (s *localActorSystem) Send(ctx context.Context, dst interface{}, msg any) e
 	a, found := s.actors[pathStr]
 	s.actorsMu.RUnlock()
 	if found {
-		a.Mailbox() <- msg
+		if cause := deliverLocalNonBlocking(a, msg); cause != "" {
+			s.publishLocalDeadLetter(pathStr, a, msg, nil, cause)
+			return fmt.Errorf("gekka: Send: %s: %s", cause, pathStr)
+		}
 		return nil
 	}
 	return fmt.Errorf("gekka: Send: actor not found: %s", pathStr)
@@ -526,10 +529,73 @@ func (s *localActorSystem) SendWithSender(ctx context.Context, path string, send
 				sender = ActorRef{fullPath: senderPath, sys: s}
 			}
 		}
-		a.Mailbox() <- actor.Envelope{Payload: msg, Sender: sender}
+		if cause := deliverLocalNonBlocking(a, actor.Envelope{Payload: msg, Sender: sender}); cause != "" {
+			s.publishLocalDeadLetter(path, a, msg, sender, cause)
+			return fmt.Errorf("gekka: SendWithSender: %s: %s", cause, path)
+		}
 		return nil
 	}
 	return fmt.Errorf("gekka: SendWithSender: actor not found: %s", path)
+}
+
+// deliverLocalNonBlocking enqueues env onto actor a's user mailbox without ever
+// blocking the caller. It mirrors ActorRef.Tell's drop-on-full / drop-on-closed
+// semantics (see actor_ref.go) and the Cluster inbound path (cluster.go): a
+// saturated or closed mailbox drops the message rather than stalling the sender
+// indefinitely. A blocking system-level enqueue is a defect — a peer delivering
+// to an actor whose mailbox is full must not be able to hang the ingress caller.
+//
+// It returns the drop cause — "" on success, "mailbox-full", or
+// "mailbox-closed" — so the caller can dead-letter the message and surface an
+// error to its own caller.
+func deliverLocalNonBlocking(a actor.Actor, env any) (cause string) {
+	// Prefer the actor's own close-race-safe, mailbox-aware enqueue
+	// (BaseActor.Send, or any installed Phase-1 / custom mailbox). It is
+	// non-blocking and returns false — rather than panicking — on a closed
+	// mailbox, honouring the configured drop/back-pressure strategy.
+	if ms, ok := a.(actor.MessageSender); ok {
+		defer func() {
+			if rec := recover(); rec != nil {
+				cause = "mailbox-closed"
+			}
+		}()
+		if !ms.Send(env) {
+			cause = "mailbox-full"
+			if mc, ok := a.(actor.MailboxClosedReporter); ok && mc.MailboxClosed() {
+				cause = "mailbox-closed"
+			}
+		}
+		return cause
+	}
+	// Fallback for actors that do not implement MessageSender: a guarded,
+	// non-blocking channel send with a recover in case the mailbox was closed
+	// concurrently (send on a closed channel panics).
+	defer func() {
+		if rec := recover(); rec != nil {
+			cause = "mailbox-closed"
+		}
+	}()
+	select {
+	case a.Mailbox() <- env:
+	default:
+		cause = "mailbox-full"
+	}
+	return cause
+}
+
+// publishLocalDeadLetter emits a DeadLetter for a message that could not be
+// delivered to path (mailbox full or closed), mirroring the Cluster inbound
+// path and ActorRef.Tell so undeliverable system-level sends remain observable.
+func (s *localActorSystem) publishLocalDeadLetter(path string, a actor.Actor, msg any, sender actor.Ref, cause string) {
+	if s.eventStream == nil {
+		return
+	}
+	s.eventStream.Publish(actor.DeadLetter{
+		Message:   msg,
+		Sender:    sender,
+		Recipient: ActorRef{fullPath: s.SelfPathURI(path), sys: s, local: a},
+		Cause:     cause,
+	})
 }
 
 // SelfAddress implements internalSystem.

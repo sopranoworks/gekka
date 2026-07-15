@@ -1,4 +1,4 @@
-# Gekka API Reference (v1.0.0-rc4)
+# Gekka API Reference (v1.0.0-rc5)
 
 This document provides a comprehensive reference for the Gekka public API.
 

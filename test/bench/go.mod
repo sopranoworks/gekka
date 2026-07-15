@@ -7,7 +7,7 @@ require (
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/moby/moby/client v0.4.0
 	github.com/redis/go-redis/v9 v9.17.3
-	github.com/sopranoworks/gekka v1.0.0-rc4
+	github.com/sopranoworks/gekka v1.0.0-rc5
 	github.com/sopranoworks/gekka-extensions-persistence-redis v0.0.0
 	github.com/sopranoworks/gekka-extensions-persistence-spanner v0.0.0
 	github.com/testcontainers/testcontainers-go v0.42.0

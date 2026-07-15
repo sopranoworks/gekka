@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0-rc5] - 2026-07-15
+
+Persistence — a new embedded backend, an actor-messaging blocking fix, and real-process-boundary validation of cross-process forwarding. 4 commits since `v1.0.0-rc4`, no API breakage. Adds a bbolt-backed `DurableStateStore` provider, stops system-level `Send`/`SendWithSender` from blocking on a full mailbox, and proves cross-process journal + snapshot-store forwarding across two genuine OS processes.
+
+### Added
+
+- 🚀 **bbolt `DurableStateStore` backend** (`41e92b2`): new `persistence/bbolt` provider storing durable actor state in a single embedded bbolt file with no external database process. Registered as the `"bbolt"` plugin (HOCON-selectable like in-memory / SQL / Redis); every `Upsert`/`Delete` commits and fsyncs its own transaction, so state survives a process restart — proven by a genuine child-process restart-durability test (write, crash without a clean close, reopen, state + revision + concrete type intact).
+
+### Bug Fixes
+
+- 🐛 **System-level `Send` blocked on a full mailbox** (`166dcde`): the non-networked `ActorSystem.Send` / `SendWithSender` path blocked indefinitely when the target mailbox was full, so one slow consumer could stall the caller forever. It now drops the message, publishes a `DeadLetter` (distinguishing `mailbox-full` from `mailbox-closed`), and returns an error — matching `Tell`'s drop semantics and the remote-ingress path. Regression tests included.
+
+### Testing / Validation
+
+- ✅ **Cross-process journal + snapshot-store forwarding proven across real OS processes** (`80ee8c4`, `336b4d2`): genuine two-OS-process tests — a child process hosts the real store; the parent writes/replays (journal) or saves/loads (snapshot) through an off-mode proxy over Artery; because neither side holds local state, a correct round-trip is only reachable via real cross-process forwarding. The forwarding implementation itself predates this candidate.
+- ✅ **Persistence backend dependency isolation verified**: real `go list -deps` confirms a `persistence/bbolt`-only consumer pulls in no SQL driver and a `persistence/sql`-only consumer pulls in no bbolt; the only shared persistence dependency is the standard library's `database/sql`.
+
 ## [1.0.0-rc4] - 2026-07-15
 
 Cluster-convergence correctness and concurrency hardening — 15 commits since `v1.0.0-rc3`, no new public API and no API breakage. Resolves the three cluster bugs rc3 shipped with as open issues (clean-boot convergence, Gate-2 cross-language traffic, join-time member flicker), aligns membership/gossip/failure-detection/upNumber with Pekko's source-level semantics, and makes `go test -race ./...` clean. The full cross-language 8-node showcase (Gate 1 + the 600 s zero-WARN/ERROR Gate 2) now passes.
@@ -470,6 +487,7 @@ Cross-language interoperability and reliability hardening — 104 commits since 
 - **Message Dispatch**: Fixed a critical bug where messages were not correctly routed to registered actors by default when incoming envelopes contained full URIs.
 
 
+[1.0.0-rc5]: https://github.com/sopranoworks/gekka/compare/v1.0.0-rc4...v1.0.0-rc5
 [1.0.0-rc4]: https://github.com/sopranoworks/gekka/compare/v1.0.0-rc3...v1.0.0-rc4
 [1.0.0-rc3]: https://github.com/sopranoworks/gekka/compare/v1.0.0-rc2...v1.0.0-rc3
 [1.0.0-rc1]: https://github.com/sopranoworks/gekka/compare/v0.16.0...v1.0.0-rc1

@@ -1,4 +1,4 @@
-# Gekka Protocol Details (v1.0.0-rc4)
+# Gekka Protocol Details (v1.0.0-rc5)
 
 This document covers technical details of the Artery TCP and Aeron UDP protocol
 implementations and Gekka's internal mechanics. For the serialization subsystem see

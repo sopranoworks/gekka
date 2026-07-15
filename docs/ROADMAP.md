@@ -163,6 +163,26 @@ zero-WARN/ERROR Gate 2) now passes. Highlights:
   (`de217a0`), all 16 `go.work` modules gated with gofmt (`4490295`), and the
   sbt toolchain on JDK 25 (`ed33321`).
 
+### v1.0.0-rc5 (2026-07-15)
+Persistence — a new embedded backend, an actor-messaging blocking fix, and
+real-process-boundary validation of cross-process forwarding (4 commits since
+rc4, no API breakage). Highlights:
+- **bbolt `DurableStateStore` backend** (`41e92b2`): embedded, file-based
+  durable-state provider with no external database process, registered as the
+  `"bbolt"` plugin (HOCON-selectable like in-memory / SQL / Redis); per-`Upsert`
+  / `Delete` fsync durability proven by a genuine child-process restart test.
+- **System-level `Send` no longer blocks on a full mailbox** (`166dcde`):
+  `ActorSystem.Send` / `SendWithSender` now drop + `DeadLetter` + return an
+  error instead of blocking indefinitely, matching `Tell` and the remote path.
+- **Cross-process journal + snapshot-store forwarding proven across two real
+  OS processes** (`80ee8c4`, `336b4d2`): genuine child-process tests where the
+  store lives in a separate process and a correct round-trip is only reachable
+  via real Artery forwarding, never local state. The forwarding implementation
+  itself predates this candidate.
+- **Persistence backend dependency isolation verified**: `go list -deps`
+  confirms bbolt-only and sql-only consumers do not cross-contaminate their
+  driver dependencies (only shared dependency is stdlib `database/sql`).
+
 ## Known Open Issues
 
 *None currently tracked as release-blocking.* The three cluster issues open

@@ -9,7 +9,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.32.14
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.14
 	github.com/aws/aws-sdk-go-v2/service/kinesis v1.43.5
-	github.com/sopranoworks/gekka v1.0.0-rc4
+	github.com/sopranoworks/gekka v1.0.0-rc5
 	github.com/stretchr/testify v1.11.1
 )
 

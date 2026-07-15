@@ -2,7 +2,7 @@ module github.com/sopranoworks/gekka/test/compat-bin
 
 go 1.26.1
 
-require github.com/sopranoworks/gekka v1.0.0-rc4
+require github.com/sopranoworks/gekka v1.0.0-rc5
 
 require (
 	github.com/sopranoworks/gekka-config v1.0.4 // indirect

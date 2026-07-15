@@ -7,7 +7,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/moby/moby/client v0.4.0
-	github.com/sopranoworks/gekka v1.0.0-rc4
+	github.com/sopranoworks/gekka v1.0.0-rc5
 	github.com/sopranoworks/gekka-config v1.0.4
 	github.com/stretchr/testify v1.11.1
 	github.com/testcontainers/testcontainers-go v0.42.0

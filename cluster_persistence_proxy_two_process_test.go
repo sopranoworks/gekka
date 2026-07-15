@@ -270,3 +270,189 @@ func runProxyJournalTargetChild() {
 	_ = target.Shutdown()
 	os.Exit(0)
 }
+
+// proxySnapshotChildEnv, when set, tells the re-exec'd test binary to run
+// as the snapshot-store-hosting *child* process rather than as the test
+// itself.
+const proxySnapshotChildEnv = "GEKKA_PROXY_SNAPSHOT_TWO_PROC_CHILD"
+
+// twoProcSnapPayload is the snapshot payload carried across the process
+// boundary. Its exact value is asserted on load, so a match is only
+// possible if these bytes physically reached the child's store on save
+// and came back on load.
+const twoProcSnapPayload = "snapshot-crossed-two-processes-7f3a"
+
+// TestPersistenceProxySnapshot_TwoOSProcesses is the SnapshotStore
+// counterpart of TestPersistenceProxyJournal_TwoOSProcesses, with the
+// identical structure and rigor: the real snapshot-store lives in a
+// genuinely separate OS process, the parent saves through an off-mode
+// proxy, and a SEPARATE off-mode proxy client in the parent loads it back
+// — entirely over Artery remoting.
+//
+// Why this is a real proof and not a mock:
+//   - The snapshot-store (persistence.InMemorySnapshotStore) exists ONLY
+//     in the child process; the parent never holds a local copy.
+//   - The saving proxy and the loading proxy are two DIFFERENT
+//     RemoteSnapshotStore instances in the parent, each of which is a
+//     pure forwarder with no local snapshot state. Their sole store is
+//     the off-mode proxy whose bytes travel over the real cluster
+//     transport to the child.
+//   - Therefore the loader observing the exact saved payload + metadata is
+//     only possible if the snapshot physically crossed the process
+//     boundary into the child's store on save and came back on load. A
+//     broken forwarding path would surface as a nil/empty snapshot, not a
+//     false positive from local state.
+func TestPersistenceProxySnapshot_TwoOSProcesses(t *testing.T) {
+	if os.Getenv(proxySnapshotChildEnv) != "" {
+		runProxySnapshotTargetChild()
+		return // unreachable; runProxySnapshotTargetChild calls os.Exit
+	}
+
+	// ── Launch the snapshot-store-hosting child process ─────────────────────────
+	cmd := exec.Command(os.Args[0], "-test.run", "^TestPersistenceProxySnapshot_TwoOSProcesses$")
+	cmd.Env = append(os.Environ(), proxySnapshotChildEnv+"=1")
+	cmd.Stderr = os.Stderr // surface child cluster errors in the test log
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("StdoutPipe: %v", err)
+	}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatalf("StdinPipe: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start child: %v", err)
+	}
+	// Closing stdin releases the child from its io.Copy block so it shuts
+	// down cleanly; Wait then reaps it.
+	defer func() {
+		_ = stdin.Close()
+		_ = cmd.Wait()
+	}()
+
+	// The child advertises the address of its hosted snapshot-store on
+	// stdout as "ADDR <system> <host> <port>". Read it (and keep draining
+	// stdout so a full pipe can never deadlock the child).
+	type childAddr struct {
+		system, host string
+		port         uint32
+	}
+	addrCh := make(chan childAddr, 1)
+	go func() {
+		sc := bufio.NewScanner(stdout)
+		sent := false
+		for sc.Scan() {
+			line := sc.Text()
+			if !sent && strings.HasPrefix(line, "ADDR ") {
+				var s, h string
+				var p uint32
+				if _, err := fmt.Sscanf(line, "ADDR %s %s %d", &s, &h, &p); err == nil {
+					addrCh <- childAddr{system: s, host: h, port: p}
+					sent = true
+				}
+			}
+		}
+	}()
+
+	var target childAddr
+	select {
+	case target = <-addrCh:
+	case <-time.After(30 * time.Second):
+		t.Fatal("timed out waiting for child to advertise its snapshot-store address")
+	}
+
+	// ── Parent side: connect to the child over Artery ───────────────────────────
+	client, err := NewCluster(ClusterConfig{SystemName: "ProxyTgt", Host: "127.0.0.1", Port: 0})
+	if err != nil {
+		t.Fatalf("NewCluster client: %v", err)
+	}
+	defer func() { _ = client.Shutdown() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := client.Join(target.host, target.port); err != nil {
+		t.Fatalf("Join child: %v", err)
+	}
+	if err := client.WaitForHandshake(ctx, target.host, target.port); err != nil {
+		t.Fatalf("WaitForHandshake child: %v", err)
+	}
+
+	targetURI := fmt.Sprintf("pekko://%s@%s:%d%s",
+		target.system, target.host, target.port, persistence.RemoteSnapshotPathSuffix)
+
+	// newProxyStore builds a fresh off-mode proxy SnapshotStore pointing at
+	// the child. NewCluster already registered the cluster-backed
+	// ProxyTransport, so the "proxy" provider picks it up automatically.
+	newProxyStore := func(label string) persistence.SnapshotStore {
+		cfg, err := hocon.ParseString(fmt.Sprintf(`
+target-snapshot-store-plugin-id = ignored
+start-target-snapshot-store = off
+target-snapshot-store-address = "%s"
+init-timeout = 1s
+request-timeout = 10s
+`, targetURI))
+		if err != nil {
+			t.Fatalf("parse proxy cfg (%s): %v", label, err)
+		}
+		store, err := persistence.NewSnapshotStore("proxy", *cfg)
+		if err != nil {
+			t.Fatalf("NewSnapshotStore proxy off-mode (%s): %v", label, err)
+		}
+		return store
+	}
+
+	const persistenceID = "snap-acct-99"
+	meta := persistence.SnapshotMetadata{PersistenceID: persistenceID, SequenceNr: 7, Timestamp: 990099}
+
+	// ── Save phase: the saver proxy pushes a snapshot across the process ─────────
+	// boundary into the child's store.
+	saver := newProxyStore("saver")
+	if err := saver.SaveSnapshot(ctx, meta, twoProcSnapPayload); err != nil {
+		t.Fatalf("SaveSnapshot through proxy: %v", err)
+	}
+
+	// ── Load phase: a SEPARATE proxy client pulls the snapshot back out of ───────
+	// the child's store. Neither proxy holds local snapshot state, so a
+	// correct load proves genuine cross-process forwarding.
+	loader := newProxyStore("loader")
+	loaded, err := loader.LoadSnapshot(ctx, persistenceID, persistence.LatestSnapshotCriteria())
+	if err != nil {
+		t.Fatalf("LoadSnapshot through separate proxy: %v", err)
+	}
+	if loaded == nil {
+		t.Fatal("LoadSnapshot returned nil — snapshot did not survive the round-trip to the child process")
+	}
+	if loaded.Snapshot != twoProcSnapPayload {
+		t.Fatalf("loaded snapshot = %v, want %q — payload must be forwarded to and from the child process over Artery",
+			loaded.Snapshot, twoProcSnapPayload)
+	}
+	if loaded.Metadata.SequenceNr != 7 || loaded.Metadata.Timestamp != 990099 {
+		t.Fatalf("loaded metadata = %+v, want seq=7 ts=990099", loaded.Metadata)
+	}
+}
+
+// runProxySnapshotTargetChild is the child half of the two-process
+// snapshot proof. It stands up a cluster node hosting an in-memory
+// snapshot-store at the well-known proxy path, advertises its address on
+// stdout, and stays alive until the parent closes its stdin — at which
+// point it shuts the node down and exits cleanly.
+func runProxySnapshotTargetChild() {
+	target, err := NewCluster(ClusterConfig{SystemName: "ProxyTgt", Host: "127.0.0.1", Port: 0})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "child NewCluster: %v\n", err)
+		os.Exit(3)
+	}
+	ServePersistenceProxySnapshot(target, persistence.NewInMemorySnapshotStore())
+
+	fmt.Printf("ADDR %s %s %d\n",
+		target.localAddr.GetSystem(), target.localAddr.GetHostname(), target.localAddr.GetPort())
+	_ = os.Stdout.Sync()
+
+	// Block until the parent signals completion by closing our stdin.
+	_, _ = io.Copy(io.Discard, os.Stdin)
+
+	_ = target.Shutdown()
+	os.Exit(0)
+}
